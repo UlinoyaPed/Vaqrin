@@ -67,10 +67,11 @@ func epsilonClosure(regex: *const Regex, seeds: []const Thread,
     for seed in seeds {
         stack.clear();
         stack.push(seed)!;
-        for {
+        var draining = true;
+        for draining {
             var popped = stack.pop();
             switch popped {
-                null => break,
+                null => { draining = false; },
                 some(thread) => {
                     if thread.state < 0 || usize(thread.state) >= regex.states.len() {
                         return RegexError.InvalidCapture;

@@ -1,0 +1,28 @@
+package unicode_regex_demo
+import (io, unicode, regex)
+
+func main() !void {
+    var composed = unicode.normalize("e\u{301}", unicode.NormalForm.NFC)!;
+    io.println(composed)!;
+    io.println(unicode.isNormalized(composed, unicode.NormalForm.NFC))!;
+
+    var family = "👨‍👩‍👧‍👦";
+    io.println(unicode.graphemeCount(family))!;
+
+    var expression = regex.Regex.compile("(ab)+")!;
+    var found = expression.find("zabab")!;
+    io.println(found.unwrap().asStr())!;
+
+    var groups = expression.captures("zabab")!;
+    io.println(groups.unwrap().get(1).unwrap().asStr())!;
+
+    var emptyExpression = regex.Regex.compile("a*?")!;
+    var matches = emptyExpression.findAll("aa");
+    var count: usize = 0;
+    for {
+        var item = matches.next()!;
+        if item == null { break; }
+        count++;
+    }
+    io.println(count)!;
+}

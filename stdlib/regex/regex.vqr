@@ -1,0 +1,404 @@
+package regex
+import (coll, core, convert, text, unicode)
+
+pub error RegexError {
+    UnexpectedEnd, UnexpectedToken, UnclosedGroup, UnclosedClass, InvalidRange,
+    InvalidEscape, InvalidRepeat, UnsupportedConstruct, TooManyStates,
+    InputTooLarge, InvalidUtf8, InvalidOffset, StepLimitExceeded, InvalidCapture, CaptureLimit
+}
+
+pub enum Op { Character, Any, Class, Split, Jump, Save, AssertStart, AssertEnd, Match }
+
+pub record State {
+    pub var op: Op;
+    pub var value: u32;
+    pub var out: i32;
+    pub var alternate: i32;
+}
+
+pub record CharRange {
+    pub var first: u32;
+    pub var last: u32;
+}
+
+pub record CharacterClass {
+    pub var firstRange: usize;
+    pub var rangeCount: usize;
+    pub var builtinMask: u8;
+    pub var negated: bool;
+}
+
+pub record Match {
+    pub var startByte: usize;
+    pub var endByte: usize;
+    pub var source: str;
+
+    pub const func start() usize { startByte }
+    pub const func end() usize { endByte }
+    pub const func lenBytes() usize { endByte - startByte }
+    pub const func asStr() str {
+        unsafe { __vqr_text_borrow_utf8(source.asBytes()[startByte..endByte]) }
+    }
+}
+
+pub class Captures {
+    var groups: coll.Vec<?(usize, usize)>;
+    var source: str;
+public:
+    func init(source: str, groups: coll.Vec<?(usize, usize)>)
+        : groups(move(groups)), source(source) {}
+
+    const func len() usize { groups.len() }
+    const func get(index: usize) ?Match {
+        if index >= groups.len() { return null; }
+        switch groups[index] {
+            some(span) => some(Match{startByte: span.0, endByte: span.1, source: source}),
+            null => null
+        }
+    }
+    const func full() Match { get(0).unwrap() }
+}
+
+pub class Regex {
+    var states: coll.Vec<State>;
+    var classes: coll.Vec<CharacterClass>;
+    var ranges: coll.Vec<CharRange>;
+    var patternText: string;
+    var flags: u8;
+    var maxInputBytes: usize;
+    var maxSteps: usize;
+    var captureGroups: usize;
+    var startState: i32;
+
+public:
+    func init(states: coll.Vec<State>, classes: coll.Vec<CharacterClass>,
+              ranges: coll.Vec<CharRange>, pattern: string, flags: u8,
+              maxInputBytes: usize, maxSteps: usize, captureCount: usize, startState: i32)
+        : states(move(states)), classes(move(classes)), ranges(move(ranges)),
+          patternText(move(pattern)), flags(flags), maxInputBytes(maxInputBytes),
+          maxSteps(maxSteps), captureGroups(captureCount), startState(startState) {}
+
+    static func compile(pattern: str) !Self {
+        RegexBuilder(pattern).compile()
+    }
+
+    const func pattern() str { patternText }
+    const func captureCount() usize { captureGroups }
+    const func stateCount() usize { states.len() }
+    const func stateAt(index: usize) State { states[index] }
+    const func classCount() usize { classes.len() }
+    const func classAt(index: usize) CharacterClass { classes[index] }
+    const func rangeAt(index: usize) CharRange { ranges[index] }
+    const func flagsValue() u8 { flags }
+    const func inputLimit() usize { maxInputBytes }
+    const func workLimit() usize { maxSteps }
+    const func captureGroupCount() usize { captureGroups }
+    const func entryState() i32 { startState }
+
+    const func isMatch(value: str) !bool {
+        var found = find(value)!;
+        found != null
+    }
+
+    const func find(value: str) !?Match { findAt(value, 0) }
+
+    const func findAt(value: str, byteOffset: usize) !?Match {
+        if value.byteLen() > maxInputBytes { return RegexError.InputTooLarge; }
+        if byteOffset > value.byteLen() { return RegexError.InvalidOffset; }
+        if byteOffset < value.byteLen() && (value.asBytes()[byteOffset] & 0xc0) == 0x80 {
+            return RegexError.InvalidOffset;
+        }
+        var result = runNfa(&self, value, byteOffset, false)!;
+        switch result {
+            some(item) => some(item.matched),
+            null => null
+        }
+    }
+
+    const func captures(value: str) !?Captures { capturesAt(value, 0) }
+
+    const func capturesAt(value: str, byteOffset: usize) !?Captures {
+        if value.byteLen() > maxInputBytes { return RegexError.InputTooLarge; }
+        if byteOffset > value.byteLen() { return RegexError.InvalidOffset; }
+        if byteOffset < value.byteLen() && (value.asBytes()[byteOffset] & 0xc0) == 0x80 {
+            return RegexError.InvalidOffset;
+        }
+        var result = runNfa(&self, value, byteOffset, true)!;
+        switch result {
+            some(item) => some(move(item.captures).unwrap()),
+            null => null
+        }
+    }
+
+    const func findAll(value: str) FindIter { FindIter(&self, value) }
+    const func capturesAll(value: str) CaptureIter { CaptureIter(&self, value) }
+    const func split(value: str) SplitIter { SplitIter(&self, value) }
+
+    const func replace(value: str, replacement: str) !string {
+        replaceMatches(value, replacement, false)
+    }
+    const func replaceAll(value: str, replacement: str) !string {
+        replaceMatches(value, replacement, true)
+    }
+
+private:
+    const func replaceMatches(value: str, replacement: str, all: bool) !string {
+        if value.byteLen() > maxInputBytes { return RegexError.InputTooLarge; }
+        var output = coll.Vec<u8>();
+        var cursor: usize = 0;
+        var search: usize = 0;
+        var replaced = false;
+        var done = false;
+        for search <= value.byteLen() && !done {
+            var result = runNfa(&self, value, search, true)!;
+            switch result {
+                null => { done = true; },
+                some(item) => {
+                    var matched = item.matched;
+                    for i in cursor..matched.startByte { output.push(value.asBytes()[i])!; }
+                    var captures = move(item.captures).unwrap();
+                    appendReplacement(replacement, &captures, &output)!;
+                    cursor = matched.endByte;
+                    replaced = true;
+                    if !all { done = true; }
+                    if matched.endByte > matched.startByte {
+                        search = matched.endByte;
+                    } else if matched.endByte < value.byteLen() {
+                        var next = unicode.decodeUtf8(value.asBytes()[matched.endByte..]) catch { return RegexError.InvalidUtf8; };
+                        for i in matched.endByte..(matched.endByte + next.1) {
+                            output.push(value.asBytes()[i])!;
+                        }
+                        cursor = matched.endByte + next.1;
+                        search = cursor;
+                    } else {
+                        search = value.byteLen() + 1;
+                        done = true;
+                    }
+                }
+            }
+        }
+        if !replaced { return text.fromBytes(value.asBytes()); }
+        for i in cursor..value.byteLen() { output.push(value.asBytes()[i])!; }
+        text.fromBytes(output.asConstSlice())
+    }
+}
+
+pub class RegexBuilder {
+    var source: str;
+    var ignoreCaseValue: bool;
+    var multiLineValue: bool;
+    var dotAllValue: bool;
+    var unicodeValue: bool;
+    var stateLimit: usize;
+    var inputLimit: usize;
+    var stepLimit: usize;
+public:
+    func init(pattern: str) : source(pattern), ignoreCaseValue(false),
+        multiLineValue(false), dotAllValue(false), unicodeValue(true),
+        stateLimit(4096), inputLimit(16 * 1024 * 1024), stepLimit(64 * 1024 * 1024) {}
+
+    func ignoreCase(value: bool) Self { ignoreCaseValue = value; move(self) }
+    func multiLine(value: bool) Self { multiLineValue = value; move(self) }
+    func dotAll(value: bool) Self { dotAllValue = value; move(self) }
+    func unicode(value: bool) Self { unicodeValue = value; move(self) }
+    func maxStates(value: usize) Self { stateLimit = value; move(self) }
+    func maxInputBytes(value: usize) Self { inputLimit = value; move(self) }
+    func maxSteps(value: usize) Self { stepLimit = value; move(self) }
+
+    func compile() !Regex {
+        var flags: u8 = 0;
+        if ignoreCaseValue { flags |= 1; }
+        if multiLineValue { flags |= 2; }
+        if dotAllValue { flags |= 4; }
+        if unicodeValue { flags |= 8; }
+        compilePattern(source, flags, stateLimit, inputLimit, stepLimit)
+    }
+}
+
+pub class FindIter {
+    var regex: *const Regex;
+    var source: str;
+    var offset: usize;
+    var done: bool;
+public:
+    func init(regex: *const Regex, source: str)
+        : regex(regex), source(source), offset(0), done(false) {}
+
+    func next() !?Match {
+        if done { return null; }
+        var found = regex.findAt(source, offset)!;
+        switch found {
+            null => { done = true; null },
+            some(item) => {
+                if item.endByte > item.startByte {
+                    offset = item.endByte;
+                } else if item.endByte < source.byteLen() {
+                    var next = unicode.decodeUtf8(source.asBytes()[item.endByte..]) catch { return RegexError.InvalidUtf8; };
+                    offset = item.endByte + next.1;
+                } else {
+                    done = true;
+                }
+                some(item)
+            }
+        }
+    }
+}
+
+pub class CaptureIter {
+    var regex: *const Regex;
+    var source: str;
+    var offset: usize;
+    var done: bool;
+public:
+    func init(regex: *const Regex, source: str)
+        : regex(regex), source(source), offset(0), done(false) {}
+
+    func next() !?Captures {
+        if done { return null; }
+        var found = regex.capturesAt(source, offset)!;
+        switch found {
+            null => { done = true; null },
+            some(item) => {
+                var full = item.get(0).unwrap();
+                if full.endByte > full.startByte {
+                    offset = full.endByte;
+                } else if full.endByte < source.byteLen() {
+                    var next = unicode.decodeUtf8(source.asBytes()[full.endByte..]) catch { return RegexError.InvalidUtf8; };
+                    offset = full.endByte + next.1;
+                } else {
+                    done = true;
+                }
+                some(item)
+            }
+        }
+    }
+}
+
+pub class SplitIter {
+    var regex: *const Regex;
+    var source: str;
+    var cursor: usize;
+    var search: usize;
+    var done: bool;
+    var trailingEmpty: bool;
+public:
+    func init(regex: *const Regex, source: str)
+        : regex(regex), source(source), cursor(0), search(0), done(false), trailingEmpty(false) {}
+
+    func next() !?str {
+        if done { return null; }
+        if trailingEmpty {
+            trailingEmpty = false;
+            done = true;
+            return some(unsafe { __vqr_text_borrow_utf8(source.asBytes()[source.byteLen()..]) });
+        }
+        var found = regex.findAt(source, search)!;
+        switch found {
+            null => {
+                done = true;
+                return some(unsafe { __vqr_text_borrow_utf8(source.asBytes()[cursor..]) });
+            },
+            some(item) => {
+                var part = unsafe { __vqr_text_borrow_utf8(source.asBytes()[cursor..item.startByte]) };
+                cursor = item.endByte;
+                if item.endByte > item.startByte {
+                    search = item.endByte;
+                    if search == source.byteLen() { trailingEmpty = true; }
+                } else if item.endByte < source.byteLen() {
+                    var next = unicode.decodeUtf8(source.asBytes()[item.endByte..]) catch { return RegexError.InvalidUtf8; };
+                    search = item.endByte + next.1;
+                } else {
+                    search = source.byteLen() + 1;
+                    trailingEmpty = true;
+                }
+                some(part)
+            }
+        }
+    }
+}
+
+func appendReplacement(replacement: str, captures: *const Captures, output: *coll.Vec<u8>) !void {
+    var bytes = replacement.asBytes();
+    var position: usize = 0;
+    for position < bytes.len() {
+        if bytes[position] != 36 || position + 1 >= bytes.len() {
+            output.push(bytes[position])!;
+            position++;
+            continue;
+        }
+        var next = bytes[position + 1];
+        if next == 36 {
+            output.push(36)!;
+            position += 2;
+        } else if next == 38 {
+            var full = captures.get(0);
+            if core.isSome<Match>(&full) {
+                for byte in full.unwrap().asStr().asBytes() { output.push(byte)!; }
+            }
+            position += 2;
+        } else if 48 <= next && next <= 57 {
+            var index: usize = 0;
+            while position + 1 < bytes.len() && 48 <= bytes[position + 1] && bytes[position + 1] <= 57 {
+                index = index * 10 + usize(bytes[position + 1] - 48);
+                position++;
+            }
+            var capture = captures.get(index);
+            if core.isSome<Match>(&capture) {
+                for byte in capture.unwrap().asStr().asBytes() { output.push(byte)!; }
+            }
+            position++;
+        } else {
+            output.push(36)!;
+            position++;
+        }
+    }
+}
+
+pub func compile(pattern: str) !Regex { Regex.compile(pattern) }
+pub func isMatch(pattern: str, value: str) !bool { Regex.compile(pattern)!.isMatch(value) }
+pub func find(pattern: str, value: str) !?Match {
+    Regex.compile(pattern)!.find(value)
+}
+pub func findAt(pattern: str, value: str, byteOffset: usize) !?Match {
+    Regex.compile(pattern)!.findAt(value, byteOffset)
+}
+pub func captures(pattern: str, value: str) !?Captures {
+    Regex.compile(pattern)!.captures(value)
+}
+pub func replaceAll(pattern: str, value: str, replacement: str) !string {
+    Regex.compile(pattern)!.replaceAll(value, replacement)
+}
+pub func replace(pattern: str, value: str, replacement: str) !string {
+    Regex.compile(pattern)!.replace(value, replacement)
+}
+pub func escape(value: str) !string { escapePattern(value) }
+
+pub func findAll(pattern: str, value: str) !coll.Vec<Match> {
+    var regex = Regex.compile(pattern)!;
+    var result = coll.Vec<Match>();
+    var iterator = regex.findAll(value);
+    var done = false;
+    for !done {
+        var item = iterator.next()!;
+        switch item {
+            null => { done = true; },
+            some(found) => result.push(found)!
+        }
+    }
+    move(result)
+}
+
+pub func split(pattern: str, value: str) !coll.Vec<str> {
+    var regex = Regex.compile(pattern)!;
+    var result = coll.Vec<str>();
+    var iterator = regex.split(value);
+    var done = false;
+    for !done {
+        var item = iterator.next()!;
+        switch item {
+            null => { done = true; },
+            some(part) => result.push(part)!
+        }
+    }
+    move(result)
+}

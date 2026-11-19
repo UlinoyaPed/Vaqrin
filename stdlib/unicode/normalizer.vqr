@@ -1,0 +1,142 @@
+package unicode
+import (coll, convert, text, core)
+
+pub class Normalizer {
+    var form: NormalForm;
+    var pending: coll.Vec<u32>;
+public:
+    func init(form: NormalForm) : form(form), pending(coll.Vec<u32>()) {}
+    func reset() void { pending.clear(); }
+
+    func push(ch: char) !void {
+        var cp = convert.fromChar(ch);
+        var compatibility = form == NormalForm.NFKC || form == NormalForm.NFKD;
+        var expanded = coll.Vec<u32>();
+        decomposeScalar(cp, compatibility, &expanded, 0)!;
+        for scalar in expanded.asSlice() { insertOrdered(scalar)!; }
+    }
+
+    func finish() !string {
+        var compose = form == NormalForm.NFC || form == NormalForm.NFKC;
+        var scalars = if compose { composePending()! } else { pending.clone()! };
+        var output = coll.Vec<u8>();
+        for cp in scalars.asSlice() { appendNormalizedScalarUtf8(cp, &output)!; }
+        text.fromBytes(output.asConstSlice())
+    }
+
+    func flushTo(dst: []u8) !usize {
+        var value = finish()!;
+        var bytes = value.asBytes();
+        if dst.len() < bytes.len() { return UnicodeError.OutputTooSmall; }
+        for i in usize(0)..bytes.len() { dst[i] = bytes[i]; }
+        bytes.len()
+    }
+
+private:
+    func insertOrdered(cp: u32) !void {
+        var cls = combiningClass(__vqr_char(cp));
+        if cls == 0 { pending.push(cp)!; return; }
+        var at = pending.len();
+        while at > 0 {
+            var previous = combiningClass(__vqr_char(pending[at - 1]));
+            if previous == 0 || previous <= cls { break; }
+            at--;
+        }
+        pending.insert(at, cp)!;
+    }
+
+    func decomposeScalar(cp: u32, compatibility: bool, out: *coll.Vec<u32>, depth: usize) !void {
+        if depth > 32 { return UnicodeError.InvalidScalar; }
+        // Hangul decomposition is algorithmic.
+        if cp >= 0xac00 && cp <= 0xd7a3 {
+            var s = cp - 0xac00;
+            var l = 0x1100 + s / 588;
+            var v = 0x1161 + (s % 588) / 28;
+            var t = s % 28;
+            out.push(l)!; out.push(v)!;
+            if t != 0 { out.push(0x11a7 + t)!; }
+            return;
+        }
+        var lo: usize = 0;
+        var hi = decompositionIndex.len() / 3;
+        for lo < hi {
+            var mid = lo + (hi - lo) / 2;
+            var key = decompositionIndex[mid * 3];
+            if cp < key { hi = mid; }
+            else if cp > key { lo = mid + 1; }
+            else {
+                var offset = decompositionIndex[mid * 3 + 1];
+                var flags = decompositionIndex[mid * 3 + 2];
+                var compat = (flags & 0x100) != 0;
+                if compat && !compatibility { out.push(cp)!; return; }
+                var count = flags & 0xff;
+                for i in usize(0)..count {
+                    decomposeScalar(decompositionScalars[offset + i], compatibility, out, depth + 1)!;
+                }
+                return;
+            }
+        }
+        out.push(cp)!
+    }
+
+    func composePending() !coll.Vec<u32> {
+        var out = coll.Vec<u32>();
+        var starterIndex: ?usize = null;
+        var lastClass: u8 = 0;
+        for cp in pending.asSlice() {
+            var cls = combiningClass(__vqr_char(cp));
+            var combined: ?u32 = null;
+            if core.isSome<usize>(&starterIndex) && (lastClass < cls || lastClass == 0) {
+                combined = composePair(out[starterIndex.unwrap()], cp);
+            }
+            if core.isSome<u32>(&combined) {
+                out[starterIndex.unwrap()] = combined.unwrap();
+            } else {
+                if cls == 0 { starterIndex = some(out.len()); }
+                out.push(cp)!;
+                lastClass = cls;
+            }
+        }
+        move(out)
+    }
+}
+
+func composePair(a: u32, b: u32) ?u32 {
+    // Hangul L+V and LV+T composition.
+    if 0x1100 <= a && a <= 0x1112 && 0x1161 <= b && b <= 0x1175 {
+        return some(0xac00 + (a - 0x1100) * 588 + (b - 0x1161) * 28);
+    }
+    if 0xac00 <= a && a <= 0xd7a3 && (a - 0xac00) % 28 == 0 && 0x11a8 <= b && b <= 0x11c2 {
+        return some(a + b - 0x11a7);
+    }
+    var lo: usize = 0;
+    var hi = compositionPairs.len() / 3;
+    var key = u64(a) * 0x110000 + u64(b);
+    for lo < hi {
+        var mid = lo + (hi - lo) / 2;
+        var candidate = u64(compositionPairs[mid * 3]) * 0x110000 +
+                        u64(compositionPairs[mid * 3 + 1]);
+        if key < candidate { hi = mid; }
+        else if key > candidate { lo = mid + 1; }
+        else { return some(compositionPairs[mid * 3 + 2]); }
+    }
+    null
+}
+
+func appendNormalizedScalarUtf8(cp: u32, output: *coll.Vec<u8>) !void {
+    if cp < 0x80 {
+        output.push(u8(cp)!)!;
+    } else if cp < 0x800 {
+        output.push(u8(0xc0 | (cp >> 6))!)!;
+        output.push(u8(0x80 | (cp & 0x3f))!)!;
+    } else if cp < 0x10000 {
+        output.push(u8(0xe0 | (cp >> 12))!)!;
+        output.push(u8(0x80 | ((cp >> 6) & 0x3f))!)!;
+        output.push(u8(0x80 | (cp & 0x3f))!)!;
+    } else {
+        output.push(u8(0xf0 | (cp >> 18))!)!;
+        output.push(u8(0x80 | ((cp >> 12) & 0x3f))!)!;
+        output.push(u8(0x80 | ((cp >> 6) & 0x3f))!)!;
+        output.push(u8(0x80 | (cp & 0x3f))!)!;
+    }
+}

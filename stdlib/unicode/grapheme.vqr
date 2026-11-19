@@ -1,0 +1,204 @@
+package unicode
+import (coll, convert, text)
+
+const gOther: u8 = 0;
+const gCR: u8 = 1;
+const gLF: u8 = 2;
+const gControl: u8 = 3;
+const gExtend: u8 = 4;
+const gZWJ: u8 = 5;
+const gRI: u8 = 6;
+const gPrepend: u8 = 7;
+const gSpacing: u8 = 8;
+const gL: u8 = 9;
+const gV: u8 = 10;
+const gT: u8 = 11;
+const gLV: u8 = 12;
+const gLVT: u8 = 13;
+
+const incbConsonant: u8 = 1;
+const incbExtend: u8 = 2;
+const incbLinker: u8 = 3;
+
+func graphemeProperty(ch: char) u8 { u8((packedInfo(ch) >> 34) & 15)! }
+func indicProperty(ch: char) u8 { u8((packedInfo(ch) >> 38) & 3)! }
+
+pub func graphemeBreak(ch: char) GraphemeBreak {
+    switch graphemeProperty(ch) {
+        1 => GraphemeBreak.CR,
+        2 => GraphemeBreak.LF,
+        3 => GraphemeBreak.Control,
+        4 => GraphemeBreak.Extend,
+        5 => GraphemeBreak.ZWJ,
+        6 => GraphemeBreak.RegionalIndicator,
+        7 => GraphemeBreak.Prepend,
+        8 => GraphemeBreak.SpacingMark,
+        9 => GraphemeBreak.L,
+        10 => GraphemeBreak.V,
+        11 => GraphemeBreak.T,
+        12 => GraphemeBreak.LV,
+        13 => GraphemeBreak.LVT,
+        else => GraphemeBreak.Other
+    }
+}
+
+pub class GraphemeSegmenter {
+    var previous: ?char;
+    var regionalRun: usize;
+    var epExtendRun: bool;
+    var zwjAfterEp: bool;
+    var indicState: u8;
+public:
+    func init() : previous(null), regionalRun(0), epExtendRun(false), zwjAfterEp(false), indicState(0) {}
+
+    func reset() void {
+        previous = null;
+        regionalRun = 0;
+        epExtendRun = false;
+        zwjAfterEp = false;
+        indicState = 0;
+    }
+
+    func feed(ch: char) bool {
+        var boundary = true;
+        switch previous {
+            some(last) => { boundary = shouldBreak(last, ch); },
+            null => {},
+        }
+        if boundary {
+            regionalRun = 0;
+            epExtendRun = false;
+            zwjAfterEp = false;
+            indicState = 0;
+        }
+        updateContext(ch);
+        previous = some(ch);
+        boundary
+    }
+
+    const func hasPrevious() bool { previous != null }
+
+private:
+    const func shouldBreak(previousChar: char, nextChar: char) bool {
+        var a = graphemeProperty(previousChar);
+        var b = graphemeProperty(nextChar);
+
+        // GB3
+        if a == gCR && b == gLF { return false; }
+        // GB4 / GB5
+        if a == gControl || a == gCR || a == gLF ||
+           b == gControl || b == gCR || b == gLF { return true; }
+        // GB6..GB8 Hangul syllable sequences
+        if a == gL && (b == gL || b == gV || b == gLV || b == gLVT) { return false; }
+        if (a == gLV || a == gV) && (b == gV || b == gT) { return false; }
+        if (a == gLVT || a == gT) && b == gT { return false; }
+        // GB9, GB9a, GB9b
+        if b == gExtend || b == gZWJ || b == gSpacing || a == gPrepend { return false; }
+        // GB9c: InCB=Consonant ... Linker ... x InCB=Consonant
+        if indicProperty(nextChar) == incbConsonant && indicState == 2 { return false; }
+        // GB11: Extended_Pictographic Extend* ZWJ x Extended_Pictographic
+        if (packedInfo(nextChar) & (1u64 << 32)) != 0 && a == gZWJ && zwjAfterEp {
+            return false;
+        }
+        // GB12 / GB13: pair regional indicators from the start of the RI run.
+        if a == gRI && b == gRI && regionalRun % 2 == 1 { return false; }
+        true
+    }
+
+    func updateContext(ch: char) void {
+        var prop = graphemeProperty(ch);
+        var indic = indicProperty(ch);
+
+        if prop == gRI { regionalRun++; }
+        else { regionalRun = 0; }
+
+        if (packedInfo(ch) & (1u64 << 32)) != 0 {
+            epExtendRun = true;
+            zwjAfterEp = false;
+        } else if prop == gExtend && epExtendRun {
+            // Keep EP Extend* context alive.
+            zwjAfterEp = false;
+        } else if prop == gZWJ {
+            zwjAfterEp = epExtendRun;
+            epExtendRun = false;
+        } else {
+            epExtendRun = false;
+            zwjAfterEp = false;
+        }
+
+        if indic == incbConsonant {
+            indicState = 1;
+        } else if indic == incbLinker {
+            if indicState == 1 || indicState == 2 { indicState = 2; }
+            else { indicState = 0; }
+        } else if indic == incbExtend {
+            // Preserve a consonant/linker chain through InCB=Extend.
+        } else {
+            indicState = 0;
+        }
+    }
+}
+
+pub class Graphemes {
+    var source: str;
+    var offset: usize;
+    var segmenter: GraphemeSegmenter;
+    var pendingFirst: bool;
+    var pendingWidth: usize;
+public:
+    func init(value: str) : source(value), offset(0), segmenter(GraphemeSegmenter()),
+        pendingFirst(false), pendingWidth(0) {}
+
+    func next() ?str {
+        var bytes = source.asBytes();
+        if offset >= bytes.len() { return null; }
+        var start = offset;
+
+        if pendingFirst {
+            offset += pendingWidth;
+            pendingFirst = false;
+        } else {
+            var first = decodeUtf8(bytes[offset..]) catch { offset = bytes.len(); return null; };
+            segmenter.feed(first.0);
+            offset += first.1;
+        }
+
+        for offset < bytes.len() {
+            var next = decodeUtf8(bytes[offset..]) catch { offset = bytes.len(); return null; };
+            var nextStart = offset;
+            if segmenter.feed(next.0) {
+                pendingFirst = true;
+                pendingWidth = next.1;
+                offset = nextStart;
+                return some(unsafe { __vqr_text_borrow_utf8(bytes[start..nextStart]) });
+            }
+            offset += next.1;
+        }
+        offset = bytes.len();
+        some(unsafe { __vqr_text_borrow_utf8(bytes[start..]) })
+    }
+}
+
+pub func graphemes(value: str) Graphemes { Graphemes(value) }
+
+pub func isGraphemeBoundary(value: str, byteOffset: usize) bool {
+    var bytes = value.asBytes();
+    if byteOffset > bytes.len() { return false; }
+    if byteOffset == 0 || byteOffset == bytes.len() { return true; }
+    if (bytes[byteOffset] & 0xc0) == 0x80 { return false; }
+    var segmenter = GraphemeSegmenter();
+    var position: usize = 0;
+    for position < byteOffset {
+        var decoded = decodeUtf8(bytes[position..]) catch { return false; };
+        segmenter.feed(decoded.0);
+        position += decoded.1;
+    }
+    var next = decodeUtf8(bytes[byteOffset..]) catch { return false; };
+    segmenter.feed(next.0)
+}
+
+pub func graphemeCount(value: str) usize {
+    var count: usize = 0;
+    for _ in graphemes(value) { count++; }
+    count
+}

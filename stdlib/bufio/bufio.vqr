@@ -163,8 +163,13 @@ public:
         if count != 1 { return io.IoError.NoProgress; }
     }
     func writeString(value: str) !void {
-        var count = write(value.asBytes())!;
-        if count != value.byteLen() { return io.IoError.NoProgress; }
+        var offset: usize = 0;
+        var bytes = value.asBytes();
+        for offset < bytes.len() {
+            var count = write(bytes[offset..bytes.len()])!;
+            if count == 0 { return io.IoError.NoProgress; }
+            offset += count;
+        }
     }
     const func buffered() usize { data.len() }
     const func available() usize { capacity - data.len() }

@@ -2,3 +2,25 @@ package io
 import (coll)
 
 pub func println<T>(value: T) !void { __vqr_println(move(value)) }
+
+pub func print(value: str) !void {
+    var output = stdout();
+    writeString(&output, value)!;
+    output.flush()
+}
+
+pub func eprint(value: str) !void {
+    var output = stderr();
+    writeString(&output, value)!;
+    output.flush()
+}
+
+pub func eprintln(value: str) !void {
+    var output = stderr();
+    writeString(&output, value)!;
+    writeString(&output, "\n")!;
+    output.flush()
+}
+
+pub func readToEnd(reader: *Reader) !coll.Vec<u8> { readToEnd(reader, ~usize(0)) }
+pub func copy(reader: *Reader, writer: *Writer) !u64 { copyAll(reader, writer) }

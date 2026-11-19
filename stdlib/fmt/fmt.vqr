@@ -13,9 +13,10 @@ pub class FormatOptions {
     pub var alignment: Alignment;
     pub var uppercase: bool;
     pub var showSign: bool;
+    pub var floatStyle: FloatStyle;
 public:
     func init() : radix(10), width(0), precision(-1), fill(' '),
-        alignment(Alignment.Right), uppercase(false), showSign(false) {}
+        alignment(Alignment.Right), uppercase(false), showSign(false), floatStyle(FloatStyle.General) {}
 }
 
 func formatMagnitude(value: u128, radix: u8, negative: bool, uppercase: bool) !string {
@@ -144,7 +145,7 @@ pub func formatFloat(value: f64, style: FloatStyle, precision: ?usize) !string {
 }
 
 pub func writeFloat(writer: *io.Writer, value: f64, options: FormatOptions) !void {
-    var style = if options.precision < 0 { FloatStyle.General } else { FloatStyle.Fixed };
+    var style = options.floatStyle;
     var precision: ?usize = if options.precision < 0 { null } else { some(usize(options.precision)) };
     var output = formatFloat(value, style, precision)!;
     writeString(writer, unsafe { __vqr_text_borrow_utf8(output.asBytes()) }, options)!
@@ -182,10 +183,18 @@ pub enum FormatArg {
     Text(str), Signed(i128), Unsigned(u128), Float(f64), Boolean(bool), Character(char),
 }
 pub func arg(value: str) FormatArg { FormatArg.Text(value) }
+pub func arg(value: string) FormatArg { FormatArg.Text(unsafe { __vqr_text_borrow_utf8(value.asBytes()) }) }
+pub func arg(value: i8) FormatArg { FormatArg.Signed(i128(value)) }
+pub func arg(value: i16) FormatArg { FormatArg.Signed(i128(value)) }
+pub func arg(value: i128) FormatArg { FormatArg.Signed(value) }
+pub func arg(value: u8) FormatArg { FormatArg.Unsigned(u128(value)) }
+pub func arg(value: u16) FormatArg { FormatArg.Unsigned(u128(value)) }
+pub func arg(value: u128) FormatArg { FormatArg.Unsigned(value) }
 pub func arg(value: i32) FormatArg { FormatArg.Signed(i128(value)) }
 pub func arg(value: i64) FormatArg { FormatArg.Signed(i128(value)) }
 pub func arg(value: u32) FormatArg { FormatArg.Unsigned(u128(value)) }
 pub func arg(value: u64) FormatArg { FormatArg.Unsigned(u128(value)) }
+pub func arg(value: f32) FormatArg { FormatArg.Float(f64(value)) }
 pub func arg(value: f64) FormatArg { FormatArg.Float(value) }
 pub func arg(value: bool) FormatArg { FormatArg.Boolean(value) }
 pub func arg(value: char) FormatArg { FormatArg.Character(value) }
@@ -229,6 +238,7 @@ func parseSpec(value: str) !FormatOptions {
             precision = precision * 10 + digit;
             index++;
         }
+        if index == firstDigit { return FormatError.InvalidPrecision; }
         options.precision = i32(precision);
     }
     if index < bytes.len() {
@@ -238,6 +248,9 @@ func parseSpec(value: str) !FormatOptions {
             100 => options.radix = 10,
             120 => options.radix = 16,
             88 => { options.radix = 16; options.uppercase = true; },
+            102 => options.floatStyle = FloatStyle.Fixed,
+            101 => options.floatStyle = FloatStyle.Scientific,
+            103 => options.floatStyle = FloatStyle.General,
             _ => return FormatError.InvalidFormat,
         }
         index++;
@@ -298,6 +311,29 @@ pub func format(pattern: str, args: []const FormatArg) !string {
 }
 pub func format(value: str) !string { text.fromBytes(value.asBytes()) }
 pub func writeTo(writer: *io.Writer, value: str) !void { io.writeString(writer, value) }
+
+pub func print(value: FormatArg) !void {
+    var output = io.stdout();
+    writeArg(&output, value, FormatOptions())!;
+    output.flush()
+}
+pub func println(value: FormatArg) !void {
+    var output = io.stdout();
+    writeArg(&output, value, FormatOptions())!;
+    io.writeString(&output, "\n")!;
+    output.flush()
+}
+pub func eprint(value: FormatArg) !void {
+    var output = io.stderr();
+    writeArg(&output, value, FormatOptions())!;
+    output.flush()
+}
+pub func eprintln(value: FormatArg) !void {
+    var output = io.stderr();
+    writeArg(&output, value, FormatOptions())!;
+    io.writeString(&output, "\n")!;
+    output.flush()
+}
 
 pub func print(value: str) !void {
     var output = io.stdout();

@@ -192,10 +192,9 @@ public:
 
 pub class HostDirectory {
     #copy: disabled
-    var handle: *u8;
-    var closed: bool;
+    var handle: usize;
 public:
-    func init(handle: *u8) : handle(handle), closed(false) {}
+    func init(handle: usize) : handle(handle) {}
 
     static func open(path: []const u8) !Self {
         var name = cString(path)!;
@@ -206,12 +205,13 @@ public:
     }
 
     func next() !?HostDirEntry {
-        if closed { return IoError.Closed; }
+        if handle == 0 { return IoError.Closed; }
+        var directory = unsafe { ptrFromInt<*u8>(handle) };
         var name: [4096]u8;
         var length: usize = 0;
         var kind: i32 = 0;
         var errorCode: i32 = 0;
-        var status = unsafe { __vqr_io_dir_next(handle, &name[0], name.len(), &length, &kind, &errorCode) };
+        var status = unsafe { __vqr_io_dir_next(directory, &name[0], name.len(), &length, &kind, &errorCode) };
         if status == 0 { return null; }
         if status < 0 { return systemError(errorCode); }
         var value = text.fromBytes(name[0..length])!;
@@ -219,18 +219,17 @@ public:
     }
 
     func close() !void {
-        if closed { return; }
-        closed = true;
+        if handle == 0 { return; }
+        var directory = unsafe { ptrFromInt<*u8>(handle) };
+        handle = 0;
         var errorCode: i32 = 0;
-        if unsafe { __vqr_io_dir_close(handle, &errorCode) } != 0 {
+        if unsafe { __vqr_io_dir_close(directory, &errorCode) } != 0 {
             return systemError(errorCode);
         }
-        handle = ptrFromInt<*u8>(0);
     }
 
     func deinit() void { close() catch {}; }
 }
-
 pub func hostStat(path: []const u8, follow: bool) !HostMetadata {
     var name = cString(path)!;
     var size: u64 = 0;

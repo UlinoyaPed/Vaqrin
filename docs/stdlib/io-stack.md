@@ -26,11 +26,13 @@ that an OS runtime port exists.
 
 ## Error representation
 
-Named language errors retain normal ErrorId values. A native errno is encoded with
-bit 31 set and the native error number in bits 0..30. Use io.isSystemError and
+Named language errors retain normal ErrorId values. A native errno is encoded with marker bits 01 in bits 31..30 and the native
+error number in bits 0..29. This avoids collisions with the compiler's reserved
+high-valued error IDs for allocation, numeric conversion and legacy output errors. Use io.isSystemError and
 io.systemErrorCode to inspect it. This encoding is process-local and must not be
 serialized as a stable error number. Linux EINTR and EAGAIN are recognized by the
-progress helpers; other errno values are preserved unchanged.
+progress helpers; interrupted synchronous operations are retried, while WouldBlock
+is returned to the caller. Other errno values are preserved unchanged.
 
 ## Ownership and buffering
 

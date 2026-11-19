@@ -38,13 +38,13 @@ static void write_metadata(const struct stat *value, uint64_t *size, uint32_t *m
 extern "C" {
 
 int32_t __vqr_io_system_error(int32_t code) {
-    return (int32_t)(0x80000000u | ((uint32_t)code & 0x7fffffffu));
+    return (int32_t)(0x40000000u | ((uint32_t)code & 0x3fffffffu));
 }
 
 int32_t __vqr_io_error_code(int32_t error_id) {
     uint32_t value = (uint32_t)error_id;
-    if ((value & 0x80000000u) == 0) return -1;
-    return (int32_t)(value & 0x7fffffffu);
+    if ((value & 0xc0000000u) != 0x40000000u) return -1;
+    return (int32_t)(value & 0x3fffffffu);
 }
 
 int32_t __vqr_io_open(const char *path, uint32_t flags, uint32_t mode, int32_t *out_error) {

@@ -24,16 +24,26 @@ pub error IoError {
 
 pub func read(reader: *Reader, dst: []u8) !usize {
     if dst.len() == 0 { return 0; }
-    var count = reader.read(dst)!;
-    if count > dst.len() { return IoError.InvalidCount; }
-    count
+    for {
+        var count = reader.read(dst) catch (reason) {
+            if isInterrupted(reason) { continue; }
+            return reason;
+        };
+        if count > dst.len() { return IoError.InvalidCount; }
+        return count;
+    }
 }
 pub func write(writer: *Writer, src: []const u8) !usize {
     if src.len() == 0 { return 0; }
-    var count = writer.write(src)!;
-    if count > src.len() { return IoError.InvalidCount; }
-    if count == 0 { return IoError.NoProgress; }
-    count
+    for {
+        var count = writer.write(src) catch (reason) {
+            if isInterrupted(reason) { continue; }
+            return reason;
+        };
+        if count > src.len() { return IoError.InvalidCount; }
+        if count == 0 { return IoError.NoProgress; }
+        return count;
+    }
 }
 
 pub func readExactProgress(reader: *Reader, dst: []u8) !IoProgress {
@@ -244,11 +254,36 @@ pub func limit(reader: *Reader, n: u64) LimitedReader { LimitedReader(reader, n)
 pub func tee(reader: *Reader, writer: *Writer) TeeReader { TeeReader(reader, writer) }
 
 
+
+pub func readAt(reader: *ReaderAt, offset: u64, dst: []u8) !usize {
+    for {
+        var count = reader.readAt(offset, dst) catch (reason) {
+            if isInterrupted(reason) { continue; }
+            return reason;
+        };
+        if count > dst.len() { return IoError.InvalidCount; }
+        return count;
+    }
+}
+
+pub func writeAt(writer: *WriterAt, offset: u64, src: []const u8) !usize {
+    if src.len() == 0 { return 0; }
+    for {
+        var count = writer.writeAt(offset, src) catch (reason) {
+            if isInterrupted(reason) { continue; }
+            return reason;
+        };
+        if count > src.len() { return IoError.InvalidCount; }
+        if count == 0 { return IoError.NoProgress; }
+        return count;
+    }
+}
+
 pub func readExactAt(reader: *ReaderAt, offset: u64, dst: []u8) !void {
     var processed: usize = 0;
     for processed < dst.len() {
         if u64(processed) > ~u64(0) - offset { return IoError.PositionOutOfRange; }
-        var count = reader.readAt(offset + u64(processed), dst[processed..dst.len()])!;
+        var count = readAt(reader, offset + u64(processed), dst[processed..dst.len()])!;
         if count > dst.len() - processed { return IoError.InvalidCount; }
         if count == 0 { return IoError.UnexpectedEof; }
         processed += count;
@@ -259,7 +294,7 @@ pub func writeAllAt(writer: *WriterAt, offset: u64, src: []const u8) !void {
     var processed: usize = 0;
     for processed < src.len() {
         if u64(processed) > ~u64(0) - offset { return IoError.PositionOutOfRange; }
-        var count = writer.writeAt(offset + u64(processed), src[processed..src.len()])!;
+        var count = writeAt(writer, offset + u64(processed), src[processed..src.len()])!;
         if count > src.len() - processed { return IoError.InvalidCount; }
         if count == 0 { return IoError.NoProgress; }
         processed += count;

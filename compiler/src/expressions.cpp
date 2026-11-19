@@ -273,19 +273,23 @@ ValueAt Body::member(const Ast &n) {
     merge({state, initialized}, state.size());
     return {type, phi};
   }
-  auto basePath = path(base);
+  auto target = base->kind == NodeKind::Generic ? base->children[0] : base;
+  auto basePath = path(target);
   if (!basePath.empty() && findLocal(basePath.substr(0, basePath.find('.'))) < 0) {
     auto defs = p.resolve(file, basePath, n->span);
-    if (defs.size() == 1 && defs[0].decl->kind == DeclKind::Error)
+    if (target == base && defs.size() == 1 && defs[0].decl->kind == DeclKind::Error)
       return {p.errorTy, ir.getInt32(p.errorCode(defs[0], n->text))};
     if (defs.size() == 1 && defs[0].decl->kind == DeclKind::Enum) {
-      auto *t = p.nominal(defs[0], {});
+      std::vector<Ast> args;
+      if (target != base) args.assign(base->children.begin() + 1, base->children.end());
+      auto *t = p.named(basePath, file, n->span, generics, args, visibleConstants());
+      p.ensureSized(t, n->span);
       auto v = std::ranges::find(t->variants, n->text, &Variant::name);
       if (v == t->variants.end() || !v->fields.empty())
         fail(n->span, "expected an enum member without a payload");
       return {t, ir.CreateInsertValue(Constant::getNullValue(t->ir), ConstantInt::get(p.context, v->tag), 0)};
     }
-    if (!p.import(file, basePath).empty()) {
+    if (target == base && !p.import(file, basePath).empty()) {
       auto full = p.resolve(file, basePath + "." + n->text, n->span);
       if (full.size() == 1 && full[0].decl->kind == DeclKind::Global) {
         auto &g = p.global(full[0]);

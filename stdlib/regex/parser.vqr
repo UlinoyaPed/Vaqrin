@@ -258,8 +258,10 @@ private:
                 var right = parseClassAtom()!;
                 if right.builtinMask != 0 { return RegexError.InvalidRange; }
                 if right.scalar < left.scalar { return RegexError.InvalidRange; }
+                if ranges.len() >= nodeLimit { return RegexError.TooManyStates; }
                 ranges.push(CharRange{first: left.scalar, last: right.scalar})!;
             } else {
+                if ranges.len() >= nodeLimit { return RegexError.TooManyStates; }
                 ranges.push(CharRange{first: left.scalar, last: left.scalar})!;
             }
         }

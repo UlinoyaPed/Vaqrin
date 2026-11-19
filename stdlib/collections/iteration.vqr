@@ -1,0 +1,108 @@
+package collections;
+
+pub class SliceIter<T: Copyable & Movable> {
+    var values: []const T;
+    var position: usize;
+public:
+    func init(values: []const T) : values(values), position(0) {}
+    func next() ?T {
+        if position == values.len() { return null; }
+        var value = values[position];
+        position++;
+        move(value)
+    }
+}
+
+pub func iter<T: Copyable & Movable>(values: []const T) SliceIter<T> {
+    SliceIter<T>(values)
+}
+
+pub class Enumerate<T: Copyable & Movable> {
+    var source: SliceIter<T>;
+    var position: usize;
+public:
+    func init(values: []const T) : source(SliceIter<T>(values)), position(0) {}
+    func next() ?(usize, T) {
+        switch source.next() {
+            null => null,
+            some(value) => {
+                var index = position;
+                position++;
+                (index, move(value))
+            },
+        }
+    }
+}
+
+pub func enumerate<T: Copyable & Movable>(values: []const T) Enumerate<T> {
+    Enumerate<T>(values)
+}
+
+pub class Zip<A: Copyable & Movable, B: Copyable & Movable> {
+    var first: SliceIter<A>;
+    var second: SliceIter<B>;
+    var remaining: usize;
+public:
+    func init(a: []const A, b: []const B)
+        : first(SliceIter<A>(a)), second(SliceIter<B>(b)),
+          remaining(if a.len() < b.len() { a.len() } else { b.len() }) {}
+    func next() ?(A, B) {
+        if remaining == 0 { return null; }
+        remaining--;
+        (first.next().unwrap(), second.next().unwrap())
+    }
+}
+
+pub func zip<A: Copyable & Movable, B: Copyable & Movable>(a: []const A, b: []const B) Zip<A, B> {
+    Zip<A, B>(a, b)
+}
+
+pub class Map<T: Copyable & Movable, U: Movable> {
+    var source: SliceIter<T>;
+    var transform: func(T) U;
+public:
+    func init(values: []const T, transform: func(T) U)
+        : source(SliceIter<T>(values)), transform(transform) {}
+    func next() ?U {
+        switch source.next() {
+            null => null,
+            some(value) => transform(move(value)),
+        }
+    }
+}
+
+pub func map<T: Copyable & Movable, U: Movable>(values: []const T, transform: func(T) U) Map<T, U> {
+    Map<T, U>(values, transform)
+}
+
+pub class Filter<T: Copyable & Movable> {
+    var source: SliceIter<T>;
+    var predicate: func(T) bool;
+public:
+    func init(values: []const T, predicate: func(T) bool)
+        : source(SliceIter<T>(values)), predicate(predicate) {}
+    func next() ?T {
+        for {
+            switch source.next() {
+                null => return null,
+                some(value) => {
+                    if predicate(value) { return move(value); }
+                },
+            }
+        }
+    }
+}
+
+pub func filter<T: Copyable & Movable>(values: []const T, predicate: func(T) bool) Filter<T> {
+    Filter<T>(values, predicate)
+}
+
+pub func take<T: Copyable & Movable>(values: []const T, count: usize) SliceIter<T> {
+    var end = if count < values.len() { count } else { values.len() };
+    SliceIter<T>(values[0..end])
+}
+
+pub func skip<T: Copyable & Movable>(values: []const T, count: usize) SliceIter<T> {
+    var start = if count < values.len() { count } else { values.len() };
+    SliceIter<T>(values[start..values.len()])
+}

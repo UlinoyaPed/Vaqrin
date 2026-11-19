@@ -1,0 +1,16 @@
+package core;
+import (collections);
+
+pub type Vec<T: Movable> = collections.Vec<T>;
+
+pub type Box<T> = ^T;
+
+pub func isSome<T>(value: *const ?T) bool {
+    switch *value { null => false, some(_) => true }
+}
+
+pub func isOk<T>(value: *const !T) bool { __vqr_result_ok(value) }
+
+pub func unwrapOr<T: Movable>(value: ?T, fallback: func() T) T {
+    move(value) ?? fallback()
+}

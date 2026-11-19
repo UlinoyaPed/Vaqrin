@@ -1,0 +1,80 @@
+package text;
+import (collections);
+
+pub func equal(a, b: str) bool { a == b }
+
+pub func byteLen(value: str) usize { value.byteLen() }
+
+pub func scalarCount(value: str) usize {
+    var count: usize = 0;
+    for byte in value.asBytes() {
+        if ((byte & 0xc0) != 0x80) { count++; }
+    }
+    count
+}
+
+pub class Scalars {
+    var bytes: []const u8;
+    var index: usize;
+public:
+    func init(value: str) : bytes(value.asBytes()), index(0) {}
+    func next() ?char {
+        if index == bytes.len() { return null; }
+        var head = u32(bytes[index]);
+        index++;
+        if head < 0x80 { return __vqr_char(head); }
+        var continuation = if head < 0xe0 { 1 } else if head < 0xf0 { 2 } else { 3 };
+        var code = head & (u32(0x7f) >> (continuation + 1));
+        for i in 0..continuation {
+            code = (code << 6) | (u32(bytes[index]) & 0x3f);
+            index++;
+        }
+        __vqr_char(code)
+    }
+}
+
+pub func chars(value: str) Scalars { Scalars(value) }
+
+
+pub error Utf8Error { InvalidUtf8 }
+
+pub func fromBytes(values: []const u8) !string {
+    var position: usize = 0;
+    for position < values.len() {
+        var lead = u32(values[position]);
+        position++;
+        if lead < 0x80 { continue; }
+        if lead < 0xc2 || lead > 0xf4 { return Utf8Error.InvalidUtf8; }
+        var count: usize = if lead < 0xe0 { 1 } else if lead < 0xf0 { 2 } else { 3 };
+        if count > values.len() - position { return Utf8Error.InvalidUtf8; }
+        var code = lead & (u32(0x7f) >> (count + 1));
+        for i in usize(0)..count {
+            var byte = u32(values[position]);
+            if byte < 0x80 || byte > 0xbf { return Utf8Error.InvalidUtf8; }
+            code = (code << 6) | (byte & 0x3f);
+            position++;
+        }
+        var minimum: u32 = if count == 1 { 0x80 } else if count == 2 { 0x800 } else { 0x10000 };
+        if code < minimum || code > 0x10ffff || (0xd800 <= code && code <= 0xdfff) {
+            return Utf8Error.InvalidUtf8;
+        }
+    }
+    unsafe { __vqr_text_from_utf8(values) }
+}
+
+pub class StringBuilder {
+    var buffer: collections.Vec<u8>;
+public:
+    func init() : buffer(collections.Vec<u8>()) {}
+    const func byteLen() usize { buffer.len() }
+    func clear() void { buffer.clear(); }
+
+    func append(value: str) !void {
+        buffer.reserve(buffer.len() +| value.byteLen())!;
+        for byte in value.asBytes() { buffer.push(byte)!; }
+    }
+
+    const func build() !string {
+        unsafe { __vqr_text_from_utf8(buffer.asSlice()) }
+    }
+}

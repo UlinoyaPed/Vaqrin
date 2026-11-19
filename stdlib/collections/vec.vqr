@@ -1,0 +1,84 @@
+package collections;
+
+pub class Vec<T: Movable> {
+    #copy: disabled
+    var data: ?*T;
+    var length: usize;
+    var reserved: usize;
+public:
+    func init() : data(null), length(0), reserved(0) {}
+    const func len() usize { length }
+    const func capacity() usize { reserved }
+    const func isEmpty() bool { length == 0 }
+
+    func reserve(minCapacity: usize) !void {
+        if minCapacity <= reserved { return; }
+        var next = unsafe { __vqr_alloc<T>(minCapacity)! };
+        var i: usize = 0;
+        if __vqr_optional_present(&data) {
+            var previous = data.unwrap();
+            unsafe {
+                for i < length {
+                    __vqr_slot_write<T>(next.offset(i), __vqr_slot_take<T>(previous.offset(i)));
+                    i++;
+                }
+                __vqr_free<T>(previous);
+            }
+        }
+        data = next;
+        reserved = minCapacity;
+    }
+
+    func push(value: T) !void {
+        if length == reserved {
+            reserve(if reserved < 4 { usize(4) } else { reserved +| reserved })!;
+        }
+        unsafe {
+            __vqr_slot_write<T>(data.unwrap().offset(length), move(value));
+        }
+        length++;
+    }
+
+    func pop() ?T {
+        if length == 0 { return null; }
+        length--;
+        unsafe { __vqr_slot_take<T>(data.unwrap().offset(length)) }
+    }
+
+    func replace(index: usize, value: T) ?T {
+        if index >= length { return null; }
+        unsafe {
+            var slot = data.unwrap().offset(index);
+            var previous = __vqr_slot_take<T>(slot);
+            __vqr_slot_write<T>(slot, move(value));
+            move(previous)
+        }
+    }
+
+    const func clone() !Self {
+        var result = Vec<T>();
+        result.reserve(length)!;
+        for value in asSlice() { result.push(move(value))!; }
+        move(result)
+    }
+
+    const func iter() SliceIter<T> { SliceIter<T>(asSlice()) }
+
+    func clear() void {
+        for length > 0 {
+            length--;
+            unsafe { __vqr_slot_drop<T>(data.unwrap().offset(length)); }
+        }
+    }
+
+    func asSlice() []T { unsafe { __vqr_slice<T>(data, length) } }
+    const func asSlice() []const T { unsafe { __vqr_const_slice<T>(data, length) } }
+
+    func deinit() void {
+        clear();
+        switch data {
+            null => {},
+            some(address) => unsafe { __vqr_free<T>(address); },
+        }
+    }
+}

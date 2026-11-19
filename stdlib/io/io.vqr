@@ -1,0 +1,3 @@
+package io;
+
+pub func println<T>(value: T) !void { __vqr_println(move(value)) }

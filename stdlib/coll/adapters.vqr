@@ -1,0 +1,137 @@
+package coll
+import (core)
+
+pub class Stack<T: Movable> {
+    var values: Vec<T>;
+public:
+    func init() : values(Vec<T>()) {}
+    static func withCapacity(n: usize) !Self {
+        Stack<T>(Vec<T>.withCapacity(n)!)
+    }
+    const func len() usize { values.len() }
+    const func isEmpty() bool { values.isEmpty() }
+    func push(value: T) !void { values.push(move(value)) }
+    func pushPreserving(value: T) PushResult<T> { values.pushPreserving(move(value)) }
+    func pop() ?T { values.pop() }
+    const func peek() ?*const T { values.last() }
+    func peekMut() ?*T { values.lastMut() }
+    func clear() void { values.clear(); }
+}
+
+pub class Queue<T: Movable> {
+    var values: VecDeque<T>;
+public:
+    func init() : values(VecDeque<T>()) {}
+    static func withCapacity(n: usize) !Self {
+        Queue<T>(VecDeque<T>.withCapacity(n)!)
+    }
+    const func len() usize { values.len() }
+    const func isEmpty() bool { values.isEmpty() }
+    func enqueue(value: T) !void { values.pushBack(move(value)) }
+    func enqueuePreserving(value: T) PushResult<T> { values.pushBackPreserving(move(value)) }
+    func dequeue() ?T { values.popFront() }
+    const func front() ?*const T { values.front() }
+    const func back() ?*const T { values.back() }
+    func clear() void { values.clear(); }
+}
+
+pub class BinaryHeap<T: Movable> {
+    #copy: disabled
+    var values: Vec<T>;
+public:
+    func init() : values(Vec<T>()) {}
+    static func withCapacity(n: usize) !Self {
+        BinaryHeap<T>(Vec<T>.withCapacity(n)!)
+    }
+    static func fromSlice(items: []const T) !Self {
+        var result = BinaryHeap<T>();
+        result.values = Vec<T>.fromSlice(items)!;
+        result.heapify();
+        move(result)
+    }
+
+    const func len() usize { values.len() }
+    const func capacity() usize { values.capacity() }
+    const func isEmpty() bool { values.isEmpty() }
+    const func peek() ?*const T { values.first() }
+
+    func push(value: T) !void {
+        values.push(move(value))!;
+        siftUp(values.len() - 1);
+    }
+
+    func pushPreserving(value: T) PushResult<T> {
+        switch values.pushPreserving(move(value)) {
+            PushResult.Stored => {
+                siftUp(values.len() - 1);
+                PushResult.Stored()
+            },
+            PushResult.Full(item) => PushResult.Full(move(item)),
+            PushResult.Failed(reason, item) => PushResult.Failed(reason, move(item)),
+        }
+    }
+
+    func pop() ?T {
+        if values.isEmpty() { return null; }
+        if values.len() == 1 { return values.pop(); }
+        values.swap(0, values.len() - 1);
+        var result = values.pop().unwrap();
+        siftDown(0);
+        some(move(result))
+    }
+
+    func replaceTop(value: T) ?T {
+        if values.isEmpty() {
+            values.push(move(value)) catch { panic("heap replacement allocation failed"); };
+            return null;
+        }
+        var previous = values.replace(0, move(value)).unwrap();
+        siftDown(0);
+        some(move(previous))
+    }
+
+    func clear() void { values.clear(); }
+
+    func intoSortedVec() !Vec<T> {
+        var result = Vec<T>.withCapacity(values.len())!;
+        for values.len() > 0 {
+            var item = pop().unwrap();
+            result.push(move(item))!;
+        }
+        move(result)
+    }
+
+private:
+    func greater(a: usize, b: usize) bool { *values.at(a) > *values.at(b) }
+
+    func siftUp(index: usize) void {
+        var child = index;
+        for child > 0 {
+            var parent = (child - 1) / 2;
+            if !greater(child, parent) { return; }
+            values.swap(child, parent);
+            child = parent;
+        }
+    }
+
+    func siftDown(index: usize) void {
+        var root = index;
+        for root < values.len() / 2 {
+            var child = root * 2 + 1;
+            if child + 1 < values.len() && greater(child + 1, child) { child++; }
+            if !greater(child, root) { return; }
+            values.swap(root, child);
+            root = child;
+        }
+    }
+
+    func heapify() void {
+        var i = values.len() / 2;
+        for i > 0 {
+            i--;
+            siftDown(i);
+        }
+    }
+}
+
+pub type PriorityQueue<T: Movable> = BinaryHeap<T>;

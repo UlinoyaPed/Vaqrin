@@ -1,0 +1,228 @@
+package csv
+import (coll, core, io, text)
+
+pub error CsvError {
+    InvalidOptions, InvalidQuote, UnexpectedAfterQuote, UnterminatedQuote,
+    FieldLimit, RecordLimit, InputLimit, InvalidUtf8, IoFailure,
+}
+
+pub enum LineEnding { LF, CRLF }
+
+pub class CsvOptions {
+    pub var delimiter: u8;
+    pub var quote: u8;
+    pub var lineEnding: LineEnding;
+    pub var hasHeader: bool;
+    pub var maxFieldBytes: usize;
+    pub var maxRecordBytes: usize;
+    pub var maxRecords: usize;
+
+    func init()
+        : delimiter(44), quote(34), lineEnding(LineEnding.CRLF), hasHeader(false),
+          maxFieldBytes(1024 * 1024), maxRecordBytes(8 * 1024 * 1024),
+          maxRecords(1_000_000) {}
+}
+
+pub func validateOptions(options: *const CsvOptions) !void {
+    if options.delimiter == options.quote || options.delimiter == 10 ||
+       options.delimiter == 13 || options.quote == 10 || options.quote == 13 {
+        return CsvError.InvalidOptions;
+    }
+}
+
+pub func parseRecord(value: str, options: CsvOptions) !coll.Vec<string> {
+    validateOptions(&options)!;
+    var data = value.asBytes();
+    var fields = coll.Vec<string>();
+    var field = coll.Vec<u8>();
+    var position: usize = 0;
+    var quoted = false;
+    var afterQuote = false;
+    for position < data.len() {
+        var byte = data[position];
+        position++;
+        if quoted {
+            if byte == options.quote {
+                if position < data.len() && data[position] == options.quote {
+                    field.push(options.quote)!;
+                    position++;
+                } else {
+                    quoted = false;
+                    afterQuote = true;
+                }
+            } else {
+                field.push(byte)!;
+            }
+        } else if afterQuote {
+            if byte == options.delimiter {
+                fields.push(text.fromBytes(field.asConstSlice())!)!;
+                field.clear();
+                afterQuote = false;
+            } else if byte != 10 && byte != 13 {
+                return CsvError.UnexpectedAfterQuote;
+            } else {
+                if byte == 13 && position < data.len() && data[position] == 10 { position++; }
+                fields.push(text.fromBytes(field.asConstSlice())!)!;
+                return fields;
+            }
+        } else if byte == options.quote {
+            if field.len() != 0 { return CsvError.InvalidQuote; }
+            quoted = true;
+        } else if byte == options.delimiter {
+            fields.push(text.fromBytes(field.asConstSlice())!)!;
+            field.clear();
+        } else if byte == 10 || byte == 13 {
+            if byte == 13 && position < data.len() && data[position] == 10 { position++; }
+            fields.push(text.fromBytes(field.asConstSlice())!)!;
+            return fields;
+        } else {
+            field.push(byte)!;
+        }
+        if field.len() > options.maxFieldBytes { return CsvError.FieldLimit; }
+    }
+    if quoted { return CsvError.UnterminatedQuote; }
+    fields.push(text.fromBytes(field.asConstSlice())!)!;
+    move(fields)
+}
+
+pub func parse(value: str, options: CsvOptions) !coll.Vec<coll.Vec<string>> {
+    validateOptions(&options)!;
+    if value.byteLen() > options.maxRecordBytes { return CsvError.RecordLimit; }
+    var data = value.asBytes();
+    var rows = coll.Vec<coll.Vec<string>>();
+    var start: usize = 0;
+    var quoted = false;
+    var index: usize = 0;
+    for index < data.len() {
+        if data[index] == options.quote {
+            if quoted && index + 1 < data.len() && data[index + 1] == options.quote {
+                index += 2;
+                continue;
+            }
+            quoted = !quoted;
+        } else if !quoted && (data[index] == 10 || data[index] == 13) {
+            var end = index;
+            if data[index] == 13 && index + 1 < data.len() && data[index + 1] == 10 { index++; }
+            var record = text.fromBytes(data[start..end])!;
+            rows.push(parseRecord(record, options)!)!;
+            start = index + 1;
+            if rows.len() > options.maxRecords { return CsvError.RecordLimit; }
+        }
+        index++;
+    }
+    if start < data.len() || data.len() == 0 || (data.len() > 0 && (data[data.len()-1] == 10 || data[data.len()-1] == 13)) {
+        if start < data.len() {
+            var record = text.fromBytes(data[start..data.len()])!;
+            rows.push(parseRecord(record, options)!)!;
+        }
+    }
+    move(rows)
+}
+
+pub func escapeField(value: str, options: CsvOptions) !string {
+    validateOptions(&options)!;
+    var needsQuote = false;
+    for byte in value.asBytes() {
+        if byte == options.delimiter || byte == options.quote || byte == 10 || byte == 13 {
+            needsQuote = true;
+        }
+    }
+    if !needsQuote { return text.fromBytes(value.asBytes()); }
+    var output = coll.Vec<u8>();
+    output.push(options.quote)!;
+    for byte in value.asBytes() {
+        output.push(byte)!;
+        if byte == options.quote { output.push(byte)!; }
+    }
+    output.push(options.quote)!;
+    text.fromBytes(output.asConstSlice())
+}
+
+pub func stringify(records: []const []const str, options: CsvOptions) !string {
+    var output = coll.Vec<u8>();
+    var crlf = options.lineEnding == LineEnding.CRLF;
+    for row in records {
+        for index in usize(0)..row.len() {
+            if index != 0 { output.push(options.delimiter)!; }
+            var field = escapeField(row[index], options)!;
+            for byte in field.asBytes() { output.push(byte)!; }
+        }
+        if crlf { output.push(13)!; }
+        output.push(10)!;
+        if output.len() > options.maxRecordBytes { return CsvError.RecordLimit; }
+    }
+    text.fromBytes(output.asConstSlice())
+}
+
+pub class CsvReader {
+    var reader: *io.Reader;
+    var options: CsvOptions;
+    var buffer: coll.Vec<u8>;
+    var eof: bool;
+    var recordNumber: usize;
+    var headerValues: ?coll.Vec<string>;
+public:
+    func init(reader: *io.Reader, options: CsvOptions)
+        : reader(reader), options(move(options)), buffer(coll.Vec<u8>()),
+          eof(false), recordNumber(0), headerValues(null) {
+        validateOptions(&options)!;
+    }
+
+    func readRecord() !?coll.Vec<string> {
+        if eof && buffer.isEmpty() { return null; }
+        for {
+            var byte: [1]u8;
+            var count = io.read(reader, byte[:])!;
+            if count == 0 { eof = true; break; }
+            buffer.push(byte[0])!;
+            if buffer.len() > options.maxRecordBytes { return CsvError.RecordLimit; }
+            if byte[0] == 10 { break; }
+        }
+        if buffer.isEmpty() && eof { return null; }
+        var line = text.fromBytes(buffer.asConstSlice())!;
+        buffer.clear();
+        recordNumber++;
+        if recordNumber > options.maxRecords { return CsvError.RecordLimit; }
+        some(parseRecord(line, options)!)
+    }
+
+    func readFields(dst: *coll.Vec<string>) !bool {
+        var row = readRecord()!;
+        switch move(row) {
+            null => false,
+            some(fields) => {
+                for field in fields.asConstSlice() { dst.push(field)!; }
+                true
+            },
+        }
+    }
+
+    const func headers() ?*const coll.Vec<string> {
+        switch headerValues { null => null, some(&value) => some(&value) }
+    }
+    const func position() (usize, usize) { (recordNumber, buffer.len()) }
+    func close() void {}
+}
+
+pub class CsvWriter {
+    var writer: *io.Writer;
+    var options: CsvOptions;
+public:
+    func init(writer: *io.Writer, options: CsvOptions)
+        : writer(writer), options(move(options)) { validateOptions(&options)!; }
+
+    func writeRecord(fields: []const str) !void {
+        for index in usize(0)..fields.len() {
+            if index != 0 { io.writeAll(writer, [options.delimiter])!; }
+            var escaped = escapeField(fields[index], options)!;
+            io.writeString(writer, escaped)!;
+        }
+        if options.lineEnding == LineEnding.CRLF { io.writeString(writer, "\r")!; }
+        io.writeString(writer, "\n")
+    }
+
+    func writeAll(rows: []const []const str) !void {
+        for row in rows { writeRecord(row)!; }
+    }
+    func flush() !void { writer.flush() }
+}

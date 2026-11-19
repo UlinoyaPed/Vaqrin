@@ -595,9 +595,10 @@ class Acceptance(unittest.TestCase):
         self.assertEqual(self.process("./app", good=False).returncode, 3)
 
     def test_unavailable_hosted_packages_have_target_diagnostics(self):
-        for package in ("task", "channel", "net"):
+        packages = {"task": "", "channel": "var ends = channel.bounded<i32>(1) catch { return; };", "net": ""}
+        for package, operation in packages.items():
             with self.subTest(package=package):
-                source = self.source("target.vqr", f"import ({package}) func f() void {{}}")
+                source = self.source("target.vqr", f"import ({package}) func f() void {{ {operation} }}")
                 result = self.process(VAQC, "check", source, "--target", "thumbv7m-none-eabi",
                                       "--profile", "freestanding", good=False)
                 self.assertIn(b"E290", result.stderr)
@@ -2182,6 +2183,212 @@ class Acceptance(unittest.TestCase):
         ''', '-1\n-501000000\ntrue\n1501\n2251500000\ntrue\ntrue\n9223372036854775807\n0\ntrue\n'
              '1969\n12\n31\n60\ntrue\ntrue\n-400\ntrue\n28\n3\n3\n23\n59\n59\n-1\n0\n0\n999999999\n'
              'true\ntrue\ntrue\ntrue\ntrue\n1000000\n')
+
+    def test_channel_buffered_ownership_close_and_optional_values(self):
+        self.hosted('''
+            import (channel, core, meta)
+            class Probe {
+                #copy: disabled
+                pub var marker: i32;
+                func deinit() void { io.println(marker + 100) catch {}; }
+            }
+            func main() !void {
+                tx, rx := channel.bounded<Probe>(2)!;
+                tx.send(Probe{marker: 1})!;
+                tx.send(Probe{marker: 2})!;
+                switch tx.trySend(Probe{marker: 3}) {
+                    channel.TrySendResult.Full(recovered) => { io.println(recovered.marker)!; },
+                    _ => { panic("expected a full channel"); },
+                }
+                rx.close();
+                switch tx.sendPreserving(Probe{marker: 4}) {
+                    channel.SendResult.Closed(recovered) => { io.println(recovered.marker)!; },
+                    _ => { panic("expected a closed channel"); },
+                }
+                for item in rx.drain() { io.println(item.marker)!; }
+                var empty = rx.recv()!;
+                io.println(core.isNone<Probe>(&empty))!;
+
+                inner, outer := channel.Channel<?i32>.bounded(1)!;
+                inner.send(null)!;
+                inner.close();
+                var nested = outer.recv()!;
+                var payload = nested.unwrap();
+                io.println(core.isSome<?i32>(&nested))!;
+                io.println(core.isNone<i32>(&payload))!;
+                var terminal = outer.recv()!;
+                io.println(core.isNone<?i32>(&terminal))!;
+
+                fast, slow := channel.unbounded<i32>()!;
+                for n in 0..4 { fast.send(n)!; }
+                for n in 0..2 { if slow.recv()!.unwrap() != n { panic("initial order"); } }
+                for n in 4..100 { fast.send(n)!; }
+                core.drop<channel.Sender<i32>>(move(fast));
+                for n in 2..100 { if slow.recv()!.unwrap() != n { panic("growing queue order"); } }
+                var end = slow.recv()!;
+                io.println(core.isNone<i32>(&end))!;
+                io.println(meta.isSendable<channel.Receiver<i32>>())!;
+                io.println(meta.isShareable<channel.Receiver<i32>>())!;
+            }
+        ''', '3\n103\n4\n104\n1\n101\n2\n102\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\nfalse\n')
+
+    def test_channel_native_rendezvous_and_multiple_producers(self):
+        self.hosted('''
+            import (channel, core, thread)
+            func receiveReady(receiver: *channel.Receiver<i32>) i32 {
+                for {
+                    switch receiver.tryRecv() {
+                        channel.TryRecv.Value(item) => return item,
+                        channel.TryRecv.Empty => { thread.yieldNow(); },
+                        channel.TryRecv.Closed => { panic("channel closed before rendezvous"); },
+                    }
+                }
+            }
+            func main() !void {
+                tx, rx := channel.bounded<i32>(0)!;
+                switch tx.trySend(10) {
+                    channel.TrySendResult.Full(item) => { io.println(item)!; },
+                    _ => { panic("without a receiver, trySend must fail"); },
+                }
+                var producer = [move(tx)]() !i32 => { tx.send(15)!; 17 };
+                var worker = thread.Thread<i32>.spawn(move(producer))!;
+                io.println(receiveReady(&rx))!;
+                io.println(worker.join()!)!;
+                var finished = rx.recv()!;
+                io.println(core.isNone<i32>(&finished))!;
+
+                out, incoming := channel.bounded<i32>(0)!;
+                var consumer = [move(incoming)]() !i32 => {
+                    var reader = move(incoming);
+                    reader.recv()!.unwrap()
+                };
+                var partner = thread.Thread<i32>.spawn(move(consumer))!;
+                var sent = false;
+                for !sent {
+                    switch out.trySend(28) {
+                        channel.TrySendResult.Sent => { sent = true; },
+                        channel.TrySendResult.Full(item) => { thread.yieldNow(); },
+                        _ => { panic("channel closed during pairing"); },
+                    }
+                }
+                io.println(partner.join()!)!;
+
+                source, sink := channel.bounded<i32>(8)!;
+                var another = source;
+                var putFirst = [move(source)]() !void => {
+                    for n in 0..1000 { source.send(n)!; }
+                };
+                var putSecond = [move(another)]() !void => {
+                    for n in 1000..2000 { another.send(n)!; }
+                };
+                var first = thread.Thread<void>.spawn(move(putFirst))!;
+                var second = thread.Thread<void>.spawn(move(putSecond))!;
+                var low = 0;
+                var high = 1000;
+                for {
+                    switch sink.recv()! {
+                        some(item) => {
+                            if item < 1000 {
+                                if item != low { panic("first sender reordered"); }
+                                low++;
+                            } else {
+                                if item != high { panic("second sender reordered"); }
+                                high++;
+                            }
+                        },
+                        null => break,
+                    }
+                }
+                first.join()!;
+                second.join()!;
+                io.println(low)!;
+                io.println(high)!;
+            }
+        ''', '10\n15\n17\ntrue\n28\n1000\n2000\n', '-O2')
+
+    def test_channel_and_condition_deadlines(self):
+        self.hosted('''
+            import (channel, cmp, sync, thread, time)
+            func main() !void {
+                var delay = time.Duration.fromMillis(4);
+                first, last := channel.bounded<i32>(0)!;
+                var start = time.Instant.now()!;
+                switch first.sendTimeout(57, delay) {
+                    channel.SendResult.Cancelled(value) => { io.println(value)!; },
+                    _ => { panic("unpaired send must time out"); },
+                }
+                io.println(start.elapsed()!.compare(delay) != cmp.Ordering.Less)!;
+                switch last.tryRecv() {
+                    channel.TryRecv.Empty => {},
+                    _ => { panic("timed out offer was retained"); },
+                }
+                var expired = last.recvTimeout(delay) catch (reason) {
+                    if reason != channel.ChannelError.Timeout { return reason; }
+                    io.println(1)!;
+                    null
+                };
+                var writer = first.clone();
+                var startSend = [move(writer)]() i32 => {
+                    switch writer.sendPreserving(76) {
+                        channel.SendResult.Closed(value) => value,
+                        _ => { panic("closing receiver must return unsent value"); },
+                    }
+                };
+                var handle = thread.Thread<i32>.spawn(move(startSend))!;
+                last.close();
+                io.println(handle.join()!)!;
+
+                var mutex = sync.Mutex<i32>.new(9);
+                var cv = sync.CondVar.new();
+                var guard = mutex.lock()!;
+                acquired, elapsed := cv.waitTimeout<i32>(move(guard), delay)!;
+                io.println(elapsed)!;
+                io.println(*acquired.get())!;
+            }
+        ''', '57\ntrue\n1\n76\ntrue\n9\n', '-O2')
+
+    def test_channel_preserves_value_on_queue_allocation_failure(self):
+        source = self.source("allocation.vqr", '''
+            import (channel)
+            extern "C" func fail_next() void;
+            class Probe {
+                #copy: disabled
+                pub var marker: c_int;
+            }
+            func run() !c_int {
+                tx, rx := channel.unbounded<Probe>()!;
+                unsafe { fail_next(); }
+                var recovered = switch tx.sendPreserving(Probe{marker: 29}) {
+                    channel.SendResult.OutOfMemory(item) => move(item),
+                    _ => { return 1; },
+                };
+                switch rx.tryRecv() { channel.TryRecv.Empty => {}, _ => { return 2; }, }
+                tx.send(move(recovered))!;
+                var received = rx.recv()!;
+                var value = move(received).unwrap();
+                if value.marker == 29 { 0 } else { 3 }
+            }
+            export "C" func exercise() c_int { run() catch 4 }
+        ''')
+        client = self.source("allocation.c", '''
+            #include <stddef.h>
+            void *__real_malloc(size_t), *__real_aligned_alloc(size_t, size_t);
+            extern int exercise(void);
+            static int fail;
+            void fail_next(void) { fail = 1; }
+            void *__wrap_malloc(size_t size) {
+                if (fail) { fail = 0; return NULL; }
+                return __real_malloc(size);
+            }
+            void *__wrap_aligned_alloc(size_t alignment, size_t size) {
+                if (fail) { fail = 0; return NULL; }
+                return __real_aligned_alloc(alignment, size);
+            }
+            int main(void) { return exercise(); }
+        ''')
+        self.process(VAQC, source, "--emit=obj", "-O2", "-o", "queue.o")
+        self.process("cc", client, "queue.o", "-Wl,--wrap=malloc,--wrap=aligned_alloc", "-o", "allocation")
+        self.process("./allocation")
 
     def test_build_artifacts(self):
         source = self.source("math.vqr", '''

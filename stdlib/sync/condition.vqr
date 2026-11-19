@@ -1,5 +1,5 @@
 package sync
-import (atomic, cell, core)
+import (atomic, cell, core, time)
 
 pub class CondVar {
     #copy: disabled
@@ -13,6 +13,23 @@ public:
         var version = __vqr_atomic_load(address, atomic.Order.Relaxed);
         var awaitSignal = [address, version]() void => { __vqr_sync_wait(address, version); };
         unsafe { MutexGuard<T>.unlockWhile(move(guard), awaitSignal) }
+    }
+
+    const func waitTimeout<T>(guard: MutexGuard<T>, timeout: time.Duration) !(MutexGuard<T>, bool) {
+        waitUntilDeadline<T>(move(guard), time.Deadline.after(timeout)!)
+    }
+
+    const func waitUntilDeadline<T>(guard: MutexGuard<T>, deadline: time.Deadline) !(MutexGuard<T>, bool) {
+        if deadline.expired()! { return (move(guard), true); }
+        var address = &sequence;
+        var version = __vqr_atomic_load(address, atomic.Order.Relaxed);
+        seconds, nanos := unsafe { deadline.instant().monotonicParts() };
+        var timedOut = false;
+        var awaitSignal = [address, version, seconds, nanos, &timedOut]() void => {
+            timedOut = __vqr_sync_wait_until(address, version, seconds, i64(nanos));
+        };
+        var reacquired = unsafe { MutexGuard<T>.unlockWhile(move(guard), awaitSignal) };
+        (move(reacquired), timedOut)
     }
 
     const func notifyOne() void { notify(1); }

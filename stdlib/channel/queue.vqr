@@ -1,0 +1,65 @@
+package channel
+import (coll, core, opt)
+
+class Queue<T: Movable> {
+    var slots: coll.Vec<?T>;
+    var head: usize;
+    var used: usize;
+    var limit: ?usize;
+public:
+    func init(capacity: ?usize) !void : slots(coll.Vec<?T>()), head(0), used(0), limit(capacity) {
+        var size = capacity ?? 0;
+        slots.reserve(size)!;
+        for index in usize(0)..size { slots.push(null)!; }
+    }
+
+    const func len() usize { used }
+    const func capacity() ?usize { limit }
+    const func isRendezvous() bool { (limit ?? 1) == 0 }
+    const func isFull() bool {
+        switch limit {
+            some(maximum) => used == maximum,
+            null => false,
+        }
+    }
+
+    func prepare() !void {
+        if used < slots.len() { return; }
+        var size = if used == 0 { usize(4) } else { used *| 2 };
+        var expanded = coll.Vec<?T>.withCapacity(size)!;
+        for position in usize(0)..used {
+            var item = opt.take<T>(&slots[index(position)]);
+            expanded.push(move(item)) catch { panic("reserved channel buffer could not accept an item"); };
+        }
+        for position in used..size {
+            expanded.push(null) catch { panic("reserved channel buffer could not accept an empty slot"); };
+        }
+        slots = move(expanded);
+        head = 0;
+    }
+
+    func push(value: T) void {
+        slots[index(used)] = some(move(value));
+        used++;
+    }
+
+    func pop() ?T {
+        if used == 0 { return null; }
+        var item = opt.take<T>(&slots[head]);
+        head++;
+        if head == slots.len() { head = 0; }
+        used--;
+        move(item)
+    }
+
+    func takeBuffer() coll.Vec<?T> {
+        used = 0;
+        head = 0;
+        core.replace<coll.Vec<?T>>(&slots, coll.Vec<?T>())
+    }
+private:
+    const func index(offset: usize) usize {
+        var beforeWrap = slots.len() - head;
+        if offset < beforeWrap { head + offset } else { offset - beforeWrap }
+    }
+}

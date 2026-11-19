@@ -39,6 +39,8 @@ public:
     const func checkedAdd(value: Duration) !Self { Instant(offset.add(value)!) }
     const func checkedSub(value: Duration) !Self { Instant(offset.sub(value)!) }
 
+    unsafe const func monotonicParts() (i64, i32) { (offset.seconds(), offset.nanosPart()) }
+
     const func waitUntil() !void {
         __vqr_validate_native_clocks();
         if offset.isNegative() || offset.isZero() { return; }
@@ -71,6 +73,8 @@ pub class Deadline {
 public:
     static func at(instant: Instant) Self { Deadline(instant) }
     static func after(delay: Duration) !Self { Deadline(Instant.now()!.checkedAdd(delay)!) }
+
+    const func instant() Instant { target }
 
     const func expired() !bool {
         var now = Instant.now()!;

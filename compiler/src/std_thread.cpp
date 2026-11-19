@@ -102,7 +102,8 @@ ValueAt Body::threadIntrinsic(std::string_view op, const Ast &n, const std::vect
 ValueAt Body::syncIntrinsic(std::string_view op, const Ast &n) {
   if (!p.hostedLinux64())
     fail(n->span, "blocking synchronization requires a hosted GNU/Linux x86-64 or AArch64 target", "E290");
-  if ((op != "wait" && op != "wake") || n->children.size() != 3)
+  bool timed = op == "wait_until";
+  if ((!timed && op != "wait" && op != "wake") || n->children.size() != (timed ? 5U : 3U))
     fail(n->span, "invalid futex operation");
   auto *u32 = p.integer(32, false);
   auto address = expression(n->children[1], p.pointer(u32, true));
@@ -114,12 +115,33 @@ ValueAt Body::syncIntrinsic(std::string_view op, const Ast &n) {
   auto *signature = FunctionType::get(word, {word}, true);
   auto syscall = p.module->getOrInsertFunction("syscall", signature);
   auto *number = ConstantInt::get(word, p.targetTriple().isX86() ? 202 : 98);
-  // Linux FUTEX_WAIT_PRIVATE and FUTEX_WAKE_PRIVATE compare or wake a process-local word.
-  auto *command = ConstantInt::get(word, op == "wait" ? 128 : 129);
+  constexpr unsigned privateFlag = 128;
+  constexpr unsigned wait = 0, wake = 1, waitBitset = 9;
+  auto *command = ConstantInt::get(word, privateFlag + (timed ? waitBitset : op == "wait" ? wait : wake));
   auto *value = ir.CreateZExt(read(argument, n->span), word);
   auto *null = ConstantPointerNull::get(ir.getPtrTy());
-  ir.CreateCall(syscall, {number, location, command, value, null, null, ConstantInt::get(word, 0)});
-  return voidValue();
+  if (!timed) {
+    ir.CreateCall(syscall, {number, location, command, value, null, null, ConstantInt::get(word, 0)});
+    return voidValue();
+  }
+  auto *signedWord = p.integer(64, true);
+  auto seconds = expression(n->children[3], signedWord);
+  if (!live()) return neverValue();
+  auto *whole = read(seconds, n->span);
+  auto nanos = expression(n->children[4], signedWord);
+  if (!live()) return neverValue();
+  auto *timespec = p.aggregate(Kind::Tuple, {signedWord, signedWord});
+  auto *deadline = slot(timespec, "futex.deadline");
+  ir.CreateStore(whole, ir.CreateStructGEP(timespec->ir, deadline, 0));
+  ir.CreateStore(read(nanos, n->span), ir.CreateStructGEP(timespec->ir, deadline, 1));
+  // WAIT_BITSET takes a CLOCK_MONOTONIC absolute deadline by default.
+  auto *result = ir.CreateCall(syscall, {number, location, command, value, deadline, null,
+                                        ConstantInt::get(word, 0xffffffff)});
+  auto errnoLocation = p.module->getOrInsertFunction("__errno_location", ir.getPtrTy());
+  auto *error = ir.CreateLoad(ir.getInt32Ty(), ir.CreateCall(errnoLocation));
+  constexpr unsigned timedOut = 110;
+  return {p.boolTy, ir.CreateAnd(ir.CreateICmpNE(result, ConstantInt::get(word, 0)),
+                                ir.CreateICmpEQ(error, ir.getInt32(timedOut)))};
 }
 
 } // namespace vqr::detail

@@ -1,6 +1,6 @@
 # Vaqrin 标准包
 
-可用 `import (core, coll, iter, opt, result, cmp, convert, meta, mem, mmio, bits, algo, atomic, binary, bytes, cell, encoding, simd, text, parse, io, thread, sync, time)` 导入标准包，也可使用 `std/` 前缀。CMake 在构建目录生成 `share/vaqrin/stdlib`，安装时将标准包源码复制到安装前缀下。编译器按使用情况实例化泛型声明。完整的目标接口见[标准包 API 清单](../docs/stdlib/Vaqrin-stdlib-API-complete-draft.md)。
+可用 `import (core, coll, iter, opt, result, cmp, convert, meta, mem, mmio, bits, algo, atomic, binary, bytes, cell, encoding, simd, text, parse, io, thread, sync, time, channel)` 导入标准包，也可使用 `std/` 前缀。CMake 在构建目录生成 `share/vaqrin/stdlib`，安装时将标准包源码复制到安装前缀下。编译器按使用情况实例化泛型声明。完整的目标接口见[标准包 API 清单](../docs/stdlib/Vaqrin-stdlib-API-complete-draft.md)。
 
 | 包 | 当前接口 |
 | --- | --- |
@@ -28,6 +28,7 @@
 | `thread` | GNU/Linux 原生线程、一次性领取结果、分离、协作停止、当前线程 ID 及 CPU 数 |
 | `sync` | 互斥锁、可投影的 RAII 守卫、条件变量、等待组及单次初始化 |
 | `time` | 纳秒时长、单调时钟和定时器、公历日期、日内时间及 UTC 墙钟 |
+| `channel` | 多发送端、单接收端的有界、无界及零容量通道，含关闭、定时等候和保留未交付值 |
 
 ```cpp
 package main
@@ -46,7 +47,7 @@ func main() !void {
 
 Vec 按值接收可移动元素。其 `reserve` 先分配，再搬迁已有元素，分配失败时保留原缓冲区和元素。Vec 还提供下标、`len`、`capacity`、`isEmpty`、`pop`、`replace`、`clear` 和可复制元素的 `clone`。`asSlice` 返回借用视图，扩容后原视图失效。迭代适配器可拥有上游游标及回调。按引用遍历时使用 `iterRef()` 或 `iterMut()`，后者可配合 `for &item in ...` 修改原位置。文本按字节比较，`chars` 按 Unicode 标量遍历。`fromBytes` 验证 UTF-8 后复制成不可变字符串，`StringBuilder.build()` 生成可独立持有的快照。拥有型 `string` 的副本共享不可变存储，`str` 与字节视图遵守来源的生命周期。
 
-默认堆分配器目前面向 Linux 宿主。裸机可以构造和销毁空 Vec，增长操作会报告缺少分配器。自定义分配器、字素边界、任务和通道包仍待实现。
+默认堆分配器目前面向 Linux 宿主。裸机可以构造和销毁空 Vec，增长操作会报告缺少分配器。
 
 位流的 `LsbFirst` 从字节低位开始，也先读写结果或参数的低位。`MsbFirst` 从字节高位开始，从读写宽度所覆盖的最高位开始。读不到足够位时，`BitReader` 返回成功的空值并保持位置。超出写入容量时，`BitWriter` 返回错误并保持缓冲区和位置。
 
@@ -63,6 +64,8 @@ Vec 按值接收可移动元素。其 `reserve` 先分配，再搬迁已有元�
 `Mutex`、`CondVar` 和 `WaitGroup` 通过 GNU/Linux futex 阻塞调用线程。`CondVar.wait` 允许虚假唤醒，`waitUntil` 会重新检查谓词。等待开始前须为 `WaitGroup` 登记本轮工作，计数上限为 `u32` 最大值。在所有守卫释放且等待结束前，应保持锁和条件变量的位置有效。守卫释放后，其 `get()` 返回的借用视图也到期。
 
 `Duration` 将亚秒部分归一化到与整数秒一致的方向，整数换算向零截断。可失败的算术操作报告溢出，`fromMinutes`、`fromHours` 和 `fromDays` 在超出表示范围时饱和。`Date.toOrdinal` 以 1970 年 1 月 1 日为第 0 天，公历规则向前后延伸到整个 `i32` 年份范围。`Instant`、`Deadline`、`Timer` 和 `Ticker` 以 Linux 单调时钟为准，睡眠阻塞调用线程，周期定时按前一次计划的到期点推进。
+
+`channel` 的接收端排空关闭的缓冲区后返回成功的外层 `null`。零容量通道只在发送与接收配对时交付。`sendPreserving` 在关闭或内存不足时交还值，`sendTimeout` 以 `Cancelled(value)` 交还超时值，`recvTimeout` 以 `ChannelError.Timeout` 报告超时。当前等待使用原生线程同步。`drain` 只迭代本次可立即取得的消息。
 
 `new(allocator) T(...)` 借用一个实现 `mem.Allocator` 的可变位置。分配器及其缓冲区必须比所有借用它的 Box 活得更久。拆出自定义分配的 Box 时使用 `Box.intoRawParts`，恢复时传回原释放上下文。由于同一个 `^T` 类型可保存借用的分配器，当前线程能力检查保守地拒绝跨线程移交或共享 Box。
 

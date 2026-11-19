@@ -396,21 +396,35 @@ void Program::ensureSized(Type *t, Span span) {
   if ((t->kind != Kind::Class && t->kind != Kind::Enum) || t->filled) return;
   if (t->filling) fail(span, "recursive by-value layout of '" + t->name + "'");
   t->filling = true;
+  ++layoutDepth;
   fill(t, classTypes(t));
   t->filling = false;
   t->filled = true;
+  if (!t->def.decl->generics.empty()) layoutConstraints.push_back(t);
   if (t->kind == Kind::Class) {
     validatePromotions(t);
     validateInterfaces(t);
   }
+  --layoutDepth;
+  if (layoutDepth || checkingLayoutConstraints) return;
+  checkingLayoutConstraints = true;
+  while (!layoutConstraints.empty()) {
+    auto *instance = layoutConstraints.back();
+    layoutConstraints.pop_back();
+    const auto substitutions = classTypes(instance);
+    const auto &definition = instance->def;
+    for (const auto &g : definition.decl->generics)
+      if (!g.comptime && g.type &&
+          !satisfies(substitutions.at(g.name), g.type, *definition.file, substitutions,
+                     instance->comptimeArguments))
+        fail(g.span, "type argument '" + substitutions.at(g.name)->name +
+                         "' does not satisfy " + g.type->text);
+  }
+  checkingLayoutConstraints = false;
 }
 
 void Program::fill(Type *t, const Types &substitutions) {
   const auto &d = *t->def.decl;
-  for (const auto &g : d.generics) {
-    if (!g.comptime && g.type && !satisfies(substitutions.at(g.name), g.type, *t->def.file, substitutions, t->comptimeArguments))
-      fail(g.span, "type argument '" + substitutions.at(g.name)->name + "' does not satisfy " + g.type->text);
-  }
   std::set<std::string> names;
   std::vector<llvm::Type *> layout;
   auto collect = [&](auto &&self, const std::vector<Decl> &members) -> void {

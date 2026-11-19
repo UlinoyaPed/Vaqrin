@@ -279,6 +279,9 @@ public:
   std::map<std::pair<Type *, Type *>, Function *> allocatorReleaseFunctions;
   Type *allocationContext = nullptr;
   std::set<const Decl *> aliases;
+  unsigned layoutDepth = 0;
+  bool checkingLayoutConstraints = false;
+  std::vector<Type *> layoutConstraints;
   Type *voidTy, *neverTy, *boolTy, *charTy, *errorTy, *sizeTy, *textTy, *viewTy;
   std::unique_ptr<DIBuilder> debug;
   std::map<Type *, DIType *> debugTypes;

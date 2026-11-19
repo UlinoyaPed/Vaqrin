@@ -99,6 +99,8 @@ Inputs::Outline &Inputs::outline(const Path &path, Span span) {
       if (depth && (t.text == "}" || t.text == ")" || t.text == "]")) --depth;
     }
     if (depth || t.kind != TokenKind::Keyword) continue;
+    // A return type can include *const T or []const T outside parameter parentheses.
+    if (t.text == "const" && i && (token(i - 1) == "*" || token(i - 1) == "]")) continue;
     if (t.text == "export") out.exported = true;
     if (tokens[i + 1].kind != TokenKind::Name) continue;
     if (t.text == "func" || t.text == "type" || t.text == "class" || t.text == "interface" ||
@@ -163,7 +165,9 @@ File &Inputs::activate(const Path &path, Span span) {
   importing.insert(path);
   std::set<std::string> aliases;
   for (auto &item : f.imports) {
-    if (!aliases.insert(item.alias).second || record.names.contains(item.alias))
+    if (!aliases.insert(item.alias).second)
+      fail(item.span, "duplicate import alias '" + item.alias + "'");
+    if (record.names.contains(item.alias))
       fail(item.span, "conflicting import alias '" + item.alias + "'");
     item.path = resolveImport(path.parent_path(), item);
   }

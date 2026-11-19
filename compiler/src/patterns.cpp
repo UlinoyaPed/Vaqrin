@@ -189,6 +189,7 @@ void Body::checkPattern(const Ast &pat, ValueAt subject, BasicBlock *failure,
 ValueAt Body::match(const Ast &n, Type *expected) {
   auto subject = expression(n->children[0]);
   if (!live()) return neverValue();
+  p.ensureSized(subject.type, n->span);
   requireInit(subject, n->span);
   Type *ownerType = nullptr;
   AllocaInst *selection = nullptr;

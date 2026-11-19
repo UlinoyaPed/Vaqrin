@@ -15,3 +15,15 @@
 - [ ] Empty-match iteration and split/replace behavior
 - [ ] Invalid patterns and explicit unsupported-construct errors
 - [ ] Maximum state count, maximum input bytes, long adversarial inputs
+
+## 固定回归样例
+
+- `unicode.version()` 返回 `17.0.0`。
+- `generalCategory('A')` 为 `Lu`，`generalCategory('中')` 为 `Lo`。
+- `script('A')` 为 Latin，`script('中')` 为 Han，`script('Ж')` 为 Cyrillic。
+- `isDigit('٣')` 为 true；`isWhitespace('\u{3000}')` 为 true。
+- `caseFoldFull('ß')` 为 `ss`；`caseFold("Straße")` 为 `strasse`。
+- `normalize("e\u{301}", NFC)` 为 U+00E9；`normalize(U+00E9, NFD)` 为 U+0065 U+0301。
+- NFKC 将全角 A 映射为 ASCII A，并将兼容连字分解。
+- Hangul syllable NFC/NFD 往返一致。
+- 家庭 ZWJ emoji、肤色修饰符 emoji、国旗 RI 对均按预期计为字素簇。

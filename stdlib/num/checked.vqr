@@ -1,5 +1,5 @@
 package num
-import (meta)
+import (convert, meta)
 
 pub func checkedAdd<T>(a: T, b: T) !T {
     var minimum = minValue<T>();
@@ -110,9 +110,9 @@ pub func abs<T>(value: T) !T {
 
 func magnitudeU128<T>(value: T) u128 {
     if __vqr_parse_signed<T>() && value < T(0) {
-        u128(~value) + u128(1)
+        convert.checkedCast<u128, T>(~value)!.unwrap() + u128(1)
     } else {
-        u128(value)!
+        convert.checkedCast<u128, T>(value)!.unwrap()
     }
 }
 
@@ -157,6 +157,10 @@ pub func divEuclid<T>(a: T, b: T) !T {
 
 pub func remEuclid<T>(a: T, b: T) !T {
     if b == T(0) { return NumError.DivisionByZero; }
+    if __vqr_parse_signed<T>() &&
+       a == minValue<T>() && b == __vqr_parse_bits<T>(~u128(0)) {
+        return NumError.Overflow;
+    }
     var remainder = a % b;
     if __vqr_parse_signed<T>() && remainder < T(0) {
         if b > T(0) { remainder + b } else { remainder - b }
@@ -173,7 +177,11 @@ pub func gcd<T>(a: T, b: T) !T {
         left = right;
         right = remainder;
     }
-    T(left)!
+    var converted = convert.checkedCast<T, u128>(left)!;
+    switch converted {
+        some(value) => value,
+        null => NumError.Overflow,
+    }
 }
 
 pub func lcm<T>(a: T, b: T) !T {
@@ -198,7 +206,12 @@ pub func powInt<T>(base: T, exponent: usize) !T {
 
 pub func midpoint<T>(a: T, b: T) T {
     if !__vqr_parse_signed<T>() {
-        if a <= b { a + (b - a) / T(2) } else { b + (a - b) / T(2) }
+        if a <= b {
+            a + (b - a) / T(2)
+        } else {
+            var distance = a - b;
+            b + distance / T(2) + distance % T(2)
+        }
     } else {
         var remainder = (a % T(2)) + (b % T(2));
         var result = a / T(2) + b / T(2) + remainder / T(2);
@@ -226,7 +239,13 @@ pub func product<T: Copyable & Movable>(values: []const T) !T {
 
 pub func average<T: Copyable & Movable>(values: []const T) !?T {
     if values.len() == 0 { return null; }
-    var total = sum<T>(values)!;
-    var count = T(values.len())!;
-    some(checkedDiv<T>(total, count)!)
+    var total = BigInt.zero();
+    for value in values {
+        var term = BigInt.fromInteger<T>(value)!;
+        var next = total.add(&term)!;
+        total = move(next);
+    }
+    var count = BigInt.fromInteger<usize>(values.len())!;
+    var mean = total.div(&count)!;
+    some(mean.toInteger<T>()!)
 }

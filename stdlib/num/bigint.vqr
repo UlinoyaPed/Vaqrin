@@ -1,5 +1,5 @@
 package num
-import (bits, coll, cmp, meta, text)
+import (bits, coll, cmp, convert, meta, text)
 
 func bigDigit(byte: u8) u32 {
     var code = u32(byte);
@@ -19,14 +19,39 @@ pub class BigUint {
 public:
     static func zero() Self { BigUint() }
 
-    static func fromU64(value: u64) !Self {
-        var out = coll.Vec<u32>();
-        if value != 0 {
-            out.push(u32(value & 0xffffffffu64)!)!;
-            var high = value >> 32;
-            if high != 0 { out.push(u32(high)!)!; }
+    static func fromU64(value: u64) !Self { fromU128(u128(value)) }
+
+    static func fromU128(value: u128) !Self {
+        if value == 0 { return BigUint(); }
+        var out = coll.Vec<u32>.withCapacity(4)!;
+        var raw = value;
+        for i in usize(0)..4 {
+            out.push(u32(raw & 0xffffffffu128)!)!;
+            raw >>= 32;
         }
         BigUint(move(out))
+    }
+
+    static func fromUnsigned<T>(value: T) !Self {
+        if __vqr_parse_signed<T>() && value < T(0) { return NumError.NegativeValue; }
+        fromU128(convert.checkedCast<u128, T>(value)!.unwrap())
+    }
+
+    const func toU64() !u64 {
+        if bitLength() > 64 { return NumError.Overflow; }
+        var value: u64 = 0;
+        if limbs.len() > 0 { value = u64(limbs.asConstSlice()[0]); }
+        if limbs.len() > 1 { value |= u64(limbs.asConstSlice()[1]) << 32; }
+        value
+    }
+
+    const func toU128() !u128 {
+        if bitLength() > 128 { return NumError.Overflow; }
+        var value: u128 = 0;
+        for index in usize(0)..limbs.len() {
+            value |= u128(limbs.asConstSlice()[index]) << (index * 32);
+        }
+        value
     }
 
     static func fromBytes(bytes: []const u8, endian: meta.Endian) !Self {
@@ -219,6 +244,7 @@ public:
     }
 
     func toBytes(endian: meta.Endian) !coll.Vec<u8> {
+        if limbs.len() > ~usize(0) / 4 { return coll.CapacityError.Overflow; }
         var count = if limbs.isEmpty() { usize(1) } else { limbs.len() * 4 };
         var out = coll.Vec<u8>.withCapacity(count)!;
         if limbs.isEmpty() {
@@ -347,23 +373,44 @@ pub class BigInt {
     var magnitude: BigUint;
 
     func init() : sign(0), magnitude(BigUint()) {}
-    func init(sign: i8, magnitude: BigUint) : sign(sign), magnitude(move(magnitude)) {
-        if magnitude.isZero() { sign = 0; }
-        else if sign < 0 { sign = -1; }
-        else { sign = 1; }
-    }
+    func init(sign: i8, magnitude: BigUint)
+        : sign(if magnitude.isZero() { i8(0) } else if sign < 0 { i8(-1) } else { i8(1) }),
+          magnitude(move(magnitude)) {}
 
 public:
     static func zero() Self { BigInt() }
 
-    static func fromI64(value: i64) !Self {
-        if value == 0 { return BigInt(); }
-        var mag = if value < 0 {
-            BigUint.fromU64(u64(~value) + u64(1))!
+    static func fromI64(value: i64) !Self { fromInteger<i64>(value) }
+
+    static func fromInteger<T>(value: T) !Self {
+        var negative = __vqr_parse_signed<T>() && value < T(0);
+        var magnitudeValue = if negative {
+            convert.checkedCast<u128, T>(~value)!.unwrap() + u128(1)
         } else {
-            BigUint.fromU64(u64(value)!)!
+            convert.checkedCast<u128, T>(value)!.unwrap()
         };
-        BigInt(if value < 0 { i8(-1) } else { i8(1) }, move(mag))
+        var mag = BigUint.fromU128(magnitudeValue)!;
+        BigInt(if magnitudeValue == 0 { i8(0) } else if negative { i8(-1) } else { i8(1) }, move(mag))
+    }
+
+    const func toU64() !u64 {
+        if sign < 0 { return NumError.NegativeValue; }
+        magnitude.toU64()
+    }
+
+    const func toI64() !i64 {
+        var raw = magnitude.toU64()!;
+        if sign >= 0 {
+            if raw > 0x7fffffffffffffffu64 { return NumError.Overflow; }
+            i64(raw)!
+        } else {
+            if raw > 0x8000000000000000u64 { return NumError.Overflow; }
+            if raw == 0x8000000000000000u64 {
+                convert.bitCast<i64, u64>(raw)
+            } else {
+                -i64(raw)!
+            }
+        }
     }
 
     static func fromTwosComplementBytes(bytes: []const u8, endian: meta.Endian) !Self {
@@ -469,11 +516,52 @@ public:
         move(remainder)
     }
 
+    func shl(count: usize) !Self {
+        BigInt(sign, magnitude.shl(count)!)
+    }
+
+    func shr(count: usize) !Self {
+        var shifted = magnitude.shr(count)!;
+        if sign < 0 {
+            var restored = shifted.shl(count)!;
+            if restored.compare(&magnitude) != cmp.Ordering.Equal {
+                var one = BigUint.fromU64(1)!;
+                shifted = shifted.add(&one)!;
+            }
+        }
+        BigInt(sign, move(shifted))
+    }
+
     const func abs() !Self {
         BigInt(if sign == 0 { i8(0) } else { i8(1) }, magnitude.clone()!)
     }
 
-    func negate() void { sign = -sign; }
+    static func gcd(a: *const Self, b: *const Self) !Self {
+        var left = a.abs()!;
+        var right = b.abs()!;
+        for !right.isZero() {
+            var remainder = left.rem(&right)!;
+            left = move(right);
+            right = move(remainder);
+        }
+        move(left)
+    }
+
+    const func toInteger<T>() !T {
+        if sign < 0 && !__vqr_parse_signed<T>() { return NumError.NegativeValue; }
+        var raw = magnitude.toU128()!;
+        var limit = __vqr_parse_limit<T>(sign < 0);
+        if raw > limit { return NumError.Overflow; }
+        if sign < 0 {
+            __vqr_parse_bits<T>(u128(0) -% raw)
+        } else {
+            __vqr_parse_bits<T>(raw)
+        }
+    }
+
+    func negate() !Self { negated() }
+
+    func negateInPlace() void { sign = -sign; }
 
     const func negated() !Self {
         BigInt(-sign, magnitude.clone()!)
@@ -487,6 +575,8 @@ public:
         for byte in digits.asBytes() { out.push(byte)!; }
         text.fromBytes(out.asConstSlice())
     }
+
+    func toBytes(endian: meta.Endian) !coll.Vec<u8> { toTwosComplementBytes(endian) }
 
     func toTwosComplementBytes(endian: meta.Endian) !coll.Vec<u8> {
         var out = magnitude.toBytes(meta.Endian.Little)!;

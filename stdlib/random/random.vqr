@@ -1,11 +1,31 @@
 package random
-import (coll, math, num, text)
+import (coll, convert, math, meta, text)
 
-pub error RandomError { EmptyRange, InvalidProbability, InvalidWeights, EmptyAlphabet, SampleTooLarge }
+pub error RandomError {
+    EmptyRange,
+    InvalidProbability,
+    InvalidWeights,
+    EmptyAlphabet,
+    InvalidAlphabet,
+    InvalidSeed,
+    SampleTooLarge,
+    UnsupportedWidth,
+}
 
 pub interface Rng {
     func nextU64() u64;
     func fill(dst: []u8) void;
+}
+
+pub interface CryptoRng {
+    func fillSecure(dst: []u8) !void;
+}
+
+func mixSeed(value: u64) u64 {
+    var z = value +% 0x9e3779b97f4a7c15u64;
+    z = (z ^ (z >> 30)) *% 0xbf58476d1ce4e5b9u64;
+    z = (z ^ (z >> 27)) *% 0x94d049bb133111ebu64;
+    z ^ (z >> 31)
 }
 
 pub class Seed {
@@ -13,30 +33,54 @@ pub class Seed {
     pub var high: u64;
     func init(a: u64, b: u64) : low(a), high(b) {}
     pub static func fromU64(value: u64) Self {
-        Seed(value ^ 0x9e3779b97f4a7c15u64, value + 0xd1b54a32d192ed03u64)
+        Seed(mixSeed(value), mixSeed(value ^ 0xd1b54a32d192ed03u64))
     }
 }
 
+pub func seedFromBytes(data: []const u8) Seed {
+    var low = 0xcbf29ce484222325u64;
+    var high = 0x84222325cbf29ce4u64;
+    for index in usize(0)..data.len() {
+        low = (low ^ u64(data[index])) *% 0x100000001b3u64;
+        high = (high ^ (u64(data[index]) + u64(index))) *% 0x100000001b3u64;
+    }
+    Seed(mixSeed(low), mixSeed(high ^ low))
+}
+
 pub class Pcg64 {
-    var state: u64;
-    var increment: u64;
-    func init(seedValue: u64, stream: u64) : state(0), increment((stream << 1) | 1) {
-        nextU32();
+    #implements: Rng
+    var state: u128;
+    var increment: u128;
+
+    func init(seedValue: u128, streamValue: u128) : state(0), increment((streamValue << 1) | 1) {
+        nextU64();
         state +%= seedValue;
-        nextU32();
+        nextU64();
     }
+
 public:
-    pub static func seed(value: u64) Self { Pcg64(value, 0xda3e39cb94b95bdbu64) }
-    pub static func withStream(value: u64, stream: u64) Self { Pcg64(value, stream) }
-    func nextU32() u32 {
-        var old = state;
-        state = old *% 6364136223846793005u64 +% increment;
-        var shifted = u32(((old >> 18) ^ old) >> 27);
-        var rotation = u32(old >> 59);
-        (shifted >> rotation) | (shifted << ((u32(0) -% rotation) & 31))
+    pub static func seed(value: u64) Self {
+        Pcg64(u128(value), u128(0xda3e39cb94b95bdbu64))
     }
-    func nextU64() u64 { (u64(nextU32()) << 32) | u64(nextU32()) }
-    func fill(dst: []u8) void {
+
+    pub static func fromSeed(seed: Seed) Self {
+        var initial = u128(seed.low) | (u128(seed.high) << 64);
+        var stream = u128(seed.high) ^ (u128(seed.low) << 1);
+        Pcg64(initial, stream)
+    }
+
+    pub func nextU64() u64 {
+        const MULTIPLIER: u128 = 0x2360ed051fc65da44385df649fccf645u128;
+        var old = state;
+        state = old *% MULTIPLIER +% increment;
+        var value = __vqr_parse_bits<u64>((old >> 64) ^ old);
+        var rotation = __vqr_parse_bits<u32>(old >> 122);
+        (value >> rotation) | (value << ((u64(0) -% u64(rotation)) & 63))
+    }
+
+    pub func nextU32() u32 { __vqr_parse_bits<u32>(nextU64() >> 32) }
+
+    pub func fill(dst: []u8) void {
         var index: usize = 0;
         for index < dst.len() {
             var value = nextU64();
@@ -48,12 +92,14 @@ public:
             }
         }
     }
-    func jump(distance: u64) void {
+
+    pub func jump(distance: u64) void {
+        const MULTIPLIER: u128 = 0x2360ed051fc65da44385df649fccf645u128;
         var delta = distance;
-        var multiplier = 6364136223846793005u64;
+        var multiplier = MULTIPLIER;
         var plus = increment;
-        var accumulatedMultiplier: u64 = 1;
-        var accumulatedPlus: u64 = 0;
+        var accumulatedMultiplier: u128 = 1;
+        var accumulatedPlus: u128 = 0;
         for delta > 0 {
             if (delta & 1) != 0 {
                 accumulatedMultiplier *%= multiplier;
@@ -65,14 +111,21 @@ public:
         }
         state = accumulatedMultiplier *% state +% accumulatedPlus;
     }
-    func split(stream: u64) Self { Pcg64(state ^ stream, stream) }
+
+    pub func split(stream: u64) Self {
+        var seedValue = state ^ u128(stream);
+        var streamValue = increment ^ (u128(stream) << 64);
+        Pcg64(seedValue, streamValue)
+    }
 }
 
 pub class Xoshiro256 {
+    #implements: Rng
     var s0: u64;
     var s1: u64;
     var s2: u64;
     var s3: u64;
+
     func init(seed: [32]u8) : s0(0), s1(0), s2(0), s3(0) {
         for i in usize(0)..32 {
             var value = u64(seed[i]);
@@ -83,12 +136,19 @@ pub class Xoshiro256 {
             else if word == 2 { s2 |= value << shift; }
             else { s3 |= value << shift; }
         }
-        if (s0 | s1 | s2 | s3) == 0 { s0 = 1; }
     }
+
 public:
-    pub static func fromSeed(seed: [32]u8) Self { Xoshiro256(seed) }
-    func nextU64() u64 {
-        var result = ((s1 *% 5) << 7 | (s1 *% 5) >> 57) *% 9;
+    pub static func fromSeed(seed: [32]u8) !Self {
+        var zero = true;
+        for byte in seed { if byte != 0 { zero = false; } }
+        if zero { return RandomError.InvalidSeed; }
+        Xoshiro256(seed)
+    }
+
+    pub func nextU64() u64 {
+        var product = s1 *% 5;
+        var result = ((product << 7) | (product >> 57)) *% 9;
         var temporary = s1 << 17;
         s2 ^= s0;
         s3 ^= s1;
@@ -98,7 +158,8 @@ public:
         s3 = (s3 << 45) | (s3 >> 19);
         result
     }
-    func fill(dst: []u8) void {
+
+    pub func fill(dst: []u8) void {
         var index: usize = 0;
         for index < dst.len() {
             var value = nextU64();
@@ -110,20 +171,34 @@ public:
             }
         }
     }
-    func jump() void {
-        const JUMP: [4]u64 = [4]u64{0x180ec6d33cfd0aba,0xd5a61266f0c9392c,0xa9582618e03fc9aa,0x39abdc4529b1661c};
+
+    pub func jump() void {
+        const JUMP: [4]u64 = [4]u64{
+            0x180ec6d33cfd0aba, 0xd5a61266f0c9392c,
+            0xa9582618e03fc9aa, 0x39abdc4529b1661c
+        };
         applyJump(JUMP);
     }
-    func longJump() void {
-        const JUMP: [4]u64 = [4]u64{0x76e15d3efefdcbbf,0xc5004e441c522fb3,0x77710069854ee241,0x39109bb02acbe635};
+
+    pub func longJump() void {
+        const JUMP: [4]u64 = [4]u64{
+            0x76e15d3efefdcbbf, 0xc5004e441c522fb3,
+            0x77710069854ee241, 0x39109bb02acbe635
+        };
         applyJump(JUMP);
     }
+
 private:
     func applyJump(polynomial: [4]u64) void {
-        var a: u64 = 0; var b: u64 = 0; var c: u64 = 0; var d: u64 = 0;
+        var a: u64 = 0;
+        var b: u64 = 0;
+        var c: u64 = 0;
+        var d: u64 = 0;
         for word in polynomial {
             for bit in usize(0)..64 {
-                if (word & (u64(1) << bit)) != 0 { a ^= s0; b ^= s1; c ^= s2; d ^= s3; }
+                if (word & (u64(1) << bit)) != 0 {
+                    a ^= s0; b ^= s1; c ^= s2; d ^= s3;
+                }
                 nextU64();
             }
         }
@@ -131,8 +206,13 @@ private:
     }
 }
 
+pub func newDefault() Pcg64 { Pcg64.seed(0x4d595df4d0f33173u64) }
+func indexFromU64(value: u64) usize {
+    convert.checkedCast<usize, u64>(value)!.unwrap()
+}
+
 pub func randomU64<R: Rng>(rng: *R) u64 { rng.nextU64() }
-pub func randomU32<R: Rng>(rng: *R) u32 { u32(rng.nextU64() >> 32) }
+pub func randomU32<R: Rng>(rng: *R) u32 { __vqr_parse_bits<u32>(rng.nextU64() >> 32) }
 pub func randomBool<R: Rng>(rng: *R) bool { (rng.nextU64() & 1) != 0 }
 pub func fill<R: Rng>(rng: *R, dst: []u8) void { rng.fill(dst); }
 
@@ -146,27 +226,95 @@ pub func rangeInt<R: Rng>(rng: *R, low: u64, highExclusive: u64) !u64 {
     }
 }
 
-pub func rangeIntSigned<R: Rng>(rng: *R, low: i64, highExclusive: i64) !i64 {
+pub func rangeInt<R: Rng>(rng: *R, low: i64, highExclusive: i64) !i64 {
     if low >= highExclusive { return RandomError.EmptyRange; }
-    var orderedLow = u64(low) ^ 0x8000000000000000u64;
-    var orderedHigh = u64(highExclusive) ^ 0x8000000000000000u64;
+    var orderedLow = convert.bitCast<u64, i64>(low) ^ 0x8000000000000000u64;
+    var orderedHigh = convert.bitCast<u64, i64>(highExclusive) ^ 0x8000000000000000u64;
     var sampled = rangeInt<R>(rng, orderedLow, orderedHigh)!;
-    i64(sampled ^ 0x8000000000000000u64)
+    convert.bitCast<i64, u64>(sampled ^ 0x8000000000000000u64)
 }
 
 pub func rangeFloat<R: Rng>(rng: *R, low: f64, high: f64) !f64 {
     if !math.isFinite(low) || !math.isFinite(high) || low > high { return RandomError.EmptyRange; }
     if low == high { return low; }
     var unit = f64(rng.nextU64() >> 11) * 1.1102230246251565e-16;
-    var result = low * (1.0 - unit) + high * unit;
+    var result = if (low <= 0.0 && high >= 0.0) {
+        low * (1.0 - unit) + high * unit
+    } else {
+        low + (high - low) * unit
+    };
     if result >= high { result = math.nextAfter<f64>(high, low); }
     if result < low { result = low; }
     result
 }
 
+pub func rangeFloat<R: Rng>(rng: *R, low: f32, high: f32) !f32 {
+    if !math.isFinite(low) || !math.isFinite(high) || low > high { return RandomError.EmptyRange; }
+    if low == high { return low; }
+    var unit = f32(rng.nextU64() >> 40) * 5.9604644775390625e-8;
+    var result = if (low <= 0.0 && high >= 0.0) {
+        low * (1.0 - unit) + high * unit
+    } else {
+        low + (high - low) * unit
+    };
+    if result >= high { result = math.nextAfter<f32>(high, low); }
+    if result < low { result = low; }
+    result
+}
+
+pub class UniformInt<T: Copyable & Movable> {
+    var low: T;
+    var highExclusive: T;
+    func init(lower: T, upper: T) : low(lower), highExclusive(upper) {}
+public:
+    pub static func new(lower: T, upper: T) !Self {
+        if meta.bitWidth<T>() > 64 { return RandomError.UnsupportedWidth; }
+        if lower >= upper { return RandomError.EmptyRange; }
+        UniformInt<T>(lower, upper)
+    }
+
+    pub func sample<R: Rng>(rng: *R) !T {
+        if __vqr_parse_signed<T>() {
+            var lower = convert.checkedCast<i64, T>(low)!.unwrap();
+            var upper = convert.checkedCast<i64, T>(highExclusive)!.unwrap();
+            T(rangeInt<R>(rng, lower, upper)!)
+        } else {
+            var lower = convert.checkedCast<u64, T>(low)!.unwrap();
+            var upper = convert.checkedCast<u64, T>(highExclusive)!.unwrap();
+            T(rangeInt<R>(rng, lower, upper)!)
+        }
+    }
+}
+
+pub class UniformFloat<T: Copyable & Movable> {
+    var low: T;
+    var high: T;
+    func init(lower: T, upper: T) : low(lower), high(upper) {}
+public:
+    pub static func new(lower: T, upper: T) !Self {
+        if meta.bitWidth<T>() != 32 && meta.bitWidth<T>() != 64 {
+            return RandomError.UnsupportedWidth;
+        }
+        if !math.isFinite(lower) || !math.isFinite(upper) || lower > upper {
+            return RandomError.EmptyRange;
+        }
+        UniformFloat<T>(lower, upper)
+    }
+
+    pub func sample<R: Rng>(rng: *R) !T {
+        if meta.bitWidth<T>() == 32 {
+            T(rangeFloat<R>(rng, convert.checkedCast<f32, T>(low)!.unwrap(),
+                                  convert.checkedCast<f32, T>(high)!.unwrap())!)
+        } else {
+            T(rangeFloat<R>(rng, convert.checkedCast<f64, T>(low)!.unwrap(),
+                                  convert.checkedCast<f64, T>(high)!.unwrap())!)
+        }
+    }
+}
+
 pub class Bernoulli {
-    var threshold: f64;
-    func init(probability: f64) : threshold(probability) {}
+    var probability: f64;
+    func init(value: f64) : probability(value) {}
 public:
     pub static func new(probability: f64) !Self {
         if !math.isFinite(probability) || probability < 0.0 || probability > 1.0 {
@@ -174,10 +322,100 @@ public:
         }
         Bernoulli(probability)
     }
-    func sample<R: Rng>(rng: *R) bool {
-        if threshold == 0.0 { return false; }
-        if threshold == 1.0 { return true; }
-        rangeFloat<R>(rng, 0.0, 1.0)! < threshold
+
+    pub func sample<R: Rng>(rng: *R) bool {
+        if probability == 0.0 { return false; }
+        if probability == 1.0 { return true; }
+        rangeFloat<R>(rng, 0.0, 1.0)! < probability
+    }
+}
+
+pub class Normal {
+    var mean: f64;
+    var standardDeviation: f64;
+    var spare: ?f64;
+    func init(location: f64, deviation: f64)
+        : mean(location), standardDeviation(deviation), spare(null) {}
+public:
+    pub static func new(mean: f64, standardDeviation: f64) !Self {
+        if !math.isFinite(mean) || !math.isFinite(standardDeviation) || standardDeviation < 0.0 {
+            return RandomError.InvalidProbability;
+        }
+        Normal(mean, standardDeviation)
+    }
+
+    pub func sample<R: Rng>(rng: *R) f64 {
+        switch spare {
+            some(value) => {
+                spare = null;
+                return mean + standardDeviation * value;
+            },
+            null => {},
+        }
+        var unit = (f64(rng.nextU64() >> 11) + 1.0) * 1.1102230246251565e-16;
+        if unit >= 1.0 { unit = math.nextAfter<f64>(1.0, 0.0); }
+        var angleUnit = rangeFloat<R>(rng, 0.0, 1.0)!;
+        var radius = math.sqrt(-2.0 * math.log(unit));
+        var angle = math.tau<f64>() * angleUnit;
+        spare = some(radius * math.sin(angle));
+        mean + standardDeviation * radius * math.cos(angle)
+    }
+}
+
+pub class Exponential {
+    var rate: f64;
+    func init(value: f64) : rate(value) {}
+public:
+    pub static func new(rate: f64) !Self {
+        if !math.isFinite(rate) || rate <= 0.0 { return RandomError.InvalidProbability; }
+        Exponential(rate)
+    }
+
+    pub func sample<R: Rng>(rng: *R) f64 {
+        var unit = rangeFloat<R>(rng, 0.0, 1.0)!;
+        var survival = 1.0 - unit;
+        if survival <= 0.0 { survival = 1.1102230246251565e-16; }
+        -math.log(survival) / rate
+    }
+}
+
+pub class WeightedIndex {
+    #copy: disabled
+    var cumulative: coll.Vec<f64>;
+    var total: f64;
+    func init() : cumulative(coll.Vec<f64>()), total(0.0) {}
+public:
+    pub static func new(weights: []const f64) !Self {
+        var out = WeightedIndex();
+        out.update(weights)!;
+        move(out)
+    }
+
+    pub func update(weights: []const f64) !void {
+        var next = coll.Vec<f64>.withCapacity(weights.len())!;
+        var sum = 0.0;
+        for weight in weights {
+            if !math.isFinite(weight) || weight < 0.0 { return RandomError.InvalidWeights; }
+            sum += weight;
+            if !math.isFinite(sum) { return RandomError.InvalidWeights; }
+            next.push(sum)!;
+        }
+        if sum <= 0.0 || weights.len() == 0 { return RandomError.InvalidWeights; }
+        cumulative = move(next);
+        total = sum;
+    }
+
+    pub func sample<R: Rng>(rng: *R) usize {
+        var target = rangeFloat<R>(rng, 0.0, total)!;
+        if target >= total { target = math.nextAfter<f64>(total, 0.0); }
+        var first: usize = 0;
+        var end = cumulative.len();
+        for first < end {
+            var middle = first + (end - first) / 2;
+            if cumulative.asConstSlice()[middle] <= target { first = middle + 1; }
+            else { end = middle; }
+        }
+        if first >= cumulative.len() { cumulative.len() - 1 } else { first }
     }
 }
 
@@ -185,7 +423,7 @@ pub func shuffle<R: Rng, T: Movable>(items: []T, rng: *R) void {
     var index = items.len();
     for index > 1 {
         index--;
-        var selected = rangeInt<R>(rng, 0, u64(index + 1))! as usize;
+        var selected = indexFromU64(rangeInt<R>(rng, 0, u64(index + 1))!);
         if selected != index {
             var value = move(items[index]);
             items[index] = move(items[selected]);
@@ -196,12 +434,12 @@ pub func shuffle<R: Rng, T: Movable>(items: []T, rng: *R) void {
 
 pub func choose<R: Rng, T>(items: []const T, rng: *R) ?*const T {
     if items.len() == 0 { return null; }
-    var index = rangeInt<R>(rng, 0, u64(items.len()))! as usize;
+    var index = indexFromU64(rangeInt<R>(rng, 0, u64(items.len()))!);
     some(&items[index])
 }
 pub func chooseMut<R: Rng, T>(items: []T, rng: *R) ?*T {
     if items.len() == 0 { return null; }
-    var index = rangeInt<R>(rng, 0, u64(items.len()))! as usize;
+    var index = indexFromU64(rangeInt<R>(rng, 0, u64(items.len()))!);
     some(&items[index])
 }
 
@@ -209,35 +447,62 @@ pub func sample<R: Rng, T: Copyable & Movable>(items: []const T, count: usize, r
     if count > items.len() { return RandomError.SampleTooLarge; }
     var indices = coll.Vec<usize>.withCapacity(items.len())!;
     for i in usize(0)..items.len() { indices.push(i)!; }
-    var i = usize(0);
-    for i < count {
-        var j = rangeInt<R>(rng, u64(i), u64(items.len()))! as usize;
-        var tmp = indices[i]; indices[i] = indices[j]; indices[j] = tmp;
-        i++;
+    for i in usize(0)..count {
+        var j = indexFromU64(rangeInt<R>(rng, u64(i), u64(items.len()))!);
+        var tmp = indices[i];
+        indices[i] = indices[j];
+        indices[j] = tmp;
     }
     var result = coll.Vec<T>.withCapacity(count)!;
     for i in usize(0)..count { result.push(items[indices[i]])!; }
     move(result)
 }
 
-pub func reservoirSample<R: Rng, T: Copyable & Movable>(items: []const T, count: usize, rng: *R) !coll.Vec<T> {
-    if count > items.len() { return RandomError.SampleTooLarge; }
+pub func reservoirSample<R: Rng, T: Movable, I: Movable>(items: I, count: usize, rng: *R) !coll.Vec<T> {
     var result = coll.Vec<T>.withCapacity(count)!;
-    for i in usize(0)..count { result.push(items[i])!; }
-    for i in count..items.len() {
-        var selected = rangeInt<R>(rng, 0, u64(i + 1))! as usize;
-        if selected < count { result[selected] = items[i]; }
+    var seen: usize = 0;
+    for item in move(items) {
+        if seen < count {
+            result.push(move(item))!;
+        } else {
+            if seen == ~usize(0) { return RandomError.SampleTooLarge; }
+            var selected = indexFromU64(rangeInt<R>(rng, 0, u64(seen + 1))!);
+            if selected < count { result[selected] = move(item); }
+        }
+        if seen == ~usize(0) { return RandomError.SampleTooLarge; }
+        seen++;
     }
+    if seen < count { return RandomError.SampleTooLarge; }
     move(result)
 }
 
-pub func randomString<R: Rng>(alphabet: str, length: usize, rng: *R) !string {
-    var chars = coll.Vec<u8>.withCapacity(length)!;
-    var bytes = alphabet.asBytes();
-    if bytes.len() == 0 && length != 0 { return RandomError.EmptyAlphabet; }
-    for i in usize(0)..length {
-        var index = rangeInt<R>(rng, 0, u64(bytes.len()))! as usize;
-        chars.push(bytes[index])!;
+func appendScalar(value: char, output: *coll.Vec<u8>) !void {
+    var scalar = convert.fromChar(value);
+    if scalar < 0x80 {
+        output.push(u8(scalar)!)!;
+    } else if scalar < 0x800 {
+        output.push(u8(0xc0 | (scalar >> 6))!)!;
+        output.push(u8(0x80 | (scalar & 0x3f))!)!;
+    } else if scalar < 0x10000 {
+        output.push(u8(0xe0 | (scalar >> 12))!)!;
+        output.push(u8(0x80 | ((scalar >> 6) & 0x3f))!)!;
+        output.push(u8(0x80 | (scalar & 0x3f))!)!;
+    } else {
+        output.push(u8(0xf0 | (scalar >> 18))!)!;
+        output.push(u8(0x80 | ((scalar >> 12) & 0x3f))!)!;
+        output.push(u8(0x80 | ((scalar >> 6) & 0x3f))!)!;
+        output.push(u8(0x80 | (scalar & 0x3f))!)!;
     }
-    text.fromBytes(chars.asConstSlice())
+}
+
+pub func randomString<R: Rng>(alphabet: str, length: usize, rng: *R) !string {
+    var scalars = coll.Vec<char>();
+    for scalar in text.chars(alphabet) { scalars.push(scalar)!; }
+    if scalars.isEmpty() && length != 0 { return RandomError.EmptyAlphabet; }
+    var output = coll.Vec<u8>();
+    for i in usize(0)..length {
+        var index = indexFromU64(rangeInt<R>(rng, 0, u64(scalars.len()))!);
+        appendScalar(scalars.asConstSlice()[index], &output)!;
+    }
+    text.fromBytes(output.asConstSlice())
 }

@@ -186,6 +186,3 @@ func normalizeScalars(value: str, form: NormalForm) !string {
     for ch in text.chars(value) { engine.push(ch)!; }
     engine.finish()
 }
-pub func graphemeBoundary(previous: char, next: char) bool {
-    GraphemeSegmenter.boundaryBetween(previous, next)
-}

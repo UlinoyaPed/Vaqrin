@@ -1,0 +1,208 @@
+package toml
+import (coll, convert, parse, text)
+
+pub error TomlError {
+    InvalidSyntax, InvalidKey, DuplicateKey, DuplicateTable, TypeConflict,
+    InvalidString, InvalidNumber, InvalidDateTime, UnsupportedSyntax,
+    DepthLimit, SizeLimit, MissingKey, TypeMismatch,
+}
+
+pub enum Value {
+    String(string), Integer(i64), Float(f64), Bool(bool),
+    DateTime(string), Array(coll.Vec<Value>), Table(Document),
+}
+
+pub class TomlOptions {
+    pub var maxDepth: usize;
+    pub var maxBytes: usize;
+    pub var maxEntries: usize;
+    func init() : maxDepth(64), maxBytes(4 * 1024 * 1024), maxEntries(100_000) {}
+}
+
+pub class Entry {
+    pub var key: string;
+    pub var value: Value;
+    func init(key: string, value: Value) : key(move(key)), value(move(value)) {}
+}
+
+pub class Document {
+    var entries: coll.Vec<Entry>;
+public:
+    func init() : entries(coll.Vec<Entry>()) {}
+    const func len() usize { entries.len() }
+
+    const func get(key: str) ?*const Value {
+        for index in usize(0)..entries.len() {
+            var entry = entries.get(index).unwrap();
+            if entry.key == key { return some(&entry.value); }
+        }
+        null
+    }
+
+    func getMut(key: str) ?*Value {
+        for index in usize(0)..entries.len() {
+            var entry = entries.getMut(index).unwrap();
+            if entry.key == key { return some(&entry.value); }
+        }
+        null
+    }
+
+    func set(key: string, value: Value) !void {
+        for index in usize(0)..entries.len() {
+            var entry = entries.getMut(index).unwrap();
+            if entry.key == key { entry.value = move(value); return; }
+        }
+        entries.push(Entry(move(key), move(value)))!
+    }
+
+    func insertUnique(key: string, value: Value) !void {
+        if get(key) != null { return TomlError.DuplicateKey; }
+        entries.push(Entry(move(key), move(value)))!
+    }
+
+    func remove(key: str) bool {
+        for index in usize(0)..entries.len() {
+            if entries.get(index).unwrap().key == key {
+                var removed = entries.remove(index);
+                return true;
+            }
+        }
+        false
+    }
+
+    const func keyAt(index: usize) ?str {
+        if index >= entries.len() { return null; }
+        some(entries.get(index).unwrap().key)
+    }
+    const func valueAt(index: usize) ?*const Value {
+        if index >= entries.len() { return null; }
+        some(&entries.get(index).unwrap().value)
+    }
+}
+
+pub func get(document: *const Document, path: str) ?*const Value {
+    var current = document;
+    var data = path.asBytes();
+    var start: usize = 0;
+    for index := usize(0); index <= data.len(); index++ {
+        if index != data.len() && data[index] != 46 { continue; }
+        var key = text.fromBytes(data[start..index]) catch { return null; };
+        var value = current.get(key) ?? { return null; };
+        if index == data.len() { return value; }
+        switch *value {
+            Value.Table(&table) => current = &table,
+            _ => return null,
+        }
+        start = index + 1;
+    }
+    null
+}
+
+func trim(value: str) str {
+    var data = value.asBytes();
+    var start: usize = 0;
+    var end = data.len();
+    for start < end && (data[start] == 32 || data[start] == 9) { start++; }
+    for end > start && (data[end-1] == 32 || data[end-1] == 9 || data[end-1] == 13) { end--; }
+    unsafe { __vqr_text_borrow_utf8(data[start..end]) }
+}
+
+func parseString(value: str) !string {
+    var data = value.asBytes();
+    if data.len() < 2 || data[0] != 34 || data[data.len()-1] != 34 {
+        return TomlError.InvalidString;
+    }
+    var output = coll.Vec<u8>();
+    for index := usize(1); index < data.len()-1; index++ {
+        var byte = data[index];
+        if byte == 92 {
+            index++;
+            if index >= data.len()-1 { return TomlError.InvalidString; }
+            switch data[index] {
+                34 => output.push(34)!,
+                92 => output.push(92)!,
+                110 => output.push(10)!,
+                114 => output.push(13)!,
+                116 => output.push(9)!,
+                _ => return TomlError.UnsupportedSyntax,
+            }
+        } else {
+            if byte < 32 { return TomlError.InvalidString; }
+            output.push(byte)!;
+        }
+    }
+    text.fromBytes(output.asConstSlice())
+}
+
+func parseValue(value: str) !Value {
+    var source = trim(value);
+    if source.byteLen() == 0 { return TomlError.InvalidSyntax; }
+    if source == "true" { return Value.Bool(true); }
+    if source == "false" { return Value.Bool(false); }
+    var bytes = source.asBytes();
+    if bytes[0] == 34 { return Value.String(parseString(source)!); }
+    if bytes[0] == 91 && bytes[bytes.len()-1] == 93 {
+        var array = coll.Vec<Value>();
+        var inside = text.fromBytes(bytes[1..bytes.len()-1])!;
+        var fields = parse.splitFields(inside);
+        for field in fields {
+            var item = parseValue(field)!;
+            array.push(move(item))!;
+        }
+        return Value.Array(move(array));
+    }
+    if bytes.len() >= 10 && bytes[4] == 45 && bytes[7] == 45 {
+        return Value.DateTime(text.fromBytes(bytes)!);
+    }
+    if bytes[0] == 45 || (48 <= bytes[0] && bytes[0] <= 57) {
+        var hasFloat = false;
+        for byte in bytes { if byte == 46 || byte == 101 || byte == 69 { hasFloat = true; } }
+        if hasFloat {
+            return TomlError.UnsupportedSyntax;
+        }
+        return Value.Integer(parse.parseInt<i64>(source, 10)!);
+    }
+    TomlError.InvalidSyntax
+}
+
+pub func parseWithOptions(value: str, options: TomlOptions) !Document {
+    if value.byteLen() > options.maxBytes { return TomlError.SizeLimit; }
+    var document = Document();
+    var lines = bytes.split(value.asBytes(), "\n".asBytes())!;
+    var section = "";
+    for rawLine in lines {
+        var line = trim(unsafe { __vqr_text_borrow_utf8(rawLine) });
+        if line.byteLen() == 0 || line.asBytes()[0] == 35 { continue; }
+        if line.asBytes()[0] == 91 {
+            if line.asBytes()[line.byteLen()-1] != 93 { return TomlError.InvalidSyntax; }
+            section = text.fromBytes(line.asBytes()[1..line.byteLen()-1])!;
+            if section.byteLen() == 0 { return TomlError.InvalidKey; }
+            if document.get(section) != null { return TomlError.DuplicateTable; }
+            document.insertUnique(section, Value.Table(Document()))!;
+            continue;
+        }
+        var data = line.asBytes();
+        var equal: ?usize = null;
+        for index in usize(0)..data.len() {
+            if data[index] == 61 { equal = some(index); break; }
+        }
+        var splitAt = equal ?? { return TomlError.InvalidSyntax; };
+        var key = trim(unsafe { __vqr_text_borrow_utf8(data[0..splitAt]) });
+        var rhs = trim(unsafe { __vqr_text_borrow_utf8(data[splitAt+1..data.len()]) });
+        if key.byteLen() == 0 { return TomlError.InvalidKey; }
+        var parsed = parseValue(rhs)!;
+        if section.byteLen() == 0 {
+            document.insertUnique(text.fromBytes(key.asBytes())!, move(parsed))!;
+        } else {
+            var tableValue = document.getMut(section) ?? { return TomlError.TypeConflict; };
+            switch tableValue {
+                Value.Table(&table) => table.insertUnique(text.fromBytes(key.asBytes())!, move(parsed))!,
+                _ => return TomlError.TypeConflict,
+            }
+        }
+        if document.len() > options.maxEntries { return TomlError.SizeLimit; }
+    }
+    move(document)
+}
+
+pub func parse(value: str) !Document { parseWithOptions(value, TomlOptions()) }

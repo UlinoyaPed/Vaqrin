@@ -1,0 +1,98 @@
+package cell
+import (opt)
+
+pub error CellError { Borrowed, RecursiveInitialization }
+
+pub class BorrowRef<T> {
+    #copy: disabled
+    var pointer: *const T;
+    var counter: *isize;
+public:
+    unsafe func init(pointer: *const T, counter: *isize) : pointer(pointer), counter(counter) {}
+
+    const func get() *const T { pointer }
+
+    const func map<U, F: Movable>(project: F) BorrowRef<U> {
+        var target = project(pointer);
+        &count := counter;
+        count++;
+        unsafe { BorrowRef<U>(target, counter) }
+    }
+
+    func deinit() void { *counter -= 1; }
+}
+
+pub class BorrowMut<T> {
+    #copy: disabled
+    var pointer: *T;
+    var counter: *isize;
+    var ownsBorrow: bool;
+public:
+    unsafe func init(pointer: *T, counter: *isize)
+        : pointer(pointer), counter(counter), ownsBorrow(true) {}
+
+    func get() *T { pointer }
+
+    static func map<U, F: Movable>(value: Self, project: F) BorrowMut<U> {
+        var target = project(value.pointer);
+        var state = value.counter;
+        value.ownsBorrow = false;
+        unsafe { BorrowMut<U>(target, state) }
+    }
+
+    func deinit() void {
+        if ownsBorrow {
+            var &count = counter;
+            count = 0;
+        }
+    }
+}
+
+pub class RefCell<T: Movable> {
+    #copy: disabled
+    var value: ?T;
+    var count: isize;
+    func init(initial: T) : value(some(move(initial))), count(0) {}
+public:
+    static func new(value: T) Self { RefCell<T>(move(value)) }
+
+    func tryBorrow() ?BorrowRef<T> {
+        if count < 0 { return null; }
+        count++;
+        unsafe {
+            some(BorrowRef<T>(opt.asPtr<T>(&value).unwrap(), &count))
+        }
+    }
+
+    func borrow() !BorrowRef<T> {
+        switch tryBorrow() {
+            null => CellError.Borrowed,
+            some(held) => move(held),
+        }
+    }
+
+    func tryBorrowMut() ?BorrowMut<T> {
+        if count != 0 { return null; }
+        count = -1;
+        unsafe {
+            some(BorrowMut<T>(opt.asMutPtr<T>(&value).unwrap(), &count))
+        }
+    }
+
+    func borrowMut() !BorrowMut<T> {
+        switch tryBorrowMut() {
+            null => CellError.Borrowed,
+            some(held) => move(held),
+        }
+    }
+
+    func replace(replacement: T) !T {
+        if count != 0 { return CellError.Borrowed; }
+        opt.replace<T>(&value, move(replacement)).unwrap()
+    }
+
+    static func intoInner(inner: Self) T {
+        if inner.count != 0 { panic("ref cell still borrowed"); }
+        opt.take<T>(&inner.value).unwrap()
+    }
+}

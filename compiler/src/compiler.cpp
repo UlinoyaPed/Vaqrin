@@ -707,7 +707,11 @@ bool Program::transferable(Type *t, bool shared) {
     case Kind::Class: {
       const auto &file = *type->def.file;
       auto name = type->def.decl->name;
-      if (file.standard && file.package == "coll" && (name == "Vec" || name == "FixedVec"))
+      if (file.standard && file.package == "cell" && name == "OnceLock")
+        allowed = check(type->parts[0]);
+      else if (shared && file.standard && file.package == "cell")
+        allowed = false;
+      else if (file.standard && file.package == "coll" && (name == "Vec" || name == "FixedVec"))
         allowed = check(type->parts[0]);
       else
         allowed = std::ranges::all_of(type->fields, [&](const auto &field) { return check(field.type); });

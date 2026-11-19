@@ -1643,6 +1643,133 @@ class Acceptance(unittest.TestCase):
             }
         """, "001fff\n255\ntrue\ntrue\na%2B/%20%F0%9F%98%80\n中+/\né\ntrue\n233\n6\n45\n中😀\n216\n😀\ntrue\ntrue\n8\nZg==\nZm8=\nZm9v\nfoo\ntrue\n_w\n255\ntrue\n3\n0\n中😀\nZm9v\nYmFy\nfoobar\n")
 
+    def test_cells_and_borrow_guards(self):
+        self.hosted("""
+            import (cell, core, meta)
+            error Failure { Once }
+            class Pair {
+                pub var number: i32;
+                pub var marker: i32;
+            }
+            func view(ptr: *const Pair) *const i32 { &ptr.number }
+            func edit(ptr: *Pair) *i32 { &ptr.number }
+            func twelve() i32 { 12 }
+            func makeLazy<F: Movable>(callback: F) cell.Lazy<i32, F> { cell.Lazy<i32, F>(move(callback)) }
+            func main() !void {
+                var small = cell.Cell<i32>.new(2);
+                var triple = (value: i32) i32 => value * 3;
+                small.update(triple);
+                io.println(small.replace(4))!;
+                io.println(cell.Cell<i32>.intoInner(move(small)))!;
+                var storage = cell.RefCell<Pair>.new(Pair{number: 7, marker: 9});
+                {
+                    var borrowed = storage.borrow()!;
+                    var leaf = borrowed.map<i32>(view);
+                    io.println(*leaf.get())!;
+                    var conflict = storage.borrowMut();
+                    io.println(core.isErr(&conflict))!;
+                }
+                {
+                    var borrowed = storage.borrowMut()!;
+                    var leaf = cell.BorrowMut<Pair>.map<i32>(move(borrowed), edit);
+                    &x := leaf.get();
+                    x = 20;
+                    var conflict = storage.tryBorrow();
+                    io.println(core.isNone(&conflict))!;
+                }
+                var pair = cell.RefCell<Pair>.intoInner(move(storage));
+                io.println(pair.number)!;
+                var once = cell.OnceCell<i32>.new();
+                io.println(*once.getOrInit(twelve))!;
+                io.println(once.set(17).unwrap())!;
+                io.println(once.take().unwrap())!;
+                var tried = 0;
+                var callback = [&tried]() !i32 => {
+                    tried++;
+                    if tried == 1 { return Failure.Once; }
+                    21
+                };
+                var failed = once.getOrTryInit(callback);
+                io.println(core.isErr(&failed))!;
+                io.println(*once.getOrTryInit(callback)!)!;
+                var lazy = makeLazy(move(callback));
+                io.println(*lazy.force()!)!;
+                io.println(*lazy.force()!)!;
+                io.println(tried)!;
+                var locked = cell.OnceLock<i32>.new();
+                var callbackFail = () !i32 => Failure.Once;
+                var lockFailure = locked.getOrTryInit(callbackFail);
+                io.println(core.isErr(&lockFailure))!;
+                io.println(*locked.getOrInit(twelve))!;
+                io.println(locked.set(4).unwrap())!;
+                io.println(*locked.get().unwrap())!;
+                io.println(meta.isShareable<cell.OnceLock<i32>>())!;
+                io.println(meta.isShareable<cell.RefCell<i32>>())!;
+                var raw = cell.UnsafeCell<i32>.new(5);
+                unsafe { *raw.get() = 11; io.println(*raw.get())!; }
+            }
+        """,
+                    "6\n4\n7\ntrue\ntrue\n20\n12\n17\n12\ntrue\n21\n21\n21\n3\ntrue\n12\n4\n12\ntrue\nfalse\n11\n")
+
+    def test_once_lock_publishes_once_across_native_threads(self):
+        source = self.source("once.vqr", '''
+            import (atomic, cell, core)
+            class State {
+                pub var hits: atomic.Atomic<i32>;
+                pub var once: cell.OnceLock<i32>;
+                pub func init() : hits(atomic.Atomic<i32>(0)), once(cell.OnceLock<i32>.new()) {}
+            }
+            export "C" func make_state() *State {
+                var state = new State() catch { panic("allocation failed"); };
+                Box.intoRaw(move(state))
+            }
+            export "C" func read_state(state: *State) c_int {
+                var initializer = [state]() i32 => {
+                    state.hits.fetchAdd(1);
+                    97
+                };
+                *state.once.getOrInit(move(initializer))
+            }
+            export "C" func init_count(state: *State) c_int { state.hits.load() }
+            export "C" func free_state(state: *State) void {
+                var handle = unsafe { Box<State>.fromRaw(state) };
+                core.drop(move(handle));
+            }
+        ''')
+        client = self.source("once.c", '''
+            #include <pthread.h>
+            #include <stdatomic.h>
+            #include <sched.h>
+            struct State;
+            extern struct State *make_state(void);
+            extern int read_state(struct State *);
+            extern int init_count(struct State *);
+            extern void free_state(struct State *);
+            static _Atomic int start;
+            static void *worker(void *ptr) {
+                while (!atomic_load_explicit(&start, memory_order_acquire)) sched_yield();
+                if (read_state(ptr) == 97) return 0;
+                return ptr;
+            }
+            int main(void) {
+                struct State *state = make_state();
+                pthread_t threads[8];
+                for (int i = 0; i != 8; ++i)
+                    if (pthread_create(&threads[i], 0, worker, state)) return 1;
+                atomic_store_explicit(&start, 1, memory_order_release);
+                for (int i = 0; i != 8; ++i) {
+                    void *failed = 0;
+                    if (pthread_join(threads[i], &failed) || failed) return 2;
+                }
+                int count = init_count(state);
+                free_state(state);
+                return count != 1;
+            }
+        ''')
+        self.process(VAQC, source, "--emit=obj", "-O2", "-o", "once.o")
+        self.process("cc", client, "once.o", "-pthread", "-o", "thread-client")
+        self.process("./thread-client")
+
     def test_build_artifacts(self):
         source = self.source("math.vqr", '''
             package math

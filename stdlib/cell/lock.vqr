@@ -1,0 +1,64 @@
+package cell
+import (atomic, mem)
+
+pub class OnceLock<T: Movable & Sendable & Shareable> {
+    #copy: disabled
+    var state: atomic.Atomic<u8>;
+    var slot: mem.MaybeUninit<T>;
+    func init() : state(atomic.Atomic<u8>(0)), slot(mem.MaybeUninit<T>.uninit()) {}
+public:
+    static func new() Self { OnceLock<T>() }
+
+    const func get() ?*const T {
+        if state.load(atomic.Order.Acquire) != 2 { return null; }
+        some(slot.asConstPtr())
+    }
+
+    func set(value: T) ?T {
+        var locked = state.compareExchange(0, 1, atomic.Order.AcqRel, atomic.Order.Acquire);
+        if !locked.exchanged { return some(move(value)); }
+        publish(move(value));
+        null
+    }
+
+    func getOrInit<F: Movable>(factory: F) *const T {
+        for {
+            switch get() {
+                some(ptr) => return ptr,
+                null => {},
+            }
+            var locked = state.compareExchange(0, 1, atomic.Order.AcqRel, atomic.Order.Acquire);
+            if locked.exchanged { return publish(factory()); }
+        }
+    }
+
+    func getOrTryInit<F: Movable>(factory: F) !*const T {
+        for {
+            switch get() {
+                some(ptr) => return ptr,
+                null => {},
+            }
+            var locked = state.compareExchange(0, 1, atomic.Order.AcqRel, atomic.Order.Acquire);
+            if locked.exchanged {
+                var value = factory() catch (reason) {
+                    state.store(0, atomic.Order.Release);
+                    return reason;
+                };
+                return publish(move(value));
+            }
+        }
+    }
+
+    func deinit() void {
+        if state.load(atomic.Order.Acquire) == 2 {
+            unsafe { slot.assumeInitDrop(); }
+        }
+    }
+
+private:
+    func publish(value: T) *const T {
+        unsafe { slot.write(move(value)); }
+        state.store(2, atomic.Order.Release);
+        slot.asConstPtr()
+    }
+}

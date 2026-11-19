@@ -1,6 +1,6 @@
 # Vaqrin 标准包
 
-可用 `import (core, coll, iter, opt, result, cmp, convert, meta, mem, mmio, bits, algo, atomic, binary, bytes, encoding, simd, text, io)` 导入标准包，也可使用 `std/` 前缀。CMake 在构建目录生成 `share/vaqrin/stdlib`，安装时将标准包源码复制到安装前缀下。编译器按使用情况实例化泛型声明。完整的目标接口见[标准包 API 清单](../docs/stdlib/Vaqrin-stdlib-API-complete-draft.md)。
+可用 `import (core, coll, iter, opt, result, cmp, convert, meta, mem, mmio, bits, algo, atomic, binary, bytes, cell, encoding, simd, text, io)` 导入标准包，也可使用 `std/` 前缀。CMake 在构建目录生成 `share/vaqrin/stdlib`，安装时将标准包源码复制到安装前缀下。编译器按使用情况实例化泛型声明。完整的目标接口见[标准包 API 清单](../docs/stdlib/Vaqrin-stdlib-API-complete-draft.md)。
 
 | 包 | 当前接口 |
 | --- | --- |
@@ -19,6 +19,7 @@
 | `atomic` | 原生标量、可空指针、原子标志、比较交换、读改写和内存栅栏 |
 | `binary` | 定宽端序转换、带位置的读写游标、VarUint 和 ZigZag |
 | `bytes` | 切片查找、预处理字节模式、分割及可增长缓冲区 |
+| `cell` | 内部可变值、运行时借用守卫、惰性及单次初始化、跨线程单次发布 |
 | `encoding` | Hex、Base64、百分号编码、ASCII、Latin-1、UTF-8 和 UTF-16，含跨块 UTF 校验与解码 |
 | `simd` | 定宽标量通道、掩码、载入与存储、重排和归约 |
 | `text` | UTF-8 字节相等比较 `equal`、`byteLen`、`scalarCount`、`chars`、`fromBytes`、`StringBuilder` |
@@ -46,6 +47,8 @@ Vec 按值接收可移动元素。其 `reserve` 先分配，再搬迁已有元�
 位流的 `LsbFirst` 从字节低位开始，也先读写结果或参数的低位。`MsbFirst` 从字节高位开始，从读写宽度所覆盖的最高位开始。读不到足够位时，`BitReader` 返回成功的空值并保持位置。超出写入容量时，`BitWriter` 返回错误并保持缓冲区和位置。
 
 `atomic` 在 x86-64 和 AArch64 上支持 8、16、32、64 位原子操作，在 Thumbv7-M 和 Thumbv7E-M 上支持 8、16、32 位原子操作。默认内存顺序为 `SeqCst`，非法的顺序组合触发 trap。用 `Atomic<T>.intoInner(move(value))` 交付原子对象并取出其值。
+
+`RefCell` 用借用守卫管理共享和独占访问，守卫或其映射结果释放时归还借用。`OnceCell` 检测重入，`OnceLock` 使用 Acquire/Release 发布已初始化的值，争抢初始化的线程采用自旋等待。可失败的初始化失败后允许重试。守卫和借出的指针必须在对应容器的有效期内使用。
 
 `binary` 支持显式小端、大端和目标本机端序。VarUint 使用最短编码，读到非最短或超出 64 位范围的值时返回错误。读取长度前缀失败时保留游标位置，写入容量不足时保留缓冲区内容。
 

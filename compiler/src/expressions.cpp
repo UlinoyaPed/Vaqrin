@@ -63,19 +63,22 @@ Type *Body::hint(const Ast &n) {
       if (receiver && receiver->kind == Kind::Class) {
         int i = source->kind == NodeKind::Name ? findLocal(source->text) : -1;
         bool writable = i < 0 || locals[i].writable;
-        const Decl *method = nullptr;
+        Definition method{};
         for (auto def : p.methods(receiver, callee->text, false)) {
           auto *candidate = def.decl;
           if (candidate->params.size() + 1 != n->children.size() || !candidate->generics.empty() ||
               hasComptimeParameters(*candidate) || (!candidate->readOnly && !writable) ||
-              (!candidate->visible && owner != receiver))
+              ((!candidate->visible || !def.publicPath) && owner != receiver))
             continue;
-          if (!method || (!candidate->readOnly && method->readOnly))
-            method = candidate;
-          else if (candidate->readOnly == method->readOnly)
+          if (!method.decl || (!candidate->readOnly && method.decl->readOnly))
+            method = def;
+          else if (candidate->readOnly == method.decl->readOnly)
             return nullptr;
         }
-        if (method) return p.type(method->type, *receiver->def.file, p.classTypes(receiver), receiver->comptimeArguments);
+        if (method.decl) {
+          auto *actual = method.declaringType ? method.declaringType : receiver;
+          return p.type(method.decl->type, *method.file, p.classTypes(actual), actual->comptimeArguments);
+        }
       }
     }
     auto key = path(callee);
@@ -90,7 +93,8 @@ Type *Body::hint(const Ast &n) {
             if (method.params.size() + 1 != n->children.size() || !method.generics.empty() ||
                 hasComptimeParameters(method))
               continue;
-            auto *type = p.type(method.type, *def.file, p.classTypes(owner), owner->comptimeArguments);
+            auto *actual = def.declaringType ? def.declaringType : owner;
+            auto *type = p.type(method.type, *def.file, p.classTypes(actual), actual->comptimeArguments);
             if (result && result != type) return nullptr;
             result = type;
           }
@@ -186,6 +190,7 @@ ValueAt Body::place(const Ast &n) {
   auto v = expression(n);
   if (v.type == p.neverTy) return v;
   if (!v.address) fail(n->span, "expected an assignable storage location");
+  if (v.type->kind == Kind::Interface) fail(n->span, "an interface cannot be assigned by value");
   return v;
 }
 
@@ -395,6 +400,12 @@ ValueAt Body::operate(std::string_view op, ValueAt a, ValueAt b, Span span, bool
   if (a.type == p.boolTy || a.type == p.charTy || a.type == p.errorTy || a.type->kind == Kind::Pointer) {
     if (a.type != b.type || (op != "==" && op != "!="))
       fail(span, "incompatible operands for '" + std::string(op) + "'");
+    if (a.type->kind == Kind::Pointer && !a.type->ir->isPointerTy()) {
+      auto *left = read(a, span), *right = read(b, span);
+      auto *same = ir.CreateAnd(ir.CreateICmpEQ(ir.CreateExtractValue(left, 0), ir.CreateExtractValue(right, 0)),
+                                ir.CreateICmpEQ(ir.CreateExtractValue(left, 1), ir.CreateExtractValue(right, 1)));
+      return {p.boolTy, op == "==" ? same : ir.CreateNot(same)};
+    }
     return {p.boolTy, binaryNumber(ir, op, read(a, span), read(b, span), false, false)};
   }
   if (a.type->kind == Kind::Enum && a.type == b.type &&
@@ -692,7 +703,8 @@ ValueAt Body::builtin(std::string_view key, const Ast &n, const std::vector<Ast>
     arity(1);
     unsafe();
     auto *to = evaluationType();
-    if (to->kind != Kind::Pointer) fail(n->span, "intrinsic requires a pointer type argument");
+    if (to->kind != Kind::Pointer || !to->ir->isPointerTy())
+      fail(n->span, "intrinsic requires an ordinary pointer type");
     auto v =
         expression(n->children[1], key == "ptrFromInt" && mathInteger(n->children[1]) ? p.sizeTy : nullptr);
     if (!live()) return neverValue();
@@ -710,7 +722,7 @@ ValueAt Body::builtin(std::string_view key, const Ast &n, const std::vector<Ast>
       guard(ir, valid);
       return {to, ir.CreateIntToPtr(addr, to->ir)};
     }
-    if (v.type->kind != Kind::Pointer || (key == "ptrCast" && v.type->readOnly && !to->readOnly) ||
+    if (v.type->kind != Kind::Pointer || !v.type->ir->isPointerTy() || (key == "ptrCast" && v.type->readOnly && !to->readOnly) ||
         (key == "constCast" && v.type->parts != to->parts))
       fail(n->span, "invalid pointer conversion or permission change");
     return {to, raw};
@@ -832,11 +844,12 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
   for (auto def : defs) {
     const auto &d = *def.decl;
     if (d.kind != DeclKind::Function || d.params.size() + 1 != n->children.size()) continue;
-    if (classType && !d.visible && owner != classType) continue;
+    if (classType && (!d.visible || !def.publicPath) && owner != classType) continue;
     if (receiver && !d.readOnly && !receiver->writable) continue;
     if (args.size() > d.generics.size()) continue;
-    Types subst = classType ? p.classTypes(classType) : Types{};
-    Constants constants = classType ? classType->comptimeArguments : Constants{};
+    auto *declaring = def.declaringType ? def.declaringType : classType;
+    Types subst = declaring ? p.classTypes(declaring) : Types{};
+    Constants constants = declaring ? declaring->comptimeArguments : Constants{};
     std::set<std::string> typeNames, valueNames;
     for (std::size_t i = args.size(); i < d.generics.size(); ++i) {
       const auto &g = d.generics[i];
@@ -942,9 +955,9 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
     if (!consistent) continue;
     bool valid = true;
     for (const auto &g : d.generics)
-      if (g.type && !g.comptime) valid &= p.satisfies(subst.at(g.name), g.type);
+      if (g.type && !g.comptime) valid &= p.satisfies(subst.at(g.name), g.type, *def.file, subst, constants);
     if (!valid) continue;
-    Candidate c{def, subst, constants, p.parameters(def, subst, classType, constants), {}};
+    Candidate c{def, subst, constants, p.parameters(def, subst, declaring, constants), {}};
     if (receiver) c.ranks.push_back(receiver->writable && d.readOnly);
     unsigned offset = receiver ? 1 : 0;
     for (unsigned i = 0; i < d.params.size(); ++i) {
@@ -964,6 +977,15 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
           rank += 1;
           break;
         }
+        if (from && from->kind == Kind::Pointer && t->kind == Kind::Pointer &&
+            from->parts[0]->kind == Kind::Class && t->parts[0]->kind == Kind::Interface &&
+            (t->readOnly || !from->readOnly)) {
+          p.ensureSized(from->parts[0], a->span);
+          if (from->parts[0]->conformances.contains(t->parts[0])) {
+            rank += 1;
+            break;
+          }
+        }
         if (t->kind == Kind::Optional || t->kind == Kind::Result) {
           rank += 2;
           t = t->parts[0];
@@ -977,13 +999,17 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
     if (valid) candidates.push_back(std::move(c));
   }
   Candidate *best = nullptr;
-  auto better = [](const Candidate &a, const Candidate &b) {
+  auto better = [&](const Candidate &a, const Candidate &b) {
     bool strict = false;
     for (std::size_t i = 0; i < a.ranks.size(); ++i) {
       if (a.ranks[i] > b.ranks[i]) return false;
       strict |= a.ranks[i] < b.ranks[i];
     }
-    return strict;
+    if (strict) return true;
+    return receiver && a.definition.receiverPath.empty() && !b.definition.receiverPath.empty() &&
+           a.definition.decl->readOnly == b.definition.decl->readOnly &&
+           std::equal(a.parameters.begin() + 1, a.parameters.end(), b.parameters.begin() + 1,
+                      b.parameters.end());
   };
   for (auto &a : candidates)
     if (std::ranges::none_of(candidates, [&](const auto &b) { return better(b, a); })) {
@@ -1001,18 +1027,50 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
       fail(param.span, "comptime value parameters currently require scalar types", "E290");
     best->constants[param.name] = p.evaluate(n->children[i + 1], file, t, generics, visibleConstants());
   }
-  auto &entry = p.function(best->definition, best->substitutions, classType, best->constants);
-  if (delegation && entry.lowering) fail(n->span, "cyclic constructor delegation");
+  auto *declaring = best->definition.declaringType ? best->definition.declaringType : classType;
+  bool dynamic = declaring && declaring->kind == Kind::Interface;
+  auto *entry = dynamic ? nullptr : &p.function(best->definition, best->substitutions, declaring, best->constants);
+  if (delegation && entry && entry->lowering) fail(n->span, "cyclic constructor delegation");
+  Type *returnType = entry ? entry->result :
+      p.type(d.type, *best->definition.file, best->substitutions, best->constants);
+  if (dynamic) {
+    auto containsSelf = [&](auto &&self, const Ast &node) -> bool {
+      if (!node) return false;
+      if ((node->kind == NodeKind::Name || node->kind == NodeKind::TypeName) && node->text == "Self") return true;
+      return self(self, node->type) ||
+             std::ranges::any_of(node->children, [&](const auto &child) { return self(self, child); });
+    };
+    if (d.comptime || containsSelf(containsSelf, d.type) ||
+        std::ranges::any_of(d.params, [&](const auto &param) { return containsSelf(containsSelf, param.type); }))
+      fail(n->span, "this method requires the concrete interface implementation");
+  }
   if ((d.external || d.unsafe) && !unsafeDepth) fail(n->span, "this call requires an unsafe block", "E240");
   if (evaluating && d.external)
     fail(n->span, "external calls are unavailable during compile-time evaluation", "E220");
   std::vector<Value *> values;
-  if (receiver) values.push_back(asPointer(*receiver, n->span).value);
+  Value *callee = entry ? entry->ir : nullptr;
+  if (receiver) {
+    auto *address = asPointer(*receiver, n->span).value;
+    if (dynamic) {
+      auto *table = ir.CreateExtractValue(address, 1);
+      const auto &methods = declaring->def.decl->members;
+      auto slot = static_cast<unsigned>(&d - methods.data());
+      auto *pointer = PointerType::getUnqual(p.context);
+      callee = ir.CreateLoad(pointer, ir.CreateConstGEP1_32(pointer, table, slot));
+      address = ir.CreateExtractValue(address, 0);
+    }
+    auto *type = receiver->type;
+    for (auto field : best->definition.receiverPath) {
+      address = ir.CreateStructGEP(type->ir, address, field);
+      type = type->fields[field].type;
+    }
+    values.push_back(address);
+  }
   std::vector<int> transfers;
   enter();
   for (unsigned i = 1; i < n->children.size(); ++i) {
     if (d.params[i - 1].comptime) continue;
-    auto *t = entry.parameters[i - 1 + static_cast<unsigned>(receiver.has_value())];
+    auto *t = best->parameters[i - 1 + offset];
     auto value = expression(n->children[i], t);
     if (!live()) {
       leave();
@@ -1027,7 +1085,7 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
   }
   for (auto i : transfers)
     setAlive(i, false);
-  p.lower(entry);
+  if (entry) p.lower(*entry);
   if (d.comptime && !evaluating) {
     std::vector<Constant *> constants;
     for (auto *v : values) {
@@ -1035,15 +1093,22 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
       if (!constant) fail(n->span, "comptime function arguments must be constant", "E220");
       constants.push_back(constant);
     }
-    auto *value = interpret(*entry.ir, constants, n->span);
+    auto *value = interpret(*entry->ir, constants, n->span);
     leave();
-    return entry.result == p.voidTy ? voidValue() : ValueAt{entry.result, value};
+    return returnType == p.voidTy ? voidValue() : ValueAt{returnType, value};
   }
-  auto *called = ir.CreateCall(entry.ir, values);
-  called->setAttributes(entry.ir->getAttributes());
-  if (entry.result == p.neverTy) ir.CreateUnreachable();
+  CallInst *called;
+  if (dynamic) {
+    std::vector<llvm::Type *> parameters;
+    for (auto *value : values) parameters.push_back(value->getType());
+    called = ir.CreateCall(FunctionType::get(returnType->ir, parameters, false), callee, values);
+  } else {
+    called = ir.CreateCall(entry->ir, values);
+    called->setAttributes(entry->ir->getAttributes());
+  }
+  if (returnType == p.neverTy) ir.CreateUnreachable();
   leave();
-  return entry.result == p.voidTy ? voidValue() : ValueAt{entry.result, called};
+  return returnType == p.voidTy ? voidValue() : ValueAt{returnType, called};
 }
 
 ValueAt Body::construct(const Ast &n, Type *t, const std::vector<Definition> &defs) {
@@ -1112,7 +1177,7 @@ void Body::bindCapture(const Capture &capture, Value *environment, Span span) {
   Value *address = field;
   Value *flag = nullptr;
   if (capture.reference)
-    address = ir.CreateLoad(PointerType::getUnqual(p.context), field);
+    address = ir.CreateLoad(p.pointer(capture.type, !capture.writable)->ir, field);
   else
     flag = ir.CreateStructGEP(closure->ir, environment, capture.index + 1);
   int i = static_cast<int>(locals.size());
@@ -1462,6 +1527,7 @@ ValueAt Body::call(const Ast &n, Type *expected) {
         return {p.slice(p.integer(8, false), true), textView(v, n->span)};
       if (v.type->kind == Kind::Pointer && member == "offset" && n->children.size() == 2) {
         if (!unsafeDepth) fail(n->span, "pointer offset requires an unsafe block", "E240");
+        if (!v.type->ir->isPointerTy()) fail(n->span, "interface views do not support pointer arithmetic");
         auto *address = read(v, n->span);
         auto amount = expression(n->children[1],
                                  mathInteger(n->children[1]) ? p.integer(p.pointerBits(), true) : nullptr);
@@ -1474,8 +1540,9 @@ ValueAt Body::call(const Ast &n, Type *expected) {
       }
       if (v.type->kind == Kind::Pointer)
         v = {v.type->parts[0], nullptr, read(v, n->span), !v.type->readOnly, -1, true};
-      if (v.type->kind != Kind::Class) fail(n->span, "unknown method '" + member + "'");
-      p.ensureSized(v.type, n->span);
+      if (v.type->kind != Kind::Class && v.type->kind != Kind::Interface)
+        fail(n->span, "unknown method '" + member + "'");
+      if (v.type->kind == Kind::Class) p.ensureSized(v.type, n->span);
       requireInit(v, n->span);
       if (member == "init" || member == "deinit")
         fail(n->span, "lifecycle method cannot be called explicitly");

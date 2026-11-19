@@ -15,7 +15,7 @@ unsigned nativeAtomicWidth(const Program &p) {
 }
 
 unsigned atomicWidth(const Program &p, const Type *type) {
-  if (type->kind == Kind::Pointer) return p.pointerBits();
+  if (type->kind == Kind::Pointer && type->ir->isPointerTy()) return p.pointerBits();
   if (type->kind == Kind::Bool) return 8;
   if (type->kind == Kind::Int &&
       (type->bits == 8 || type->bits == 16 || type->bits == 32 || type->bits == 64))
@@ -49,7 +49,8 @@ ValueAt Body::atomicIntrinsic(std::string_view op, const Ast &n, const std::vect
     if (op == "encode") {
       auto value = expression(n->children[1]);
       if (!live()) return neverValue();
-      if (value.type->kind != Kind::Optional || value.type->parts[0]->kind != Kind::Pointer)
+      if (value.type->kind != Kind::Optional || value.type->parts[0]->kind != Kind::Pointer ||
+          !value.type->parts[0]->ir->isPointerTy())
         fail(n->span, "expected a nullable pointer");
       auto *encoded = read(value, n->span);
       auto *present = ir.CreateExtractValue(encoded, 0);
@@ -58,6 +59,7 @@ ValueAt Body::atomicIntrinsic(std::string_view op, const Ast &n, const std::vect
     }
     if (types.size() != 1) fail(n->span, "pointer decoding requires a pointee type");
     auto *pointer = p.pointer(parseType(types[0]), false);
+    if (!pointer->ir->isPointerTy()) fail(n->span, "atomic pointers cannot store an interface view");
     auto value = expression(n->children[1], p.sizeTy);
     if (!live()) return neverValue();
     auto *address = read(value, n->span);

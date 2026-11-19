@@ -13,5 +13,6 @@ pub comptime func isSendable<T>() bool { __vqr_sendable<T>() }
 pub comptime func isShareable<T>() bool { __vqr_shareable<T>() }
 pub comptime func isTriviallyDrop<T>() bool { __vqr_trivial_drop<T>() }
 pub comptime func isZeroSized<T>() bool { sizeOf<T>() == 0 }
+pub comptime func hasInterface<T, I>() bool { __vqr_has_interface<T, I>() }
 
 pub func arrayLen<T, comptime N: usize>(value: *const [N]T) usize { N }

@@ -15,7 +15,8 @@ ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::v
     arity(1);
     auto pointer = expression(n->children[1]);
     if (!live()) return neverValue();
-    if (pointer.type->kind != Kind::Pointer) fail(n->span, "address conversion requires a pointer");
+    if (pointer.type->kind != Kind::Pointer || !pointer.type->ir->isPointerTy())
+      fail(n->span, "address conversion requires an ordinary pointer");
     return {p.sizeTy, ir.CreatePtrToInt(read(pointer, n->span), p.sizeTy->ir)};
   }
   if (key == "__vqr_mmio_load" || key == "__vqr_mmio_store" || key == "__vqr_mmio_pointer") {
@@ -140,6 +141,15 @@ ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::v
     if (!live()) return neverValue();
     ir.CreateMemMove(output, Align(1), input, Align(1), read(count, n->span));
     return voidValue();
+  }
+  if (key == "__vqr_has_interface") {
+    arity(0);
+    if (types.size() != 2) fail(n->span, "hasInterface requires a type and an interface");
+    auto *type = parseType(types[0]);
+    auto *interface = parseType(types[1]);
+    if (interface->kind != Kind::Interface) fail(n->span, "hasInterface requires an interface argument");
+    p.ensureSized(type, n->span);
+    return {p.boolTy, ir.getInt1(type->conformances.contains(interface))};
   }
   if (key == "__vqr_type_name" || key == "__vqr_alloc_size" || key == "__vqr_alignment" ||
       key == "__vqr_bit_width" || key == "__vqr_copyable" || key == "__vqr_movable" ||

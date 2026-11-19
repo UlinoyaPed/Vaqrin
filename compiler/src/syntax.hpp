@@ -77,6 +77,7 @@ struct Attribute {
   std::string name;
   Span span;
   std::string value;
+  std::vector<Ast> types{};
 };
 
 enum class DeclKind { Function, Global, Alias, Error, Enum, Class, Interface, Field, Variant, Conditional };

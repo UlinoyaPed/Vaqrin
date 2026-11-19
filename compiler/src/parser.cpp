@@ -182,6 +182,15 @@ std::vector<Attribute> Parser::attributes() {
   while (eat("#")) {
     auto t = name();
     require(":");
+    if (t.text == "implements") {
+      Attribute attribute{t.text, t.span, ""};
+      do {
+        attribute.types.push_back(type());
+      } while (eat(","));
+      eat(";");
+      out.push_back(std::move(attribute));
+      continue;
+    }
     std::string value;
     while (current().kind != TokenKind::End && !current().newline && !at(";") && !at("}"))
       value += take().text;
@@ -218,9 +227,13 @@ void Parser::genericParameters(Decl &d) {
     Ast constraint;
     if (eat(":")) {
       constraint = type();
-      if (!c)
-        while (eat("&"))
-          constraint->children.push_back(type());
+      if (!c) {
+        auto current = constraint;
+        while (eat("&")) {
+          current->tail = type();
+          current = current->tail;
+        }
+      }
     }
     if (c && !constraint) fail(t.span, "comptime parameter requires a type", "E110");
     d.generics.push_back({t.text, t.span, constraint, c});
@@ -357,6 +370,8 @@ void Parser::members(std::vector<Decl> &out, bool publicMembers, bool iface) {
       continue;
     }
     auto member = declaration(true, iface);
+    if (iface && (member.kind != DeclKind::Function || member.external || member.exported || member.associated))
+      fail(member.span, "an interface member must be an instance method", "E110");
     member.visible |= publicMembers;
     out.push_back(std::move(member));
   }

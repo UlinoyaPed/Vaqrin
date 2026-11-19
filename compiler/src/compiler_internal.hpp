@@ -47,6 +47,7 @@ enum class Kind {
   Closure,
   PatternRemainder,
   Class,
+  Interface,
   Enum
 };
 struct Type;
@@ -56,6 +57,9 @@ using Constants = std::map<std::string, std::pair<Type *, Constant *>>;
 struct Definition {
   const File *file;
   const Decl *decl;
+  Type *declaringType = nullptr;
+  std::vector<unsigned> receiverPath{};
+  bool publicPath = true;
 };
 struct Variant {
   std::string name;
@@ -91,6 +95,7 @@ struct Type {
   std::vector<Variant> variants;
   Constants comptimeArguments;
   std::vector<const Decl *> members;
+  std::map<Type *, std::vector<Definition>> conformances;
   bool filling = false;
   bool filled = false;
   bool cAbi = false;
@@ -265,6 +270,7 @@ public:
   unsigned lambdaCount = 0, matchCount = 0;
   std::map<std::string, Constant *> strings;
   std::map<Type *, Function *> dropFunctions, copyFunctions;
+  std::map<std::pair<Type *, Type *>, GlobalVariable *> interfaceTables;
   std::set<const Decl *> aliases;
   Type *voidTy, *neverTy, *boolTy, *charTy, *errorTy, *sizeTy, *textTy, *viewTy;
   std::unique_ptr<DIBuilder> debug;
@@ -287,9 +293,13 @@ public:
   std::pair<Type *, Constant *> genericValue(const Ast &arg, const File &file, Type *expected,
                                              const Types &types, const Constants &values);
   void fill(Type *t, const Types &substitutions);
+  void validatePromotions(Type *type);
+  void validateInterfaces(Type *type);
+  GlobalVariable *interfaceTable(Type *type, Type *interface, Span span);
   void ensureSized(Type *t, Span span);
   bool copyable(Type *t);
-  bool satisfies(Type *t, const Ast &constraint);
+  bool satisfies(Type *t, const Ast &constraint, const File &file, const Types &generics = {},
+                 const Constants &values = {});
   bool movable(Type *t);
   bool transferable(Type *t, bool shared);
   bool drops(Type *t);
@@ -299,7 +309,7 @@ public:
   Function *copyGlue(Type *t, Span span);
   std::string attribute(const Decl &d, std::string_view key);
   std::vector<Definition> resolve(const File &f, std::string_view name, Span span);
-  std::vector<Definition> methods(Type *t, std::string_view name, bool isStatic);
+  std::vector<Definition> methods(Type *t, std::string_view name, bool isStatic, bool keepHidden = false);
   std::string import(const File &f, std::string_view name);
   GlobalEntry &global(Definition d);
   std::vector<Type *> parameters(Definition def, const Types &types, Type *owner,

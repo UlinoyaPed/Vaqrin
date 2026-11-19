@@ -94,7 +94,10 @@ Type *Program::integer(unsigned bits, bool sign) {
 Type *Program::pointer(Type *t, bool readOnly) {
   auto key = std::string(readOnly ? "*const " : "*") + t->name;
   if (auto i = canonical.find(key); i != canonical.end()) return i->second;
-  auto *p = add(Kind::Pointer, PointerType::getUnqual(context), key, {t});
+  auto *address = PointerType::getUnqual(context);
+  llvm::Type *representation = address;
+  if (t->kind == Kind::Interface) representation = StructType::get(context, {address, address});
+  auto *p = add(Kind::Pointer, representation, key, {t});
   p->readOnly = readOnly;
   return p;
 }
@@ -217,8 +220,8 @@ Type *Program::named(std::string name, const File &file, Span span, const Types 
   if (!defs.empty()) {
     auto d = defs.front();
     const auto kind = d.decl->kind;
-    if (kind == DeclKind::Interface) fail(span, "interface types are not yet supported", "E290");
-    if (kind != DeclKind::Alias && kind != DeclKind::Class && kind != DeclKind::Enum)
+    if (kind != DeclKind::Alias && kind != DeclKind::Class && kind != DeclKind::Enum &&
+        kind != DeclKind::Interface)
       fail(span, "'" + name + "' does not name a type");
     if (args.size() != d.decl->generics.size()) fail(span, "wrong number of type arguments for " + name);
     Types substitutions;
@@ -231,12 +234,15 @@ Type *Program::named(std::string name, const File &file, Span span, const Types 
         constants.emplace(parameter.name, genericValue(args[i], file, expected, generics, values));
       } else {
         auto *arg = type(args[i], file, generics, values);
-        if (kind == DeclKind::Alias && parameter.type && !satisfies(arg, parameter.type))
-          fail(span, "type alias arguments do not satisfy declared constraints");
-        substitutions.emplace(parameter.name, arg);
+          substitutions.emplace(parameter.name, arg);
         typeArgs.push_back(arg);
       }
     }
+    if (kind == DeclKind::Alias || kind == DeclKind::Interface)
+      for (const auto &parameter : d.decl->generics)
+        if (!parameter.comptime && parameter.type &&
+            !satisfies(substitutions.at(parameter.name), parameter.type, *d.file, substitutions, constants))
+          fail(span, "type arguments do not satisfy declared constraints");
     if (kind != DeclKind::Alias) return nominal(d, typeArgs, false, constants);
     if (!aliases.insert(d.decl).second) fail(span, "cyclic type alias '" + name + "'");
     auto *t = type(d.decl->type, *d.file, substitutions, constants);
@@ -294,6 +300,10 @@ Type *Program::type(const Ast &n, const File &file, const Types &generics, const
       parts.push_back(type(a, file, generics, values));
     if (n->type) {
       parts.push_back(type(n->type, file, generics, values));
+      if (n->text == "C" && std::ranges::any_of(parts, [](auto *part) {
+            return part->kind == Kind::Pointer && !part->ir->isPointerTy();
+          }))
+        fail(n->span, "interface views cannot use the C ABI");
       return aggregate(Kind::Function, parts, 0, n->text == "C");
     }
     for (auto *t : parts)
@@ -335,8 +345,10 @@ Type *Program::nominal(Definition d, const std::vector<Type *> &args, bool compl
   if (auto i = canonical.find(id); i != canonical.end())
     t = i->second;
   else {
-    t = add(d.decl->kind == DeclKind::Enum ? Kind::Enum : Kind::Class, StructType::create(context, id), id,
-            args);
+    auto kind = d.decl->kind == DeclKind::Enum ? Kind::Enum :
+                d.decl->kind == DeclKind::Interface ? Kind::Interface : Kind::Class;
+    auto *layout = kind == Kind::Interface ? voidTy->ir : StructType::create(context, id);
+    t = add(kind, layout, id, args);
     t->def = d;
     t->comptimeArguments = values;
   }
@@ -345,20 +357,23 @@ Type *Program::nominal(Definition d, const std::vector<Type *> &args, bool compl
 }
 
 void Program::ensureSized(Type *t, Span span) {
+  if (t->kind == Kind::Interface) fail(span, "an interface has no by-value representation");
   if ((t->kind != Kind::Class && t->kind != Kind::Enum) || t->filled) return;
   if (t->filling) fail(span, "recursive by-value layout of '" + t->name + "'");
   t->filling = true;
   fill(t, classTypes(t));
   t->filling = false;
   t->filled = true;
+  if (t->kind == Kind::Class) {
+    validatePromotions(t);
+    validateInterfaces(t);
+  }
 }
 
 void Program::fill(Type *t, const Types &substitutions) {
   const auto &d = *t->def.decl;
-  if (!attribute(d, "implements").empty())
-    fail(d.span, "interface implementation is not yet supported", "E290");
   for (const auto &g : d.generics) {
-    if (!g.comptime && g.type && !satisfies(substitutions.at(g.name), g.type))
+    if (!g.comptime && g.type && !satisfies(substitutions.at(g.name), g.type, *t->def.file, substitutions, t->comptimeArguments))
       fail(g.span, "type argument '" + substitutions.at(g.name)->name + "' does not satisfy " + g.type->text);
   }
   std::set<std::string> names;
@@ -381,7 +396,6 @@ void Program::fill(Type *t, const Types &substitutions) {
       const auto &m = *member;
       if (m.kind != DeclKind::Field) continue;
       if (!names.insert(m.name).second) fail(m.span, "duplicate field '" + m.name + "'");
-      if (m.embed) fail(m.span, "embedded method promotion is not yet supported", "E290");
       auto *field = m.type ? type(m.type, *t->def.file, substitutions, t->comptimeArguments)
                            : evaluate(m.body, *t->def.file, nullptr, substitutions, t->comptimeArguments).first;
       ensureSized(field, m.span);
@@ -425,29 +439,175 @@ void Program::fill(Type *t, const Types &substitutions) {
   cast<StructType>(t->ir)->setBody(layout);
 }
 
-std::vector<Definition> Program::methods(Type *t, std::string_view name, bool isStatic) {
+std::vector<Definition> Program::methods(Type *t, std::string_view name, bool isStatic, bool keepHidden) {
   std::vector<Definition> out;
+  if (t->kind == Kind::Interface && !isStatic) {
+    for (const auto &method : t->def.decl->members)
+      if (method.name == name) out.push_back({t->def.file, &method});
+    return out;
+  }
   if (t->kind != Kind::Class) return out;
   if (!t->filling) ensureSized(t, t->def.decl->span);
   for (const auto *member : t->members)
     if (member->kind == DeclKind::Function && member->name == name && member->associated == isStatic)
       out.push_back({t->def.file, member});
+  if (isStatic || name == "init" || name == "deinit" || name == "copy" || name == "clone")
+    return out;
+  for (const auto &field : t->fields) {
+    if (!field.decl->embed) continue;
+    for (auto method : methods(field.type, name, false)) {
+      if (!method.decl->visible || !method.publicPath) continue;
+      if (!method.declaringType) method.declaringType = field.type;
+      if (!keepHidden && method.decl->generics.empty() && !hasComptimeParameters(*method.decl)) {
+        auto hidden = std::ranges::any_of(out, [&](const auto &local) {
+          if (!local.receiverPath.empty() || local.decl->readOnly != method.decl->readOnly ||
+              !local.decl->generics.empty() || hasComptimeParameters(*local.decl) ||
+              local.decl->params.size() != method.decl->params.size())
+            return false;
+          auto *actual = method.declaringType;
+          return parameters(local, classTypes(t), nullptr, t->comptimeArguments) ==
+                 parameters(method, classTypes(actual), nullptr, actual->comptimeArguments);
+        });
+        if (hidden) continue;
+      }
+      method.receiverPath.insert(method.receiverPath.begin(), field.index);
+      method.publicPath = field.decl->visible;
+      out.push_back(std::move(method));
+    }
+  }
   return out;
 }
 
-bool Program::satisfies(Type *t, const Ast &constraint) {
+void Program::validatePromotions(Type *type) {
+  if (std::ranges::none_of(type->fields, [](const auto &field) { return field.decl->embed; })) return;
+  auto substitutions = classTypes(type);
+  for (const auto *own : type->members) {
+    if (own->kind != DeclKind::Function || own->associated || !own->generics.empty() ||
+        hasComptimeParameters(*own))
+      continue;
+    auto params = parameters({type->def.file, own}, substitutions, nullptr, type->comptimeArguments);
+    for (const auto &method : methods(type, own->name, false, true)) {
+      const auto &member = *method.decl;
+      if (!method.declaringType || member.readOnly != own->readOnly || !member.generics.empty() ||
+          hasComptimeParameters(member) || member.params.size() != own->params.size())
+        continue;
+      auto *nested = method.declaringType;
+      auto nestedTypes = classTypes(nested);
+      if (params != parameters(method, nestedTypes, nullptr, nested->comptimeArguments)) continue;
+      auto *local = this->type(own->type, *type->def.file, substitutions, type->comptimeArguments);
+      auto *inherited = this->type(member.type, *method.file, nestedTypes, nested->comptimeArguments);
+      if (local != inherited) fail(own->span, "method result conflicts with an embedded method");
+    }
+  }
+}
+
+void Program::validateInterfaces(Type *type) {
+  const auto &declaration = *type->def.decl;
+  auto substitutions = classTypes(type);
+  for (const auto &attribute : declaration.attributes) {
+    if (attribute.name != "implements") continue;
+    for (const auto &syntax : attribute.types) {
+      auto *interface = this->type(syntax, *type->def.file, substitutions, type->comptimeArguments);
+      if (interface->kind != Kind::Interface) fail(syntax->span, "#implements requires an interface");
+      auto [entry, inserted] = type->conformances.try_emplace(interface);
+      if (!inserted) fail(syntax->span, "duplicate interface in #implements");
+      auto expectedTypes = classTypes(interface);
+      expectedTypes["Self"] = type;
+      for (const auto &requirement : interface->def.decl->members) {
+        if (!requirement.generics.empty() || hasComptimeParameters(requirement))
+          fail(requirement.span, "generic interface methods are not yet supported", "E290");
+        Definition wanted{interface->def.file, &requirement};
+        auto expected = parameters(wanted, expectedTypes, nullptr, interface->comptimeArguments);
+        auto *result = this->type(requirement.type, *wanted.file, expectedTypes, interface->comptimeArguments);
+        std::vector<Definition> matches;
+        for (auto found : methods(type, requirement.name, false)) {
+          const auto &method = *found.decl;
+          if (!method.visible || !found.publicPath || method.unsafe != requirement.unsafe ||
+              method.readOnly != requirement.readOnly || method.params.size() != requirement.params.size() ||
+              method.comptime != requirement.comptime || !method.generics.empty() ||
+              hasComptimeParameters(method))
+            continue;
+          auto *owner = found.declaringType ? found.declaringType : type;
+          auto methodTypes = classTypes(owner);
+          if (parameters(found, methodTypes, nullptr, owner->comptimeArguments) != expected) continue;
+          if (this->type(method.type, *found.file, methodTypes, owner->comptimeArguments) != result) continue;
+          matches.push_back(std::move(found));
+        }
+        auto own = std::ranges::find_if(matches, [](const auto &method) { return method.receiverPath.empty(); });
+        if (own != matches.end() && matches.size() > 1)
+          std::erase_if(matches, [](const auto &method) { return !method.receiverPath.empty(); });
+        if (matches.size() != 1)
+          fail(syntax->span, "'" + type->name + "' must have one public implementation of " +
+                                 interface->name + "." + requirement.name);
+        entry->second.push_back(std::move(matches.front()));
+      }
+    }
+  }
+}
+
+GlobalVariable *Program::interfaceTable(Type *type, Type *interface, Span span) {
+  ensureSized(type, span);
+  auto conformance = type->conformances.find(interface);
+  if (conformance == type->conformances.end())
+    fail(span, "'" + type->name + "' does not implement '" + interface->name + "'");
+  auto id = std::pair{type, interface};
+  if (auto cached = interfaceTables.find(id); cached != interfaceTables.end()) return cached->second;
+  const auto &methods = conformance->second;
+  auto *layout = ArrayType::get(PointerType::getUnqual(context), methods.size());
+  auto *table = new GlobalVariable(*module, layout, true, GlobalValue::PrivateLinkage,
+                                   Constant::getNullValue(layout), "vqr.interface");
+  interfaceTables.emplace(id, table);
+  std::vector<Constant *> functions;
+  for (const auto &method : methods) {
+    auto *owner = method.declaringType ? method.declaringType : type;
+    auto &entry = function(method, classTypes(owner), owner);
+    if (method.receiverPath.empty()) {
+      functions.push_back(entry.ir);
+    } else {
+      auto *thunk = Function::Create(entry.ir->getFunctionType(), GlobalValue::InternalLinkage,
+                                     "vqr.interface.receiver", *module);
+      IRBuilder<> builder(BasicBlock::Create(context, "entry", thunk));
+      Type *current = type;
+      Value *address = thunk->getArg(0);
+      for (auto field : method.receiverPath) {
+        address = builder.CreateStructGEP(current->ir, address, field);
+        current = current->fields[field].type;
+      }
+      std::vector<Value *> parameters{address};
+      for (unsigned i = 1; i < thunk->arg_size(); ++i) parameters.push_back(thunk->getArg(i));
+      auto *call = builder.CreateCall(entry.ir, parameters);
+      if (entry.result == neverTy) builder.CreateUnreachable();
+      else if (entry.result == voidTy) builder.CreateRetVoid();
+      else builder.CreateRet(call);
+      functions.push_back(thunk);
+    }
+    lower(entry);
+  }
+  table->setInitializer(ConstantArray::get(layout, functions));
+  return table;
+}
+
+bool Program::satisfies(Type *t, const Ast &constraint, const File &file, const Types &generics,
+                        const Constants &values) {
   ensureSized(t, constraint->span);
-  auto one = [&](const Ast &requirement) {
-    if (requirement->text == "Copyable") return copyable(t);
-    if (requirement->text == "Movable") return movable(t);
-    if (requirement->text == "Sendable") return transferable(t, false);
-    if (requirement->text == "Shareable") return transferable(t, true);
-    fail(requirement->span, "unsupported generic constraint '" + requirement->text + "'", "E290");
-  };
-  return one(constraint) && std::ranges::all_of(constraint->children, one);
+  for (auto item = constraint; item; item = item->tail) {
+    const auto &name = item->text;
+    if (name == "Copyable" || name == "Movable" || name == "Sendable" || name == "Shareable") {
+      auto result = name == "Copyable" ? copyable(t) : name == "Movable" ? movable(t)
+                                                                  : transferable(t, name == "Shareable");
+      if (!result) return false;
+    } else {
+      auto *interface = type(item, file, generics, values);
+      if (interface->kind != Kind::Interface)
+        fail(item->span, "a generic constraint must be an interface or a built-in trait");
+      if (!t->conformances.contains(interface)) return false;
+    }
+  }
+  return true;
 }
 
 bool Program::copyable(Type *t) {
+  if (t->kind == Kind::Interface) return false;
   if (t->kind == Kind::Box || t->kind == Kind::Allocation || t->kind == Kind::RawStorage) return false;
   if (t->kind == Kind::Closure)
     return std::ranges::all_of(t->captures, [&](const auto &c) { return c.reference || copyable(c.type); });
@@ -469,6 +629,7 @@ bool Program::copyable(Type *t) {
 }
 
 bool Program::movable(Type *t) {
+  if (t->kind == Kind::Interface) return false;
   if (t->kind == Kind::RawStorage) return movable(t->parts[0]);
   if (t->kind == Kind::Class)
     return attribute(*t->def.decl, "move") != "disabled" &&
@@ -711,7 +872,7 @@ FunctionEntry &Program::function(Definition d, Types substitutions, Type *owner,
     if (!cSymbols.insert(decl.name).second) fail(decl.span, "duplicate C symbol '" + decl.name + "'");
     auto scalar = [](Type *t) {
       return (t->kind == Kind::Int && (t->bits == 8 || t->bits == 16 || t->bits == 32 || t->bits == 64)) ||
-             t->kind == Kind::Float || t->kind == Kind::Pointer || (t->kind == Kind::Function && t->cAbi);
+             t->kind == Kind::Float || (t->kind == Kind::Pointer && t->ir->isPointerTy()) || (t->kind == Kind::Function && t->cAbi);
     };
     if ((ret != voidTy && !scalar(ret)) || !std::ranges::all_of(params, scalar))
       fail(decl.span, "C ABI requires supported scalar types; aggregate bridges are not yet supported",

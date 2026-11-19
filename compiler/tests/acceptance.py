@@ -1202,6 +1202,93 @@ class Acceptance(unittest.TestCase):
         self.assertRegex(assembly, r"\bdmb\b")
         self.assertRegex(assembly, r"\bisb\b")
 
+    def test_interfaces_and_embedded_receivers(self):
+        self.hosted("""
+            import (meta)
+            interface Readable<T> { const func read() T; }
+            interface Writable { func write(value: i32) void; }
+            interface Comparable { const func same(other: *const Self) bool; }
+            class Cell {
+                #implements: Readable<i32>, Writable, Comparable
+                var number: i32;
+            public:
+                func init(number: i32) : number(number) {}
+                const func read() i32 { number }
+                func write(value: i32) void { number = value; }
+                const func same(other: *const Self) bool { number == other.number }
+            }
+            class Wrapper {
+                #implements: Readable<i32>, Writable
+            public:
+                embed cell: Cell;
+                func init(n: i32) : cell(Cell(n)) {}
+                const func read() i32 { cell.read() + 1 }
+                func write(flag: bool) void { cell.write(if (flag) 1 else 0); }
+            }
+            class Outer {
+                #implements: Readable<i32>
+            public:
+                embed Wrapper;
+                func init(n: i32) : Wrapper(Wrapper(n)) {}
+            }
+            class Private {
+                embed cell: Cell;
+            public:
+                func init(n: i32) : cell(Cell(n)) {}
+                const func inside() i32 { read() }
+            }
+            func statically<T: Readable<i32> & Copyable>(target: *const T) i32 { target.read() }
+            func dynamically(target: *const Readable<i32>) i32 {
+                &view := target;
+                var restored = &view;
+                var call = [&view]() i32 => view.read();
+                if (target == restored) call() else 0
+            }
+            func mutate(target: *Writable) void { target.write(88); }
+            func main() !void {
+                var wrapper = Wrapper(11);
+                io.println(statically(&wrapper))!;
+                io.println(dynamically(&wrapper))!;
+                wrapper.write(44);
+                io.println(wrapper.cell.read())!;
+                wrapper.write(false);
+                io.println(wrapper.read())!;
+                mutate(&wrapper);
+                io.println(wrapper.read())!;
+                var outer = Outer(31);
+                io.println(outer.read())!;
+                io.println(dynamically(&outer))!;
+                var secret = Private(9);
+                io.println(secret.inside())!;
+                var a = Cell(5);
+                var b = Cell(5);
+                io.println(a.same(&b))!;
+                io.println(meta.hasInterface<Outer, Readable<i32>>())!;
+                io.println(meta.hasInterface<Private, Readable<i32>>())!;
+            }
+        """, "12\n12\n44\n1\n89\n32\n32\n9\ntrue\ntrue\nfalse\n")
+        cases = (
+            ("interface Read { func read() i32; } class Missing { #implements: Read\n }",
+             "public implementation"),
+            ("interface Read { const func read() i32; } class Cell { #implements: Read\n "
+             "pub func read() i32 { 1 } }", "public implementation"),
+            ("class Base { pub func value() i32 { 1 } } class Bad { pub embed base: Base; "
+             "pub func value() bool { true } }", "conflicts with an embedded method"),
+            ("class Base { pub func value() i32 { 1 } } class Bad { pub embed first: Base; "
+             "pub embed second: Base; } func f(x: *Bad) i32 { x.value() }", "ambiguous overload"),
+            ("class Base { pub func value() i32 { 1 } } class Bad { embed privateBase: Base; } "
+             "func f(x: *Bad) i32 { x.value() }", "no accessible overload"),
+            ("interface Change { func go() void; } func f(x: *const Change) void { x.go(); }",
+             "no accessible overload"),
+            ("interface Compare { const func eq(other: *const Self) bool; } "
+             "func f(a, b: *const Compare) bool { a.eq(b) }", "concrete interface"),
+            ("interface Change { func go() void; } func f(x: Change) void {}", "no by-value"),
+        )
+        for program, error in cases:
+            with self.subTest(source=program):
+                src = self.source("bad.vqr", program)
+                self.assertIn(error.encode(), self.process(VAQC, "check", src, good=False).stderr)
+
     def test_build_artifacts(self):
         source = self.source("math.vqr", '''
             package math

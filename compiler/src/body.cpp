@@ -352,6 +352,7 @@ Value *Body::emitCopy(Type *t, Value *address, Span span) {
 }
 
 Value *Body::read(ValueAt v, Span span, bool take) {
+  if (v.type->kind == Kind::Interface) fail(span, "an interface cannot be read by value");
   if (v.type == p.voidTy) return voidValue().value;
   if (v.value) return v.value;
   requireInit(v, span);
@@ -377,6 +378,12 @@ ValueAt Body::wrap(Type *t, Value *v, bool present) {
 
 ValueAt Body::coerce(ValueAt v, Type *t, Span span) {
   if (!t || v.type == t || v.type == p.neverTy) return v;
+  if (t->kind == Kind::Pointer && t->parts[0]->kind == Kind::Interface && v.type->kind == Kind::Pointer &&
+      v.type->parts[0]->kind == Kind::Class && (t->readOnly || !v.type->readOnly)) {
+    auto *table = p.interfaceTable(v.type->parts[0], t->parts[0], span);
+    auto *view = ir.CreateInsertValue(PoisonValue::get(t->ir), read(v, span), 0);
+    return {t, ir.CreateInsertValue(view, table, 1)};
+  }
   if (t->kind == Kind::Pointer && v.type->kind == Kind::Pointer && t->readOnly && t->parts == v.type->parts)
     return {t, read(v, span)};
   if (t->kind == Kind::Slice && v.type->kind == Kind::Slice && t->readOnly && t->parts == v.type->parts)
@@ -482,6 +489,10 @@ DIType *Program::debugType(Type *t) {
     out = debug->createBasicType(t->name, t->bits, dwarf::DW_ATE_float);
     break;
   case Kind::Pointer: {
+    if (!t->ir->isPointerTy()) {
+      out = debug->createUnspecifiedType(t->name);
+      break;
+    }
     auto *pointee = t->parts[0];
     auto *description =
         pointee->kind == Kind::Pointer ? debug->createUnspecifiedType(pointee->name) : debugType(pointee);
@@ -511,7 +522,7 @@ void Body::debugValue(int id, bool alive) {
 }
 
 void Body::debugLocal(int id, Span span, unsigned argument) {
-  if (!debug) return;
+  if (!debug || locals[id].type->kind == Kind::Interface) return;
   auto previous = ir.getCurrentDebugLocation();
   setDebug(span);
   auto &local = locals[id];

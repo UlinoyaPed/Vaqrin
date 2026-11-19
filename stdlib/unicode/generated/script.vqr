@@ -182,7 +182,7 @@ pub enum Script {
     ZanabazarSquare
 }
 
-func scriptFromId(value: u8) Script {
+pub func scriptFromId(value: u8) Script {
     switch value {
         0 => Script.Unknown,
         1 => Script.Common,

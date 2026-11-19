@@ -1,5 +1,7 @@
 #include "compiler_internal.hpp"
 
+#include <charconv>
+
 namespace vqr::detail {
 
 Type *Body::hint(const Ast &n) {
@@ -144,9 +146,17 @@ Type *Body::hint(const Ast &n) {
         }
       }
       auto ds = p.resolve(file, key, n->span);
-      if (ds.size() == 1 && ds[0].decl->kind == DeclKind::Function && ds[0].decl->generics.empty() &&
-          !hasComptimeParameters(*ds[0].decl))
-        return p.function(ds[0]).result;
+      Type *result = nullptr;
+      for (auto def : ds) {
+        const auto &candidate = *def.decl;
+        if (candidate.kind != DeclKind::Function || candidate.params.size() + 1 != n->children.size())
+          continue;
+        if (!candidate.generics.empty() || hasComptimeParameters(candidate)) return nullptr;
+        auto *type = p.type(candidate.type, *def.file);
+        if (result && result != type) return nullptr;
+        result = type;
+      }
+      if (result) return result;
       if (ds.size() == 1 && ds[0].decl->kind == DeclKind::Class && ds[0].decl->generics.empty())
         return p.nominal(ds[0], {});
       if (generics.contains(key) || key == "bool" || key == "char" || key == "usize" || key == "isize" || key == "f32" ||
@@ -238,6 +248,14 @@ ValueAt Body::place(const Ast &n) {
 
 ValueAt Body::member(const Ast &n) {
   auto base = n->children[0];
+  auto tupleIndex = [&](Type *tuple) {
+    unsigned index = 0;
+    auto end = n->text.data() + n->text.size();
+    auto [last, error] = std::from_chars(n->text.data(), end, index);
+    if (error != std::errc{} || last != end || index >= tuple->parts.size())
+      fail(n->span, "tuple field index is out of range");
+    return index;
+  };
   if (!n->names.empty()) {
     auto optional = expression(base);
     if (optional.type == p.neverTy) return optional;
@@ -253,13 +271,22 @@ ValueAt Body::member(const Ast &n) {
     auto inner = payload(optional, 1, optional.type->parts[0]);
     Type *obj = inner.type->kind == Kind::Pointer ? inner.type->parts[0] : inner.type;
     p.ensureSized(obj, n->span);
-    auto f = std::ranges::find_if(obj->fields, [&](const Field &f) { return f.decl->name == n->text; });
-    if (f == obj->fields.end()) fail(n->span, "unknown field '" + n->text + "'");
-    if (!f->decl->visible && owner != obj) fail(n->span, "field is private");
+    unsigned index;
+    Type *fieldType;
+    if (obj->kind == Kind::Tuple) {
+      index = tupleIndex(obj);
+      fieldType = obj->parts[index];
+    } else {
+      auto f = std::ranges::find_if(obj->fields, [&](const Field &f) { return f.decl->name == n->text; });
+      if (f == obj->fields.end()) fail(n->span, "unknown field '" + n->text + "'");
+      if (!f->decl->visible && owner != obj) fail(n->span, "field is private");
+      index = f->index;
+      fieldType = f->type;
+    }
     if (inner.type->kind == Kind::Pointer)
       inner = {obj, nullptr, read(inner, n->span), !inner.type->readOnly, -1, true};
-    auto field = payload(inner, f->index, f->type);
-    auto *type = p.aggregate(Kind::Optional, {f->type});
+    auto field = payload(inner, index, fieldType);
+    auto *type = p.aggregate(Kind::Optional, {fieldType});
     auto value = wrap(type, read(field, n->span), true);
     leave();
     auto *from = ir.GetInsertBlock();
@@ -316,6 +343,10 @@ ValueAt Body::member(const Ast &n) {
   if (v.type->kind == Kind::Pointer)
     v = {v.type->parts[0], nullptr, read(v, n->span), !v.type->readOnly, -1, true};
   p.ensureSized(v.type, n->span);
+  if (v.type->kind == Kind::Tuple) {
+    auto index = tupleIndex(v.type);
+    return payload(v, index, v.type->parts[index]);
+  }
   if (v.type->kind != Kind::Class) fail(n->span, "member access requires a class instance");
   auto f = std::ranges::find_if(v.type->fields, [&](const Field &f) { return f.decl->name == n->text; });
   if (f == v.type->fields.end()) fail(n->span, "unknown field '" + n->text + "'");
@@ -565,6 +596,18 @@ ValueAt Body::binary(const Ast &n, Type *expected) {
     return {p.boolTy, phi};
   }
   bool shift = op.starts_with("<<") || op == ">>";
+  if (op == "==" || op == "!=") {
+    bool leftNull = n->children[0]->kind == NodeKind::Null;
+    bool rightNull = n->children[1]->kind == NodeKind::Null;
+    if (leftNull != rightNull) {
+      auto operand = expression(n->children[leftNull ? 1 : 0]);
+      if (!live()) return neverValue();
+      if (operand.type->kind != Kind::Optional) fail(n->span, "null comparison requires an optional value");
+      auto *tag = read(payload(operand, 0, p.boolTy), n->span, false);
+      disposeTemporary(operand, n->span);
+      return {p.boolTy, op == "==" ? ir.CreateNot(tag) : tag};
+    }
+  }
   auto *leftHint = hint(n->children[0]);
   auto *rightHint = hint(n->children[1]);
   if (leftHint && leftHint->kind == Kind::Int && leftHint->bits < 32 && !op.ends_with('|') && op != "+%" &&
@@ -1570,12 +1613,14 @@ ValueAt Body::call(const Ast &n, Type *expected) {
     auto ds = basePath.empty() || findLocal(basePath.substr(0, basePath.find('.'))) >= 0
                   ? std::vector<Definition>{}
                   : p.resolve(file, basePath, n->span);
-    if (ds.size() == 1 && (ds[0].decl->kind == DeclKind::Class || ds[0].decl->kind == DeclKind::Enum)) {
+    if (ds.size() == 1 && (ds[0].decl->kind == DeclKind::Class || ds[0].decl->kind == DeclKind::Enum ||
+                           ds[0].decl->kind == DeclKind::Alias)) {
       std::vector<Ast> args;
       if (target != base) args.assign(base->children.begin() + 1, base->children.end());
       auto *t = p.named(basePath, file, n->span, generics, args, visibleConstants());
       p.ensureSized(t, n->span);
       if (t->kind == Kind::Class) return invoke(n, p.methods(t, callee->text, true), types, std::nullopt, t);
+      if (t->kind != Kind::Enum) fail(n->span, "associated functions require a class or enum type");
       if (callee->text == "fromInt" && n->children.size() == 2 &&
           std::ranges::all_of(t->variants, [](const auto &v) { return v.fields.empty(); })) {
         auto x = expression(n->children[1]);

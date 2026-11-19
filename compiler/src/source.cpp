@@ -297,6 +297,9 @@ Token Lexer::quoted(std::size_t begin) {
       case 'n':
         c = '\n';
         break;
+      case 'r':
+        c = '\r';
+        break;
       case 't':
         c = '\t';
         break;
@@ -350,7 +353,13 @@ void Lexer::run(std::vector<Token> &tokens, bool indexOnly) {
       return;
     }
     if (digit(peek()) < 10) {
-      tokens.push_back(number(begin));
+      if (!tokens.empty() && tokens.back().kind == TokenKind::Punctuation &&
+          (tokens.back().text == "." || tokens.back().text == "?.")) {
+        do ++pos; while (digit(peek()) < 10);
+        tokens.push_back({TokenKind::Number, std::string(input.substr(begin, pos - begin)), span(begin), newline});
+      } else {
+        tokens.push_back(number(begin));
+      }
       continue;
     }
     if (peek() == '"' || peek() == '\'') {

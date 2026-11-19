@@ -23,4 +23,5 @@ pub func eprintln(value: str) !void {
 }
 
 pub func readToEnd(reader: *Reader) !coll.Vec<u8> { readToEnd(reader, ~usize(0)) }
+pub func readToString(reader: *Reader) !string { readToString(reader, ~usize(0)) }
 pub func copy(reader: *Reader, writer: *Writer) !u64 { copyAll(reader, writer) }

@@ -53,6 +53,7 @@ func assertEnd(regex: *const Regex, input: str, position: usize) bool {
 
 func appendHistory(history: *coll.Vec<CaptureHistory>, previous: i32,
                    slot: usize, offset: usize) !i32 {
+    if history.len() >= 4 * 1024 * 1024 { return RegexError.StepLimitExceeded; }
     history.push(CaptureHistory{previous: previous, slot: slot, offset: offset})!;
     i32(history.len() - 1)!
 }
@@ -227,7 +228,9 @@ func buildSearchResult(candidate: ?Thread, endByte: usize, input: str,
             var slotCount = (captureCount + 1) * 2;
             var slots = coll.Vec<?usize>();
             for i in usize(0)..slotCount { slots.push(null)!; }
-            var head = appendHistory(history, thread.history, 1, endByte)!;
+            slots[0] = some(thread.startByte);
+            slots[1] = some(endByte);
+            var head = thread.history;
             for head >= 0 {
                 var item = history[usize(head)!];
                 if item.slot < slots.len() && slots[item.slot] == null {
@@ -279,8 +282,7 @@ func runNfa(regex: *const Regex, input: str, start: usize) !?SearchResult {
         for thread in current.asSlice() { seeds.push(thread)!; }
 
         if candidate == null {
-            var initialHistory = appendHistory(&history, -1, 0, position)!;
-            seeds.push(Thread{state: regex.startState, startByte: position, history: initialHistory})!;
+            seeds.push(Thread{state: regex.startState, startByte: position, history: -1})!;
         }
 
         active.clear();

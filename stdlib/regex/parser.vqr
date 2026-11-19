@@ -76,7 +76,7 @@ private:
 
     func readScalar() !u32 {
         if atEnd() { return RegexError.UnexpectedEnd; }
-        var decoded = unicode.decodeUtf8(source.asBytes()[position..])!;
+        var decoded = unicode.decodeUtf8(source.asBytes()[position..]) catch { return RegexError.InvalidUtf8; };
         position += decoded.1;
         convert.fromChar(decoded.0)
     }

@@ -123,7 +123,7 @@ func composePair(a: u32, b: u32) ?u32 {
     null
 }
 
-func appendUtf8Scalar(cp: u32, output: *coll.Vec<u8>) !void {
+func appendNormalizedScalarUtf8(cp: u32, output: *coll.Vec<u8>) !void {
     if cp < 0x80 {
         output.push(u8(cp)!)!;
     } else if cp < 0x800 {

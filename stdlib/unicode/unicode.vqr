@@ -35,8 +35,8 @@ func packedInfo(ch: char) u64 {
     for lo < hi {
         var mid = lo + (hi - lo) / 2;
         var bounds = data.unicodePropertyRanges[mid * 2];
-        var first = u32(bounds >> 21);
-        var last = u32(bounds & 0x1fffff);
+        var first = u32(bounds >> 21)!;
+        var last = u32(bounds & 0x1fffff)!;
         if cp < first { hi = mid; }
         else if cp > last { lo = mid + 1; }
         else { return data.unicodePropertyRanges[mid * 2 + 1]; }
@@ -47,13 +47,13 @@ func packedInfo(ch: char) u64 {
 pub func version() str { "17.0.0" }
 pub func charInfo(ch: char) CharInfo {
     var value = packedInfo(ch);
-    var gc = u8(value & 31);
-    var sc = u8((value >> 5) & 255);
+    var gc = u8(value & 31)!;
+    var sc = u8((value >> 5) & 255)!;
     CharInfo{
         category: categoryFromId(gc),
         script: generated.scriptFromId(sc),
-        combiningClass: u8((value >> 13) & 255),
-        flags: u16((value >> 21) & 0x1fff)
+        combiningClass: u8((value >> 13) & 255)!,
+        flags: u16((value >> 21) & 0x1fff)!
     }
 }
 func categoryFromId(id: u8) GeneralCategory {

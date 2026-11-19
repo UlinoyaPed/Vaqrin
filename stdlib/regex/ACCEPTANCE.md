@@ -38,3 +38,15 @@
 - [ ] 超过 16 MiB 默认输入上限返回 InputTooLarge
 - [ ] 超过工作预算返回 StepLimitExceeded
 - [ ] 长输入与 `(a+)+$`、`(a|aa)*b` 对抗模式在预算内退出
+
+## 固定回归样例
+
+- `Regex.compile("a*").find("baaa")` 匹配空串（左侧最早位置）。
+- `Regex.compile("a*").find("aaa")` 贪婪匹配 `aaa`。
+- `Regex.compile("a*?").find("aaa")` 非贪婪匹配空串。
+- `Regex.compile("(ab)+").captures("zabab")` 的 group 0 为 `abab`，group 1 为 `ab`。
+- `Regex.compile("^[a-z]{2,4}$")` 匹配 `abcd`，不匹配 `abcde`。
+- `Regex.compile("\\d+")` 在 Unicode 模式匹配阿拉伯-印度数字。
+- `Regex.compile("a|aa")` 对 `aa` 遵循左分支优先，结果为 `a`。
+- 空模式在长度为 N 的 N 标量文本上产生 N+1 个 FindIter 结果。
+- `replaceAll("a", "banana", "$0$0")` 的结果为 `banaana`。

@@ -15,7 +15,7 @@ pub record CaptureHistory {
 
 pub record SearchResult {
     pub var matched: Match;
-    pub var captures: Captures;
+    pub var captures: ?Captures;
 }
 
 func isLineTerminatorAt(input: str, position: usize) bool {
@@ -61,7 +61,7 @@ func appendHistory(history: *coll.Vec<CaptureHistory>, previous: i32,
 func epsilonClosure(regex: *const Regex, seeds: []const Thread,
                     output: *coll.Vec<Thread>, history: *coll.Vec<CaptureHistory>,
                     seen: *coll.Vec<usize>, generation: usize, stack: *coll.Vec<Thread>,
-                    input: str, position: usize, budget: *usize) !void {
+                    input: str, position: usize, captureOutput: bool, budget: *usize) !void {
     for seed in seeds {
         stack.clear();
         stack.push(seed)!;
@@ -100,11 +100,13 @@ func epsilonClosure(regex: *const Regex, seeds: []const Thread,
                             }
                         },
                         Op.Save => {
-                            if state.value >= u32(regex.captureGroups + 1)! * 2 {
-                                return RegexError.InvalidCapture;
+                            if captureOutput {
+                                if state.value >= u32(regex.captureGroups + 1)! * 2 {
+                                    return RegexError.InvalidCapture;
+                                }
+                                thread.history = appendHistory(history, thread.history,
+                                    usize(state.value), position)!;
                             }
-                            thread.history = appendHistory(history, thread.history,
-                                usize(state.value), position)!;
                             if state.out >= 0 {
                                 thread.state = state.out;
                                 stack.push(thread)!;
@@ -218,46 +220,50 @@ func accepts(regex: *const Regex, state: State, cp: u32) bool {
 }
 
 func buildSearchResult(candidate: ?Thread, endByte: usize, input: str,
-                       history: *coll.Vec<CaptureHistory>, captureCount: usize) !?SearchResult {
+                       history: *coll.Vec<CaptureHistory>, captureCount: usize,
+                       captureOutput: bool) !?SearchResult {
     switch candidate {
         null => null,
         some(thread) => {
-            var slotCount = (captureCount + 1) * 2;
-            var slots = coll.Vec<?usize>();
-            for i in usize(0)..slotCount { slots.push(null)!; }
-            slots[0] = some(thread.startByte);
-            slots[1] = some(endByte);
-            var head = thread.history;
-            for head >= 0 {
-                var item = history[usize(head)!];
-                if item.slot < slots.len() && slots[item.slot] == null {
-                    slots[item.slot] = some(item.offset);
+            var matched = Match{startByte: thread.startByte, endByte: endByte, source: input};
+            var captures: ?Captures = null;
+            if captureOutput {
+                var slotCount = (captureCount + 1) * 2;
+                var slots = coll.Vec<?usize>();
+                for i in usize(0)..slotCount { slots.push(null)!; }
+                slots[0] = some(thread.startByte);
+                slots[1] = some(endByte);
+                var head = thread.history;
+                for head >= 0 {
+                    var item = history[usize(head)!];
+                    if item.slot < slots.len() && slots[item.slot] == null {
+                        slots[item.slot] = some(item.offset);
+                    }
+                    head = item.previous;
                 }
-                head = item.previous;
-            }
-            var groups = coll.Vec<?(usize, usize)>();
-            for group in usize(0)..(captureCount + 1) {
-                var start = slots[group * 2];
-                var finish = slots[group * 2 + 1];
-                switch start {
-                    some(a) => switch finish {
-                        some(b) => {
-                            if a <= b { groups.push(some((a, b)))!; }
-                            else { groups.push(null)!; }
+                var groups = coll.Vec<?(usize, usize)>();
+                for group in usize(0)..(captureCount + 1) {
+                    var start = slots[group * 2];
+                    var finish = slots[group * 2 + 1];
+                    switch start {
+                        some(a) => switch finish {
+                            some(b) => {
+                                if a <= b { groups.push(some((a, b)))!; }
+                                else { groups.push(null)!; }
+                            },
+                            null => groups.push(null)!
                         },
                         null => groups.push(null)!
-                    },
-                    null => groups.push(null)!
+                    }
                 }
+                captures = some(Captures(input, move(groups)));
             }
-            var matched = Match{startByte: thread.startByte, endByte: endByte, source: input};
-            var captures = Captures(input, move(groups));
             some(SearchResult{matched: matched, captures: move(captures)})
         }
     }
 }
 
-func runNfa(regex: *const Regex, input: str, start: usize) !?SearchResult {
+func runNfa(regex: *const Regex, input: str, start: usize, captureOutput: bool) !?SearchResult {
     if input.byteLen() > regex.maxInputBytes { return RegexError.InputTooLarge; }
     if start > input.byteLen() { return RegexError.InvalidOffset; }
     if start < input.byteLen() && (input.asBytes()[start] & 0xc0) == 0x80 {
@@ -289,7 +295,7 @@ func runNfa(regex: *const Regex, input: str, start: usize) !?SearchResult {
         active.clear();
         generation++;
         epsilonClosure(regex, seeds.asConstSlice(), &active, &history,
-                       &seen, generation, &stack, input, position, &budget)!;
+                       &seen, generation, &stack, input, position, captureOutput, &budget)!;
 
         var matchIndex: ?usize = null;
         for i in usize(0)..active.len() {

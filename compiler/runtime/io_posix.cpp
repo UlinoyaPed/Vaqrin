@@ -221,14 +221,14 @@ int32_t __vqr_io_chmod(const char *path, uint32_t mode, int32_t *out_error) {
     return 0;
 }
 
-void *__vqr_io_dir_open(const char *path, int32_t *out_error) {
+uintptr_t __vqr_io_dir_open(const char *path, int32_t *out_error) {
     DIR *directory = opendir(path);
     if (!directory) {
         set_error(out_error, errno);
-        return NULL;
+        return 0;
     }
     set_error(out_error, 0);
-    return directory;
+    return (uintptr_t)directory;
 }
 
 int32_t __vqr_io_dir_next(void *opaque, uint8_t *name, size_t capacity, size_t *length,

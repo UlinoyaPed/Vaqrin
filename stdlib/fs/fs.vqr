@@ -2,6 +2,30 @@ package fs
 import (io, path, text, coll)
 
 pub error FsError { InvalidOptions, NotFound, NotDirectory, IsDirectory }
+pub enum FileType { File, Directory, Symlink, Device, Socket, Other }
+
+func fileTypeFromCode(code: i32) FileType {
+    switch code {
+        0 => FileType.File,
+        1 => FileType.Directory,
+        2 => FileType.Symlink,
+        3 => FileType.Device,
+        4 => FileType.Socket,
+        _ => FileType.Other,
+    }
+}
+
+pub class Permissions {
+    var modeBits: u32;
+public:
+    func init(mode: u32) : modeBits(mode) {}
+    const func mode() u32 { modeBits }
+    const func readonly() bool { (modeBits & 146u32) == 0 }
+    func setReadonly(value: bool) void {
+        if value { modeBits = modeBits & ~u32(146); }
+        else { modeBits = modeBits | 128u32; }
+    }
+}
 
 pub class OpenOptions {
     pub var readEnabled: bool;
@@ -14,22 +38,25 @@ pub class OpenOptions {
 public:
     func init() : readEnabled(false), writeEnabled(false), appendEnabled(false),
         createEnabled(false), createNewEnabled(false), truncateEnabled(false), modeBits(420) {}
-    func read(value: bool) Self { readEnabled = value; move(self) }
-    func write(value: bool) Self { writeEnabled = value; move(self) }
-    func append(value: bool) Self { appendEnabled = value; move(self) }
-    func create(value: bool) Self { createEnabled = value; move(self) }
-    func createNew(value: bool) Self { createNewEnabled = value; move(self) }
-    func truncate(value: bool) Self { truncateEnabled = value; move(self) }
-    func mode(value: u32) Self { modeBits = value; move(self) }
-    func open(name: str) !File {
+    func read(value: bool) void { readEnabled = value; }
+    func write(value: bool) void { writeEnabled = value; }
+    func append(value: bool) void { appendEnabled = value; }
+    func create(value: bool) void { createEnabled = value; }
+    func createNew(value: bool) void { createNewEnabled = value; }
+    func truncate(value: bool) void { truncateEnabled = value; }
+    func mode(value: u32) void { modeBits = value; }
+    func open(name: path.Path) !File {
         if !readEnabled && !writeEnabled && !appendEnabled { return FsError.InvalidOptions; }
         if appendEnabled && !writeEnabled { return FsError.InvalidOptions; }
+        if truncateEnabled && !writeEnabled { return FsError.InvalidOptions; }
+        if createNewEnabled && createEnabled { return FsError.InvalidOptions; }
         var flags: u32 = (if readEnabled { 1 } else { 0 }) | (if writeEnabled { 2 } else { 0 }) |
             (if appendEnabled { 4 } else { 0 }) | (if createEnabled { 8 } else { 0 }) |
             (if createNewEnabled { 16 } else { 0 }) | (if truncateEnabled { 32 } else { 0 });
-        var handle = io.HostFile.open(name.asBytes(), flags, modeBits)!;
+        var handle = io.HostFile.open(name.asString().asBytes(), flags, modeBits)!;
         File(move(handle))
     }
+    func open(name: str) !File { open(path.Path(name)) }
 }
 
 pub class Metadata {
@@ -40,7 +67,8 @@ public:
     const func isFile() bool { value.kindCode() == 0 }
     const func isDir() bool { value.kindCode() == 1 }
     const func isSymlink() bool { value.kindCode() == 2 }
-    const func permissions() u32 { value.mode() }
+    const func fileType() FileType { fileTypeFromCode(value.kindCode()) }
+    const func permissions() Permissions { Permissions(value.mode()) }
     const func modifiedUnixSeconds() i64 { value.modifiedUnixSeconds() }
 }
 
@@ -59,33 +87,115 @@ public:
     func syncData() !void { handle.syncData() }
     func truncate(size: u64) !void { handle.truncate(size) }
     func metadata() !Metadata { Metadata(handle.metadata()!) }
+    func setPermissions(value: Permissions) !void { handle.setMode(value.mode()) }
     func deinit() void { handle.close() catch {}; }
 }
 
+pub class DirectoryEntry {
+    var entry: io.HostDirEntry;
+    var parentPath: path.Path;
+public:
+    func init(entry: io.HostDirEntry, parent: path.Path) : entry(move(entry)), parentPath(parent) {}
+    const func name() str { entry.name() }
+    const func fileType() FileType { fileTypeFromCode(entry.kindCode()) }
+    const func path() !path.Path { path.join(parentPath, path.Path(name())) }
+    func metadata() !Metadata { stat(path()!) }
+}
+
+pub class Directory {
+    #copy: disabled
+    var handle: io.HostDirectory;
+    var base: path.Path;
+public:
+    func init(handle: io.HostDirectory, base: path.Path) : handle(move(handle)), base(base) {}
+    func next() !?DirectoryEntry {
+        var item = handle.next()!;
+        switch item {
+            null => null,
+            some(entry) => some(DirectoryEntry(move(entry), base)),
+        }
+    }
+    func close() !void { handle.close() }
+    func deinit() void { handle.close() catch {}; }
+}
+
+pub func open(name: path.Path, options: OpenOptions) !File { options.open(name) }
 pub func open(name: str, options: OpenOptions) !File { options.open(name) }
-pub func create(name: str) !File { OpenOptions().write(true).create(true).truncate(true).open(name) }
-pub func readFile(name: str, limit: usize) !coll.Vec<u8> {
-    var file = OpenOptions().read(true).open(name)!;
+pub func create(name: path.Path) !File {
+    var options = OpenOptions();
+    options.write(true);
+    options.create(true);
+    options.truncate(true);
+    options.open(name)
+}
+pub func create(name: str) !File { create(path.Path(name)) }
+pub func openRead(name: path.Path) !File {
+    var options = OpenOptions();
+    options.read(true);
+    options.open(name)
+}
+pub func openWrite(name: path.Path) !File {
+    var options = OpenOptions();
+    options.write(true);
+    options.create(true);
+    options.truncate(true);
+    options.open(name)
+}
+pub func readFile(name: path.Path, limit: usize) !coll.Vec<u8> {
+    var file = openRead(name)!;
     io.readToEnd(&file, limit)
 }
-pub func readText(name: str, limit: usize) !string {
+pub func readFile(name: str, limit: usize) !coll.Vec<u8> { readFile(path.Path(name), limit) }
+pub func readText(name: path.Path, limit: usize) !string {
     var data = readFile(name, limit)!;
     text.fromBytes(data.asConstSlice())
 }
-pub func writeFile(name: str, data: []const u8) !void {
+pub func readText(name: str, limit: usize) !string { readText(path.Path(name), limit) }
+pub func writeFile(name: path.Path, data: []const u8) !void {
     var file = create(name)!;
     io.writeAll(&file, data)!;
     file.flush()!;
 }
-pub func exists(name: str) bool {
-    var result = io.hostStat(name.asBytes(), true) catch { return false; };
+pub func writeFile(name: str, data: []const u8) !void { writeFile(path.Path(name), data) }
+pub func appendFile(name: path.Path, data: []const u8) !void {
+    var options = OpenOptions();
+    options.write(true);
+    options.append(true);
+    options.create(true);
+    var file = options.open(name)!;
+    io.writeAll(&file, data)!
+}
+pub func exists(name: path.Path) bool {
+    io.hostStat(name.asString().asBytes(), true) catch { return false; };
     true
 }
-pub func stat(name: str) !Metadata { Metadata(io.hostStat(name.asBytes(), true)!) }
-pub func lstat(name: str) !Metadata { Metadata(io.hostStat(name.asBytes(), false)!) }
-pub func mkdir(name: str) !void { io.hostMkdir(name.asBytes(), 493) }
-pub func remove(name: str) !void { io.hostRemove(name.asBytes()) }
-pub func removeDir(name: str) !void { io.hostRemoveDir(name.asBytes()) }
-pub func rename(from: str, to: str) !void { io.hostRename(from.asBytes(), to.asBytes()) }
+pub func exists(name: str) bool { exists(path.Path(name)) }
+pub func stat(name: path.Path) !Metadata { Metadata(io.hostStat(name.asString().asBytes(), true)!) }
+pub func stat(name: str) !Metadata { stat(path.Path(name)) }
+pub func lstat(name: path.Path) !Metadata { Metadata(io.hostStat(name.asString().asBytes(), false)!) }
+pub func lstat(name: str) !Metadata { lstat(path.Path(name)) }
+pub func mkdir(name: path.Path) !void { io.hostMkdir(name.asString().asBytes(), 493) }
+pub func mkdir(name: str) !void { mkdir(path.Path(name)) }
+pub func remove(name: path.Path) !void { io.hostRemove(name.asString().asBytes()) }
+pub func remove(name: str) !void { remove(path.Path(name)) }
+pub func removeDir(name: path.Path) !void { io.hostRemoveDir(name.asString().asBytes()) }
+pub func removeDir(name: str) !void { removeDir(path.Path(name)) }
+pub func rename(from: path.Path, to: path.Path) !void {
+    io.hostRename(from.asString().asBytes(), to.asString().asBytes())
+}
+pub func rename(from: str, to: str) !void { rename(path.Path(from), path.Path(to)) }
+pub func readDir(name: path.Path) !Directory {
+    var handle = io.HostDirectory.open(name.asString().asBytes())!;
+    Directory(move(handle), name)
+}
+pub func readDir(name: str) !Directory { readDir(path.Path(name)) }
+pub func copy(source: path.Path, destination: path.Path) !u64 {
+    var input = openRead(source)!;
+    var output = create(destination)!;
+    var count = io.copyAll(&input, &output)!;
+    output.flush()!;
+    count
+}
 pub func currentDir() !string { io.currentDir() }
-pub func setCurrentDir(name: str) !void { io.setCurrentDir(name.asBytes()) }
+pub func setCurrentDir(name: path.Path) !void { io.setCurrentDir(name.asString().asBytes()) }
+pub func setCurrentDir(name: str) !void { setCurrentDir(path.Path(name)) }

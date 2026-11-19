@@ -1,6 +1,6 @@
 # Vaqrin 标准包
 
-可用 `import (core, coll, iter, opt, result, cmp, convert, meta, mem, mmio, bits, algo, atomic, binary, bytes, cell, encoding, simd, text, parse, io, thread, sync, time, channel)` 导入标准包，也可使用 `std/` 前缀。CMake 在构建目录生成 `share/vaqrin/stdlib`，安装时将标准包源码复制到安装前缀下。编译器按使用情况实例化泛型声明。完整的目标接口见[标准包 API 清单](../docs/stdlib/Vaqrin-stdlib-API-complete-draft.md)。
+可用 `import (core, coll, iter, opt, result, cmp, convert, meta, mem, mmio, bits, algo, atomic, binary, bytes, cell, encoding, simd, text, parse, io, path, fs, bufio, fmt, thread, sync, time, channel)` 导入标准包，也可使用 `std/` 前缀。CMake 在构建目录生成 `share/vaqrin/stdlib`，安装时将标准包源码复制到安装前缀下。编译器按使用情况实例化泛型声明。完整的目标接口见[标准包 API 清单](../docs/stdlib/Vaqrin-stdlib-API-complete-draft.md)。
 
 | 包 | 当前接口 |
 | --- | --- |
@@ -24,7 +24,11 @@
 | `simd` | 定宽标量通道、掩码、载入与存储、重排和归约 |
 | `text` | UTF-8 字节相等比较 `equal`、`byteLen`、`scalarCount`、`chars`、`fromBytes`、`StringBuilder` |
 | `parse` | 整串及前缀整数解析、布尔值、Unicode 标量、UTF-8 字节偏移游标和空白分词 |
-| `io` | 读写与定位接口、内存流、限制与计数适配器、短读短写进度及宿主 `println` |
+| `io` | Reader/Writer/Seeker/Closer、内存流、组合适配器、标准流、宿主文件描述符及原生错误码 |
+| `path` | UTF-8 词法路径、父目录/文件名/扩展名、组件迭代与规范化 |
+| `fs` | File、OpenOptions、Metadata、Permissions、目录读取及文件系统操作 |
+| `bufio` | BufferedReader/Writer、Scanner、Token、peek/unread、按行和分隔符读取 |
+| `fmt` | Writer 格式化、整数/浮点/布尔/字符/字符串、宽度/精度/进制/填充 |
 | `thread` | GNU/Linux 原生线程、一次性领取结果、分离、协作停止、当前线程 ID 及 CPU 数 |
 | `sync` | 互斥锁、可投影的 RAII 守卫、条件变量、等待组及单次初始化 |
 | `time` | 纳秒时长、单调时钟和定时器、公历日期、日内时间及 UTC 墙钟 |

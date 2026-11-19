@@ -18,25 +18,34 @@ public:
         BufferedReader(reader, move(values), 0, size, false, null)
     }
     func fill() !void {
-        if eof || data.len() >= capacity { return; }
+        if eof { return; }
         if position != 0 {
-            data.clear();
+            var unread = data.len() - position;
+            var bytes = data.asSlice();
+            for index in usize(0)..unread { bytes[index] = bytes[position + index]; }
+            data.truncate(unread);
             position = 0;
         }
+        if data.len() >= capacity { return; }
         var room = capacity - data.len();
         var scratch: [4096]u8;
         var count = if room < scratch.len() { room } else { scratch.len() };
-        var readCount = source.read(scratch[0..count])!;
-        if readCount == 0 { eof = true; return; }
-        for byte in scratch[0..readCount] { data.push(byte)!; }
+        var received = source.read(scratch[0..count])!;
+        if received == 0 { eof = true; return; }
+        if received > count { return io.IoError.InvalidCount; }
+        for byte in scratch[0..received] { data.push(byte)!; }
     }
     func read(dst: []u8) !usize {
         if dst.len() == 0 { return 0; }
-        if position == data.len() { data.clear(); position = 0; fill()!; }
+        if position == data.len() {
+            data.clear();
+            position = 0;
+            fill()!;
+        }
         var available = data.len() - position;
         var count = if available < dst.len() { available } else { dst.len() };
         if count == 0 { return 0; }
-        for i in usize(0)..count { dst[i] = data[position + i]; }
+        for index in usize(0)..count { dst[index] = data[position + index]; }
         position += count;
         lastByte = some(dst[count - 1]);
         count
@@ -53,11 +62,66 @@ public:
         lastByte = null;
     }
     func peek(count: usize) ![]const u8 {
-        while data.len() - position < count && !eof { fill()!; if data.len() == capacity { break; } }
+        if count > capacity { return BufferError.BufferFull; }
+        while data.len() - position < count && !eof {
+            var before = data.len();
+            fill()!;
+            if data.len() == before { break; }
+        }
         if count > data.len() - position { return BufferError.BufferFull; }
         data.asConstSlice()[position..position + count]
     }
-    func reset(reader: *io.Reader) void { source = reader; data.clear(); position = 0; eof = false; lastByte = null; }
+    func discard(count: usize) !usize {
+        var available = data.len() - position;
+        var skipped = if count < available { count } else { available };
+        position += skipped;
+        lastByte = null;
+        skipped
+    }
+    func readUntil(delimiter: u8, maxBytes: usize) !?coll.Vec<u8> {
+        var output = coll.Vec<u8>();
+        for {
+            var next = readByte()!;
+            switch next {
+                null => {
+                    if output.len() == 0 { return null; }
+                    return some(move(output));
+                },
+                some(byte) => {
+                    if byte == delimiter { return some(move(output)); }
+                    if output.len() >= maxBytes { return BufferError.TokenTooLong; }
+                    output.push(byte)!;
+                },
+            }
+        }
+    }
+    func readString(delimiter: u8, maxBytes: usize) !?string {
+        var bytes = readUntil(delimiter, maxBytes)!;
+        switch bytes {
+            null => null,
+            some(value) => some(text.fromBytes(value.asConstSlice())!),
+        }
+    }
+    func readLine(maxBytes: usize) !?string {
+        var line = readUntil(10, maxBytes)!;
+        switch line {
+            null => null,
+            some(value) => {
+                if value.len() != 0 && value[value.len() - 1] == 13 {
+                    value.truncate(value.len() - 1);
+                }
+                some(text.fromBytes(value.asConstSlice())!)
+            },
+        }
+    }
+    const func bufferLen() usize { data.len() - position }
+    func reset(reader: *io.Reader) void {
+        source = reader;
+        data.clear();
+        position = 0;
+        eof = false;
+        lastByte = null;
+    }
 }
 
 pub class BufferedWriter {
@@ -70,25 +134,55 @@ public:
         if size == 0 { return BufferError.InvalidCapacity; }
         BufferedWriter(writer, coll.Vec<u8>.withCapacity(size)!, size)
     }
+    func retainPending(committed: usize) void {
+        var pending = data.len() - committed;
+        var bytes = data.asSlice();
+        for index in usize(0)..pending { bytes[index] = bytes[committed + index]; }
+        data.truncate(pending);
+    }
     func write(src: []const u8) !usize {
         var total: usize = 0;
-        for byte in src {
-            if data.len() == capacity { flush()!; }
-            data.push(byte)!;
-            total++;
+        for total < src.len() {
+            if data.len() == capacity {
+                flush() catch (reason) {
+                    if total != 0 { return total; }
+                    return reason;
+                };
+            }
+            var room = capacity - data.len();
+            var remaining = src.len() - total;
+            var count = if room < remaining { room } else { remaining };
+            for index in usize(0)..count { data.push(src[total + index])!; }
+            total += count;
         }
         total
     }
-    func writeByte(byte: u8) !void { var one = [1]u8{byte}; write(one[:])!; }
-    func writeString(value: str) !void { write(value.asBytes())!; }
-    func buffered() usize { data.len() }
-    func available() usize { capacity - data.len() }
+    func writeByte(byte: u8) !void {
+        var one: [1]u8{byte};
+        var count = write(one[:])!;
+        if count != 1 { return io.IoError.NoProgress; }
+    }
+    func writeString(value: str) !void {
+        var count = write(value.asBytes())!;
+        if count != value.byteLen() { return io.IoError.NoProgress; }
+    }
+    const func buffered() usize { data.len() }
+    const func available() usize { capacity - data.len() }
     func flush() !void {
         var offset: usize = 0;
-        while offset < data.len() {
-            var count = target.write(data.asConstSlice()[offset..data.len()])!;
-            if count == 0 { return io.IoError.NoProgress; }
-            if count > data.len() - offset { return io.IoError.InvalidCount; }
+        for offset < data.len() {
+            var count = target.write(data.asConstSlice()[offset..data.len()]) catch (reason) {
+                retainPending(offset);
+                return reason;
+            };
+            if count > data.len() - offset {
+                retainPending(offset);
+                return io.IoError.InvalidCount;
+            }
+            if count == 0 {
+                retainPending(offset);
+                return io.IoError.NoProgress;
+            }
             offset += count;
         }
         data.clear();
@@ -99,19 +193,75 @@ public:
     func deinit() void { flush() catch {}; }
 }
 
-pub func readLine(reader: *io.Reader, maxBytes: usize) !?string {
-    var line = coll.Vec<u8>();
-    var byte: [1]u8;
-    for {
-        var count = reader.read(byte[:])!;
-        if count == 0 {
-            if line.len() == 0 { return null; }
-            break;
+pub class Token {
+    var contents: string;
+    var first: u64;
+    var last: u64;
+public:
+    func init(value: string, start: u64, end: u64)
+        : contents(move(value)), first(start), last(end) {}
+    const func text() str { unsafe { __vqr_text_borrow_utf8(contents.asBytes()) } }
+    const func start() u64 { first }
+    const func end() u64 { last }
+}
+
+pub class Scanner {
+    #copy: disabled
+    var reader: BufferedReader;
+    var maximum: usize;
+    var consumed: u64;
+public:
+    func init(source: *io.Reader) !Self { Scanner(BufferedReader(source, 4096)!, 1048576, 0) }
+    func setMaxToken(value: usize) void { maximum = value; }
+    const func position() u64 { consumed }
+    func next() !?Token {
+        var output = coll.Vec<u8>();
+        var started = false;
+        var start = consumed;
+        for {
+            var next = reader.readByte()!;
+            switch next {
+                null => {
+                    if !started { return null; }
+                    var value = text.fromBytes(output.asConstSlice())!;
+                    return some(Token(move(value), start, consumed));
+                },
+                some(byte) => {
+                    consumed++;
+                    var whitespace = byte == 32 || (9 <= byte && byte <= 13);
+                    if whitespace {
+                        if !started { start = consumed; continue; }
+                        var value = text.fromBytes(output.asConstSlice())!;
+                        return some(Token(move(value), start, consumed - 1));
+                    }
+                    if !started { started = true; start = consumed - 1; }
+                    if output.len() >= maximum { return BufferError.TokenTooLong; }
+                    output.push(byte)!;
+                },
+            }
         }
-        if byte[0] == 10 { break; }
-        if line.len() >= maxBytes { return BufferError.TokenTooLong; }
-        line.push(byte[0])!;
     }
-    if line.len() > 0 && line.at(line.len() - 1) == 13 { line.truncate(line.len() - 1); }
-    some(text.fromBytes(line.asConstSlice())!)
+    func nextString() !?string {
+        var item = next()!;
+        switch item {
+            null => null,
+            some(value) => some(text.fromBytes(value.text().asBytes())!),
+        }
+    }
+    func reset(source: *io.Reader) void {
+        reader.reset(source);
+        consumed = 0;
+    }
+}
+
+pub func newReader(reader: *io.Reader, capacity: usize) !BufferedReader {
+    BufferedReader(reader, capacity)
+}
+pub func newWriter(writer: *io.Writer, capacity: usize) !BufferedWriter {
+    BufferedWriter(writer, capacity)
+}
+pub func newScanner(reader: *io.Reader) !Scanner { Scanner(reader) }
+pub func readLine(reader: *io.Reader, maxBytes: usize) !?string {
+    var buffered = BufferedReader(reader, 4096)!;
+    buffered.readLine(maxBytes)
 }

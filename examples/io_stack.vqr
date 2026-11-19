@@ -1,0 +1,42 @@
+package io_stack
+import (io, fs, path, bufio, fmt)
+
+func main() !void {
+    var target = path.Path("build/io-stack.txt").normalize()!;
+    var options = fs.OpenOptions();
+    options.write(true);
+    options.create(true);
+    options.truncate(true);
+    var file = fs.open(target, options)!;
+
+    io.writeString(&file, "Vaqrin I/O\n")!;
+    file.seek(0, io.SeekOrigin.Start)!;
+
+    var buffered = bufio.BufferedReader(&file, 64)!;
+    var line = buffered.readLine(64)!;
+    switch line {
+        null => {},
+        some(value) => {
+            var output = io.stdout();
+            fmt.writeTo(&output, "read: ")!;
+            fmt.writeTo(&output, value)!;
+            fmt.writeTo(&output, "\n")!;
+            output.flush()!;
+        },
+    }
+
+    var metadata = file.metadata()!;
+    io.println(metadata.len())!;
+
+    var formatted = fmt.format("hex={:x}", [fmt.arg(u64(255))])!;
+    io.println(formatted)!;
+
+    file.close()!;
+    var directory = fs.readDir(path.Path("build"))!;
+    var entry = directory.next()!;
+    switch entry {
+        null => {},
+        some(value) => { io.println(value.name())!; },
+    }
+    directory.close()!;
+}

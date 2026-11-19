@@ -18,7 +18,7 @@ extern "C" func __vqr_io_remove(path: *const u8, error: *i32) i32;
 extern "C" func __vqr_io_remove_dir(path: *const u8, error: *i32) i32;
 extern "C" func __vqr_io_rename(from: *const u8, to: *const u8, error: *i32) i32;
 extern "C" func __vqr_io_chmod(path: *const u8, mode: u32, error: *i32) i32;
-extern "C" func __vqr_io_dir_open(path: *const u8, error: *i32) *u8;
+extern "C" func __vqr_io_dir_open(path: *const u8, error: *i32) usize;
 extern "C" func __vqr_io_dir_next(dir: *u8, name: *u8, capacity: usize, length: *usize, kind: *i32, error: *i32) i32;
 extern "C" func __vqr_io_dir_close(dir: *u8, error: *i32) i32;
 extern "C" func __vqr_io_getcwd(buffer: *u8, capacity: usize, length: *usize, error: *i32) i32;
@@ -201,7 +201,7 @@ public:
         var name = cString(path)!;
         var errorCode: i32 = 0;
         var directory = unsafe { __vqr_io_dir_open(&name[0], &errorCode) };
-        if directory == null { return systemError(errorCode); }
+        if directory == 0 { return systemError(errorCode); }
         HostDirectory(directory)
     }
 

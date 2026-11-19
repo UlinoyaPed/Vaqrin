@@ -1,0 +1,552 @@
+package coll
+import (core, mem)
+
+pub enum InsertResult<K: Movable, V: Movable> {
+    Inserted,
+    Replaced(V),
+    Failed(ErrorId, K, V),
+}
+
+enum BucketState { Empty, Tombstone, Occupied }
+
+class HashBucket<K: Movable, V: Movable> {
+    var state: BucketState;
+    var key: mem.MaybeUninit<K>;
+    var value: mem.MaybeUninit<V>;
+    var hashCode: usize;
+public:
+    func init()
+        : state(BucketState.Empty),
+          key(mem.MaybeUninit<K>.uninit()),
+          value(mem.MaybeUninit<V>.uninit()),
+          hashCode(0) {}
+
+    const func isEmpty() bool { state == BucketState.Empty }
+    const func isTombstone() bool { state == BucketState.Tombstone }
+    const func isOccupied() bool { state == BucketState.Occupied }
+    const func storedHash() usize { hashCode }
+    const func keyRef() *const K { key.asConstPtr() }
+    const func valueRef() *const V { value.asConstPtr() }
+    func valueMut() *V { value.asPtr() }
+
+    const func matches(
+        hash: usize, needle: *const K,
+        equals: func(*const K, *const K) bool
+    ) bool {
+        state == BucketState.Occupied && hashCode == hash && equals(key.asConstPtr(), needle)
+    }
+
+    func write(hash: usize, newKey: K, newValue: V) void {
+        if state == BucketState.Occupied { panic("writing an occupied hash bucket"); }
+        unsafe {
+            key.write(move(newKey));
+            value.write(move(newValue));
+        }
+        hashCode = hash;
+        state = BucketState.Occupied;
+    }
+
+    func take() (K, V) {
+        if state != BucketState.Occupied { panic("taking an empty hash bucket"); }
+        state = BucketState.Tombstone;
+        var oldKey = unsafe { key.assumeInit() };
+        var oldValue = unsafe { value.assumeInit() };
+        (move(oldKey), move(oldValue))
+    }
+
+    func tombstoneEntry() void {
+        if state != BucketState.Occupied { return; }
+        state = BucketState.Tombstone;
+        unsafe {
+            key.assumeInitDrop();
+            value.assumeInitDrop();
+        }
+    }
+
+    func clearEntry() void {
+        if state == BucketState.Occupied {
+            unsafe {
+                key.assumeInitDrop();
+                value.assumeInitDrop();
+            }
+        }
+        state = BucketState.Empty;
+        hashCode = 0;
+    }
+
+    func deinit() void { clearEntry(); }
+}
+
+pub class MapIterRef<K: Movable, V: Movable> {
+    var entries: Vec<(*const K, *const V)>;
+    var frontIndex: usize;
+    var backIndex: usize;
+public:
+    func init(items: Vec<(*const K, *const V)>, count: usize)
+        : entries(move(items)), frontIndex(0), backIndex(count) {}
+
+    func next() ?(*const K, *const V) {
+        if frontIndex == backIndex { return null; }
+        var entry = entries.get(frontIndex).unwrap();
+        frontIndex++;
+        some(((*entry).0, (*entry).1))
+    }
+
+    func nextBack() ?(*const K, *const V) {
+        if frontIndex == backIndex { return null; }
+        backIndex--;
+        var entry = entries.get(backIndex).unwrap();
+        some((entry.0, entry.1))
+    }
+
+    const func remaining() usize { backIndex - frontIndex }
+}
+
+func hashTableCapacity(entries: usize) !usize {
+    if entries == 0 { return 0; }
+    var capacity: usize = 8;
+    for entries > capacity - capacity / 8 {
+        if capacity > ~usize(0) / 2 { return CapacityError.Overflow; }
+        capacity *= 2;
+    }
+    capacity
+}
+
+pub class HashMap<K: Movable, V: Movable> {
+    #copy: disabled
+    var buckets: Vec<HashBucket<K, V>>;
+    var length: usize;
+    var tombstones: usize;
+    var seed: u32;
+    var allocator: ?mem.AllocatorRef;
+    var hashFunction: func(*const K, u32) usize;
+    var equalsFunction: func(*const K, *const K) bool;
+public:
+    func init(
+        hashFunction: func(*const K, u32) usize,
+        equalsFunction: func(*const K, *const K) bool
+    ) : buckets(Vec<HashBucket<K, V>>()), length(0), tombstones(0), seed(0),
+        allocator(null), hashFunction(hashFunction), equalsFunction(equalsFunction) {}
+
+    static func withHasher(
+        hashFunction: func(*const K, u32) usize,
+        equalsFunction: func(*const K, *const K) bool
+    ) Self {
+        HashMap<K, V>(hashFunction, equalsFunction)
+    }
+
+    static func withSeed(
+        seed: u32,
+        hashFunction: func(*const K, u32) usize,
+        equalsFunction: func(*const K, *const K) bool
+    ) Self {
+        var result = HashMap<K, V>.withHasher(hashFunction, equalsFunction);
+        result.seed = seed;
+        move(result)
+    }
+
+    static func withCapacity(
+        n: usize,
+        hashFunction: func(*const K, u32) usize,
+        equalsFunction: func(*const K, *const K) bool
+    ) !Self {
+        var result = HashMap<K, V>.withHasher(hashFunction, equalsFunction);
+        result.reserve(n)!;
+        move(result)
+    }
+
+    static func withCapacityAndSeed(
+        n: usize, seed: u32,
+        hashFunction: func(*const K, u32) usize,
+        equalsFunction: func(*const K, *const K) bool
+    ) !Self {
+        var result = HashMap<K, V>.withSeed(seed, hashFunction, equalsFunction);
+        result.reserve(n)!;
+        move(result)
+    }
+
+    static func withAllocator(
+        hashFunction: func(*const K, u32) usize,
+        equalsFunction: func(*const K, *const K) bool,
+        allocator: mem.AllocatorRef
+    ) Self {
+        var result = HashMap<K, V>.withHasher(hashFunction, equalsFunction);
+        result.allocator = some(allocator);
+        result.buckets = Vec<HashBucket<K, V>>.withAllocator(allocator);
+        move(result)
+    }
+
+    static func withSeedAndAllocator(
+        seed: u32,
+        hashFunction: func(*const K, u32) usize,
+        equalsFunction: func(*const K, *const K) bool,
+        allocator: mem.AllocatorRef
+    ) Self {
+        var result = HashMap<K, V>.withAllocator(hashFunction, equalsFunction, allocator);
+        result.seed = seed;
+        move(result)
+    }
+
+    static func withCapacityAndAllocator(
+        n: usize,
+        hashFunction: func(*const K, u32) usize,
+        equalsFunction: func(*const K, *const K) bool,
+        allocator: mem.AllocatorRef
+    ) !Self {
+        var result = HashMap<K, V>.withAllocator(hashFunction, equalsFunction, allocator);
+        result.reserve(n)!;
+        move(result)
+    }
+
+    const func len() usize { length }
+    const func capacity() usize { buckets.len() }
+    const func isEmpty() bool { length == 0 }
+
+private:
+    const func hashKey(key: *const K) usize {
+        hashFunction(key, seed)
+    }
+
+    const func findIndex(key: *const K, hash: usize) ?usize {
+        var cap = buckets.len();
+        if cap == 0 { return null; }
+        var index = hash % cap;
+        var examined: usize = 0;
+        for examined < cap {
+            var bucket = buckets.get(index).unwrap();
+            if bucket.isEmpty() { return null; }
+            if bucket.matches(hash, key, equalsFunction) { return some(index); }
+            examined++;
+            index++;
+            if index == cap { index = 0; }
+        }
+        null
+    }
+
+    const func insertionIndex(hash: usize) usize {
+        var cap = buckets.len();
+        var index = hash % cap;
+        var firstTombstone: ?usize = null;
+        for examined := usize(0); examined < cap; examined++ {
+            var bucket = buckets.get(index).unwrap();
+            if bucket.isEmpty() { return firstTombstone ?? index; }
+            if bucket.isTombstone() && firstTombstone == null {
+                firstTombstone = some(index);
+            }
+            index++;
+            if index == cap { index = 0; }
+        }
+        firstTombstone.unwrap()
+    }
+
+    func insertKnownHash(hash: usize, key: K, value: V) void {
+        var index = insertionIndex(hash);
+        var bucket = buckets.getMut(index).unwrap();
+        if bucket.isTombstone() { tombstones--; }
+        bucket.write(hash, move(key), move(value));
+        length++;
+    }
+
+    func rehash(newCapacity: usize) !void {
+        if newCapacity == buckets.len() && tombstones == 0 { return; }
+        var next = Vec<HashBucket<K, V>>();
+        switch allocator {
+            null => {},
+            some(owner) => { next = Vec<HashBucket<K, V>>.withAllocator(owner); },
+        }
+        next.reserve(newCapacity)!;
+        for i in usize(0)..newCapacity { next.push(HashBucket<K, V>())!; }
+
+        core.swap<Vec<HashBucket<K, V>>>(&buckets, &next);
+        var previousLength = length;
+        length = 0;
+        tombstones = 0;
+
+        for i in usize(0)..next.len() {
+            var bucket = next.getMut(i).unwrap();
+            if bucket.isOccupied() {
+                var hash = bucket.storedHash();
+                var pair = bucket.take();
+                var key, value := move(pair);
+                insertKnownHash(hash, move(key), move(value));
+            }
+        }
+        if length != previousLength { panic("hash table rehash lost an entry"); }
+    }
+
+    func ensureRoomForOne() !void {
+        if length == ~usize(0) { return CapacityError.Overflow; }
+        var cap = buckets.len();
+        if cap == 0 {
+            rehash(8)!;
+            return;
+        }
+        if length + 1 > cap - cap / 8 {
+            if cap > ~usize(0) / 2 { return CapacityError.Overflow; }
+            rehash(cap * 2)!;
+            return;
+        }
+        if tombstones > cap / 4 { rehash(cap)!; }
+    }
+
+public:
+    func reserve(minEntries: usize) !void {
+        var target = hashTableCapacity(minEntries)!;
+        if target > buckets.len() { rehash(target)!; }
+    }
+
+    func reserveAdditional(extra: usize) !void {
+        if extra > ~usize(0) - length { return CapacityError.Overflow; }
+        reserve(length + extra)
+    }
+
+    func insertPreserving(key: K, value: V) InsertResult<K, V> {
+        var hash = hashKey(&key);
+        switch findIndex(&key, hash) {
+            some(index) => {
+                var bucket = buckets.getMut(index).unwrap();
+                var previous = bucket.take();
+                var oldKey, oldValue := move(previous);
+                bucket.write(hash, move(key), move(value));
+                InsertResult<K, V>.Replaced(move(oldValue))
+            },
+            null => {
+                ensureRoomForOne() catch (reason) {
+                    return InsertResult<K, V>.Failed(reason, move(key), move(value));
+                };
+                insertKnownHash(hash, move(key), move(value));
+                InsertResult<K, V>.Inserted()
+            },
+        }
+    }
+
+    func insert(key: K, value: V) !?V {
+        switch insertPreserving(move(key), move(value)) {
+            InsertResult.Inserted => null,
+            InsertResult.Replaced(previous) => some(move(previous)),
+            InsertResult.Failed(reason, _, _) => return reason,
+        }
+    }
+
+    const func get(key: *const K) ?*const V {
+        var hash = hashKey(key);
+        switch findIndex(key, hash) {
+            null => null,
+            some(index) => some(buckets.get(index).unwrap().valueRef()),
+        }
+    }
+
+    func getMut(key: *const K) ?*V {
+        var hash = hashKey(key);
+        switch findIndex(key, hash) {
+            null => null,
+            some(index) => some(buckets.getMut(index).unwrap().valueMut()),
+        }
+    }
+
+    const func getKeyValue(key: *const K) ?(*const K, *const V) {
+        var hash = hashKey(key);
+        switch findIndex(key, hash) {
+            null => null,
+            some(index) => {
+                var bucket = buckets.get(index).unwrap();
+                some((bucket.keyRef(), bucket.valueRef()))
+            },
+        }
+    }
+
+    const func containsKey(key: *const K) bool {
+        findIndex(key, hashKey(key)) != null
+    }
+
+    func removeEntry(key: *const K) ?(K, V) {
+        var hash = hashKey(key);
+        switch findIndex(key, hash) {
+            null => null,
+            some(index) => {
+                var pair = buckets.getMut(index).unwrap().take();
+                length--;
+                tombstones++;
+                some(move(pair))
+            },
+        }
+    }
+
+    func remove(key: *const K) ?V {
+        switch removeEntry(key) {
+            null => null,
+            some(pair) => {
+                var oldKey, oldValue := move(pair);
+                some(move(oldValue))
+            },
+        }
+    }
+
+    func retain<F: Movable>(predicate: F) void {
+        for i in usize(0)..buckets.len() {
+            var bucket = buckets.getMut(i).unwrap();
+            if bucket.isOccupied() && !predicate(bucket.keyRef(), bucket.valueRef()) {
+                bucket.tombstoneEntry();
+                length--;
+                tombstones++;
+            }
+        }
+    }
+
+    func clear() void {
+        for i in usize(0)..buckets.len() {
+            buckets.getMut(i).unwrap().clearEntry();
+        }
+        length = 0;
+        tombstones = 0;
+    }
+
+    func shrinkToFit() !void {
+        var target = hashTableCapacity(length)!;
+        if target != buckets.len() || tombstones != 0 { rehash(target)!; }
+    }
+
+    func extend<I: Movable>(entries: I) !void {
+        for key, value in move(entries) { insert(move(key), move(value))!; }
+    }
+
+    const func iterRef() !MapIterRef<K, V> {
+        var entries = switch allocator {
+            null => Vec<(*const K, *const V)>(),
+            some(owner) => Vec<(*const K, *const V)>.withAllocator(owner),
+        };
+        entries.reserve(length)!;
+        for i in usize(0)..buckets.len() {
+            var bucket = buckets.get(i).unwrap();
+            if bucket.isOccupied() {
+                entries.push((bucket.keyRef(), bucket.valueRef()))!;
+            }
+        }
+        MapIterRef<K, V>(move(entries), length)
+    }
+
+    func deinit() void { clear(); }
+}
+
+pub class SetIterRef<T: Movable> {
+    var source: MapIterRef<T, u8>;
+public:
+    func init(source: MapIterRef<T, u8>) : source(move(source)) {}
+    func next() ?*const T {
+        switch source.next() {
+            null => null,
+            some(entry) => {
+                var key, value := move(entry);
+                some(key)
+            },
+        }
+    }
+    const func remaining() usize { source.remaining() }
+}
+
+pub class HashSet<T: Movable> {
+    #copy: disabled
+    var values: HashMap<T, u8>;
+public:
+    func init(
+        hashFunction: func(*const T, u32) usize,
+        equalsFunction: func(*const T, *const T) bool
+    ) : values(HashMap<T, u8>(hashFunction, equalsFunction)) {}
+
+    static func withHasher(
+        hashFunction: func(*const T, u32) usize,
+        equalsFunction: func(*const T, *const T) bool
+    ) Self {
+        HashSet<T>(hashFunction, equalsFunction)
+    }
+
+    static func withCapacity(
+        n: usize,
+        hashFunction: func(*const T, u32) usize,
+        equalsFunction: func(*const T, *const T) bool
+    ) !Self {
+        var result = HashSet<T>.withHasher(hashFunction, equalsFunction);
+        result.values.reserve(n)!;
+        move(result)
+    }
+
+    static func withSeed(
+        seed: u32,
+        hashFunction: func(*const T, u32) usize,
+        equalsFunction: func(*const T, *const T) bool
+    ) Self {
+        var result = HashSet<T>.withHasher(hashFunction, equalsFunction);
+        result.values = HashMap<T, u8>.withSeed(seed, hashFunction, equalsFunction);
+        move(result)
+    }
+
+    static func withAllocator(
+        hashFunction: func(*const T, u32) usize,
+        equalsFunction: func(*const T, *const T) bool,
+        allocator: mem.AllocatorRef
+    ) Self {
+        var result = HashSet<T>.withHasher(hashFunction, equalsFunction);
+        result.values = HashMap<T, u8>.withAllocator(hashFunction, equalsFunction, allocator);
+        move(result)
+    }
+
+    static func withCapacityAndAllocator(
+        n: usize,
+        hashFunction: func(*const T, u32) usize,
+        equalsFunction: func(*const T, *const T) bool,
+        allocator: mem.AllocatorRef
+    ) !Self {
+        var result = HashSet<T>.withHasher(hashFunction, equalsFunction);
+        result.values = HashMap<T, u8>.withCapacityAndAllocator(
+            n, hashFunction, equalsFunction, allocator
+        )!;
+        move(result)
+    }
+
+    static func withSeedAndAllocator(
+        seed: u32,
+        hashFunction: func(*const T, u32) usize,
+        equalsFunction: func(*const T, *const T) bool,
+        allocator: mem.AllocatorRef
+    ) Self {
+        var result = HashSet<T>.withHasher(hashFunction, equalsFunction);
+        result.values = HashMap<T, u8>.withSeedAndAllocator(
+            seed, hashFunction, equalsFunction, allocator
+        );
+        move(result)
+    }
+
+    const func len() usize { values.len() }
+    const func capacity() usize { values.capacity() }
+    const func isEmpty() bool { values.isEmpty() }
+
+    func insert(value: T) !bool {
+        switch values.insert(move(value), 0u8)! {
+            null => true,
+            some(_) => false,
+        }
+    }
+
+    func remove(value: *const T) bool {
+        switch values.remove(value) {
+            null => false,
+            some(_) => true,
+        }
+    }
+
+    func take(value: *const T) ?T {
+        switch values.removeEntry(value) {
+            null => null,
+            some(entry) => {
+                var key, ignored := move(entry);
+                some(move(key))
+            },
+        }
+    }
+
+    const func contains(value: *const T) bool { values.containsKey(value) }
+    func reserve(n: usize) !void { values.reserve(n) }
+    func clear() void { values.clear(); }
+    const func iterRef() !SetIterRef<T> { SetIterRef<T>(values.iterRef()!) }
+    func deinit() void { values.clear(); }
+}

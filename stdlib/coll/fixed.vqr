@@ -1,5 +1,5 @@
 package coll
-import (mem)
+import (core, iter as iterator, mem)
 
 pub enum PushResult<T: Movable> {
     Stored,
@@ -28,6 +28,11 @@ public:
         if index >= length { return null; }
         some(&(*slots.asPtr())[index])
     }
+
+    const func first() ?*const T { get(0) }
+    func firstMut() ?*T { getMut(0) }
+    const func last() ?*const T { if length == 0 { null } else { get(length - 1) } }
+    func lastMut() ?*T { if length == 0 { null } else { getMut(length - 1) } }
 
     func push(value: T) PushResult<T> { tryPush(move(value)) }
     func tryPush(value: T) PushResult<T> {
@@ -62,6 +67,28 @@ public:
         some(move(value))
     }
 
+    func swapRemove(index: usize) ?T {
+        if index >= length { return null; }
+        swap(index, length - 1);
+        pop()
+    }
+
+    func replace(index: usize, value: T) ?T {
+        if index >= length { return null; }
+        unsafe {
+            var slot = address(index);
+            var previous = __vqr_slot_take<T>(slot);
+            __vqr_slot_write<T>(slot, move(value));
+            some(move(previous))
+        }
+    }
+
+    func replacePreserving(index: usize, value: T) ReplaceResult<T> {
+        if index >= length { return ReplaceResult<T>.InvalidIndex(move(value)); }
+        var previous = replace(index, move(value)).unwrap();
+        ReplaceResult<T>.Replaced(move(previous))
+    }
+
     func truncate(n: usize) void {
         for length > n {
             length--;
@@ -71,10 +98,47 @@ public:
 
     func clear() void { truncate(0); }
 
+    func extend<I: Movable>(values: I) !void {
+        for item in move(values) {
+            switch tryPush(move(item)) {
+                PushResult.Stored => {},
+                PushResult.Full(_) => return CapacityError.Overflow,
+                PushResult.Failed(reason, _) => return reason,
+            }
+        }
+    }
+
+    func append(other: *Self) !void {
+        if self == other || other.length == 0 { return; }
+        if other.length > N - length { return CapacityError.Overflow; }
+        var base = length;
+        for other.length > 0 {
+            var item = other.pop().unwrap();
+            switch insert(base, move(item)) {
+                PushResult.Stored => {},
+                else => panic("FixedVec append capacity invariant"),
+            }
+        }
+    }
+
+    func splitOff(index: usize) !Self {
+        if index > length { return CapacityError.IndexOutOfBounds; }
+        var result = FixedVec<T, N>();
+        var count = length - index;
+        for i in usize(0)..count {
+            var item = remove(index).unwrap();
+            switch result.push(move(item)) {
+                PushResult.Stored => {},
+                else => panic("FixedVec split capacity invariant"),
+            }
+        }
+        move(result)
+    }
+
     func retain<F: Movable>(predicate: F) void {
         var kept: usize = 0;
         for i in usize(0)..length {
-            if predicate(address(i)) {
+            if predicate(get(i).unwrap()) {
                 if kept != i { transfer(i, kept); }
                 kept++;
             } else {
@@ -82,6 +146,33 @@ public:
             }
         }
         length = kept;
+    }
+
+    func swap(a: usize, b: usize) void {
+        core.swap<T>(getMut(a).unwrap(), getMut(b).unwrap());
+    }
+
+    func reverse() void {
+        for i in usize(0)..(length / 2) { swap(i, length - i - 1); }
+    }
+
+    // Requires T: Copyable.
+    const func clone() Self {
+        var result = FixedVec<T, N>();
+        for item in iterRef() {
+            switch result.push(*item) {
+                PushResult.Stored => {},
+                else => panic("FixedVec clone capacity invariant"),
+            }
+        }
+        move(result)
+    }
+
+    const func iter() iterator.SliceIter<T> { iterator.SliceIter<T>(asConstSlice()) }
+    const func iterRef() iterator.SliceIterRef<T> { iterator.SliceIterRef<T>(asConstSlice()) }
+    func iterMut() iterator.SliceIterMut<T> { iterator.SliceIterMut<T>(asSlice()) }
+    const func reverseIter() iterator.RevIter<iterator.SliceIterRef<T>, *const T> {
+        iterator.rev<iterator.SliceIterRef<T>, *const T>(iterRef())
     }
 
     static func intoIter(value: Self) IntoFixedVecIter<T, N> {
@@ -104,4 +195,5 @@ public:
     func init(values: FixedVec<T, N>) : source(move(values)) {}
     func next() ?T { source.remove(0) }
     func nextBack() ?T { source.pop() }
+    const func remaining() usize { source.len() }
 }

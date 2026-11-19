@@ -20,9 +20,9 @@ public:
     func finish() !string {
         var compose = form == NormalForm.NFC || form == NormalForm.NFKC;
         var scalars = if compose { composePending()! } else { pending.clone()! };
-        var chars = coll.Vec<char>.withCapacity(scalars.len())!;
-        for cp in scalars.asSlice() { chars.push(__vqr_char(cp))!; }
-        text.fromChars(chars.intoIter())
+        var output = coll.Vec<u8>();
+        for cp in scalars.asSlice() { appendUtf8Scalar(cp, &output)!; }
+        text.fromBytes(output.asConstSlice())
     }
 
     func flushTo(dst: []u8) !usize {
@@ -122,4 +122,22 @@ func composePair(a: u32, b: u32) ?u32 {
         else { return some(data.compositionPairs[mid * 3 + 2]); }
     }
     null
+}
+
+func appendUtf8Scalar(cp: u32, output: *coll.Vec<u8>) !void {
+    if cp < 0x80 {
+        output.push(u8(cp)!)!;
+    } else if cp < 0x800 {
+        output.push(u8(0xc0 | (cp >> 6))!)!;
+        output.push(u8(0x80 | (cp & 0x3f))!)!;
+    } else if cp < 0x10000 {
+        output.push(u8(0xe0 | (cp >> 12))!)!;
+        output.push(u8(0x80 | ((cp >> 6) & 0x3f))!)!;
+        output.push(u8(0x80 | (cp & 0x3f))!)!;
+    } else {
+        output.push(u8(0xf0 | (cp >> 18))!)!;
+        output.push(u8(0x80 | ((cp >> 12) & 0x3f))!)!;
+        output.push(u8(0x80 | ((cp >> 6) & 0x3f))!)!;
+        output.push(u8(0x80 | (cp & 0x3f))!)!;
+    }
 }

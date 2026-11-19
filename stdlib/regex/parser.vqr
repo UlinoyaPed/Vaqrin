@@ -267,7 +267,7 @@ private:
             builtinMask: builtinMask,
             negated: negated
         })!;
-        simpleNode(NodeKind.Class, u32(classId))
+        simpleNode(NodeKind.Class, u32(classId)!)
     }
 
     func parseClassAtom() !Escaped {
@@ -411,7 +411,7 @@ private:
         var split = emit(State{op: Op.Split, value: 0, out: -1, alternate: -1})!;
         var exitAlternate = !greedy;
         if greedy { states[usize(split)!].out = body.start; }
-        else { states[usize(split)].alternate = body.start; }
+        else { states[usize(split)!].alternate = body.start; }
         patchAll(&body.outs, split);
         Fragment{start: split, outs: singlePatch(split, exitAlternate)!}
     }
@@ -449,7 +449,7 @@ private:
         if depth > 256 || index < 0 || usize(index)! >= nodes.len() {
             return RegexError.TooManyStates;
         }
-        var node = nodes[usize(index)];
+        var node = nodes[usize(index)!];
         switch node.kind {
             NodeKind.Empty => return emptyFragment(),
             NodeKind.Literal => return simpleFragment(Op.Character, node.value),

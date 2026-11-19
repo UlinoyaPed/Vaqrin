@@ -15,12 +15,13 @@ pub class CsvOptions {
     pub var hasHeader: bool;
     pub var maxFieldBytes: usize;
     pub var maxRecordBytes: usize;
+    pub var maxInputBytes: usize;
     pub var maxRecords: usize;
 
     func init()
         : delimiter(44), quote(34), lineEnding(LineEnding.CRLF), hasHeader(false),
           maxFieldBytes(1024 * 1024), maxRecordBytes(8 * 1024 * 1024),
-          maxRecords(1_000_000) {}
+          maxInputBytes(64 * 1024 * 1024), maxRecords(1_000_000) {}
 }
 
 pub func validateOptions(options: *const CsvOptions) !void {
@@ -93,6 +94,7 @@ private:
             null => {},
         }
         if eof { return null; }
+        if byteOffset >= options.maxInputBytes { return CsvError.InputLimit; }
         var buffer: [1]u8;
         var count = io.read(reader, buffer[:])!;
         if count == 0 {
@@ -108,6 +110,12 @@ private:
         var value = text.fromBytes(field.asConstSlice()) catch { return CsvError.InvalidUtf8; };
         fields.push(move(value))!;
         field.clear();
+    }
+
+    func countRecordByte(recordBytes: *usize) !void {
+        if *recordBytes == ~usize(0) { return CsvError.InputLimit; }
+        *recordBytes += 1;
+        if *recordBytes > options.maxRecordBytes { return CsvError.RecordLimit; }
     }
 
     func readRawRecord() !?coll.Vec<string> {
@@ -129,21 +137,21 @@ private:
                 },
                 some(byte) => {
                     sawInput = true;
-                    if recordBytes == ~usize(0) { return CsvError.InputLimit; }
-                    recordBytes++;
-                    if recordBytes > options.maxRecordBytes { return CsvError.RecordLimit; }
+                    countRecordByte(&recordBytes)!;
 
                     if inQuotes {
                         if byte == options.quote {
                             var lookahead = nextByte()!;
                             switch move(lookahead) {
-                                some(other) if other == options.quote => {
-                                    field.push(options.quote)!;
-                                },
                                 some(other) => {
-                                    inQuotes = false;
-                                    afterQuote = true;
-                                    pendingByte = some(other);
+                                    if other == options.quote {
+                                        countRecordByte(&recordBytes)!;
+                                        field.push(options.quote)!;
+                                    } else {
+                                        inQuotes = false;
+                                        afterQuote = true;
+                                        pendingByte = some(other);
+                                    }
                                 },
                                 null => {
                                     inQuotes = false;
@@ -163,8 +171,11 @@ private:
                         } else if byte == 13 {
                             var lookahead = nextByte()!;
                             switch move(lookahead) {
-                                some(other) if other != 10 => pendingByte = some(other),
-                                _ => {},
+                                some(other) => {
+                                    if other == 10 { countRecordByte(&recordBytes)!; }
+                                    else { pendingByte = some(other); }
+                                },
+                                null => {},
                             }
                             finishField(&fields, &field)!;
                             break;
@@ -182,8 +193,11 @@ private:
                     } else if byte == 13 {
                         var lookahead = nextByte()!;
                         switch move(lookahead) {
-                            some(other) if other != 10 => pendingByte = some(other),
-                            _ => {},
+                            some(other) => {
+                                if other == 10 { countRecordByte(&recordBytes)!; }
+                                else { pendingByte = some(other); }
+                            },
+                            null => {},
                         }
                         finishField(&fields, &field)!;
                         break;
@@ -231,17 +245,17 @@ public:
 }
 
 pub func parseRecord(value: str, options: CsvOptions) !coll.Vec<string> {
+    var localOptions = options;
+    localOptions.hasHeader = false;
     var memory = io.MemoryReader(value.asBytes());
-    var reader = CsvReader(&memory, options);
+    var reader = CsvReader(&memory, localOptions);
     var fields = reader.readRecord()! ?? { return coll.Vec<string>(); };
     if reader.readRecord()! != null { return CsvError.RecordLimit; }
     move(fields)
 }
 
 pub func parse(value: str, options: CsvOptions) !coll.Vec<coll.Vec<string>> {
-    if value.byteLen() > options.maxRecordBytes * options.maxRecords {
-        return CsvError.InputLimit;
-    }
+    if value.byteLen() > options.maxInputBytes { return CsvError.InputLimit; }
     var memory = io.MemoryReader(value.asBytes());
     var reader = CsvReader(&memory, options);
     var rows = coll.Vec<coll.Vec<string>>();

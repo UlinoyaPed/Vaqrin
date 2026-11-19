@@ -1,5 +1,5 @@
 package unicode
-import (coll, convert, text)
+import (coll, convert, text, core)
 import ("generated/unicode_data.vqr" as data)
 
 pub class Normalizer {

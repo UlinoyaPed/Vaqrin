@@ -364,18 +364,19 @@
 + init(value: str,pattern: str)->Self; next()->?(usize,usize)
 #enum TextBoundary|Byte, Scalar, Grapheme
 = equal(a: str,b: str)->bool; compare(a: str,b: str)->cmp.Ordering; byteLen(value: str)->usize; scalarCount(value: str)->usize; graphemeCount(value: str)->usize; isEmpty(value: str)->bool; chars(value: str)->Scalars; graphemes(value: str)->Graphemes; lines(value: str)->Lines; split(value: str,delimiter: str)->Split; splitOnce(value: str,delimiter: str)->?(str,str); rsplit(value: str,delimiter: str)->Split; words(value: str)->iter.Iterator<str>; find(value: str,pattern: str)->?usize; findLast(value: str,pattern: str)->?usize; matchIndices(value: str,pattern: str)->MatchIndices; contains(value: str,pattern: str)->bool; startsWith(value: str,prefix: str)->bool; endsWith(value: str,suffix: str)->bool; stripPrefix(value: str,prefix: str)->?str; stripSuffix(value: str,suffix: str)->?str; trim(value: str)->str; trimStart(value: str)->str; trimEnd(value: str)->str; trimMatches(value: str,cutset: str)->str; substringBytes(value: str,start: usize,end: usize)->!str; scalarAt(value: str,index: usize)->?char; graphemeAt(value: str,index: usize)->?str; byteOffsetOfScalar(value: str,index: usize)->?usize; fromBytes(value: []const u8)->!string; fromBytesLossy(value: []const u8)->!string; fromChars<I>(chars: I)->!string; toBytes(value: str)->!coll.Vec<u8>; concat(a: str,b: str)->!string; join<I>(parts: I,separator: str)->!string; repeat(value: str,n: usize)->!string; replace(value: str,old: str,new: str)->!string; replaceFirst(value: str,old: str,new: str)->!string; toLower(value: str)->!string; toUpper(value: str)->!string; caseFold(value: str)->!string; normalizeNFC(value: str)->!string; normalizeNFD(value: str)->!string; normalizeNFKC(value: str)->!string; normalizeNFKD(value: str)->!string; isNormalizedNFC(value: str)->bool; trimIndent(value: str)->!string; escape(value: str)->!string; unescape(value: str)->!string; compareIgnoreCase(a: str,b: str)->!cmp.Ordering
-@unicode|固定 Unicode 17.0 字符属性/正规化；数据文件可切换版本时必须显式声明
-#enum GeneralCategory|Lu Ll Lt Lm Lo Mn Mc Me Nd Nl No 等分类
-#enum Script|Unicode Script 枚举
-#enum GraphemeBreak|UAX #29 状态分类
-#enum WordBreak|UAX #29 词边界状态分类
+@unicode|Unicode 17.0.0 字符属性、大小写、UTF-8、正规化与 UAX #29 扩展字素簇
+#enum GeneralCategory|Unicode 17.0 General_Category 完整值域
+#enum Script|Unicode 17.0 Script 完整值域
+#enum GraphemeBreak|Other, CR, LF, Control, Extend, ZWJ, RegionalIndicator, Prepend, SpacingMark, L, V, T, LV, LVT
 #enum NormalForm|NFC, NFD, NFKC, NFKD
-#record CharInfo|标量类别、脚本、组合类、大小写属性
-#class Normalizer|流式正规化与组合
+#record CharInfo|GeneralCategory、Script、canonical combining class 与二进制属性标志
+#class Normalizer|按 Unicode 17.0 递归分解、规范组合类排序和规范组合；输入暂存至 finish
 + init(form: NormalForm)->Self; push(ch: char)->!void; flushTo(dst: []u8)->!usize; finish()->!string; reset()->void
-#class GraphemeSegmenter|按 UTF-8 标量流维护上下文
-+ init()->Self; feed(ch: char)->bool; reset()->void
-= version()->str; isAlphabetic(ch: char)->bool; isDigit(ch: char)->bool; isWhitespace(ch: char)->bool; isControl(ch: char)->bool; isUpper(ch: char)->bool; isLower(ch: char)->bool; isTitle(ch: char)->bool; isXidStart(ch: char)->bool; isXidContinue(ch: char)->bool; isEmoji(ch: char)->bool; isCombiningMark(ch: char)->bool; isAscii(ch: char)->bool; isHexDigit(ch: char)->bool; generalCategory(ch: char)->GeneralCategory; script(ch: char)->Script; combiningClass(ch: char)->u8; numericValue(ch: char)->?f64; toLowerSimple(ch: char)->char; toUpperSimple(ch: char)->char; toTitleSimple(ch: char)->char; caseFoldFull(ch: char)->!string; normalize(value: str,form: NormalForm)->!string; isNormalized(value: str,form: NormalForm)->bool; graphemeBoundary(prev: char,next: char)->bool; utf8Len(ch: char)->usize; encodeUtf8(ch: char,dst: []u8)->!usize; decodeUtf8(src: []const u8)->!(char,usize)
+#class GraphemeSegmenter|UAX #29 上下文状态机，支持 CRLF、Hangul、Extend、SpacingMark、Prepend、RI、Emoji ZWJ 和 Indic conjunct
++ init()->Self; feed(ch: char)->bool; hasPrevious()->bool; reset()->void
+#class Graphemes|扩展字素簇视图，next 返回 UTF-8 字节借用视图
++ init(value: str)->Self; next()->?str
+= version()->str; charInfo(ch: char)->CharInfo; generalCategory(ch: char)->GeneralCategory; script(ch: char)->Script; combiningClass(ch: char)->u8; graphemeBreak(ch: char)->GraphemeBreak; isAlphabetic(ch: char)->bool; isDigit(ch: char)->bool; isWhitespace(ch: char)->bool; isControl(ch: char)->bool; isUpper(ch: char)->bool; isLower(ch: char)->bool; isTitle(ch: char)->bool; isXidStart(ch: char)->bool; isXidContinue(ch: char)->bool; isEmoji(ch: char)->bool; isExtendedPictographic(ch: char)->bool; isCombiningMark(ch: char)->bool; isAscii(ch: char)->bool; isHexDigit(ch: char)->bool; toLowerSimple(ch: char)->char; toUpperSimple(ch: char)->char; toTitleSimple(ch: char)->char; caseFoldFull(ch: char)->!string; caseFold(value: str)->!string; normalize(value: str,form: NormalForm)->!string; isNormalized(value: str,form: NormalForm)->bool; graphemes(value: str)->Graphemes; graphemeCount(value: str)->usize; isGraphemeBoundary(value: str,byteOffset: usize)->bool; utf8Len(ch: char)->usize; encodeUtf8(ch: char,dst: []u8)->!usize; decodeUtf8(src: []const u8)->!(char,usize)
 @encoding|文本/二进制编码转换，明确错误偏移与容量限制
 #enum Base64Alphabet|Standard, UrlSafe
 #record Base64Options|字母表、padding、换行和宽容策略
@@ -425,22 +426,26 @@
 #class Formatter|写入流和当前格式状态
 + init(writer: *io.Writer,options: FormatOptions)->Self; write(value: str)->!void; writeChar(value: char)->!void; writeInt<T>(value: T)->!void; writeFloat<T>(value: T)->!void; writeHex(data: []const u8)->!void; pad(value: str)->!void; finish()->!void
 = format<F>(pattern: str,args: F)->!string; formatWithPlan<F>(plan: *const FormatPlan,args: F)->!string; writeTo<W,F>(writer: *W,pattern: str,args: F)->!void; writeValue<T,W>(writer: *W,value: *const T)->!void; writeDebug<T,W>(writer: *W,value: *const T)->!void; formatInt<T>(value: T,radix: u8)->!string; formatFloat<T>(value: T,style: FormatStyle,precision: ?usize)->!string; formatBytes(data: []const u8,style: FormatStyle)->!string; formatDuration(value: time.Duration)->!string; formatDate(value: time.Date,pattern: str)->!string; padLeft(value: str,width: usize,fill: char)->!string; padRight(value: str,width: usize,fill: char)->!string; center(value: str,width: usize,fill: char)->!string; escapeDebug(value: str)->!string; parsePlan(pattern: str)->!FormatPlan
-@regex|正则编译为受限 NFA，拒绝非线性回溯语义与不支持的构造
-#class Regex|已编译字节码、字符类和捕获组
-+ compile(pattern: str)->!Self; isMatch(value: str)->bool; find(value: str)->?Match; findAt(value: str,byteOffset: usize)->?Match; findAll(value: str)->FindIter; captures(value: str)->?Captures; capturesAll(value: str)->CaptureIter; split(value: str)->SplitIter; replace(value: str,replacement: str)->!string; replaceAll(value: str,replacement: str)->!string; replaceWith<F>(value: str,f: F)->!string; captureCount()->usize; pattern()->str
-#class RegexBuilder|配置 Unicode、大小写、点号换行、资源限制
-+ init(pattern: str)->Self; ignoreCase(value: bool)->Self; multiLine(value: bool)->Self; dotAll(value: bool)->Self; unicode(value: bool)->Self; maxStates(n: usize)->Self; maxInputBytes(n: usize)->Self; compile()->!Regex
-#record Match|startByte / endByte 与借用文本视图
+@regex|Thompson NFA 正则引擎；按 UTF-8 标量推进，使用有序 epsilon-closure 与显式工作预算，不执行递归回溯
+#enum Op|Character, Any, Class, Split, Jump, Save, AssertStart, AssertEnd, Match
+#record State|NFA 指令、主边与备选边
+#record CharRange|闭区间 Unicode scalar 范围
+#record CharacterClass|范围片段、预定义属性掩码和取反标记
+#class Regex|不可变已编译 NFA、字符类、捕获组与资源上限
++ compile(pattern: str)->!Self; isMatch(value: str)->!bool; find(value: str)->!?Match; findAt(value: str,byteOffset: usize)->!?Match; findAll(value: str)->FindIter; captures(value: str)->!?Captures; capturesAt(value: str,byteOffset: usize)->!?Captures; capturesAll(value: str)->CaptureIter; split(value: str)->SplitIter; replace(value: str,replacement: str)->!string; replaceAll(value: str,replacement: str)->!string; captureCount()->usize; pattern()->str
+#class RegexBuilder|配置 Unicode/ASCII 预定义类、大小写、点号换行、行锚点与资源上限
++ init(pattern: str)->Self; ignoreCase(value: bool)->Self; multiLine(value: bool)->Self; dotAll(value: bool)->Self; unicode(value: bool)->Self; maxStates(n: usize)->Self; maxInputBytes(n: usize)->Self; maxSteps(n: usize)->Self; compile()->!Regex
+#record Match|startByte / endByte 与原文本借用视图
 + start()->usize; end()->usize; asStr()->str; lenBytes()->usize
-#class Captures|捕获分组的视图
-+ len()->usize; get(index: usize)->?Match; getNamed(name: str)->?Match; full()->Match
-#class FindIter|逐个匹配位置，空匹配必须前进
-+ next()->?Match
-#class CaptureIter|逐个多组匹配
-+ next()->?Captures
-#class SplitIter|非匹配文本视图
-+ next()->?str
-= compile(pattern: str)->!Regex; isMatch(pattern: str,value: str)->!bool; escape(value: str)->!string; replaceAll(pattern: str,value: str,replacement: str)->!string; split(pattern: str,value: str)->!coll.Vec<str>; findAll(pattern: str,value: str)->!coll.Vec<Match>
+#class Captures|按编号访问的捕获组视图，未参与匹配的组返回 null
++ len()->usize; get(index: usize)->?Match; full()->Match
+#class FindIter|逐个非重叠匹配；空匹配推进一个 UTF-8 scalar
++ next()->!?Match
+#class CaptureIter|逐个捕获组集合
++ next()->!?Captures
+#class SplitIter|非匹配文本借用视图，支持空匹配推进
++ next()->!?str
+= compile(pattern: str)->!Regex; isMatch(pattern: str,value: str)->!bool; find(pattern: str,value: str)->!?Match; findAt(pattern: str,value: str,byteOffset: usize)->!?Match; findAll(pattern: str,value: str)->!coll.Vec<Match>; captures(pattern: str,value: str)->!?Captures; escape(value: str)->!string; replace(pattern: str,value: str,replacement: str)->!string; replaceAll(pattern: str,value: str,replacement: str)->!string; split(pattern: str,value: str)->!coll.Vec<str>
 @math|浮点数学、复数及特殊函数；禁止无声明 fast-math
 #record Complex<T>|实部/虚部，具可检查缩放的除法
 + new(real: T,imag: T)->Self; real()->T; imag()->T; conjugate()->Self; norm()->T; abs()->T; arg()->T; add(other: Self)->Self; sub(other: Self)->Self; mul(other: Self)->Self; div(other: Self)->Self; sqrt()->Self; exp()->Self; log()->Self; pow(other: Self)->Self

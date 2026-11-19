@@ -1,4 +1,6 @@
-package collections;
+package coll;
+
+pub error CapacityError { Overflow }
 
 pub class Vec<T: Movable> {
     #copy: disabled
@@ -31,6 +33,7 @@ public:
 
     func push(value: T) !void {
         if length == reserved {
+            if length == ~usize(0) { return CapacityError.Overflow; }
             reserve(if reserved < 4 { usize(4) } else { reserved +| reserved })!;
         }
         unsafe {
@@ -42,7 +45,7 @@ public:
     func pop() ?T {
         if length == 0 { return null; }
         length--;
-        unsafe { __vqr_slot_take<T>(data.unwrap().offset(length)) }
+        unsafe { some(__vqr_slot_take<T>(data.unwrap().offset(length))) }
     }
 
     func replace(index: usize, value: T) ?T {
@@ -51,7 +54,7 @@ public:
             var slot = data.unwrap().offset(index);
             var previous = __vqr_slot_take<T>(slot);
             __vqr_slot_write<T>(slot, move(value));
-            move(previous)
+            some(move(previous))
         }
     }
 

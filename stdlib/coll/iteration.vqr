@@ -1,4 +1,4 @@
-package collections;
+package coll;
 
 pub class SliceIter<T: Copyable & Movable> {
     var values: []const T;
@@ -9,7 +9,7 @@ public:
         if position == values.len() { return null; }
         var value = values[position];
         position++;
-        move(value)
+        some(move(value))
     }
 }
 
@@ -66,7 +66,7 @@ public:
     func next() ?U {
         switch source.next() {
             null => null,
-            some(value) => transform(move(value)),
+            some(value) => some(transform(move(value))),
         }
     }
 }
@@ -86,7 +86,7 @@ public:
             switch source.next() {
                 null => return null,
                 some(value) => {
-                    if predicate(value) { return move(value); }
+                    if predicate(value) { return some(move(value)); }
                 },
             }
         }
@@ -105,4 +105,29 @@ pub func take<T: Copyable & Movable>(values: []const T, count: usize) SliceIter<
 pub func skip<T: Copyable & Movable>(values: []const T, count: usize) SliceIter<T> {
     var start = if count < values.len() { count } else { values.len() };
     SliceIter<T>(values[start..values.len()])
+}
+
+pub class FilterMap<T: Copyable & Movable, U: Movable> {
+    var source: SliceIter<T>;
+    var transform: func(T) ?U;
+public:
+    func init(values: []const T, transform: func(T) ?U)
+        : source(SliceIter<T>(values)), transform(transform) {}
+    func next() ?U {
+        for {
+            switch source.next() {
+                null => return null,
+                some(item) => {
+                    switch transform(move(item)) {
+                        null => {},
+                        some(output) => return some(move(output)),
+                    }
+                },
+            }
+        }
+    }
+}
+
+pub func filterMap<T: Copyable & Movable, U: Movable>(values: []const T, transform: func(T) ?U) FilterMap<T, U> {
+    FilterMap<T, U>(values, transform)
 }

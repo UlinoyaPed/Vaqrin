@@ -1,5 +1,5 @@
 package text;
-import (collections);
+import (coll);
 
 pub func equal(a, b: str) bool { a == b }
 
@@ -63,14 +63,15 @@ pub func fromBytes(values: []const u8) !string {
 }
 
 pub class StringBuilder {
-    var buffer: collections.Vec<u8>;
+    var buffer: coll.Vec<u8>;
 public:
-    func init() : buffer(collections.Vec<u8>()) {}
+    func init() : buffer(coll.Vec<u8>()) {}
     const func byteLen() usize { buffer.len() }
     func clear() void { buffer.clear(); }
 
     func append(value: str) !void {
-        buffer.reserve(buffer.len() +| value.byteLen())!;
+        if value.byteLen() > ~usize(0) - buffer.len() { return coll.CapacityError.Overflow; }
+        buffer.reserve(buffer.len() + value.byteLen())!;
         for byte in value.asBytes() { buffer.push(byte)!; }
     }
 

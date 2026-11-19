@@ -1,23 +1,24 @@
 # Vaqrin 标准包
 
-使用 `import (core, collections, text, io);` 导入。包名也接受 `std/` 前缀，例如 `import (std/io);`。CMake 在构建目录生成 `share/vaqrin/stdlib`，安装时将同一目录放到安装前缀下。消费者编译时从源码实例化用到的声明。
+使用 `import (core, coll, text, io);` 导入。可空组合子通过 `import (opt);` 导入。包名也接受 `std/` 前缀，例如 `import (std/io);`。CMake 在构建目录生成 `share/vaqrin/stdlib`，安装时将同一目录放到安装前缀下。消费者编译时从源码实例化用到的声明。
 
 | 包 | 接口 |
 | --- | --- |
 | `core` | `Box<T>` 与 `Vec<T>` 别名，`isSome`、`isOk`、`unwrapOr` |
-| `collections` | `Vec<T>`、`iter`、`enumerate`、`zip`、`map`、`filter`、`take`、`skip` |
+| `coll` | `Vec<T>`、`iter`、`enumerate`、`zip`、`map`、`filter`、`filterMap`、`take`、`skip` |
+| `opt` | `map` 保留一层、`andThen` 接续可空回调、`flatten` 显式合并一层 |
 | `text` | UTF-8 字节相等比较 `equal`、`byteLen`、`scalarCount`、`chars`、`fromBytes`、`StringBuilder` |
 | `io` | 宿主 `println`，输出失败通过 `!void` 返回 |
 
 ```cpp
 package main;
-import (collections, io);
+import (coll, io);
 
 func main() !void {
-    var values = collections.Vec<i32>();
+    var values = coll.Vec<i32>();
     values.push(42)!;
     values.push(7)!;
-    for index, value in collections.enumerate(values.asSlice()) {
+    for index, value in coll.enumerate(values.asSlice()) {
         io.println(index)!;
         io.println(value)!;
     }

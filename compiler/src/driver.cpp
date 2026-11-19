@@ -238,7 +238,7 @@ void Inputs::dependencies(const std::string &name) {
   if (complete.contains(name)) return;
   active.push_back(name);
   for (const auto &[path, span] : edges[name]) {
-    static const std::set<std::string> standard{"core", "collections", "text", "io"};
+    static const std::set<std::string> standard{"core", "coll", "opt", "text", "io"};
     auto logical = path.starts_with("std/") ? path.substr(4) : path;
     std::string dependency;
     if (standard.contains(logical)) {

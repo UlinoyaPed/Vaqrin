@@ -26,7 +26,7 @@ build/host/vaqc build -O2 -g examples/hello.vqr -o build/hello
 
 默认产物是宿主可执行文件，入口是 `func main() void` 或 `func main() !void`。未处理错误输出到标准错误流，进程退出码为 1。也可生成 `llvm-ir`、`bc`、`asm`、`obj`、`staticlib` 和 `sharedlib`。生成库或对象时允许省略入口，供 C 消费者使用的符号通过 `export "C"` 声明。`--emit=ast` 将语法树写到标准输出。`check` 解析、类型检查并验证生成的 IR，无需链接。
 
-传入目录时，编译器读取其中的同包 `.vqr` 文件。传入文件时，可以在命令行列出同包的多个源文件。本地导入按目录查找，额外搜索根通过 `--package-path DIR` 提供。命令选项见 `vaqc --help`。标准包可用 `import (core, collections, text, io);` 或带 `std/` 前缀的路径导入。参见[标准包说明](../stdlib/README.md)。
+传入目录时，编译器读取其中的同包 `.vqr` 文件。传入文件时，可以在命令行列出同包的多个源文件。本地导入按目录查找，额外搜索根通过 `--package-path DIR` 提供。命令选项见 `vaqc --help`。标准包可用 `import (core, coll, opt, text, io);` 或带 `std/` 前缀的路径导入。参见[标准包说明](../stdlib/README.md)。
 
 在 Zed 中打开仓库根目录，`task: spawn` 可启动 `build vaqc`。已有绑定指向 `run code` 时，当前文件是 `.vqr` 就在构建编译器后编译并运行它，其他文件只触发编译器构建。任务首次配置时生成 `build/host/compile_commands.json`，供 clangd 使用。
 

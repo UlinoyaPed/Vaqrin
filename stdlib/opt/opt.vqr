@@ -1,0 +1,22 @@
+package opt;
+
+pub func flatten<T: Movable>(value: ??T) ?T {
+    switch move(value) {
+        null => null,
+        some(inner) => move(inner),
+    }
+}
+
+pub func map<T: Movable, U: Movable>(value: ?T, transform: func(T) U) ?U {
+    switch move(value) {
+        null => null,
+        some(item) => some(transform(move(item))),
+    }
+}
+
+pub func andThen<T: Movable, U: Movable>(value: ?T, transform: func(T) ?U) ?U {
+    switch move(value) {
+        null => null,
+        some(item) => transform(move(item)),
+    }
+}

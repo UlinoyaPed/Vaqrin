@@ -218,7 +218,7 @@ class Acceptance(unittest.TestCase):
 
     def test_standard_packages(self):
         self.hosted('''
-            import (std/core, std/text, collections as seq);
+            import (std/core, std/text, coll as seq);
             func twice(x: i32) i32 { x * 2 }
             func even(x: i32) bool { x % 2 == 0 }
             func seven() i32 { 7 }
@@ -259,6 +259,41 @@ class Acceptance(unittest.TestCase):
             }
         ''', "9\n0\n1\n2\n3\n2\n4\n6\n2\n1\n3\n5\n1\n2\n3\n10\ntrue\nfalse\n9\n3\ntrue\ntrue\ntrue\ntrue\ntrue\n7\n4\n")
 
+    def test_optional_payloads_and_collection_aliases(self):
+        self.hosted('''
+            import (std/opt, coll, std/coll as seq);
+            func missing(x: i32) ?i32 { null }
+            func positive(x: i32) ?i32 {
+                if x > 0 { return x; }
+                null
+            }
+            func tag(x: ??i32) i32 {
+                switch x { null => 0, some(null) => 1, some(some(_)) => 2 }
+            }
+            func sequenceLen(v: *seq.Vec<?i32>) usize { v.len() }
+            func main() !void {
+                var v = coll.Vec<?i32>();
+                v.push(null)!;
+                io.println(sequenceLen(&v))!;
+                var cursor = v.iter();
+                io.println(tag(cursor.next()))!;
+                io.println(tag(cursor.next()))!;
+                io.println(tag(v.pop()))!;
+                io.println(tag(v.pop()))!;
+                var nested = opt.map<i32, ?i32>(7, missing);
+                io.println(tag(nested))!;
+                io.println(opt.flatten<i32>(nested) ?? 9)!;
+                io.println(opt.andThen<i32, i32>(7, missing) ?? 8)!;
+                var data = [_]i32{0, 3};
+                var mapped = coll.map<i32, ?i32>(data[:], positive);
+                io.println(tag(mapped.next()))!;
+                io.println(tag(mapped.next()))!;
+                var kept = coll.filterMap<i32, i32>(data[:], positive);
+                io.println(kept.next() ?? -1)!;
+                io.println(kept.next() ?? -1)!;
+            }
+        ''', "1\n1\n0\n1\n0\n1\n9\n8\n1\n2\n3\n-1\n")
+
     def test_dynamic_text(self):
         self.hosted('''
             import (core, text);
@@ -293,7 +328,7 @@ class Acceptance(unittest.TestCase):
 
     def test_vec_ownership_and_allocation_failure(self):
         self.hosted('''
-            import (collections);
+            import (coll);
             class Probe {
                 var id: i32;
             public:
@@ -302,7 +337,7 @@ class Acceptance(unittest.TestCase):
                 func deinit() void { io.println(id + 100) catch {}; }
             }
             func main() !void {
-                var items = collections.Vec<Probe>();
+                var items = coll.Vec<Probe>();
                 for n in 0..9 { items.push(Probe(n))!; }
                 io.println(items.len())!;
                 items.reserve(~usize(0)) catch { io.println(items.len())!; };
@@ -317,7 +352,7 @@ class Acceptance(unittest.TestCase):
     def test_host_allocation_lifetime(self):
         source = self.source("allocation.vqr", """
             package allocation;
-            import (core, collections, text);
+            import (core, coll, text);
             extern "C" func fail_next() void;
             extern "C" func dropped(id: c_int) void;
             class Probe {
@@ -327,7 +362,7 @@ class Acceptance(unittest.TestCase):
                 func deinit() void { unsafe { dropped(id); } }
             }
             func check() !i32 {
-                var vec = collections.Vec<Probe>();
+                var vec = coll.Vec<Probe>();
                 for id in 1..=4 { vec.push(Probe(id))!; }
                 unsafe { fail_next(); }
                 var push = vec.push(Probe(99));
@@ -391,9 +426,9 @@ class Acceptance(unittest.TestCase):
     def test_freestanding_standard_packages(self):
         source = self.source("empty.vqr", """
             package empty;
-            import (collections, io);
+            import (coll, io);
             export "C" func size() usize {
-                var v = collections.Vec<u8>();
+                var v = coll.Vec<u8>();
                 v.len()
             }
         """)
@@ -402,9 +437,9 @@ class Acceptance(unittest.TestCase):
         self.assertEqual(self.process("llvm-nm", "-u", "empty.o").stdout, b"")
         fail = self.source("fail.vqr", """
             package denied;
-            import (collections);
+            import (coll);
             func allocate() !void {
-                var v = collections.Vec<u8>();
+                var v = coll.Vec<u8>();
                 v.push(1)!;
             }
         """)
@@ -413,7 +448,7 @@ class Acceptance(unittest.TestCase):
 
     def test_standard_intrinsics_require_standard_package(self):
         source = self.source("bad.vqr", """
-            package collections;
+            package coll;
             func steal(p: *i32) i32 { unsafe { __vqr_slot_take<i32>(p) } }
         """)
         result = self.process(VAQC, "check", source, good=False)

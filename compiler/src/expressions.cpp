@@ -264,7 +264,7 @@ ValueAt Body::index(const Ast &n) {
   auto *t = v.type;
   if (!v.borrowed && p.drops(t))
     fail(n->span, "bind a resource-owning array before indexing or borrowing it", "E290");
-  if (t->kind == Kind::Class && t->def.file->standard && t->def.file->package == "collections" &&
+  if (t->kind == Kind::Class && t->def.file->standard && t->def.file->package == "coll" &&
       t->def.decl->name == "Vec") {
     auto call = std::make_shared<Node>();
     call->kind = NodeKind::Call;

@@ -1,6 +1,5 @@
 package unicode
 import (coll, convert, text)
-import ("generated/unicode_data.vqr" as data)
 
 const gOther: u8 = 0;
 const gCR: u8 = 1;

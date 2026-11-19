@@ -420,8 +420,8 @@ private:
         var body = compileNode(child, depth + 1)!;
         var split = emit(State{op: Op.Split, value: 0, out: -1, alternate: -1})!;
         var exitAlternate = !greedy;
-        if greedy { states[usize(split)].out = body.start; }
-        else { states[usize(split)].alternate = body.start; }
+        if greedy { states[usize(split)!].out = body.start; }
+        else { states[usize(split)!].alternate = body.start; }
         var outs = singlePatch(split, exitAlternate)!;
         appendPatches(&outs, &body.outs)!;
         Fragment{start: split, outs: move(outs)}

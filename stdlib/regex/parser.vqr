@@ -363,7 +363,7 @@ public:
         patchAll(&fragment.outs, matchState);
         var ownedPattern = text.fromBytes(pattern.asBytes())!;
         Regex(move(states), move(classes), move(ranges), move(ownedPattern),
-              flags, maxInput, maxSteps, captureCount)
+              flags, maxInput, maxSteps, captureCount, fragment.start)
     }
 
 private:

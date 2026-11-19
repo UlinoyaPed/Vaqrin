@@ -148,6 +148,24 @@ pub func decodeUtf8(src: []const u8) !(char, usize) {
     (__vqr_char(value), count)
 }
 
+func appendUtf8Scalar(cp: u32, output: *coll.Vec<u8>) !void {
+    if cp < 0x80 {
+        output.push(u8(cp)!)!;
+    } else if cp < 0x800 {
+        output.push(u8(0xc0 | (cp >> 6))!)!;
+        output.push(u8(0x80 | (cp & 0x3f))!)!;
+    } else if cp < 0x10000 {
+        output.push(u8(0xe0 | (cp >> 12))!)!;
+        output.push(u8(0x80 | ((cp >> 6) & 0x3f))!)!;
+        output.push(u8(0x80 | (cp & 0x3f))!)!;
+    } else {
+        output.push(u8(0xf0 | (cp >> 18))!)!;
+        output.push(u8(0x80 | ((cp >> 12) & 0x3f))!)!;
+        output.push(u8(0x80 | ((cp >> 6) & 0x3f))!)!;
+        output.push(u8(0x80 | (cp & 0x3f))!)!;
+    }
+}
+
 pub func caseFoldFull(ch: char) !string {
     var cp = convert.fromChar(ch);
     var lo: usize = 0;
@@ -160,14 +178,25 @@ pub func caseFoldFull(ch: char) !string {
         else {
             var offset = data.caseFoldIndex[mid * 3 + 1];
             var count = data.caseFoldIndex[mid * 3 + 2];
-            var chars = coll.Vec<char>.withCapacity(count)!;
-            for i in usize(0)..count { chars.push(__vqr_char(data.caseFoldScalars[offset + i]))!; }
-            return text.fromChars(chars.intoIter());
+            var output = coll.Vec<u8>();
+            for i in usize(0)..count {
+                appendUtf8Scalar(data.caseFoldScalars[offset + i], &output)!;
+            }
+            return text.fromBytes(output.asConstSlice());
         }
     }
-    var one = coll.Vec<char>();
-    one.push(ch)!;
-    text.fromChars(one.intoIter())
+    var output = coll.Vec<u8>();
+    appendUtf8Scalar(cp, &output)!;
+    text.fromBytes(output.asConstSlice())
+}
+
+pub func caseFold(value: str) !string {
+    var output = coll.Vec<u8>();
+    for ch in text.chars(value) {
+        var folded = caseFoldFull(ch)!;
+        for byte in folded.asBytes() { output.push(byte)!; }
+    }
+    text.fromBytes(output.asConstSlice())
 }
 
 // Normalization is intentionally kept behind this implementation boundary until
@@ -179,9 +208,7 @@ pub func isNormalized(value: str, form: NormalForm) bool {
     normalized == value
 }
 func normalizeScalars(value: str, form: NormalForm) !string {
-    var output = coll.Vec<u8>();
-    // Generated mappings are complete. The normalization engine is supplied in
-    // normalizer.vqr; this entry delegates to its scalar pipeline.
+    // The normalization engine consumes the generated Unicode 17 mappings.
     var engine = Normalizer(form);
     for ch in text.chars(value) { engine.push(ch)!; }
     engine.finish()

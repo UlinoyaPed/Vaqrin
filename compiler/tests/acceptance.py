@@ -2054,6 +2054,61 @@ class Acceptance(unittest.TestCase):
         self.process("cc", client, "sync.o", "-pthread", "-o", "sync-client")
         self.process("./sync-client")
 
+    def test_shared_weak_ownership_and_native_transfer(self):
+        self.hosted('''
+            import (cell, core, mem, meta, sync, thread)
+            class Probe {
+                #copy: disabled
+                pub var number: i32;
+                func deinit() void { io.println(number + 100) catch {}; }
+            }
+            func main() !void {
+                var original = mem.Shared<Probe>.new(Probe{number: 1})!;
+                var unique = original.getMut().unwrap();
+                unique.number = 7;
+                var observer = original.downgrade();
+                var aliased = original.getMut();
+                io.println(core.isNone<*Probe>(&aliased))!;
+                {
+                    var duplicate = original;
+                    var weakCopy = observer;
+                    io.println(observer.ptrEq(&weakCopy))!;
+                    io.println(duplicate.ptrEq(&original))!;
+                    io.println(duplicate.strongCount())!;
+                    io.println(duplicate.weakCount())!;
+                    var upgraded = observer.upgrade();
+                    io.println(original.strongCount())!;
+                    var failure = mem.Shared<Probe>.tryUnwrap(move(duplicate));
+                    io.println(core.isErr<Probe>(&failure))!;
+                }
+                {
+                    var final = mem.Shared<Probe>.tryUnwrap(move(original))!;
+                    io.println(final.number)!;
+                    var dead = observer.upgrade();
+                    io.println(core.isNone<mem.Shared<Probe>>(&dead))!;
+                    io.println(observer.weakCount())!;
+                }
+                var common = mem.Shared<sync.Mutex<u32>>.new(sync.Mutex<u32>.new(5))!;
+                var weak = common.downgrade();
+                var job = [move(weak)]() !u32 => {
+                    var clone = weak.upgrade();
+                    var owned = move(clone).unwrap();
+                    var guard = owned.asPtr().lock()!;
+                    &value := guard.get();
+                    value += 9;
+                    value
+                };
+                var handle = thread.Thread<u32>.spawn(move(job))!;
+                io.println(handle.join()!)!;
+                var guard = common.asPtr().lock()!;
+                io.println(*guard.get())!;
+                io.println(common.strongCount())!;
+                io.println(common.weakCount())!;
+                io.println(meta.isShareable<mem.Shared<sync.Mutex<cell.Cell<i32>>>>())!;
+                io.println(meta.isSendable<mem.Shared<cell.Cell<i32>>>())!;
+            }
+        ''', 'true\ntrue\ntrue\n2\n2\n3\ntrue\n7\ntrue\n1\n107\n14\n14\n1\n0\ntrue\nfalse\n')
+
     def test_build_artifacts(self):
         source = self.source("math.vqr", '''
             package math

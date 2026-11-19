@@ -713,6 +713,8 @@ bool Program::transferable(Type *t, bool shared) {
         allowed = !shared && check(type->parts[0]);
       else if (file.standard && file.package == "sync" && name == "Mutex")
         allowed = self(self, type->parts[0], false);
+      else if (file.standard && file.package == "mem" && (name == "Shared" || name == "Weak"))
+        allowed = self(self, type->parts[0], true);
       else if (shared && file.standard && file.package == "cell")
         allowed = false;
       else if (file.standard && file.package == "coll" && (name == "Vec" || name == "FixedVec"))

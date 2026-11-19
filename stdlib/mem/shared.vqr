@@ -1,0 +1,140 @@
+package mem
+import (atomic)
+
+pub error SharedError { NotUnique }
+
+class SharedState<T: Movable> {
+    pub var strong: atomic.Atomic<usize>;
+    pub var weak: atomic.Atomic<usize>;
+    pub var payload: MaybeUninit<T>;
+public:
+    func init(value: T) : strong(atomic.Atomic<usize>(1)), weak(atomic.Atomic<usize>(1)),
+                         payload(MaybeUninit<T>.uninit()) {
+        unsafe { payload.write(move(value)); }
+    }
+}
+
+// The weak counter includes one implicit reference while strong owners exist.
+const uniqueLock: usize = ~usize(0);
+
+func countReference(counter: *atomic.Atomic<usize>) bool {
+    var current = counter.load(atomic.Order.Relaxed);
+    for {
+        if current == 0 { return false; }
+        if current == uniqueLock {
+            current = counter.load(atomic.Order.Relaxed);
+            continue;
+        }
+        if current == uniqueLock - 1 { panic("shared ownership count overflow"); }
+        var attempt = counter.compareExchangeWeak(current, current + 1, atomic.Order.Acquire,
+                                                   atomic.Order.Relaxed);
+        if attempt.exchanged { return true; }
+        current = attempt.old;
+    }
+}
+
+func weakTotal(counter: *const atomic.Atomic<usize>) usize {
+    var current = counter.load(atomic.Order.Acquire);
+    if current == uniqueLock { 1 } else { current }
+}
+
+func releaseWeak<T: Movable>(state: *SharedState<T>) void {
+    if state.weak.fetchSub(1, atomic.Order.AcqRel) == 1 {
+        var owned = unsafe { Box<SharedState<T>>.fromRaw(state) };
+    }
+}
+
+pub class Shared<T: Movable> {
+    #copy: enable
+    var owner: ?*SharedState<T>;
+    func init(state: *SharedState<T>) : owner(some(state)) {}
+public:
+    static func new(value: T) !Self {
+        var block = (new SharedState<T>(move(value)))!;
+        Shared<T>(Box.intoRaw(move(block)))
+    }
+
+    unsafe static func fromRetained(state: *SharedState<T>) Self { Shared<T>(state) }
+
+    const func copy() Self {
+        var state = owner.unwrap();
+        if !countReference(&state.strong) { panic("copy requires a strong owner"); }
+        Shared<T>(state)
+    }
+
+    const func clone() Self { copy() }
+
+    const func downgrade() Weak<T> {
+        var state = owner.unwrap();
+        if !countReference(&state.weak) { panic("downgrade requires a strong owner"); }
+        unsafe { Weak<T>.fromRetained(state) }
+    }
+
+    const func asPtr() *const T { owner.unwrap().payload.asConstPtr() }
+    const func strongCount() usize { owner.unwrap().strong.load(atomic.Order.Acquire) }
+    const func weakCount() usize { weakTotal(&owner.unwrap().weak) - 1 }
+    const func ptrEq(other: *const Self) bool { owner.unwrap() == other.owner.unwrap() }
+
+    func getMut() ?*T {
+        var state = owner.unwrap();
+        var locked = state.weak.compareExchange(1, uniqueLock, atomic.Order.Acquire,
+                                               atomic.Order.Relaxed);
+        if !locked.exchanged { return null; }
+        var exclusive = state.strong.load(atomic.Order.Acquire) == 1;
+        state.weak.store(1, atomic.Order.Release);
+        if exclusive { some(state.payload.asPtr()) } else { null }
+    }
+
+    static func tryUnwrap(value: Self) !T {
+        var state = value.owner.unwrap();
+        var unique = state.strong.compareExchange(1, 0, atomic.Order.AcqRel, atomic.Order.Relaxed);
+        if !unique.exchanged { return SharedError.NotUnique; }
+        value.owner = null;
+        var item = unsafe { state.payload.assumeInit() };
+        releaseWeak<T>(state);
+        move(item)
+    }
+
+    func deinit() void {
+        switch owner {
+            some(state) => {
+                if state.strong.fetchSub(1, atomic.Order.AcqRel) == 1 {
+                    unsafe { state.payload.assumeInitDrop(); }
+                    releaseWeak<T>(state);
+                }
+            },
+            null => {},
+        }
+    }
+}
+
+pub class Weak<T: Movable> {
+    #copy: enable
+    var owner: *SharedState<T>;
+    func init(state: *SharedState<T>) : owner(state) {}
+public:
+    unsafe static func fromRetained(state: *SharedState<T>) Self { Weak<T>(state) }
+
+    const func copy() Self {
+        if !countReference(&owner.weak) { panic("copy requires a weak owner"); }
+        Weak<T>(owner)
+    }
+
+    const func clone() Self { copy() }
+    const func strongCount() usize { owner.strong.load(atomic.Order.Acquire) }
+    const func weakCount() usize {
+        var strong = strongCount();
+        var weak = weakTotal(&owner.weak);
+        if strong != 0 && weak != 0 { weak - 1 } else { weak }
+    }
+    const func ptrEq(other: *const Self) bool { owner == other.owner }
+
+    const func upgrade() ?Shared<T> {
+        if countReference(&owner.strong) {
+            return some(unsafe { Shared<T>.fromRetained(owner) });
+        }
+        null
+    }
+
+    func deinit() void { releaseWeak<T>(owner); }
+}

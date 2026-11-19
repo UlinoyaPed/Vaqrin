@@ -345,6 +345,15 @@ func appendReplacement(replacement: str, captures: *const Captures, output: *col
 
 pub func compile(pattern: str) !Regex { Regex.compile(pattern) }
 pub func isMatch(pattern: str, value: str) !bool { Regex.compile(pattern)!.isMatch(value) }
+pub func find(pattern: str, value: str) !?Match {
+    Regex.compile(pattern)!.find(value)
+}
+pub func findAt(pattern: str, value: str, byteOffset: usize) !?Match {
+    Regex.compile(pattern)!.findAt(value, byteOffset)
+}
+pub func captures(pattern: str, value: str) !?Captures {
+    Regex.compile(pattern)!.captures(value)
+}
 pub func replaceAll(pattern: str, value: str, replacement: str) !string {
     Regex.compile(pattern)!.replaceAll(value, replacement)
 }

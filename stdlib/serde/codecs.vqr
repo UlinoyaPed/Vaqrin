@@ -1,14 +1,10 @@
 package serde
-import (coll, convert, parse, text)
+import (coll, convert, opt, parse, text)
 
 pub class BoolCodec {
 public:
-    func encode(value: *const bool, serializer: *Serializer) !void {
-        serializer.writeBool(*value)
-    }
-    func decode(deserializer: *Deserializer) !bool {
-        deserializer.readBool()
-    }
+    func encode(value: *const bool, serializer: *Serializer) !void { serializer.writeBool(*value) }
+    func decode(deserializer: *Deserializer) !bool { deserializer.readBool() }
 }
 
 pub class SignedIntegerCodec<T> {
@@ -46,12 +42,8 @@ public:
 
 pub class StringCodec {
 public:
-    func encode(value: *const string, serializer: *Serializer) !void {
-        serializer.writeString(*value)
-    }
-    func decode(deserializer: *Deserializer) !string {
-        deserializer.readString()
-    }
+    func encode(value: *const string, serializer: *Serializer) !void { serializer.writeString(*value) }
+    func decode(deserializer: *Deserializer) !string { deserializer.readString() }
 }
 
 pub class CharCodec {
@@ -77,7 +69,6 @@ public:
         var encoded = text.fromBytes(bytes.asConstSlice())!;
         serializer.writeString(encoded)
     }
-
     func decode(deserializer: *Deserializer) !char {
         var value = deserializer.readString()!;
         parse.parseChar(value)
@@ -88,14 +79,12 @@ pub class OptionalCodec<T> {
     var element: *const Codec<T>;
 public:
     func init(element: *const Codec<T>) : element(element) {}
-
     func encode(value: *const ?T, serializer: *Serializer) !void {
         switch *value {
             null => serializer.writeNull(),
-            some(item) => element.encode(&item, serializer),
+            some(&item) => element.encode(&item, serializer),
         }
     }
-
     func decode(deserializer: *Deserializer) !?T {
         if deserializer.kind()! == DataKind.Null {
             deserializer.readNull()!;
@@ -109,7 +98,6 @@ pub class SequenceCodec<T> {
     var element: *const Codec<T>;
 public:
     func init(element: *const Codec<T>) : element(element) {}
-
     func encode(value: *const coll.Vec<T>, serializer: *Serializer) !void {
         serializer.beginSeq(some(value.len()))!;
         for index in usize(0)..value.len() {
@@ -117,14 +105,10 @@ public:
         }
         serializer.endSeq()
     }
-
     func decode(deserializer: *Deserializer) !coll.Vec<T> {
         var length = deserializer.beginSeq()!;
         var output = coll.Vec<T>();
-        switch length {
-            some(count) => output.reserve(count)!,
-            null => {},
-        }
+        switch length { some(count) => output.reserve(count)!, null => {}, }
         for deserializer.nextElement()! {
             var item = element.decode(deserializer)!;
             output.push(move(item))!;
@@ -138,7 +122,6 @@ pub class StringMapCodec<T> {
     var element: *const Codec<T>;
 public:
     func init(element: *const Codec<T>) : element(element) {}
-
     func encode(value: *const coll.Vec<(string, T)>, serializer: *Serializer) !void {
         serializer.beginMap(some(value.len()))!;
         for index in usize(0)..value.len() {
@@ -148,14 +131,10 @@ public:
         }
         serializer.endMap()
     }
-
     func decode(deserializer: *Deserializer) !coll.Vec<(string, T)> {
         var length = deserializer.beginMap()!;
         var output = coll.Vec<(string, T)>();
-        switch length {
-            some(count) => output.reserve(count)!,
-            null => {},
-        }
+        switch length { some(count) => output.reserve(count)!, null => {}, }
         for {
             var key = deserializer.nextKey()!;
             switch move(key) {

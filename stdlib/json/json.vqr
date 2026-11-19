@@ -9,14 +9,8 @@ pub error JsonError {
 }
 
 pub enum DuplicateKeyPolicy { Reject, KeepFirst, KeepLast }
-
 pub enum Value {
-    Null,
-    Bool(bool),
-    Number(JsonNumber),
-    String(string),
-    Array(JsonArray),
-    Object(JsonObject),
+    Null, Bool(bool), Number(JsonNumber), String(string), Array(JsonArray), Object(JsonObject),
 }
 
 pub class ParseOptions {
@@ -24,8 +18,7 @@ pub class ParseOptions {
     pub var maxBytes: usize;
     pub var maxElements: usize;
     pub var duplicateKeys: DuplicateKeyPolicy;
-
-    func init()
+    pub func init()
         : maxDepth(128), maxBytes(16 * 1024 * 1024),
           maxElements(1_000_000), duplicateKeys(DuplicateKeyPolicy.Reject) {}
 }
@@ -35,8 +28,7 @@ pub class EncodeOptions {
     pub var maxDepth: usize;
     pub var escapeNonAscii: bool;
     pub var sortKeys: bool;
-
-    func init()
+    pub func init()
         : indent(0), maxDepth(128), escapeNonAscii(false), sortKeys(false) {}
 }
 
@@ -44,26 +36,21 @@ pub class JsonNumber {
     pub var raw: string;
 public:
     func init(value: string) : raw(move(value)) {}
-
     static func parse(value: str) !Self {
         validateNumber(value)!;
         var owned = text.fromBytes(value.asBytes())!;
         JsonNumber(move(owned))
     }
-
     const func text() str { raw }
     const func isInteger() bool { !hasFractionOrExponent(raw.asBytes()) }
-
     const func asI64() !i64 {
         if !isInteger() { return JsonError.InexactNumber; }
         parse.parseInt<i64>(raw, 10)
     }
-
     const func asU64() !u64 {
         if !isInteger() { return JsonError.InexactNumber; }
         parse.parseUint<u64>(raw, 10)
     }
-
     const func asF64() !f64 {
         if !isInteger() { return JsonError.InexactNumber; }
         var integer = parse.parseInt<i64>(raw, 10)!;
@@ -78,7 +65,6 @@ pub class JsonArray {
     var values: coll.Vec<Value>;
 public:
     func init() : values(coll.Vec<Value>()) {}
-
     const func len() usize { values.len() }
     const func isEmpty() bool { values.isEmpty() }
     func reserve(count: usize) !void { values.reserve(count) }
@@ -99,10 +85,8 @@ pub class JsonObject {
     var entries: coll.Vec<(string, Value)>;
 public:
     func init() : entries(coll.Vec<(string, Value)>()) {}
-
     const func len() usize { entries.len() }
     const func isEmpty() bool { entries.isEmpty() }
-
     const func containsKey(key: str) bool {
         for index in usize(0)..entries.len() {
             var entry = entries.get(index).unwrap();
@@ -110,7 +94,6 @@ public:
         }
         false
     }
-
     const func get(key: str) ?*const Value {
         for index in usize(0)..entries.len() {
             var entry = entries.get(index).unwrap();
@@ -118,7 +101,6 @@ public:
         }
         null
     }
-
     func getMut(key: str) ?*Value {
         for index in usize(0)..entries.len() {
             var entry = entries.getMut(index).unwrap();
@@ -126,7 +108,6 @@ public:
         }
         null
     }
-
     func insert(key: string, value: Value) !?Value {
         for index in usize(0)..entries.len() {
             var entry = entries.getMut(index).unwrap();
@@ -138,7 +119,6 @@ public:
         entries.push((move(key), move(value)))!;
         null
     }
-
     func remove(key: str) ?Value {
         for index in usize(0)..entries.len() {
             var entry = entries.get(index).unwrap();
@@ -152,17 +132,14 @@ public:
         }
         null
     }
-
     const func keyAt(index: usize) ?str {
         if index >= entries.len() { return null; }
         some(entries.get(index).unwrap().0)
     }
-
     const func valueAt(index: usize) ?*const Value {
         if index >= entries.len() { return null; }
         some(&entries.get(index).unwrap().1)
     }
-
     func valueAtMut(index: usize) ?*Value {
         if index >= entries.len() { return null; }
         some(&entries.getMut(index).unwrap().1)
@@ -170,45 +147,22 @@ public:
 }
 
 pub func isNull(value: *const Value) bool {
-    switch *value {
-        Value.Null => true,
-        _ => false,
-    }
+    switch *value { Value.Null => true, _ => false }
 }
-
 pub func asBool(value: *const Value) ?bool {
-    switch *value {
-        Value.Bool(item) => some(item),
-        _ => null,
-    }
+    switch *value { Value.Bool(item) => some(item), _ => null }
 }
-
 pub func asNumber(value: *const Value) ?*const JsonNumber {
-    switch *value {
-        Value.Number(&item) => some(&item),
-        _ => null,
-    }
+    switch *value { Value.Number(&item) => some(&item), _ => null }
 }
-
 pub func asString(value: *const Value) ?str {
-    switch *value {
-        Value.String(item) => some(item),
-        _ => null,
-    }
+    switch *value { Value.String(item) => some(item), _ => null }
 }
-
 pub func asArray(value: *const Value) ?*const JsonArray {
-    switch *value {
-        Value.Array(&item) => some(&item),
-        _ => null,
-    }
+    switch *value { Value.Array(&item) => some(&item), _ => null }
 }
-
 pub func asObject(value: *const Value) ?*const JsonObject {
-    switch *value {
-        Value.Object(&item) => some(&item),
-        _ => null,
-    }
+    switch *value { Value.Object(&item) => some(&item), _ => null }
 }
 
 func hasFractionOrExponent(value: []const u8) bool {
@@ -233,27 +187,19 @@ pub func validateNumber(value: str) !void {
         }
     } else {
         if data[position] < 49 || data[position] > 57 { return JsonError.InvalidNumber; }
-        for position < data.len() && 48 <= data[position] && data[position] <= 57 {
-            position++;
-        }
+        for position < data.len() && 48 <= data[position] && data[position] <= 57 { position++; }
     }
     if position < data.len() && data[position] == 46 {
         position++;
         var start = position;
-        for position < data.len() && 48 <= data[position] && data[position] <= 57 {
-            position++;
-        }
+        for position < data.len() && 48 <= data[position] && data[position] <= 57 { position++; }
         if position == start { return JsonError.InvalidNumber; }
     }
     if position < data.len() && (data[position] == 101 || data[position] == 69) {
         position++;
-        if position < data.len() && (data[position] == 43 || data[position] == 45) {
-            position++;
-        }
+        if position < data.len() && (data[position] == 43 || data[position] == 45) { position++; }
         var start = position;
-        for position < data.len() && 48 <= data[position] && data[position] <= 57 {
-            position++;
-        }
+        for position < data.len() && 48 <= data[position] && data[position] <= 57 { position++; }
         if position == start { return JsonError.InvalidNumber; }
     }
     if position != data.len() { return JsonError.InvalidNumber; }

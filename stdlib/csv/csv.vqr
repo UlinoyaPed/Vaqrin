@@ -5,7 +5,6 @@ pub error CsvError {
     InvalidOptions, InvalidQuote, UnexpectedAfterQuote, UnterminatedQuote,
     FieldLimit, RecordLimit, InputLimit, InvalidUtf8, IoFailure,
 }
-
 pub enum LineEnding { LF, CRLF }
 
 pub class CsvOptions {
@@ -17,7 +16,7 @@ pub class CsvOptions {
     pub var maxRecordBytes: usize;
     pub var maxInputBytes: usize;
     pub var maxRecords: usize;
-
+public:
     func init()
         : delimiter(44), quote(34), lineEnding(LineEnding.CRLF), hasHeader(false),
           maxFieldBytes(1024 * 1024), maxRecordBytes(8 * 1024 * 1024),
@@ -75,33 +74,27 @@ public:
     }
 
     const func headers() ?*const coll.Vec<string> {
-        switch headerValues {
-            null => null,
-            some(&value) => some(&value),
-        }
+        switch headerValues { null => null, some(&value) => some(&value) }
     }
-
     const func position() (usize, usize) { (recordNumber, byteOffset) }
     func close() void {}
 
 private:
     func nextByte() !?u8 {
         switch pendingByte {
-            some(value) => {
-                pendingByte = null;
-                return some(value);
-            },
+            some(value) => { pendingByte = null; return some(value); },
             null => {},
         }
         if eof { return null; }
-        if byteOffset >= options.maxInputBytes { return CsvError.InputLimit; }
+        if byteOffset >= options.maxInputBytes {
+            var probe: [1]u8;
+            var probeCount = io.read(reader, probe[:])!;
+            if probeCount == 0 { eof = true; return null; }
+            return CsvError.InputLimit;
+        }
         var buffer: [1]u8;
         var count = io.read(reader, buffer[:])!;
-        if count == 0 {
-            eof = true;
-            return null;
-        }
-        if byteOffset == ~usize(0) { return CsvError.InputLimit; }
+        if count == 0 { eof = true; return null; }
         byteOffset++;
         some(buffer[0])
     }
@@ -125,7 +118,6 @@ private:
         var afterQuote = false;
         var sawInput = false;
         var recordBytes: usize = 0;
-
         for {
             var next = nextByte()!;
             switch move(next) {
@@ -138,7 +130,6 @@ private:
                 some(byte) => {
                     sawInput = true;
                     countRecordByte(&recordBytes)!;
-
                     if inQuotes {
                         if byte == options.quote {
                             var lookahead = nextByte()!;
@@ -153,10 +144,7 @@ private:
                                         pendingByte = some(other);
                                     }
                                 },
-                                null => {
-                                    inQuotes = false;
-                                    afterQuote = true;
-                                },
+                                null => { inQuotes = false; afterQuote = true; },
                             }
                         } else {
                             field.push(byte)!;
@@ -204,12 +192,10 @@ private:
                     } else {
                         field.push(byte)!;
                     }
-
                     if field.len() > options.maxFieldBytes { return CsvError.FieldLimit; }
                 },
             }
         }
-
         if recordNumber >= options.maxRecords { return CsvError.RecordLimit; }
         recordNumber++;
         some(move(fields))
@@ -236,11 +222,9 @@ public:
         if encoded.len() > options.maxRecordBytes { return CsvError.RecordLimit; }
         io.writeAll(writer, encoded.asConstSlice())
     }
-
     func writeAll(rows: []const []const str) !void {
         for row in rows { writeRecord(row)!; }
     }
-
     func flush() !void { writer.flush() }
 }
 
@@ -293,5 +277,6 @@ pub func stringify(records: []const []const str, options: CsvOptions) !string {
     var csvWriter = CsvWriter(&writer, options);
     csvWriter.writeAll(records)!;
     var data = io.MemoryWriter.intoBytes(move(writer));
+    if data.len() > options.maxInputBytes { return CsvError.InputLimit; }
     text.fromBytes(data.asConstSlice())
 }

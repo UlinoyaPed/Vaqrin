@@ -18,73 +18,51 @@ pub class TomlDomSerializer {
     var root: ?Value;
 public:
     func init() : frames(coll.Vec<TomlWriteFrame>()), root(null) {}
-
     func writeNull() !void { return serde.SerdeError.Unsupported; }
     func writeBool(value: bool) !void { appendValue(Value.Bool(value)) }
     func writeI64(value: i64) !void { appendValue(Value.Integer(value)) }
-
     func writeU64(value: u64) !void {
         if value > 9223372036854775807 { return serde.SerdeError.IntegerOutOfRange; }
         var narrowed = convert.narrow<i64>(value)!;
         appendValue(Value.Integer(narrowed))
     }
-
     func writeF64(value: f64) !void { return serde.SerdeError.Unsupported; }
-
     func writeNumber(value: str) !void {
         var options = TomlOptions();
         var parsed = parseValue(value, 0, &options)!;
         switch parsed {
-            Value.Integer(_) | Value.Float(_) => appendValue(move(parsed)),
+            Value.Integer(_), Value.Float(_) => appendValue(move(parsed)),
             _ => TomlSerdeError.UnsupportedValue,
         }
     }
-
     func writeString(value: str) !void {
         var owned = text.fromBytes(value.asBytes())!;
         appendValue(Value.String(move(owned)))
     }
-
-    func beginSeq(length: ?usize) !void {
-        var frame = TomlWriteFrame(false);
-        frames.push(move(frame))!
-    }
-
+    func beginSeq(length: ?usize) !void { frames.push(TomlWriteFrame(false))!; }
     func endSeq() !void {
         if frames.isEmpty() { return TomlSerdeError.InvalidState; }
         var frame = frames.pop().unwrap();
         if frame.mapMode { return TomlSerdeError.InvalidState; }
         appendValue(Value.Array(move(frame.array)))
     }
-
-    func beginMap(length: ?usize) !void {
-        var frame = TomlWriteFrame(true);
-        frames.push(move(frame))!
-    }
-
+    func beginMap(length: ?usize) !void { frames.push(TomlWriteFrame(true))!; }
     func writeKey(value: str) !void {
         if frames.isEmpty() { return TomlSerdeError.InvalidState; }
         var frame = frames.getMut(frames.len() - 1).unwrap();
-        if !frame.mapMode || frame.pendingKey != null {
-            return TomlSerdeError.InvalidState;
-        }
+        if !frame.mapMode || frame.pendingKey != null { return TomlSerdeError.InvalidState; }
         frame.pendingKey = some(text.fromBytes(value.asBytes())!);
     }
-
     func endMap() !void {
         if frames.isEmpty() { return TomlSerdeError.InvalidState; }
         var frame = frames.pop().unwrap();
-        if !frame.mapMode || frame.pendingKey != null {
-            return TomlSerdeError.InvalidState;
-        }
+        if !frame.mapMode || frame.pendingKey != null { return TomlSerdeError.InvalidState; }
         appendValue(Value.Table(move(frame.table)))
     }
-
     func takeValue() !Value {
         if !frames.isEmpty() { return TomlSerdeError.InvalidState; }
         move(root).unwrap()
     }
-
 private:
     func appendValue(value: Value) !void {
         if frames.isEmpty() {
@@ -94,9 +72,7 @@ private:
         }
         var frame = frames.getMut(frames.len() - 1).unwrap();
         if frame.mapMode {
-            var key = opt.take<string>(&frame.pendingKey) ?? {
-                return TomlSerdeError.InvalidState;
-            };
+            var key = opt.take<string>(&frame.pendingKey) ?? { return TomlSerdeError.InvalidState; };
             frame.table.insertUnique(move(key), move(value))!;
         } else {
             frame.array.push(move(value))!;
@@ -122,35 +98,27 @@ public:
         : root(move(value)), current(null), frames(coll.Vec<TomlReadFrame>()) {
         current = some(&root);
     }
-
     func kind() !serde.DataKind {
         var value = current ?? { return serde.SerdeError.InvalidState; };
         switch *value {
             Value.String(_) => serde.DataKind.String,
-            Value.Integer(_) | Value.Float(_) => serde.DataKind.Number,
+            Value.Integer(_), Value.Float(_) => serde.DataKind.Number,
             Value.Bool(_) => serde.DataKind.Bool,
             Value.Array(_) => serde.DataKind.Sequence,
             Value.Table(_) => serde.DataKind.Map,
             Value.DateTime(_) => serde.DataKind.String,
         }
     }
-
     func readNull() !void { return serde.SerdeError.TypeMismatch; }
-
     func readBool() !bool {
-        switch *current.unwrap() {
-            Value.Bool(value) => value,
-            _ => serde.SerdeError.TypeMismatch,
-        }
+        switch *current.unwrap() { Value.Bool(value) => value, _ => serde.SerdeError.TypeMismatch }
     }
-
     func readI64() !i64 {
         switch *current.unwrap() {
             Value.Integer(value) => value,
             _ => serde.SerdeError.TypeMismatch,
         }
     }
-
     func readU64() !u64 {
         switch *current.unwrap() {
             Value.Integer(value) => {
@@ -160,9 +128,7 @@ public:
             _ => serde.SerdeError.TypeMismatch,
         }
     }
-
     func readF64() !f64 { return serde.SerdeError.Unsupported; }
-
     func readNumber() !string {
         switch *current.unwrap() {
             Value.Integer(value) => integerText(value),
@@ -170,7 +136,6 @@ public:
             _ => serde.SerdeError.TypeMismatch,
         }
     }
-
     func readString() !string {
         switch *current.unwrap() {
             Value.String(value) => text.fromBytes(value.asBytes()),
@@ -178,7 +143,6 @@ public:
             _ => serde.SerdeError.TypeMismatch,
         }
     }
-
     func beginSeq() !?usize {
         var parent = current ?? { return serde.SerdeError.InvalidState; };
         switch *parent {
@@ -189,21 +153,16 @@ public:
             _ => serde.SerdeError.TypeMismatch,
         }
     }
-
     func nextElement() !bool {
         if frames.isEmpty() { return TomlSerdeError.InvalidState; }
         var frame = frames.getMut(frames.len() - 1).unwrap();
         if frame.mapMode { return TomlSerdeError.InvalidState; }
         var array = asArray(frame.parent).unwrap();
-        if frame.index >= array.len() {
-            current = null;
-            return false;
-        }
+        if frame.index >= array.len() { current = null; return false; }
         current = array.get(frame.index);
         frame.index++;
         true
     }
-
     func endSeq() !void {
         if frames.isEmpty() { return TomlSerdeError.InvalidState; }
         var frame = frames.pop().unwrap();
@@ -212,7 +171,6 @@ public:
         if frame.index != array.len() { return serde.SerdeError.InvalidLength; }
         current = some(frame.parent);
     }
-
     func beginMap() !?usize {
         var parent = current ?? { return serde.SerdeError.InvalidState; };
         switch *parent {
@@ -223,22 +181,17 @@ public:
             _ => serde.SerdeError.TypeMismatch,
         }
     }
-
     func nextKey() !?string {
         if frames.isEmpty() { return TomlSerdeError.InvalidState; }
         var frame = frames.getMut(frames.len() - 1).unwrap();
         if !frame.mapMode { return TomlSerdeError.InvalidState; }
         var table = asTable(frame.parent).unwrap();
-        if frame.index >= table.len() {
-            current = null;
-            return null;
-        }
+        if frame.index >= table.len() { current = null; return null; }
         var key = table.keyAt(frame.index).unwrap();
         current = table.valueAt(frame.index);
         frame.index++;
         some(text.fromBytes(key.asBytes())!)
     }
-
     func endMap() !void {
         if frames.isEmpty() { return TomlSerdeError.InvalidState; }
         var frame = frames.pop().unwrap();
@@ -247,26 +200,17 @@ public:
         if frame.index != table.len() { return serde.SerdeError.InvalidLength; }
         current = some(frame.parent);
     }
-
     func finish() !void {
         if !frames.isEmpty() || current == null { return TomlSerdeError.InvalidState; }
     }
 }
 
 func asArray(value: *const Value) ?*const coll.Vec<Value> {
-    switch *value {
-        Value.Array(&array) => some(&array),
-        _ => null,
-    }
+    switch *value { Value.Array(&array) => some(&array), _ => null }
 }
-
 func asTable(value: *const Value) ?*const Document {
-    switch *value {
-        Value.Table(&table) => some(&table),
-        _ => null,
-    }
+    switch *value { Value.Table(&table) => some(&table), _ => null }
 }
-
 func integerText(value: i64) !string {
     var negative = value < 0;
     var bits = bitCast<u64>(value);

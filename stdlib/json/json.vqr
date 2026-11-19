@@ -1,5 +1,5 @@
 package json
-import (coll, core, convert, parse, text)
+import (coll, convert, iter as iterator, parse, text)
 
 pub error JsonError {
     UnexpectedEnd, TrailingInput, InvalidSyntax, InvalidNumber, InvalidEscape,
@@ -52,19 +52,20 @@ public:
     }
 
     const func text() str { raw }
+    const func isInteger() bool { !hasFractionOrExponent(raw.asBytes()) }
 
     const func asI64() !i64 {
-        if hasFractionOrExponent(raw.asBytes()) { return JsonError.InexactNumber; }
+        if !isInteger() { return JsonError.InexactNumber; }
         parse.parseInt<i64>(raw, 10)
     }
 
     const func asU64() !u64 {
-        if hasFractionOrExponent(raw.asBytes()) { return JsonError.InexactNumber; }
+        if !isInteger() { return JsonError.InexactNumber; }
         parse.parseUint<u64>(raw, 10)
     }
 
     const func asF64() !f64 {
-        if hasFractionOrExponent(raw.asBytes()) { return JsonError.InexactNumber; }
+        if !isInteger() { return JsonError.InexactNumber; }
         var integer = parse.parseInt<i64>(raw, 10)!;
         if integer < -9007199254740992 || integer > 9007199254740992 {
             return JsonError.InexactNumber;
@@ -80,6 +81,7 @@ public:
 
     const func len() usize { values.len() }
     const func isEmpty() bool { values.isEmpty() }
+    func reserve(count: usize) !void { values.reserve(count) }
     const func get(index: usize) ?*const Value { values.get(index) }
     func getMut(index: usize) ?*Value { values.getMut(index) }
     func push(value: Value) !void { values.push(move(value)) }
@@ -88,6 +90,9 @@ public:
     func remove(index: usize) ?Value { values.remove(index) }
     func replace(index: usize, value: Value) ?Value { values.replace(index, move(value)) }
     const func asSlice() []const Value { values.asConstSlice() }
+    const func iterRef() iterator.SliceIterRef<Value> {
+        iterator.SliceIterRef<Value>(values.asConstSlice())
+    }
 }
 
 pub class JsonObject {
@@ -211,13 +216,6 @@ func hasFractionOrExponent(value: []const u8) bool {
         if byte == 46 || byte == 101 || byte == 69 { return true; }
     }
     false
-}
-
-func digitValue(value: u8) ?u8 {
-    if 48 <= value && value <= 57 { return some(value - 48); }
-    if 65 <= value && value <= 70 { return some(value - 55); }
-    if 97 <= value && value <= 102 { return some(value - 87); }
-    null
 }
 
 pub func validateNumber(value: str) !void {

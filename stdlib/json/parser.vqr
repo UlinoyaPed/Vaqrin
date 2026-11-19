@@ -1,5 +1,5 @@
 package json
-import (coll, core, io, text)
+import (coll, io, text)
 
 pub class Parser {
     var source: str;
@@ -144,7 +144,7 @@ private:
     }
 
     func readHex4() !u32 {
-        if data.len() - position < 4 { return JsonError.UnexpectedEnd; }
+        if position > data.len() || data.len() - position < 4 { return JsonError.UnexpectedEnd; }
         var value: u32 = 0;
         for i in usize(0)..usize(4) {
             var digit = hexValue(data[position + i]);
@@ -161,7 +161,8 @@ private:
         var first = readHex4()!;
         var scalar = first;
         if 0xd800 <= first && first <= 0xdbff {
-            if data.len() - position < 6 || data[position] != 92 || data[position + 1] != 117 {
+            if position > data.len() || data.len() - position < 6 ||
+               data[position] != 92 || data[position + 1] != 117 {
                 return JsonError.InvalidUnicode;
             }
             position += 2;
@@ -280,17 +281,18 @@ pub func parseWithOptions(value: str, options: ParseOptions) !Value {
     parser.parse()
 }
 
-pub func parse(value: str) !Value {
-    parseWithOptions(value, ParseOptions())
-}
+pub func parse(value: str) !Value { parseWithOptions(value, ParseOptions()) }
 
 pub func parseBytes(value: []const u8) !Value {
-    var source = text.fromBytes(value)!;
+    var source = text.fromBytes(value) catch { return JsonError.InvalidUtf8; };
     parse(source)
 }
 
 pub func parseReader(reader: *io.Reader, options: ParseOptions) !Value {
-    var source = io.readToString(reader, options.maxBytes)!;
+    var source = io.readToString(reader, options.maxBytes) catch (reason) {
+        if reason == io.IoError.LimitExceeded { return JsonError.SizeLimit; }
+        return reason;
+    };
     parseWithOptions(source, options)
 }
 

@@ -1,13 +1,13 @@
 package json
-import (coll, convert, core, opt, serde, text)
+import (coll, convert, opt, serde, text)
 
 pub error JsonSerdeError { InvalidState, TypeMismatch, UnsupportedNumber, MissingRoot }
 
 class JsonWriteFrame {
-    var objectMode: bool;
-    var array: JsonArray;
-    var object: JsonObject;
-    var pendingKey: ?string;
+    pub var objectMode: bool;
+    pub var array: JsonArray;
+    pub var object: JsonObject;
+    pub var pendingKey: ?string;
     func init(isObject: bool)
         : objectMode(isObject), array(JsonArray()), object(JsonObject()), pendingKey(null) {}
 }
@@ -35,9 +35,7 @@ public:
         appendValue(Value.Number(JsonNumber.parse(raw)!))
     }
 
-    func writeF64(value: f64) !void {
-        return serde.SerdeError.Unsupported;
-    }
+    func writeF64(value: f64) !void { return serde.SerdeError.Unsupported; }
 
     func writeNumber(value: str) !void {
         var number = JsonNumber.parse(value)!;
@@ -51,10 +49,6 @@ public:
 
     func beginSeq(length: ?usize) !void {
         var frame = JsonWriteFrame(false);
-        switch length {
-            some(count) => frame.array.values.reserve(count)!,
-            null => {},
-        }
         frames.push(move(frame))!
     }
 
@@ -113,9 +107,9 @@ private:
 }
 
 class JsonReadFrame {
-    var mapMode: bool;
-    var parent: *const Value;
-    var index: usize;
+    pub var mapMode: bool;
+    pub var parent: *const Value;
+    pub var index: usize;
     func init(isMap: bool, parent: *const Value)
         : mapMode(isMap), parent(parent), index(0) {}
 }
@@ -259,8 +253,7 @@ public:
     }
 
     func finish() !void {
-        if !frames.isEmpty() { return serde.SerdeError.InvalidState; }
-        if current == null { return serde.SerdeError.InvalidState; }
+        if !frames.isEmpty() || current == null { return serde.SerdeError.InvalidState; }
     }
 }
 

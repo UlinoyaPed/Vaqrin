@@ -1,5 +1,5 @@
 package json
-import (coll, io, text)
+import (coll, io, parse, text)
 
 pub func escapeString(value: str) !string {
     var output = coll.Vec<u8>();
@@ -51,7 +51,9 @@ public:
     func flush() !void { writer.flush() }
 private:
     func writeIndent() !void {
-        for i in usize(0)..(depth * options.indent) { io.writeAll(writer, " ".asBytes())!; }
+        if depth != 0 && options.indent > ~usize(0) / depth { return JsonError.SizeLimit; }
+        var count = depth * options.indent;
+        for i in usize(0)..count { io.writeAll(writer, " ".asBytes())!; }
     }
     func writeValue(value: *const Value) !void {
         switch *value {
@@ -96,6 +98,7 @@ private:
 }
 
 pub func write(writer: *io.Writer, value: *const Value, options: EncodeOptions) !void {
+    if options.escapeNonAscii || options.sortKeys { return JsonError.UnsupportedOption; }
     var encoder = Encoder(writer, options);
     encoder.encodeValue(value)!;
     encoder.flush()

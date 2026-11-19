@@ -98,7 +98,7 @@ public:
         if byteOffset < value.byteLen() && (value.asBytes()[byteOffset] & 0xc0) == 0x80 {
             return RegexError.InvalidOffset;
         }
-        var result = runNfa(&self, value, byteOffset)!;
+        var result = runNfa(&self, value, byteOffset, false)!;
         switch result {
             some(item) => some(item.matched),
             null => null
@@ -113,9 +113,9 @@ public:
         if byteOffset < value.byteLen() && (value.asBytes()[byteOffset] & 0xc0) == 0x80 {
             return RegexError.InvalidOffset;
         }
-        var result = runNfa(&self, value, byteOffset)!;
+        var result = runNfa(&self, value, byteOffset, true)!;
         switch result {
-            some(item) => some(move(item.captures)),
+            some(item) => some(move(item.captures).unwrap()),
             null => null
         }
     }
@@ -140,13 +140,14 @@ private:
         var replaced = false;
         var done = false;
         for search <= value.byteLen() && !done {
-            var result = runNfa(&self, value, search)!;
+            var result = runNfa(&self, value, search, true)!;
             switch result {
                 null => { done = true; },
                 some(item) => {
                     var matched = item.matched;
                     for i in cursor..matched.startByte { output.push(value.asBytes()[i])!; }
-                    appendReplacement(replacement, &item.captures, &output)!;
+                    var captures = move(item.captures).unwrap();
+                    appendReplacement(replacement, &captures, &output)!;
                     cursor = matched.endByte;
                     replaced = true;
                     if !all { done = true; }

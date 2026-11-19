@@ -184,13 +184,13 @@ pub func caseFoldFull(ch: char) !string {
             var count = caseFoldIndex[mid * 3 + 2];
             var output = coll.Vec<u8>();
             for i in usize(0)..count {
-                appendUtf8Scalar(caseFoldScalars[offset + i], &output)!;
+                appendCaseFoldScalarUtf8(caseFoldScalars[offset + i], &output)!;
             }
             return text.fromBytes(output.asConstSlice());
         }
     }
     var output = coll.Vec<u8>();
-    appendUtf8Scalar(cp, &output)!;
+    appendCaseFoldScalarUtf8(cp, &output)!;
     text.fromBytes(output.asConstSlice())
 }
 

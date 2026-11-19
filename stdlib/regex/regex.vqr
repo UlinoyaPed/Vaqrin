@@ -60,15 +60,15 @@ public:
 }
 
 pub class Regex {
-    pub var states: coll.Vec<State>;
-    pub var classes: coll.Vec<CharacterClass>;
-    pub var ranges: coll.Vec<CharRange>;
-    pub var patternText: string;
-    pub var flags: u8;
-    pub var maxInputBytes: usize;
-    pub var maxSteps: usize;
-    pub var captureGroups: usize;
-    pub var startState: i32;
+    var states: coll.Vec<State>;
+    var classes: coll.Vec<CharacterClass>;
+    var ranges: coll.Vec<CharRange>;
+    var patternText: string;
+    var flags: u8;
+    var maxInputBytes: usize;
+    var maxSteps: usize;
+    var captureGroups: usize;
+    var startState: i32;
 
 public:
     func init(states: coll.Vec<State>, classes: coll.Vec<CharacterClass>,
@@ -84,6 +84,16 @@ public:
 
     const func pattern() str { patternText }
     const func captureCount() usize { captureGroups }
+    const func stateCount() usize { states.len() }
+    const func stateAt(index: usize) State { states[index] }
+    const func classCount() usize { classes.len() }
+    const func classAt(index: usize) CharacterClass { classes[index] }
+    const func rangeAt(index: usize) CharRange { ranges[index] }
+    const func flagsValue() u8 { flags }
+    const func inputLimit() usize { maxInputBytes }
+    const func workLimit() usize { maxSteps }
+    const func captureGroupCount() usize { captureGroups }
+    const func entryState() i32 { startState }
 
     const func isMatch(value: str) !bool {
         var found = find(value)!;

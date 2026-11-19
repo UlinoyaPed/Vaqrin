@@ -314,7 +314,7 @@ func runNfa(regex: *const Regex, input: str, start: usize) !?SearchResult {
             return buildSearchResult(candidate, candidateEnd, input, &history, regex.captures);
         }
 
-        var decoded = unicode.decodeUtf8(input.asBytes()[position..])!;
+        var decoded = unicode.decodeUtf8(input.asBytes()[position..]) catch { return RegexError.InvalidUtf8; };
         var cp = convert.fromChar(decoded.0);
         if active.isEmpty() {
             position += decoded.1;

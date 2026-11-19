@@ -24,7 +24,9 @@ public:
 }
 
 pub func validateOptions(options: *const CsvOptions) !void {
-    if options.delimiter == options.quote || options.delimiter == 10 ||
+    if options.delimiter == 0 || options.quote == 0 ||
+       options.delimiter >= 128 || options.quote >= 128 ||
+       options.delimiter == options.quote || options.delimiter == 10 ||
        options.delimiter == 13 || options.quote == 10 || options.quote == 13 {
         return CsvError.InvalidOptions;
     }

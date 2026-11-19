@@ -144,6 +144,35 @@ public:
         if index >= entries.len() { return null; }
         some(&entries.getMut(index).unwrap().1)
     }
+    const func keys() JsonKeyIter { JsonKeyIter(&self) }
+    const func items() JsonItemIter { JsonItemIter(&self) }
+}
+
+pub class JsonKeyIter {
+    var object: *const JsonObject;
+    var index: usize;
+public:
+    func init(object: *const JsonObject) : object(object), index(0) {}
+    func next() ?str {
+        switch object.keyAt(index) {
+            null => null,
+            some(key) => { index++; some(key) },
+        }
+    }
+}
+
+pub class JsonItemIter {
+    var object: *const JsonObject;
+    var index: usize;
+public:
+    func init(object: *const JsonObject) : object(object), index(0) {}
+    func next() ?(str, *const Value) {
+        if index >= object.len() { return null; }
+        var key = object.keyAt(index).unwrap();
+        var value = object.valueAt(index).unwrap();
+        index++;
+        some((key, value))
+    }
 }
 
 pub func isNull(value: *const Value) bool {

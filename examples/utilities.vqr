@@ -1,0 +1,93 @@
+package utilities_example
+import (url, log, errors, io, core)
+
+error NetworkError { Refused, Timeout }
+
+func main() !void {
+    // URI parsing, normalization, and RFC 3986 relative resolution.
+    var address = url.parse("https://Example.COM:443/a/../b?tag=one&tag=two#top")!;
+    var normalized = address.normalize()!;
+    io.println(normalized.toString()!)!;
+
+    var base = url.parse("http://a/b/c/d;p?q")!;
+    io.println(base.resolve("../g")!.toString()!)!;
+
+    var ipv6 = url.parse("http://[2001:db8::1]:8080/a")!;
+    io.println(ipv6.host().unwrap())!;
+    var emptyPort = url.parse("http://example.com:/")!;
+    io.println(emptyPort.toString()!)!;
+
+    // Immutable builder: keep the returned value at every step.
+    var builder = url.UrlBuilder();
+    var withScheme = builder.scheme("https")!;
+    var withHost = withScheme.host("example.com")!;
+    var withPath = withHost.path("/api")!;
+    var withQuery = withPath.query("q=a+b")!;
+    io.println(withQuery.build()!.toString()!)!;
+
+    // Ordered duplicate parameters and literal plus handling.
+    var params = url.parseQuery("tag=one&tag=two&plus=a+b")!;
+    io.println(params.len())!;
+    var tags = params.getAll("tag")!;
+    for tag in tags { io.println(tag)!; }
+    io.println(url.queryUnescape("a+b")!)!;
+    params.set("tag", "three")!;
+    io.println(params.encode()!)!;
+
+    // Malformed escapes and invalid decoded UTF-8 are errors.
+    var badUrl = url.parse("https://example.com/%Q0");
+    io.println(core.isErr(&badUrl))!;
+    var badEscape = url.queryUnescape("%Q0");
+    io.println(core.isErr(&badEscape))!;
+    var badUtf8 = url.queryUnescape("%FF");
+    io.println(core.isErr(&badUtf8))!;
+
+    // Synchronous structured logging with two independent handlers.
+    var memory = io.MemoryWriter();
+    var textHandler = log.TextHandler.new(&memory);
+    var bufferHandler = log.BufferHandler();
+    var handlers = [2]*log.Handler{&textHandler, &bufferHandler};
+    var multi = log.MultiHandler.new(handlers[:]);
+    var logger = log.newLogger(&multi)!;
+    logger.setLevel(log.Level.Info);
+    var attributes = [_]log.Attr{
+        log.Attr.string("component", "worker")!,
+        log.Attr.int("attempt", 2)!,
+        log.Attr.bool("retry", false)!,
+    };
+    var networkLogger = logger.withGroup("network")!;
+    log.debug(&networkLogger, "filtered", attributes[:])!;
+    log.info(&networkLogger, "connected", attributes[:])!;
+    networkLogger.flush()!;
+    io.println(bufferHandler.len())!;
+    io.println(memory.asSlice())!;
+
+    // Error identity, nested context, source location, and cause tree.
+    var report = errors.fromError(NetworkError.Refused)!;
+    report.addContext("connecting to upstream")!;
+    var location = errors.SourceLocation("client.vqr", 12, 5, 12, 18, "connect")!;
+    report.addContextAt("request failed", move(location), attributes[:])!;
+
+    var cause = errors.fromError(NetworkError.Timeout)!;
+    cause.addContext("socket wait expired")!;
+    report.addCause(move(cause))!;
+    io.println(errors.format(&report)!)!;
+
+    var other = errors.fromError(NetworkError.Refused)!;
+    var aggregate = errors.join(move(report), move(other))!;
+    io.println(errors.format(&aggregate)!)!;
+
+    // ErrorSink owns submitted reports and can aggregate them.
+    var sink = errors.ErrorSink();
+    sink.push(move(aggregate))!;
+    sink.push(errors.fromError(NetworkError.Refused)!)!;
+    var collected = sink.toReport()!;
+    io.println(errors.format(&collected)!)!;
+
+    // drain transfers ownership to an independent iterator.
+    var pending = errors.ErrorSink();
+    pending.push(errors.fromError(NetworkError.Timeout)!)!;
+    var drained = pending.drain();
+    var first = drained.next();
+    io.println(core.isSome(&first))!;
+}

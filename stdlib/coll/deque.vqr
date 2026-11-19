@@ -1,0 +1,530 @@
+package coll
+import (core, iter as iterator, mem)
+
+pub class DequeIterRef<T: Movable> {
+    var slots: []const mem.MaybeUninit<T>;
+    var head: usize;
+    var capacity: usize;
+    var frontIndex: usize;
+    var backIndex: usize;
+public:
+    func init(slots: []const mem.MaybeUninit<T>, head: usize, length: usize, capacity: usize)
+        : slots(slots), head(head), capacity(capacity), frontIndex(0), backIndex(length) {}
+
+    func next() ?*const T {
+        if frontIndex == backIndex { return null; }
+        var slot = physical(frontIndex);
+        frontIndex++;
+        some(slots[slot].asConstPtr())
+    }
+
+    func nextBack() ?*const T {
+        if frontIndex == backIndex { return null; }
+        backIndex--;
+        some(slots[physical(backIndex)].asConstPtr())
+    }
+
+    const func remaining() usize { backIndex - frontIndex }
+
+private:
+    const func physical(index: usize) usize {
+        if capacity == 0 { return 0; }
+        var tail = capacity - head;
+        if index >= tail { index - tail } else { head + index }
+    }
+}
+
+pub class DequeIterMut<T: Movable> {
+    var slots: []mem.MaybeUninit<T>;
+    var head: usize;
+    var capacity: usize;
+    var frontIndex: usize;
+    var backIndex: usize;
+public:
+    func init(slots: []mem.MaybeUninit<T>, head: usize, length: usize, capacity: usize)
+        : slots(slots), head(head), capacity(capacity), frontIndex(0), backIndex(length) {}
+
+    func next() ?*T {
+        if frontIndex == backIndex { return null; }
+        var slot = physical(frontIndex);
+        frontIndex++;
+        some(slots[slot].asPtr())
+    }
+
+    func nextBack() ?*T {
+        if frontIndex == backIndex { return null; }
+        backIndex--;
+        some(slots[physical(backIndex)].asPtr())
+    }
+
+    const func remaining() usize { backIndex - frontIndex }
+
+private:
+    const func physical(index: usize) usize {
+        if capacity == 0 { return 0; }
+        var tail = capacity - head;
+        if index >= tail { index - tail } else { head + index }
+    }
+}
+
+pub class DequeIter<T: Movable & Copyable> {
+    var slots: []const mem.MaybeUninit<T>;
+    var head: usize;
+    var capacity: usize;
+    var frontIndex: usize;
+    var backIndex: usize;
+public:
+    func init(slots: []const mem.MaybeUninit<T>, head: usize, length: usize, capacity: usize)
+        : slots(slots), head(head), capacity(capacity), frontIndex(0), backIndex(length) {}
+
+    func next() ?T {
+        if frontIndex == backIndex { return null; }
+        var slot = physical(frontIndex);
+        frontIndex++;
+        some(*slots[slot].asConstPtr())
+    }
+
+    func nextBack() ?T {
+        if frontIndex == backIndex { return null; }
+        backIndex--;
+        some(*slots[physical(backIndex)].asConstPtr())
+    }
+
+    const func remaining() usize { backIndex - frontIndex }
+
+private:
+    const func physical(index: usize) usize {
+        if capacity == 0 { return 0; }
+        var tail = capacity - head;
+        if index >= tail { index - tail } else { head + index }
+    }
+}
+
+pub class VecDeque<T: Movable> {
+    #copy: disabled
+    var slots: Vec<mem.MaybeUninit<T>>;
+    var head: usize;
+    var length: usize;
+public:
+    func init() : slots(Vec<mem.MaybeUninit<T>>()), head(0), length(0) {}
+
+    static func withCapacity(n: usize) !Self {
+        var out = VecDeque<T>();
+        out.reserve(n)!;
+        move(out)
+    }
+
+    const func len() usize { length }
+    const func capacity() usize { slots.len() }
+    const func isEmpty() bool { length == 0 }
+
+    func reserve(minCapacity: usize) !void {
+        if minCapacity <= capacity() { return; }
+        reallocate(minCapacity)
+    }
+
+    func reserveAdditional(extra: usize) !void {
+        if extra > ~usize(0) - length { return CapacityError.Overflow; }
+        reserve(length + extra)
+    }
+
+    func shrinkToFit() !void {
+        if length < capacity() { reallocate(length)!; }
+    }
+
+private:
+    func physical(index: usize) usize {
+        var cap = capacity();
+        if cap == 0 { return 0; }
+        var tail = cap - head;
+        if index >= tail { index - tail } else { head + index }
+    }
+
+    func reallocate(newCapacity: usize) !void {
+        var next = Vec<mem.MaybeUninit<T>>.withCapacity(newCapacity)!;
+        for i in usize(0)..newCapacity {
+            next.push(mem.MaybeUninit<T>.uninit())!;
+        }
+        for i in usize(0)..length {
+            var source = physical(i);
+            var value = unsafe { slots.getMut(source).unwrap().assumeInit() };
+            unsafe { next.getMut(i).unwrap().write(move(value)); }
+        }
+        slots = move(next);
+        head = 0;
+    }
+
+    func ensureRoomForOne() !void {
+        if length < capacity() { return; }
+        if length == ~usize(0) { return CapacityError.Overflow; }
+        reserve(if (capacity() < 4) usize(4) else capacity() +| capacity())
+    }
+
+public:
+    func pushBack(value: T) !void {
+        ensureRoomForOne()!;
+        unsafe { slots.getMut(physical(length)).unwrap().write(move(value)); }
+        length++;
+    }
+
+    func pushFront(value: T) !void {
+        ensureRoomForOne()!;
+        if head == 0 { head = capacity() - 1; } else { head--; }
+        unsafe { slots.getMut(head).unwrap().write(move(value)); }
+        length++;
+    }
+
+    func pushBackPreserving(value: T) PushResult<T> {
+        ensureRoomForOne() catch (reason) {
+            return PushResult<T>.Failed(reason, move(value));
+        };
+        unsafe { slots.getMut(physical(length)).unwrap().write(move(value)); }
+        length++;
+        PushResult<T>.Stored()
+    }
+
+    func pushFrontPreserving(value: T) PushResult<T> {
+        ensureRoomForOne() catch (reason) {
+            return PushResult<T>.Failed(reason, move(value));
+        };
+        if head == 0 { head = capacity() - 1; } else { head--; }
+        unsafe { slots.getMut(head).unwrap().write(move(value)); }
+        length++;
+        PushResult<T>.Stored()
+    }
+
+    func popFront() ?T {
+        if length == 0 { return null; }
+        var value = unsafe { slots.getMut(head).unwrap().assumeInit() };
+        length--;
+        if length == 0 { head = 0; }
+        else if head + 1 == capacity() { head = 0; }
+        else { head++; }
+        some(move(value))
+    }
+
+    func popBack() ?T {
+        if length == 0 { return null; }
+        var index = physical(length - 1);
+        var value = unsafe { slots.getMut(index).unwrap().assumeInit() };
+        length--;
+        if length == 0 { head = 0; }
+        some(move(value))
+    }
+
+    func get(index: usize) ?*const T {
+        if index >= length { return null; }
+        some(slots.get(physical(index)).unwrap().asConstPtr())
+    }
+
+    func getMut(index: usize) ?*T {
+        if index >= length { return null; }
+        some(slots.getMut(physical(index)).unwrap().asPtr())
+    }
+
+    const func front() ?*const T { get(0) }
+    func frontMut() ?*T { getMut(0) }
+    const func back() ?*const T { if length == 0 { null } else { get(length - 1) } }
+    func backMut() ?*T { if length == 0 { null } else { getMut(length - 1) } }
+
+    func insert(index: usize, value: T) !void {
+        if index > length { return CapacityError.IndexOutOfBounds; }
+        ensureRoomForOne()!;
+        for i := length; i > index; i-- {
+            var source = physical(i - 1);
+            var target = physical(i);
+            var item = unsafe { slots.getMut(source).unwrap().assumeInit() };
+            unsafe { slots.getMut(target).unwrap().write(move(item)); }
+        }
+        unsafe { slots.getMut(physical(index)).unwrap().write(move(value)); }
+        length++;
+    }
+
+    func remove(index: usize) ?T {
+        if index >= length { return null; }
+        var value = unsafe { slots.getMut(physical(index)).unwrap().assumeInit() };
+        for i := index; i + 1 < length; i++ {
+            var source = physical(i + 1);
+            var target = physical(i);
+            var item = unsafe { slots.getMut(source).unwrap().assumeInit() };
+            unsafe { slots.getMut(target).unwrap().write(move(item)); }
+        }
+        length--;
+        if length == 0 { head = 0; }
+        some(move(value))
+    }
+
+    func swapRemove(index: usize) ?T {
+        if index >= length { return null; }
+        swap(index, length - 1);
+        popBack()
+    }
+
+    func replace(index: usize, value: T) ?T {
+        if index >= length { return null; }
+        var slot = slots.getMut(physical(index)).unwrap();
+        var previous = unsafe { slot.assumeInit() };
+        unsafe { slot.write(move(value)); }
+        some(move(previous))
+    }
+
+    func retain<F: Movable>(predicate: F) void {
+        var kept: usize = 0;
+        for i in usize(0)..length {
+            var slot = slots.getMut(physical(i)).unwrap();
+            if predicate(slot.asConstPtr()) {
+                if kept != i {
+                    var item = unsafe { slot.assumeInit() };
+                    unsafe { slots.getMut(physical(kept)).unwrap().write(move(item)); }
+                }
+                kept++;
+            } else {
+                unsafe { slot.assumeInitDrop(); }
+            }
+        }
+        length = kept;
+        if length == 0 { head = 0; }
+    }
+
+    func extend<I: Movable>(values: I) !void {
+        for item in move(values) { pushBack(move(item))!; }
+    }
+
+    func append(other: *Self) !void {
+        if self == other || other.length == 0 { return; }
+        reserveAdditional(other.length)!;
+        for i in usize(0)..other.length {
+            var item = other.popFront().unwrap();
+            pushBack(move(item))!;
+        }
+    }
+
+    func splitOff(index: usize) !Self {
+        if index > length { return CapacityError.IndexOutOfBounds; }
+        var count = length - index;
+        var result = VecDeque<T>.withCapacity(count)!;
+        for i in usize(0)..count {
+            var item = popBack().unwrap();
+            result.pushFront(move(item))!;
+        }
+        move(result)
+    }
+
+    // Requires T: Copyable.
+    const func clone() !Self {
+        var result = VecDeque<T>.withCapacity(length)!;
+        for item in iterRef() { result.pushBack(*item)!; }
+        move(result)
+    }
+
+    func swap(a: usize, b: usize) void {
+        core.swap<mem.MaybeUninit<T>>(
+            slots.getMut(physical(a)).unwrap(),
+            slots.getMut(physical(b)).unwrap()
+        );
+    }
+
+    func reverse() void {
+        for i in usize(0)..(length / 2) { swap(i, length - i - 1); }
+    }
+
+    const func iter() DequeIter<T> { DequeIter<T>(slots.asConstSlice(), head, length, capacity()) }
+    const func iterRef() DequeIterRef<T> {
+        DequeIterRef<T>(slots.asConstSlice(), head, length, capacity())
+    }
+    func iterMut() DequeIterMut<T> { DequeIterMut<T>(slots.asSlice(), head, length, capacity()) }
+    const func reverseIter() iterator.RevIter<DequeIterRef<T>, *const T> {
+        iterator.rev<DequeIterRef<T>, *const T>(iterRef())
+    }
+
+    static func intoIter(value: Self) IntoDequeIter<T> { IntoDequeIter<T>(move(value)) }
+
+    func clear() void {
+        for length > 0 {
+            var value = popBack().unwrap();
+        }
+        head = 0;
+    }
+
+    func deinit() void { clear(); }
+}
+
+pub class IntoDequeIter<T: Movable> {
+    var source: VecDeque<T>;
+public:
+    func init(value: VecDeque<T>) : source(move(value)) {}
+    func next() ?T { source.popFront() }
+    func nextBack() ?T { source.popBack() }
+    const func remaining() usize { source.len() }
+}
+
+pub class FixedDeque<T: Movable, comptime N: usize> {
+    #copy: disabled
+    var slots: FixedVec<mem.MaybeUninit<T>, N>;
+    var head: usize;
+    var length: usize;
+public:
+    func init() : slots(FixedVec<mem.MaybeUninit<T>, N>()), head(0), length(0) {
+        for i in usize(0)..N {
+            switch slots.push(mem.MaybeUninit<T>.uninit()) {
+                PushResult.Stored => {},
+                else => panic("FixedDeque storage invariant"),
+            }
+        }
+    }
+
+    const func len() usize { length }
+    const func capacity() usize { N }
+    const func isEmpty() bool { length == 0 }
+
+private:
+    func address(index: usize) *mem.MaybeUninit<T> { slots.getMut(index).unwrap() }
+
+    func physical(index: usize) usize {
+        if N == 0 { return 0; }
+        var tail = N - head;
+        if index >= tail { index - tail } else { head + index }
+    }
+
+public:
+    func pushBack(value: T) PushResult<T> {
+        if length == N { return PushResult<T>.Full(move(value)); }
+        unsafe { address(physical(length)).write(move(value)); }
+        length++;
+        PushResult<T>.Stored()
+    }
+
+    func pushFront(value: T) PushResult<T> {
+        if length == N { return PushResult<T>.Full(move(value)); }
+        if head == 0 { head = N - 1; } else { head--; }
+        unsafe { address(head).write(move(value)); }
+        length++;
+        PushResult<T>.Stored()
+    }
+
+    func popFront() ?T {
+        if length == 0 { return null; }
+        var value = unsafe { address(head).assumeInit() };
+        length--;
+        if length == 0 { head = 0; }
+        else if head + 1 == N { head = 0; }
+        else { head++; }
+        some(move(value))
+    }
+
+    func popBack() ?T {
+        if length == 0 { return null; }
+        var value = unsafe { address(physical(length - 1)).assumeInit() };
+        length--;
+        if length == 0 { head = 0; }
+        some(move(value))
+    }
+
+    func get(index: usize) ?*const T {
+        if index >= length { return null; }
+        some(address(physical(index)).asConstPtr())
+    }
+
+    func getMut(index: usize) ?*T {
+        if index >= length { return null; }
+        some(address(physical(index)).asPtr())
+    }
+
+    const func front() ?*const T { get(0) }
+    func frontMut() ?*T { getMut(0) }
+    const func back() ?*const T { if length == 0 { null } else { get(length - 1) } }
+    func backMut() ?*T { if length == 0 { null } else { getMut(length - 1) } }
+
+    func insert(index: usize, value: T) PushResult<T> {
+        if index > length {
+            return PushResult<T>.Failed(CapacityError.IndexOutOfBounds, move(value));
+        }
+        if length == N { return PushResult<T>.Full(move(value)); }
+        for i := length; i > index; i-- {
+            var item = unsafe { address(physical(i - 1)).assumeInit() };
+            unsafe { address(physical(i)).write(move(item)); }
+        }
+        unsafe { address(physical(index)).write(move(value)); }
+        length++;
+        PushResult<T>.Stored()
+    }
+
+    func remove(index: usize) ?T {
+        if index >= length { return null; }
+        var value = unsafe { address(physical(index)).assumeInit() };
+        for i := index; i + 1 < length; i++ {
+            var item = unsafe { address(physical(i + 1)).assumeInit() };
+            unsafe { address(physical(i)).write(move(item)); }
+        }
+        length--;
+        if length == 0 { head = 0; }
+        some(move(value))
+    }
+
+    func replace(index: usize, value: T) ?T {
+        if index >= length { return null; }
+        var slot = address(physical(index));
+        var previous = unsafe { slot.assumeInit() };
+        unsafe { slot.write(move(value)); }
+        some(move(previous))
+    }
+
+    func retain<F: Movable>(predicate: F) void {
+        var kept: usize = 0;
+        for i in usize(0)..length {
+            var slot = address(physical(i));
+            if predicate(slot.asConstPtr()) {
+                if kept != i {
+                    var item = unsafe { slot.assumeInit() };
+                    unsafe { address(physical(kept)).write(move(item)); }
+                }
+                kept++;
+            } else {
+                unsafe { slot.assumeInitDrop(); }
+            }
+        }
+        length = kept;
+        if length == 0 { head = 0; }
+    }
+
+    func swap(a: usize, b: usize) void {
+        core.swap<mem.MaybeUninit<T>>(address(physical(a)), address(physical(b)));
+    }
+
+    func reverse() void {
+        for i in usize(0)..(length / 2) { swap(i, length - i - 1); }
+    }
+
+    const func iter() DequeIter<T> {
+        DequeIter<T>(slots.asConstSlice(), head, length, N)
+    }
+    const func iterRef() DequeIterRef<T> {
+        DequeIterRef<T>(slots.asConstSlice(), head, length, N)
+    }
+    func iterMut() DequeIterMut<T> { DequeIterMut<T>(slots.asSlice(), head, length, N) }
+    const func reverseIter() iterator.RevIter<DequeIterRef<T>, *const T> {
+        iterator.rev<DequeIterRef<T>, *const T>(iterRef())
+    }
+
+    static func intoIter(value: Self) IntoFixedDequeIter<T, N> {
+        IntoFixedDequeIter<T, N>(move(value))
+    }
+
+    func clear() void {
+        for length > 0 {
+            var value = popBack().unwrap();
+        }
+        head = 0;
+    }
+
+    func deinit() void { clear(); }
+}
+
+pub class IntoFixedDequeIter<T: Movable, comptime N: usize> {
+    var source: FixedDeque<T, N>;
+public:
+    func init(value: FixedDeque<T, N>) : source(move(value)) {}
+    func next() ?T { source.popFront() }
+    func nextBack() ?T { source.popBack() }
+    const func remaining() usize { source.len() }
+}

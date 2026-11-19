@@ -51,6 +51,10 @@ Type *Body::hint(const Ast &n) {
     if (n->kind == NodeKind::Index) return base->parts[0];
     if (base->kind == Kind::Slice) return base;
     auto source = n->children[0];
+    if (source->kind == NodeKind::Unary && source->text == "*") {
+      auto *pointer = hint(source->children[0]);
+      if (pointer && pointer->kind == Kind::Pointer) return p.slice(base->parts[0], pointer->readOnly);
+    }
     int i = source->kind == NodeKind::Name ? findLocal(source->text) : -1;
     return p.slice(base->parts[0], i < 0 || !locals[i].writable);
   }
@@ -1102,6 +1106,7 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
     std::vector<llvm::Type *> parameters;
     for (auto *value : values) parameters.push_back(value->getType());
     called = ir.CreateCall(FunctionType::get(returnType->ir, parameters, false), callee, values);
+    called->setDoesNotThrow();
   } else {
     called = ir.CreateCall(entry->ir, values);
     called->setAttributes(entry->ir->getAttributes());
@@ -1290,32 +1295,89 @@ ValueAt Body::lambda(const Ast &n, Type *expected) {
 }
 
 ValueAt Body::allocate(const Ast &n) {
-  if (n->tail) fail(n->span, "custom allocators are not yet supported", "E290");
-  if (evaluating)
-    fail(n->span, "heap allocation during compile-time evaluation is not yet supported", "E290");
-  if (!p.heapAvailable()) fail(n->span, "target has no default Box allocator", "E290");
+  if (evaluating) fail(n->span, "heap allocation is unavailable during compile-time evaluation", "E220");
+  if (!n->tail && !p.heapAvailable()) fail(n->span, "target has no default Box allocator", "E290");
   auto *t = parseType(n->type);
   p.ensureSized(t, n->span);
+  if (t == p.neverTy) fail(n->span, "never cannot be allocated");
   auto *box = p.box(t);
   auto *resultType = p.aggregate(Kind::Result, {box});
   auto *ptr = PointerType::getUnqual(p.context);
-  auto &layout = p.module->getDataLayout();
-  auto align = std::max<std::uint64_t>(p.pointerBits() / 8, layout.getABITypeAlign(p.storage(t)).value());
-  auto size = layout.getTypeAllocSize(p.storage(t)).getFixedValue();
-  size = std::max(align, ((size + align - 1) / align) * align);
-  auto sizeConstant = [&](std::uint64_t value) { return ConstantInt::get(p.sizeTy->ir, value); };
-  auto allocator = p.module->getOrInsertFunction("aligned_alloc",
-                                                 FunctionType::get(ptr, {p.sizeTy->ir, p.sizeTy->ir}, false));
-  auto *storage = ir.CreateCall(allocator, {sizeConstant(align), sizeConstant(size)});
+  Value *context = Constant::getNullValue(p.allocationContext->ir);
+  Value *storage = nullptr;
+  Value *error = ir.getInt32(0xfffffffc);
+  if (n->tail) {
+    auto placed = expression(n->tail);
+    if (!live()) return neverValue();
+    auto *owner = placed.type->kind == Kind::Pointer ? placed.type->parts[0] : placed.type;
+    auto allocatorInterface = [](Type *candidate) {
+      return candidate->kind == Kind::Interface && candidate->def.file->standard &&
+             candidate->def.file->package == "mem" && candidate->def.decl->name == "Allocator";
+    };
+    Type *allocator = nullptr;
+    if (allocatorInterface(owner)) {
+      allocator = owner;
+    } else if (owner->kind == Kind::Class) {
+      p.ensureSized(owner, n->span);
+      for (const auto &[interface, _] : owner->conformances)
+        if (allocatorInterface(interface)) {
+          allocator = interface;
+          break;
+        }
+    }
+    if (!allocator) fail(n->tail->span, "new requires an allocator implementing mem.Allocator");
+    if (placed.type->kind != Kind::Pointer) {
+      if (!placed.address) fail(n->tail->span, "allocator must be a live storage location");
+      placed = asPointer(placed, n->tail->span);
+    }
+    auto view = coerce(placed, p.pointer(allocator, false), n->tail->span);
+    auto *address = read(view, n->tail->span);
+    auto [layoutType, layout] = p.boxLayout(t, allocator);
+    enter();
+    std::string argument = " <allocation layout>";
+    bindConstant(argument, layoutType, layout, n->span);
+    auto value = std::make_shared<Node>();
+    value->kind = NodeKind::Name;
+    value->span = n->span;
+    value->text = argument;
+    auto call = std::make_shared<Node>();
+    call->kind = NodeKind::Call;
+    call->span = n->span;
+    call->children = {nullptr, value};
+    auto allocation = invoke(call, p.methods(allocator, "alloc", false), {},
+                             ValueAt{allocator, nullptr, address, true, -1, true}, allocator);
+    leave();
+    auto *result = read(allocation, n->span);
+    auto *status = ir.CreateExtractValue(result, 0);
+    auto *optional = ir.CreateExtractValue(result, 1);
+    auto *ok = ir.CreateIsNull(status);
+    auto *some = ir.CreateSelect(ok, ir.CreateExtractValue(optional, 0), ir.getFalse());
+    storage = ir.CreateSelect(some, ir.CreateExtractValue(optional, 1), ConstantPointerNull::get(ptr));
+    error = ir.CreateSelect(ok, error, status);
+    context = ir.CreateInsertValue(context, ir.CreateExtractValue(address, 0), 0);
+    context = ir.CreateInsertValue(context, ir.CreateExtractValue(address, 1), 1);
+    context = ir.CreateInsertValue(context, p.boxRelease(t, allocator), 2);
+  } else {
+    const auto &layout = p.module->getDataLayout();
+    auto align = std::max<std::uint64_t>(p.pointerBits() / 8, layout.getABITypeAlign(p.storage(t)).value());
+    auto size = layout.getTypeAllocSize(p.storage(t)).getFixedValue();
+    size = std::max(align, ((size + align - 1) / align) * align);
+    auto sizeConstant = [&](std::uint64_t value) { return ConstantInt::get(p.sizeTy->ir, value); };
+    auto allocator = p.module->getOrInsertFunction("aligned_alloc",
+                                                   FunctionType::get(ptr, {p.sizeTy->ir, p.sizeTy->ir}, false));
+    storage = ir.CreateCall(allocator, {sizeConstant(align), sizeConstant(size)});
+  }
+  auto *rawBox = ir.CreateInsertValue(PoisonValue::get(box->ir), storage, 0);
+  rawBox = ir.CreateInsertValue(rawBox, context, 1);
   auto *initialBlock = ir.GetInsertBlock(), *allocated = block("heap.allocated"), *end = block("heap.end");
-  auto failure = wrap(resultType, ir.getInt32(0xfffffffc), false);
+  auto failure = wrap(resultType, error, false);
   auto initial = initialized;
   ir.CreateCondBr(ir.CreateIsNotNull(storage), allocated, end);
   ir.SetInsertPoint(allocated);
   enter();
   auto *allocationType = p.canonical.contains("<allocation>") ? p.canonical.at("<allocation>")
-                                                              : p.add(Kind::Allocation, ptr, "<allocation>");
-  auto raw = bind(" <allocation>", allocationType, true, storage, n->span);
+                                                              : p.add(Kind::Allocation, box->ir, "<allocation>");
+  auto raw = bind(" <allocation>", allocationType, true, rawBox, n->span);
   ValueAt constructor = voidValue();
   if (t->kind == Kind::Class) {
     auto methods = p.methods(t, "init", false);
@@ -1345,7 +1407,7 @@ ValueAt Body::allocate(const Ast &n) {
     setAlive(raw, false);
     states.push_back(initialized);
     leave();
-    auto success = wrap(resultType, storage, true);
+    auto success = wrap(resultType, rawBox, true);
     edges.emplace_back(success.value, ir.GetInsertBlock());
     ir.CreateBr(end);
   } else
@@ -1416,23 +1478,46 @@ ValueAt Body::call(const Ast &n, Type *expected) {
   }
   if (callee->kind == NodeKind::Member) {
     auto base = callee->children[0];
-    if (key == "Box.intoRaw" && findLocal("Box") < 0 && p.resolve(file, "Box", n->span).empty()) {
-      if (n->children.size() != 2) fail(n->span, "Box.intoRaw takes one Box value");
+    if ((key == "Box.intoRaw" || key == "Box.intoRawParts") && findLocal("Box") < 0 &&
+        p.resolve(file, "Box", n->span).empty()) {
+      if (n->children.size() != 2) fail(n->span, "Box raw conversion takes one Box value");
       auto box = expression(n->children[1]);
       if (!live()) return neverValue();
-      if (box.type->kind != Kind::Box) fail(n->span, "Box.intoRaw takes one Box value");
-      return {p.pointer(box.type->parts[0], false), read(box, n->span)};
+      if (box.type->kind != Kind::Box) fail(n->span, "Box raw conversion takes one Box value");
+      auto *value = read(box, n->span);
+      auto *pointer = p.pointer(box.type->parts[0], false);
+      auto *address = ir.CreateExtractValue(value, 0);
+      auto *context = ir.CreateExtractValue(value, 1);
+      if (key == "Box.intoRaw") {
+        guard(ir, ir.CreateIsNull(ir.CreateExtractValue(context, 2)));
+        return {pointer, address};
+      }
+      auto *parts = p.aggregate(Kind::Tuple, {pointer, p.allocationContext});
+      auto *out = ir.CreateInsertValue(PoisonValue::get(parts->ir), address, 0);
+      return {parts, ir.CreateInsertValue(out, context, 1)};
     }
-    if (base->kind == NodeKind::Generic && path(base->children[0]) == "Box" && callee->text == "fromRaw" &&
+    if (base->kind == NodeKind::Generic && path(base->children[0]) == "Box" &&
+        (callee->text == "fromRaw" || callee->text == "fromRawParts") &&
         findLocal("Box") < 0 && p.resolve(file, "Box", n->span).empty()) {
-      if (!unsafeDepth) fail(n->span, "Box.fromRaw requires an unsafe block", "E240");
-      if (base->children.size() != 2 || n->children.size() != 2)
-        fail(n->span, "expected Box<T>.fromRaw(pointer)");
+      bool withContext = callee->text == "fromRawParts";
+      if (!unsafeDepth) fail(n->span, "Box reconstruction requires an unsafe block", "E240");
+      if (base->children.size() != 2 || n->children.size() != (withContext ? 3u : 2u))
+        fail(n->span, "invalid Box reconstruction arguments");
+      if (!withContext && !p.heapAvailable()) fail(n->span, "target has no default Box allocator", "E290");
       auto *element = parseType(base->children[1]);
       p.ensureSized(element, n->span);
-      auto ptr = expression(n->children[1], p.pointer(element, false));
+      auto *box = p.box(element);
+      auto input = expression(n->children[1], p.pointer(element, false));
       if (!live()) return neverValue();
-      return {p.box(element), read(ptr, n->span)};
+      auto *address = read(input, n->span);
+      Value *context = Constant::getNullValue(p.allocationContext->ir);
+      if (withContext) {
+        auto owner = expression(n->children[2], p.allocationContext);
+        if (!live()) return neverValue();
+        context = read(owner, n->span);
+      }
+      auto *value = ir.CreateInsertValue(PoisonValue::get(box->ir), address, 0);
+      return {box, ir.CreateInsertValue(value, context, 1)};
     }
     auto target = base->kind == NodeKind::Generic ? base->children[0] : base;
     auto basePath = path(target);
@@ -1506,7 +1591,7 @@ ValueAt Body::call(const Ast &n, Type *expected) {
     auto invokeMember = [&]() -> ValueAt {
       if (v.type->kind == Kind::Box && member == "asPtr" && n->children.size() == 1) {
         if (!v.borrowed) fail(n->span, "bind the Box before taking a pointer to its contents", "E290");
-        return {p.pointer(v.type->parts[0], !v.writable), read(v, n->span, false)};
+        return {p.pointer(v.type->parts[0], !v.writable), ir.CreateExtractValue(read(v, n->span, false), 0)};
       }
       if (v.type->kind == Kind::Optional && member == "unwrap" && n->children.size() == 1) {
         guard(ir, ir.CreateExtractValue(read(v, n->span, false), 0));

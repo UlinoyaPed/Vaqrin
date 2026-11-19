@@ -11,6 +11,24 @@ ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::v
   auto arity = [&](unsigned count) {
     if (n->children.size() != count + 1) fail(n->span, "wrong intrinsic argument count");
   };
+  if (key == "__vqr_unaligned_load" || key == "__vqr_unaligned_store") {
+    bool store = key == "__vqr_unaligned_store";
+    arity(store ? 2 : 1);
+    if (!unsafeDepth) fail(n->span, "unaligned access requires unsafe", "E240");
+    auto reference = expression(n->children[1]);
+    if (!live()) return neverValue();
+    if (reference.type->kind != Kind::Pointer || (store && reference.type->readOnly))
+      fail(n->span, "unaligned access requires a suitably qualified pointer");
+    auto *element = reference.type->parts[0];
+    if (element->kind != Kind::Int && element->kind != Kind::Float && element->kind != Kind::Bool)
+      fail(n->span, "unaligned access requires scalar lanes");
+    auto *address = read(reference, n->span);
+    if (!store) return {element, ir.CreateAlignedLoad(element->ir, address, Align(1))};
+    auto value = expression(n->children[2], element);
+    if (!live()) return neverValue();
+    ir.CreateAlignedStore(read(value, n->span), address, Align(1));
+    return voidValue();
+  }
   if (key == "__vqr_pointer_address") {
     arity(1);
     auto pointer = expression(n->children[1]);
@@ -107,6 +125,40 @@ ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::v
       return ir.CreateSelect(negative, ir.CreateNot(raw), ir.CreateXor(raw, sign));
     };
     return {p.boolTy, ir.CreateICmpULT(order(a), order(b))};
+  }
+  if (key == "__vqr_alloc_bytes") {
+    arity(2);
+    if (!p.heapAvailable()) fail(n->span, "this target has no default byte allocator", "E290");
+    auto size = expression(n->children[1], p.sizeTy);
+    if (!live()) return neverValue();
+    auto *bytes = read(size, n->span);
+    auto alignment = expression(n->children[2], p.sizeTy);
+    if (!live()) return neverValue();
+    auto *natural = read(alignment, n->span);
+    auto *word = ConstantInt::get(p.sizeTy->ir, p.pointerBits() / 8);
+    auto *align = ir.CreateSelect(ir.CreateICmpULT(natural, word), word, natural);
+    auto *mask = ir.CreateSub(align, ConstantInt::get(p.sizeTy->ir, 1));
+    auto *total = ir.CreateAdd(bytes, mask);
+    auto *allocate = block("allocation.bytes"), *end = block("allocation.done");
+    auto *start = ir.GetInsertBlock();
+    auto *pointer = p.pointer(p.integer(8, false), false);
+    auto *optional = p.aggregate(Kind::Optional, {pointer});
+    auto *result = p.aggregate(Kind::Result, {optional});
+    auto failure = wrap(result, ir.getInt32(0xfffffffc), false);
+    ir.CreateCondBr(ir.CreateICmpUGE(total, bytes), allocate, end);
+    ir.SetInsertPoint(allocate);
+    auto *padded = ir.CreateAnd(total, ir.CreateNot(mask));
+    auto allocator = p.module->getOrInsertFunction(
+        "aligned_alloc", FunctionType::get(pointer->ir, {p.sizeTy->ir, p.sizeTy->ir}, false));
+    auto *address = ir.CreateCall(allocator, {align, padded});
+    auto success = wrap(result, wrap(optional, address, true).value, true);
+    auto *value = ir.CreateSelect(ir.CreateIsNotNull(address), success.value, failure.value);
+    ir.CreateBr(end);
+    ir.SetInsertPoint(end);
+    auto *out = ir.CreatePHI(result->ir, 2);
+    out->addIncoming(value, allocate);
+    out->addIncoming(failure.value, start);
+    return {result, out};
   }
   if (key == "__vqr_uninitialized") {
     arity(0);

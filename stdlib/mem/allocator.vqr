@@ -1,0 +1,67 @@
+package mem
+
+pub interface Allocator {
+    func alloc(layout: Layout) !?*u8;
+    func free(ptr: *u8, layout: Layout) void;
+}
+
+pub type AllocatorRef = *Allocator;
+
+pub error AllocationError { OutOfMemory }
+
+pub class GlobalAllocator {
+    #implements: Allocator
+public:
+    func init() {}
+
+    func alloc(layout: Layout) !?*u8 {
+        if layout.size() == 0 { return null; }
+        __vqr_alloc_bytes(layout.size(), layout.align())
+    }
+
+    func free(ptr: *u8, layout: Layout) void {
+        unsafe { __vqr_free<u8>(ptr); }
+    }
+}
+
+pub func alloc(layout: Layout, allocator: AllocatorRef) !?*u8 { allocator.alloc(layout) }
+pub func free(ptr: *u8, layout: Layout, allocator: AllocatorRef) void { allocator.free(ptr, layout); }
+
+pub class FixedBufferAllocator {
+    #copy: disabled
+    #implements: Allocator
+    var buffer: []u8;
+    var cursor: usize;
+public:
+    func init(bytes: []u8) : buffer(bytes), cursor(0) {}
+
+    func alloc(layout: Layout) !?*u8 {
+        if layout.size() == 0 { return null; }
+        if cursor == buffer.len() { return AllocationError.OutOfMemory; }
+        var base = __vqr_pointer_address(&buffer[0]);
+        if cursor > ~usize(0) - base { return AllocationError.OutOfMemory; }
+        var position = alignUp(base + cursor, layout.align())! - base;
+        if position >= buffer.len() || layout.size() > buffer.len() - position {
+            return AllocationError.OutOfMemory;
+        }
+        cursor = position + layout.size();
+        some(&buffer[position])
+    }
+
+    func free(ptr: *u8, layout: Layout) void {
+        if buffer.len() == 0 { return; }
+        var base = __vqr_pointer_address(&buffer[0]);
+        var address = __vqr_pointer_address(ptr);
+        if address < base { return; }
+        var position = address - base;
+        if position <= cursor && layout.size() == cursor - position { cursor = position; }
+    }
+
+    const func mark() usize { cursor }
+    unsafe func reset() void { cursor = 0; }
+    unsafe func rewind(mark: usize) void {
+        if mark > cursor { panic("buffer allocator mark out of bounds"); }
+        cursor = mark;
+    }
+    const func remaining() usize { buffer.len() - cursor }
+}

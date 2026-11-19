@@ -42,6 +42,7 @@ enum class Kind {
   Pointer,
   Box,
   Allocation,
+  AllocationContext,
   RawStorage,
   Function,
   Closure,
@@ -231,6 +232,7 @@ private:
   ValueAt lambda(const Ast &n, Type *expected);
   void bindCapture(const Capture &capture, Value *environment, Span span);
   void freeAllocation(Value *address);
+  void releaseBox(Value *address, Value *context);
   Value *textView(ValueAt value, Span span);
   void disposeTemporary(ValueAt value, Span span);
   ValueAt match(const Ast &n, Type *expected);
@@ -271,6 +273,8 @@ public:
   std::map<std::string, Constant *> strings;
   std::map<Type *, Function *> dropFunctions, copyFunctions;
   std::map<std::pair<Type *, Type *>, GlobalVariable *> interfaceTables;
+  std::map<std::pair<Type *, Type *>, Function *> allocatorReleaseFunctions;
+  Type *allocationContext = nullptr;
   std::set<const Decl *> aliases;
   Type *voidTy, *neverTy, *boolTy, *charTy, *errorTy, *sizeTy, *textTy, *viewTy;
   std::unique_ptr<DIBuilder> debug;
@@ -284,6 +288,8 @@ public:
   Type *pointer(Type *t, bool readOnly);
   Type *slice(Type *t, bool readOnly);
   Type *box(Type *t);
+  std::pair<Type *, Constant *> boxLayout(Type *element, Type *allocator);
+  Function *boxRelease(Type *element, Type *allocator);
   Type *rawStorage(Type *element, Span span);
   Type *type(const Ast &n, const File &file, const Types &generics = {}, const Constants &values = {});
   Type *named(std::string name, const File &file, Span span, const Types &generics = {},

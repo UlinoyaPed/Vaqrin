@@ -261,7 +261,7 @@ Decl Parser::declaration(bool member, bool iface) {
   if (isOperator || eat("func")) {
     d.kind = DeclKind::Function;
     d.readOnly = isConst;
-    auto n = (isOperator || (d.associated && at("new"))) ? take() : name();
+    auto n = (isOperator || at("select") || (d.associated && at("new"))) ? take() : name();
     d.name = isOperator ? "operator" + n.text : n.text;
     genericParameters(d);
     parameters(d);
@@ -788,7 +788,7 @@ Ast Parser::postfix(Ast base, bool excludeFields) {
       arguments.insert(arguments.begin(), base);
       base = make(NodeKind::Call, t.span, "", std::move(arguments));
     } else if (eat(".") || eat("?.")) {
-      auto member = at("new") ? take() : name();
+      auto member = (at("new") || at("select")) ? take() : name();
       base = make(NodeKind::Member, member.span, member.text, {base});
       if (t.text == "?.") base->names.push_back("optional");
     } else if (eat("!")) {

@@ -1,0 +1,92 @@
+package io
+import (coll, mem)
+
+pub class MemoryReader {
+    #implements: Reader, Seeker
+    var data: []const u8;
+    var position: usize;
+public:
+    func init(data: []const u8) : data(data), position(0) {}
+    const func remaining() usize { data.len() - position }
+
+    func read(dst: []u8) !usize {
+        var available = remaining();
+        var count = if (available < dst.len()) available else dst.len();
+        mem.copyBytes(data[position..position + count], dst)!;
+        position += count;
+        count
+    }
+
+    func seek(offset: i64, origin: SeekOrigin) !u64 {
+        var base = switch origin {
+            SeekOrigin.Start => usize(0),
+            SeekOrigin.Current => position,
+            SeekOrigin.End => data.len(),
+        };
+        if offset < 0 {
+            var back = 0u64 -% bitCast<u64>(offset);
+            if back > u64(base) { return IoError.PositionOutOfRange; }
+            var count: !usize = usize(back);
+            position = base - count!;
+        } else {
+            var forward = bitCast<u64>(offset);
+            if forward > u64(data.len() - base) { return IoError.PositionOutOfRange; }
+            var count: !usize = usize(forward);
+            position = base + count!;
+        }
+        u64(position)
+    }
+}
+
+pub class MemoryWriter {
+    #implements: Writer
+    var buffer: coll.Vec<u8>;
+public:
+    func init() : buffer(coll.Vec<u8>()) {}
+
+    func write(data: []const u8) !usize {
+        var count = data.len();
+        if count == 0 { return 0; }
+        var original = buffer.len();
+        var offset: ?usize = null;
+        if original != 0 {
+            var current = buffer.asConstSlice();
+            var base = __vqr_pointer_address(&current[0]);
+            var address = __vqr_pointer_address(&data[0]);
+            if address >= base && address - base < original { offset = address - base; }
+        }
+        buffer.reserveAdditional(count)!;
+        switch offset {
+            null => {},
+            some(index) => { data = buffer.asConstSlice()[index..index + count]; },
+        }
+        for byte in data { buffer.push(byte)!; }
+        count
+    }
+
+    func flush() !void {}
+    const func asSlice() []const u8 { buffer.asConstSlice() }
+    static func intoBytes(value: Self) coll.Vec<u8> { mem.replace<coll.Vec<u8>>(&value.buffer, coll.Vec<u8>()) }
+}
+
+pub class FixedWriter {
+    #implements: Writer
+    var buffer: []u8;
+    var position: usize;
+public:
+    func init(data: []u8) : buffer(data), position(0) {}
+
+    func write(src: []const u8) !usize {
+        if src.len() == 0 { return 0; }
+        var available = remaining();
+        if available == 0 { return IoError.NoProgress; }
+        var count = if (available < src.len()) available else src.len();
+        mem.copyBytes(src[0..count], buffer[position..position + count])!;
+        position += count;
+        count
+    }
+
+    func flush() !void {}
+    const func written() []const u8 { buffer[0..position] }
+    const func remaining() usize { buffer.len() - position }
+}

@@ -1186,7 +1186,7 @@ class Acceptance(unittest.TestCase):
                     io.println(flag.load())!;
                 }
             }
-        """, "8\n4\n0\ntrue\ntrue\n1\n4\n1\n4\ntrue\n0\ntrue\ntrue\ntrue\nfalse\nfalse\n5\ntrue\n9\n")
+        """, "8\n4\n0\ntrue\ntrue\n1\n4\n1\n4\ntrue\n0\ntrue\nfalse\ntrue\nfalse\nfalse\n5\ntrue\n9\n")
         source = self.source("mmio.vqr", """
             import (mmio)
             export "C" func update(register: *u32) void {
@@ -1288,6 +1288,200 @@ class Acceptance(unittest.TestCase):
             with self.subTest(source=program):
                 src = self.source("bad.vqr", program)
                 self.assertIn(error.encode(), self.process(VAQC, "check", src, good=False).stderr)
+
+    def test_custom_box_allocator_and_raw_parts(self):
+        self.hosted("""
+            import (core, mem)
+            error Trouble { Refused, Constructor }
+            class Tracker {
+                #implements: mem.Allocator
+                var defaultAllocator: mem.GlobalAllocator;
+            public:
+                var releases: i32;
+                var refuse: bool;
+                func init() : defaultAllocator(mem.GlobalAllocator()), releases(0), refuse(false) {}
+                func alloc(layout: mem.Layout) !?*u8 {
+                    if refuse { return Trouble.Refused; }
+                    defaultAllocator.alloc(layout)
+                }
+                func free(ptr: *u8, layout: mem.Layout) void {
+                    releases++;
+                    defaultAllocator.free(ptr, layout);
+                }
+            }
+            class Guarded {
+                var number: i32;
+            public:
+                func init(value: i32) !void : number(value) {
+                    if value < 0 { return Trouble.Constructor; }
+                }
+                const func get() i32 { number }
+                func deinit() void { io.println(number) catch {}; }
+            }
+            func check(ref: mem.AllocatorRef) !i32 {
+                var value = new(ref) i32(33)!;
+                *value.asPtr()
+            }
+            func main() !void {
+                var heap = Tracker();
+                {
+                    var first = new(heap) Guarded(19)!;
+                    ptr, context := Box.intoRawParts(move(first));
+                    var restored = unsafe { Box<Guarded>.fromRawParts(ptr, move(context)) };
+                    io.println(restored.asPtr().get())!;
+                    io.println(heap.releases)!;
+                }
+                io.println(heap.releases)!;
+                var failed = new(&heap) Guarded(-1);
+                io.println(core.isErr(&failed))!;
+                io.println(heap.releases)!;
+                io.println(check(&heap)!)!;
+                io.println(heap.releases)!;
+                heap.refuse = true;
+                var disabled = new(heap) i32(4);
+                var refused = move(disabled) catch (e) {
+                    io.println(e == Trouble.Refused)!;
+                    return;
+                };
+                panic("allocator unexpectedly succeeded");
+            }
+        """,
+                    "19\n0\n19\n1\ntrue\n2\n33\n3\ntrue\n")
+        bare = self.source("fixed.vqr", """
+            import (mem)
+            export "C" func allocate(buffer: *[64]u8) c_int {
+                var arena = mem.FixedBufferAllocator((*buffer)[:]);
+                var value = new(arena) i32(97) catch { return -1; };
+                *value.asPtr()
+            }
+        """)
+        flags = ("--target", "thumbv7m-none-eabi", "--cpu", "cortex-m3", "--profile", "freestanding")
+        self.process(VAQC, bare, *flags, "--emit=obj", "-O2", "-o", "fixed.o")
+        self.assertEqual(self.process("llvm-nm", "-u", "fixed.o").stdout, b"")
+
+    def test_simd_scalar_lanes(self):
+        self.hosted("""
+            import (core, simd)
+            func main() !void {
+                var input = [4]i32{1, 4, 3, 2};
+                var a = simd.load<i32, 4>(input[:])!;
+                var three = simd.Simd<i32, 4>.splat(3);
+                var mask = a.compareLt(three);
+                io.println(mask.countTrue())!;
+                io.println(mask.any())!;
+                io.println(mask.all())!;
+                io.println(mask.and(mask.not()).none())!;
+                io.println(mask.or(mask.not()).all())!;
+                io.println(mask.xor(mask.not()).countTrue())!;
+                var selected = simd.select(mask, a, three);
+                io.println(simd.reduceAdd(selected))!;
+                io.println(simd.reduceMul(selected))!;
+                io.println(simd.reduceMin(selected))!;
+                io.println(simd.reduceMax(selected))!;
+                io.println(a.add(three).sub(three).mul(three).div(three).extract(1))!;
+                io.println(a.min(three).reduceAdd())!;
+                io.println(a.max(three).reduceAdd())!;
+                var indices = [4]usize{3, 2, 1, 0};
+                io.println(simd.shuffle(a, indices).extract(0))!;
+                var combined = [4]usize{0, 1, 4, 6};
+                io.println(simd.permute(a, three, combined).reduceAdd())!;
+                var gathered = simd.gather(input[:], indices)!;
+                io.println(gathered.extract(1))!;
+                var badIndices = [4]usize{1, 0, 2, 4};
+                var rejected = simd.scatter(input[:], badIndices, gathered);
+                io.println(core.isErr(&rejected))!;
+                io.println(input[1])!;
+                simd.store(input[:], gathered)!;
+                io.println(input[0])!;
+                io.println(simd.horizontalSum(input[:]))!;
+                var bytes = [_]u8{0, 0, 0, 0, 0};
+                unsafe {
+                    var address = ptrCast<*u16>(&bytes[1]);
+                    simd.storeUnaligned<u16, 2>(address, simd.Simd<u16, 2>.splat(1000));
+                    io.println(simd.loadUnaligned<u16, 2>(address).reduceAdd())!;
+                }
+            }
+        """, "2\ntrue\nfalse\ntrue\ntrue\n4\n9\n18\n1\n3\n4\n9\n13\n2\n11\n3\ntrue\n4\n2\n10\n2000\n")
+
+    def test_stream_protocols_and_partial_io(self):
+        self.hosted("""
+            import (core)
+            class ShortReader {
+                #implements: io.Reader
+                var remaining: usize;
+            public:
+                func init() : remaining(2) {}
+                func read(dst: []u8) !usize {
+                    if dst.len() == 0 { return 0; }
+                    if remaining == 0 { return io.IoError.WouldBlock; }
+                    dst[0] = 55;
+                    remaining--;
+                    1
+                }
+            }
+            class ShortWriter {
+                #implements: io.Writer
+                var remaining: usize;
+            public:
+                func init() : remaining(3) {}
+                func write(src: []const u8) !usize {
+                    if src.len() == 0 { return 0; }
+                    if remaining == 0 { return io.IoError.Interrupted; }
+                    remaining--;
+                    1
+                }
+                func flush() !void {}
+            }
+            func main() !void {
+                var source = [_]u8{2, 4, 6, 9};
+                var scratch = [_]u8{0, 0, 0, 0};
+                var reader = io.MemoryReader(source[:]);
+                io.println(reader.seek(-2, io.SeekOrigin.End)!)!;
+                var progress = io.readExactProgress(&reader, scratch[:])!;
+                io.println(progress.processed)!;
+                io.println(progress.status == io.ReadStatus.Eof)!;
+                io.println(scratch[1])!;
+                reader.seek(0, io.SeekOrigin.Start)!;
+                var limited = io.limit(&reader, 3);
+                var counted = io.CountingReader(&limited);
+                io.println(io.readAtLeast(&counted, scratch[:], 2)!)!;
+                io.println(counted.count())!;
+                io.println(limited.remaining())!;
+                io.println(io.read(&limited, scratch[:])!)!;
+                var fixed = io.FixedWriter(scratch[0..2]);
+                io.println(io.write(&fixed, source[:])!)!;
+                var full = io.write(&fixed, source[:]);
+                io.println(core.isErr(&full))!;
+                io.println(fixed.written()[1])!;
+                var short = ShortReader();
+                var partial = io.readExactProgress(&short, scratch[:])!;
+                io.println(partial.processed)!;
+                io.println(partial.status == io.ReadStatus.WouldBlock)!;
+                var narrow = ShortWriter();
+                var interrupted = io.writeAllProgress(&narrow, source[:])!;
+                io.println(interrupted.processed)!;
+                io.println(interrupted.status == io.ReadStatus.Interrupted)!;
+                var first = io.MemoryReader(source[0..2]);
+                var second = io.MemoryReader(source[2..4]);
+                var readers = [2]*io.Reader{&first, &second};
+                var multi = io.MultiReader(readers[:]);
+                var output = io.MemoryWriter();
+                var writer = io.CountingWriter(&output);
+                io.println(io.copyAll(&multi, &writer)!)!;
+                io.println(writer.count())!;
+                io.writeAll(&output, output.asSlice())!;
+                var list = io.MemoryWriter.intoBytes(move(output));
+                io.println(list.len())!;
+                io.println(list[7])!;
+                var tiny = io.MemoryReader(source[:]);
+                var oversize = io.readToEnd(&tiny, 3);
+                io.println(core.isErr(&oversize))!;
+                var chars = "中文".asBytes();
+                var text = io.MemoryReader(chars);
+                var decoded = io.readToString(&text, 6)!;
+                io.println(decoded)!;
+            }
+        """, "2\n2\ntrue\n9\n3\n3\n0\n0\n2\ntrue\n4\n2\ntrue\n3\ntrue\n4\n4\n8\n9\ntrue\n中文\n")
 
     def test_build_artifacts(self):
         source = self.source("math.vqr", '''

@@ -95,6 +95,28 @@ void Body::freeAllocation(Value *address) {
   ir.CreateCall(free, {address});
 }
 
+void Body::releaseBox(Value *address, Value *context) {
+  auto *callback = ir.CreateExtractValue(context, 2);
+  auto *custom = block("box.release.custom"), *fallback = block("box.release.default"),
+       *end = block("box.release.done");
+  ir.CreateCondBr(ir.CreateIsNotNull(callback), custom, fallback);
+  ir.SetInsertPoint(custom);
+  auto *pointer = PointerType::getUnqual(p.context);
+  auto *signature = FunctionType::get(ir.getVoidTy(), {pointer, pointer, pointer}, false);
+  ir.CreateCall(signature, callback,
+                {ir.CreateExtractValue(context, 0), ir.CreateExtractValue(context, 1), address})->setDoesNotThrow();
+  ir.CreateBr(end);
+  ir.SetInsertPoint(fallback);
+  if (p.heapAvailable()) {
+    freeAllocation(address);
+    ir.CreateBr(end);
+  } else {
+    ir.CreateCall(Intrinsic::getOrInsertDeclaration(p.module.get(), Intrinsic::trap));
+    ir.CreateUnreachable();
+  }
+  ir.SetInsertPoint(end);
+}
+
 void Body::drop(Type *t, Value *address) {
   p.ensureSized(t, {});
   if (p.drops(t)) ir.CreateCall(p.dropGlue(t), {address});
@@ -117,9 +139,10 @@ void Body::emitDrop(Type *t, Value *address) {
     ir.CreateBr(end);
     ir.SetInsertPoint(end);
   } else if (t->kind == Kind::Box || t->kind == Kind::Allocation) {
-    auto *pointer = ir.CreateLoad(t->ir, address);
+    auto *value = ir.CreateLoad(t->ir, address);
+    auto *pointer = ir.CreateExtractValue(value, 0);
     if (t->kind == Kind::Box) drop(t->parts[0], pointer);
-    freeAllocation(pointer);
+    releaseBox(pointer, ir.CreateExtractValue(value, 1));
   } else if (t->kind == Kind::PatternRemainder) {
     auto *subject = ir.CreateLoad(PointerType::getUnqual(p.context), ir.CreateStructGEP(t->ir, address, 0));
     auto *pattern = ir.CreateLoad(ir.getInt32Ty(), ir.CreateStructGEP(t->ir, address, 1));

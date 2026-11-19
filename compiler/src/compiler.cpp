@@ -105,7 +105,42 @@ Type *Program::pointer(Type *t, bool readOnly) {
 Type *Program::box(Type *t) {
   auto key = '^' + t->name;
   if (auto i = canonical.find(key); i != canonical.end()) return i->second;
-  return add(Kind::Box, PointerType::getUnqual(context), key, {t});
+  auto *address = PointerType::getUnqual(context);
+  if (!allocationContext)
+    allocationContext = add(Kind::AllocationContext, StructType::get(context, {address, address, address}),
+                            "<allocation context>");
+  return add(Kind::Box, StructType::get(context, {address, allocationContext->ir}), key, {t});
+}
+
+std::pair<Type *, Constant *> Program::boxLayout(Type *element, Type *allocator) {
+  auto allocation = methods(allocator, "alloc", false).front();
+  auto *type = this->type(allocation.decl->params.front().type, *allocation.file);
+  ensureSized(type, allocation.decl->span);
+  const auto &layout = module->getDataLayout();
+  auto size = std::max<std::uint64_t>(1, layout.getTypeAllocSize(storage(element)).getFixedValue());
+  auto alignment = layout.getABITypeAlign(storage(element)).value();
+  return {type, ConstantStruct::get(cast<StructType>(type->ir),
+                                   {ConstantInt::get(sizeTy->ir, size), ConstantInt::get(sizeTy->ir, alignment)})};
+}
+
+Function *Program::boxRelease(Type *element, Type *allocator) {
+  auto key = std::pair{element, allocator};
+  if (auto cached = allocatorReleaseFunctions.find(key); cached != allocatorReleaseFunctions.end())
+    return cached->second;
+  auto *address = PointerType::getUnqual(context);
+  auto *fn = Function::Create(FunctionType::get(voidTy->ir, {address, address, address}, false),
+                              GlobalValue::InternalLinkage, "vqr.box.release", *module);
+  fn->setDoesNotThrow();
+  allocatorReleaseFunctions.emplace(key, fn);
+  auto [layoutType, layout] = boxLayout(element, allocator);
+  auto method = methods(allocator, "free", false).front();
+  auto index = static_cast<unsigned>(method.decl - allocator->def.decl->members.data());
+  IRBuilder<> builder(BasicBlock::Create(context, "entry", fn));
+  auto *function = builder.CreateLoad(address, builder.CreateConstGEP1_32(address, fn->getArg(1), index));
+  auto *signature = FunctionType::get(voidTy->ir, {address, address, layoutType->ir}, false);
+  builder.CreateCall(signature, function, {fn->getArg(0), fn->getArg(2), layout})->setDoesNotThrow();
+  builder.CreateRetVoid();
+  return fn;
 }
 
 Type *Program::slice(Type *t, bool readOnly) {
@@ -566,6 +601,7 @@ GlobalVariable *Program::interfaceTable(Type *type, Type *interface, Span span) 
     } else {
       auto *thunk = Function::Create(entry.ir->getFunctionType(), GlobalValue::InternalLinkage,
                                      "vqr.interface.receiver", *module);
+      thunk->setDoesNotThrow();
       IRBuilder<> builder(BasicBlock::Create(context, "entry", thunk));
       Type *current = type;
       Value *address = thunk->getArg(0);
@@ -662,7 +698,6 @@ bool Program::transferable(Type *t, bool shared) {
     case Kind::Function:
       allowed = true;
       break;
-    case Kind::Box:
     case Kind::Array:
     case Kind::Tuple:
     case Kind::Optional:
@@ -785,6 +820,12 @@ Value *Program::standardStream(IRBuilder<> &builder, bool error) {
 }
 
 std::uint32_t Program::errorCode(Definition def, std::string_view member) {
+  if (def.file->standard && def.file->package == "mem" && def.decl->name == "AllocationError" &&
+      member == "OutOfMemory")
+    return 0xfffffffc;
+  if (def.file->standard && def.file->package == "io" && def.decl->name == "IoError" &&
+      member == "WriteFailed")
+    return 0xfffffffd;
   if (!std::ranges::any_of(def.decl->members, [&](const auto &m) { return m.name == member; }))
     fail(def.decl->span, "unknown error member '" + std::string(member) + "'");
   std::uint32_t n = 1;

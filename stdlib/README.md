@@ -1,6 +1,6 @@
 # Vaqrin 标准包
 
-可用 `import (core, coll, iter, opt, result, cmp, meta, mem, mmio, bits, algo, atomic, binary, text, io)` 导入标准包，也可使用 `std/` 前缀。CMake 在构建目录生成 `share/vaqrin/stdlib`，安装时将标准包源码复制到安装前缀下。编译器按使用情况实例化泛型声明。完整的目标接口见[标准包 API 清单](../docs/stdlib/Vaqrin-stdlib-API-complete-draft.md)。
+可用 `import (core, coll, iter, opt, result, cmp, meta, mem, mmio, bits, algo, atomic, binary, simd, text, io)` 导入标准包，也可使用 `std/` 前缀。CMake 在构建目录生成 `share/vaqrin/stdlib`，安装时将标准包源码复制到安装前缀下。编译器按使用情况实例化泛型声明。完整的目标接口见[标准包 API 清单](../docs/stdlib/Vaqrin-stdlib-API-complete-draft.md)。
 
 | 包 | 当前接口 |
 | --- | --- |
@@ -11,14 +11,15 @@
 | `result` | 错误结果的组合、恢复、观察、只读载荷访问与收集 |
 | `cmp` | 标量比较、部分序、浮点总序和上下界助手 |
 | `meta` | 目标布局、类型名称、数组长度、复制、移动、析构、接口实现及线程间移交和共享特性 |
-| `mem` | 布局与对齐、字节操作、原始槽、手动析构和作用域守卫 |
+| `mem` | 布局与对齐、字节操作、原始槽、手动析构、作用域守卫和默认或固定缓冲分配器 |
 | `mmio` | 带边界和对齐检查的寄存器、宽度受限的 volatile 访问、编译器屏障及 ARM 指令屏障 |
 | `bits` | 定宽整数位操作、对齐及可指定顺序的位流读写 |
 | `algo` | 切片查找、二分、堆操作、排序、翻转和旋转 |
 | `atomic` | 原生标量、可空指针、原子标志、比较交换、读改写和内存栅栏 |
 | `binary` | 定宽端序转换、带位置的读写游标、VarUint 和 ZigZag |
+| `simd` | 定宽标量通道、掩码、载入与存储、重排和归约 |
 | `text` | UTF-8 字节相等比较 `equal`、`byteLen`、`scalarCount`、`chars`、`fromBytes`、`StringBuilder` |
-| `io` | 宿主 `println`，输出失败通过 `!void` 返回 |
+| `io` | 读写与定位接口、内存流、限制与计数适配器、短读短写进度及宿主 `println` |
 
 ```cpp
 package main
@@ -44,3 +45,5 @@ Vec 按值接收可移动元素。其 `reserve` 先分配，再搬迁已有元�
 `atomic` 在 x86-64 和 AArch64 上支持 8、16、32、64 位原子操作，在 Thumbv7-M 和 Thumbv7E-M 上支持 8、16、32 位原子操作。默认内存顺序为 `SeqCst`，非法的顺序组合触发 trap。用 `Atomic<T>.intoInner(move(value))` 交付原子对象并取出其值。
 
 `binary` 支持显式小端、大端和目标本机端序。VarUint 使用最短编码，读到非最短或超出 64 位范围的值时返回错误。读取长度前缀失败时保留游标位置，写入容量不足时保留缓冲区内容。
+
+`new(allocator) T(...)` 借用一个实现 `mem.Allocator` 的可变位置。分配器及其缓冲区必须比所有借用它的 Box 活得更久。拆出自定义分配的 Box 时使用 `Box.intoRawParts`，恢复时传回原释放上下文。由于同一个 `^T` 类型可保存借用的分配器，当前线程能力检查保守地拒绝跨线程移交或共享 Box。

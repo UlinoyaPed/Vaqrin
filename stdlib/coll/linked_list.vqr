@@ -16,15 +16,6 @@ pub class ListNode<T: Movable> {
     func valueMut() *T { slot.asPtr() }
 }
 
-func allocateListNode<T: Movable>(value: T) !*ListNode<T> {
-    var owner = new ListNode<T>(move(value))!;
-    Box.intoRaw(move(owner))
-}
-
-func releaseListNode<T: Movable>(node: *ListNode<T>) void {
-    var owner = unsafe { Box<ListNode<T>>.fromRaw(node) };
-}
-
 pub class ListIterRef<T: Movable> {
     var front: ?*ListNode<T>;
     var back: ?*ListNode<T>;
@@ -93,14 +84,30 @@ pub class LinkedList<T: Movable> {
     var firstNode: ?*ListNode<T>;
     var lastNode: ?*ListNode<T>;
     var length: usize;
+    var nodes: Vec<^ListNode<T>>;
+    var allocator: ?mem.AllocatorRef;
 public:
-    func init() : firstNode(null), lastNode(null), length(0) {}
+    func init()
+        : firstNode(null), lastNode(null), length(0),
+          nodes(Vec<^ListNode<T>>()), allocator(null) {}
+
+    static func withAllocator(allocator: mem.AllocatorRef) Self {
+        var result = LinkedList<T>();
+        result.allocator = some(allocator);
+        result.nodes = Vec<^ListNode<T>>.withAllocator(allocator);
+        move(result)
+    }
 
     const func len() usize { length }
     const func isEmpty() bool { length == 0 }
 
     func pushFront(value: T) !void {
-        var node = allocateListNode<T>(move(value))!;
+        var owner = switch allocator {
+            null => new ListNode<T>(move(value))!,
+            some(source) => new(source) ListNode<T>(move(value))!,
+        };
+        var node = owner.asPtr();
+        nodes.insert(0, move(owner))!;
         node.following = firstNode;
         switch firstNode {
             some(oldFirst) => { oldFirst.previous = some(node); },
@@ -111,7 +118,12 @@ public:
     }
 
     func pushBack(value: T) !void {
-        var node = allocateListNode<T>(move(value))!;
+        var owner = switch allocator {
+            null => new ListNode<T>(move(value))!,
+            some(source) => new(source) ListNode<T>(move(value))!,
+        };
+        var node = owner.asPtr();
+        nodes.push(move(owner))!;
         node.previous = lastNode;
         switch lastNode {
             some(oldLast) => { oldLast.following = some(node); },
@@ -128,7 +140,12 @@ public:
 
         var current = nodeAt(index).unwrap();
         var previous = current.previous.unwrap();
-        var node = allocateListNode<T>(move(value))!;
+        var owner = switch allocator {
+            null => new ListNode<T>(move(value))!,
+            some(source) => new(source) ListNode<T>(move(value))!,
+        };
+        var node = owner.asPtr();
+        nodes.insert(index, move(owner))!;
         node.previous = some(previous);
         node.following = some(current);
         previous.following = some(node);
@@ -171,7 +188,12 @@ private:
         }
         length--;
         var value = unsafe { node.slot.assumeInit() };
-        releaseListNode<T>(node);
+        for i in usize(0)..nodes.len() {
+            if nodes.get(i).unwrap().asPtr() == node {
+                var owner = nodes.remove(i).unwrap();
+                break;
+            }
+        }
         move(value)
     }
 
@@ -229,6 +251,7 @@ public:
         if self == other || other.length == 0 { return; }
         if other.length > ~usize(0) - length { return CapacityError.Overflow; }
 
+        nodes.append(&other.nodes)!;
         switch lastNode {
             some(oldLast) => {
                 oldLast.following = other.firstNode;
@@ -246,6 +269,8 @@ public:
     func splitOff(index: usize) !Self {
         if index > length { return CapacityError.IndexOutOfBounds; }
         var result = LinkedList<T>();
+        result.allocator = allocator;
+        result.nodes = nodes.splitOff(index)!;
         if index == length { return move(result); }
 
         if index == 0 {
@@ -283,6 +308,7 @@ public:
         var oldFirst = firstNode;
         firstNode = lastNode;
         lastNode = oldFirst;
+        nodes.reverse();
     }
 
     const func iterRef() ListIterRef<T> {

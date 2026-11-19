@@ -127,9 +127,29 @@ pub class HashMap<K: Movable & hashing.HashKey, V: Movable> {
     var length: usize;
     var tombstones: usize;
     var seed: u32;
+    var allocator: ?mem.AllocatorRef;
 public:
     func init()
-        : buckets(Vec<HashBucket<K, V>>()), length(0), tombstones(0), seed(0) {}
+        : buckets(Vec<HashBucket<K, V>>()), length(0), tombstones(0), seed(0), allocator(null) {}
+
+    static func withAllocator(allocator: mem.AllocatorRef) Self {
+        var result = HashMap<K, V>();
+        result.allocator = some(allocator);
+        result.buckets = Vec<HashBucket<K, V>>.withAllocator(allocator);
+        move(result)
+    }
+
+    static func withSeedAndAllocator(seed: u32, allocator: mem.AllocatorRef) Self {
+        var result = HashMap<K, V>.withAllocator(allocator);
+        result.seed = seed;
+        move(result)
+    }
+
+    static func withCapacityAndAllocator(n: usize, allocator: mem.AllocatorRef) !Self {
+        var result = HashMap<K, V>.withAllocator(allocator);
+        result.reserve(n)!;
+        move(result)
+    }
 
     static func withCapacity(n: usize) !Self {
         var result = HashMap<K, V>();
@@ -200,7 +220,12 @@ private:
 
     func rehash(newCapacity: usize) !void {
         if newCapacity == buckets.len() && tombstones == 0 { return; }
-        var next = Vec<HashBucket<K, V>>.withCapacity(newCapacity)!;
+        var next = Vec<HashBucket<K, V>>();
+        switch allocator {
+            null => {},
+            some(owner) => { next = Vec<HashBucket<K, V>>.withAllocator(owner); },
+        }
+        next.reserve(newCapacity)!;
         for i in usize(0)..newCapacity { next.push(HashBucket<K, V>())!; }
 
         core.swap<Vec<HashBucket<K, V>>>(&buckets, &next);
@@ -208,8 +233,8 @@ private:
         length = 0;
         tombstones = 0;
 
-        for i in usize(0)..old.len() {
-            var bucket = old.getMut(i).unwrap();
+        for i in usize(0)..next.len() {
+            var bucket = next.getMut(i).unwrap();
             if bucket.isOccupied() {
                 var hash = bucket.storedHash();
                 var pair = bucket.take();
@@ -392,6 +417,24 @@ public:
     static func withSeed(seed: u32) Self {
         var result = HashSet<T>();
         result.values = HashMap<T, u8>.withSeed(seed);
+        move(result)
+    }
+
+    static func withAllocator(allocator: mem.AllocatorRef) Self {
+        var result = HashSet<T>();
+        result.values = HashMap<T, u8>.withAllocator(allocator);
+        move(result)
+    }
+
+    static func withCapacityAndAllocator(n: usize, allocator: mem.AllocatorRef) !Self {
+        var result = HashSet<T>();
+        result.values = HashMap<T, u8>.withCapacityAndAllocator(n, allocator)!;
+        move(result)
+    }
+
+    static func withSeedAndAllocator(seed: u32, allocator: mem.AllocatorRef) Self {
+        var result = HashSet<T>();
+        result.values = HashMap<T, u8>.withSeedAndAllocator(seed, allocator);
         move(result)
     }
 

@@ -1,5 +1,5 @@
 package coll
-import (core, iter as iterator)
+import (core, iter as iterator, mem)
 
 pub error CapacityError { Overflow, IndexOutOfBounds }
 
@@ -13,8 +13,21 @@ pub class Vec<T: Movable> {
     var data: ?*T;
     var length: usize;
     var reserved: usize;
+    var allocator: ?mem.AllocatorRef;
 public:
-    func init() : data(null), length(0), reserved(0) {}
+    func init() : data(null), length(0), reserved(0), allocator(null) {}
+
+    static func withAllocator(allocator: mem.AllocatorRef) Self {
+        var out = Vec<T>();
+        out.allocator = some(allocator);
+        move(out)
+    }
+
+    static func withCapacityAndAllocator(n: usize, allocator: mem.AllocatorRef) !Self {
+        var out = Vec<T>.withAllocator(allocator);
+        out.reserve(n)!;
+        move(out)
+    }
 
     static func withCapacity(n: usize) !Self {
         var out = Vec<T>();
@@ -58,17 +71,41 @@ public:
     func shrinkToFit() !void { shrinkTo(length) }
 
 private:
+    func freeBuffer(address: *T, capacity: usize) void {
+        switch allocator {
+            null => unsafe { __vqr_free<T>(address); },
+            some(owner) => {
+                var layout = mem.Layout.array<T>(capacity)!;
+                var bytes = unsafe { ptrCast<*u8>(address) };
+                owner.free(bytes, layout);
+            },
+        }
+    }
+
     func reallocate(newCapacity: usize) !void {
         if newCapacity == 0 {
             switch data {
                 null => {},
-                some(address) => unsafe { __vqr_free<T>(address); },
+                some(address) => freeBuffer(address, reserved),
             }
             data = null;
             reserved = 0;
             return;
         }
-        var next = unsafe { __vqr_alloc<T>(newCapacity)! };
+
+        var next: *T;
+        switch allocator {
+            null => { next = unsafe { __vqr_alloc<T>(newCapacity)! }; },
+            some(owner) => {
+                var layout = mem.Layout.array<T>(newCapacity)!;
+                var raw = owner.alloc(layout)!;
+                switch raw {
+                    null => return mem.AllocationError.OutOfMemory,
+                    some(bytes) => { next = unsafe { ptrCast<*T>(bytes) }; },
+                }
+            },
+        }
+
         var i: usize = 0;
         if __vqr_optional_present(&data) {
             var previous = data.unwrap();
@@ -77,10 +114,10 @@ private:
                     __vqr_slot_write<T>(next.offset(i), __vqr_slot_take<T>(previous.offset(i)));
                     i++;
                 }
-                __vqr_free<T>(previous);
             }
+            freeBuffer(previous, reserved);
         }
-        data = next;
+        data = some(next);
         reserved = newCapacity;
     }
 
@@ -218,7 +255,10 @@ public:
     func splitOff(index: usize) !Self {
         if index > length { return CapacityError.IndexOutOfBounds; }
         var count = length - index;
-        var result = Vec<T>.withCapacity(count)!;
+        var result = switch allocator {
+            null => Vec<T>.withCapacity(count)!,
+            some(owner) => Vec<T>.withCapacityAndAllocator(count, owner)!,
+        };
         if count != 0 {
             var source = data.unwrap();
             var target = result.data.unwrap();
@@ -235,7 +275,10 @@ public:
 
     // Requires T: Copyable. Copying is explicit at this API boundary.
     const func clone() !Self {
-        var result = Vec<T>.withCapacity(length)!;
+        var result = switch allocator {
+            null => Vec<T>.withCapacity(length)!,
+            some(owner) => Vec<T>.withCapacityAndAllocator(length, owner)!,
+        };
         for item in iterRef() { result.push(*item)!; }
         move(result)
     }
@@ -292,7 +335,7 @@ public:
         clear();
         switch data {
             null => {},
-            some(address) => unsafe { __vqr_free<T>(address); },
+            some(address) => freeBuffer(address, reserved),
         }
         data = null;
         reserved = 0;

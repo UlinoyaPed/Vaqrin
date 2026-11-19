@@ -105,11 +105,25 @@ pub class VecDeque<T: Movable> {
     var slots: Vec<mem.MaybeUninit<T>>;
     var head: usize;
     var length: usize;
+    var allocator: ?mem.AllocatorRef;
 public:
-    func init() : slots(Vec<mem.MaybeUninit<T>>()), head(0), length(0) {}
+    func init() : slots(Vec<mem.MaybeUninit<T>>()), head(0), length(0), allocator(null) {}
+
+    static func withAllocator(allocator: mem.AllocatorRef) Self {
+        var out = VecDeque<T>();
+        out.allocator = some(allocator);
+        out.slots = Vec<mem.MaybeUninit<T>>.withAllocator(allocator);
+        move(out)
+    }
 
     static func withCapacity(n: usize) !Self {
         var out = VecDeque<T>();
+        out.reserve(n)!;
+        move(out)
+    }
+
+    static func withCapacityAndAllocator(n: usize, allocator: mem.AllocatorRef) !Self {
+        var out = VecDeque<T>.withAllocator(allocator);
         out.reserve(n)!;
         move(out)
     }
@@ -141,7 +155,12 @@ private:
     }
 
     func reallocate(newCapacity: usize) !void {
-        var next = Vec<mem.MaybeUninit<T>>.withCapacity(newCapacity)!;
+        var next = Vec<mem.MaybeUninit<T>>();
+        switch allocator {
+            null => {},
+            some(owner) => { next = Vec<mem.MaybeUninit<T>>.withAllocator(owner); },
+        }
+        next.reserve(newCapacity)!;
         for i in usize(0)..newCapacity {
             next.push(mem.MaybeUninit<T>.uninit())!;
         }
@@ -302,7 +321,10 @@ public:
     func splitOff(index: usize) !Self {
         if index > length { return CapacityError.IndexOutOfBounds; }
         var count = length - index;
-        var result = VecDeque<T>.withCapacity(count)!;
+        var result = switch allocator {
+            null => VecDeque<T>.withCapacity(count)!,
+            some(owner) => VecDeque<T>.withCapacityAndAllocator(count, owner)!,
+        };
         for i in usize(0)..count {
             var item = popBack().unwrap();
             result.pushFront(move(item))!;
@@ -312,7 +334,10 @@ public:
 
     // Requires T: Copyable.
     const func clone() !Self {
-        var result = VecDeque<T>.withCapacity(length)!;
+        var result = switch allocator {
+            null => VecDeque<T>.withCapacity(length)!,
+            some(owner) => VecDeque<T>.withCapacityAndAllocator(length, owner)!,
+        };
         for item in iterRef() { result.pushBack(*item)!; }
         move(result)
     }

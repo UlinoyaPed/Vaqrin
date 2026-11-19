@@ -32,7 +32,7 @@ The compiler currently provides no standard-library-level direct math intrinsic 
 
 Rounding follows the C/IEEE conventions exposed by the platform: `round` rounds halfway cases away from zero; `roundEven` implements ties-to-even explicitly; `remainder` follows the nearest-integer quotient rule; `fmod` follows truncating quotient semantics. Elementary and special-function domain/pole behavior follows the target C math library, including its NaN/infinity results. The wrappers do not translate errno or floating-point exception flags into Vaqrin errors.
 
-The driver does not automatically link arbitrary extern C references. On hosted ELF systems, link the target's math library explicitly (commonly the platform's `libm.so`) with `vaqc --link-input /absolute/path/to/libm.so`. The path is target/sysroot-specific. Apple platforms commonly resolve these symbols through libSystem. Verify the corresponding CRT/math provider on Windows. The POSIX Bessel symbols `j0`, `j1`, `y0`, and `y1` are not ISO C functions and may be unavailable on non-POSIX targets.
+The driver does not automatically link arbitrary extern C references. For hosted Linux executables and shared libraries that reference `math_ffi`, the driver passes `-lm` to the target linker. Static library consumers supply their own final link dependencies. Other targets can use `--link-input` if the target toolchain requires a separate math library. Apple platforms commonly resolve these symbols through libSystem. Verify the corresponding CRT/math provider on Windows. The POSIX Bessel symbols `j0`, `j1`, `y0`, and `y1` are not ISO C functions and may be unavailable on non-POSIX targets.
 
 Complex division scales the denominator before forming its squared magnitude to reduce avoidable overflow. Interval supports basic closed-interval queries and arithmetic, but uses ordinary round-to-nearest operations. It does not round bounds outward and must not be used as a rigorous enclosure or proof system.
 
@@ -59,7 +59,7 @@ Before local integration, pay particular attention to compiler diagnostics aroun
 ## Local acceptance
 
 1. Run `vaqc check examples/numerics/main.vqr` using the current compiler.
-2. Build the example with the target math library linked. On hosted ELF, use `--link-input /absolute/path/to/libm.so`.
+2. Build the example with `vaqc build examples/numerics/main.vqr -o numerics-example` on hosted Linux.
 3. Compare BigUint add/sub/mul/divMod/shifts/parse/bytes against Python integers, including zero, carries, borrow chains, and division by one-limb and multi-limb divisors.
 4. Test BigInt conversion at i8/i64/i128 minima and maxima, negative zero parsing, truncating division, arithmetic right shift, and signed byte round-trips.
 5. Test Rational negative denominators, zero numerator, denominator minimum, exact reduction, cross-product overflow avoidance, and final-result overflow.

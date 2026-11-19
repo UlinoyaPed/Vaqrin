@@ -6,10 +6,10 @@ Run the static check with the repository's current compiler:
 vaqc check examples/numerics/main.vqr
 ```
 
-For hosted ELF execution, link the target math library explicitly. For example, after locating the correct library for the active architecture/sysroot:
+On hosted Linux, `vaqc` links the target math library when the program uses it.
 
 ```sh
-vaqc build examples/numerics/main.vqr --link-input /absolute/path/to/libm.so -o numerics-example
+vaqc build examples/numerics/main.vqr -o numerics-example
 ./numerics-example
 ```
 

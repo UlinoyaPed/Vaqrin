@@ -69,3 +69,4 @@ Testing/
 /compiler/tests/__pycache__/
 
 tmp/
+examples/uses/

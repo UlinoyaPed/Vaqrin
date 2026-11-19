@@ -1,0 +1,5 @@
+{
+  "grammars": [{"name": "vaqrin", "scope": "source.vaqrin", "path": ".", "file-types": ["vqr"]}],
+  "metadata": {"version": "0.1.0", "license": "MIT", "description": "Vaqrin highlighting grammar"},
+  "bindings": {}
+}

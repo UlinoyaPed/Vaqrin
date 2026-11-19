@@ -341,6 +341,7 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
         args.push_back("-pthread");
       if (r.options.profile == "hosted" && target.isOSLinux() &&
           std::ranges::any_of(module, [](const llvm::Function &function) {
+            if (function.hasFnAttribute("vaqrin.libm") && !function.use_empty()) return true;
             auto intrinsic = function.getIntrinsicID();
             return intrinsic == llvm::Intrinsic::floor || intrinsic == llvm::Intrinsic::ceil ||
                    intrinsic == llvm::Intrinsic::trunc || intrinsic == llvm::Intrinsic::roundeven;

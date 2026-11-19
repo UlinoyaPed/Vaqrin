@@ -22,12 +22,9 @@ class StandardLibraryAcceptance(CompilerCase):
 
     def test_numerics(self):
         self.assertEqual(
-            self.example("examples/numerics/main.vqr", "--link-input", self.math_library()),
+            self.example("examples/numerics/main.vqr"),
             (REPOSITORY / "examples/numerics/expected.txt").read_text(encoding="utf-8"),
         )
-
-    def math_library(self):
-        return self.process("cc", "-print-file-name=libm.so").stdout.decode().strip()
 
     def test_integer_arithmetic_edges(self):
         program = self.source("integers.vqr", '''
@@ -76,7 +73,7 @@ class StandardLibraryAcceptance(CompilerCase):
                 io.println(math.isNan<f64>(math.sqrt<f64>(-1.0)))!;
             }
         ''')
-        self.assertEqual(self.run_program(program, "--link-input", self.math_library()), "true\ntrue\n")
+        self.assertEqual(self.run_program(program), "true\ntrue\n")
 
     def test_json(self):
         lines = self.example("stdlib/json/examples/json_smoke.vqr").splitlines()

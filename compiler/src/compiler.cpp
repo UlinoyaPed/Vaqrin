@@ -976,6 +976,8 @@ FunctionEntry &Program::function(Definition d, Types substitutions, Type *owner,
   bool publiclyLinked = c || (options.emit != "exe" && decl.visible && !owner && (!d.file->standard || d.file->package == root));
   auto linkage = publiclyLinked ? GlobalValue::ExternalLinkage : GlobalValue::InternalLinkage;
   auto *fn = Function::Create(signature, linkage, c ? decl.name : "vqr." + instance, *module);
+  if (decl.external && d.file->standard && d.file->package == "math_ffi")
+    fn->addFnAttr("vaqrin.libm");
   fn->setDoesNotThrow();
   if (ret == neverTy) fn->setDoesNotReturn();
   if (c && extendCNarrowInteger()) {

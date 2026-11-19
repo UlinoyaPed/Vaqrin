@@ -485,9 +485,10 @@ private:
 
 func compilePattern(pattern: str, flags: u8, maxStates: usize,
                     maxInputBytes: usize, maxSteps: usize) !Regex {
-    if maxStates == 0 { return RegexError.TooManyStates; }
+    if maxStates == 0 || maxStates > 0x7fffffff { return RegexError.TooManyStates; }
     if maxSteps == 0 { return RegexError.StepLimitExceeded; }
-    var parser = RegexParser(pattern, maxStates);
+    var maxNodes = if maxStates > ~usize(0) / 4 { ~usize(0) } else { maxStates * 4 };
+    var parser = RegexParser(pattern, maxNodes);
     var parsed = parser.parse()!;
     var compiler = NfaCompiler(move(parsed), maxStates, flags, maxInputBytes, maxSteps);
     compiler.compile(pattern)

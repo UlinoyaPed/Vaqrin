@@ -1,13 +1,26 @@
 # toml
 
-This is an explicitly partial TOML reader. The initial subset supports basic
-key/value assignments, one-level table headers, basic quoted strings, booleans,
-decimal signed integers, and date-like values retained as source strings.
-Duplicate keys and duplicate table declarations are rejected.
+## API
 
-The implementation does not claim TOML 1.0 conformance. Multiline strings,
-literal strings, dotted/quoted keys, inline tables, arrays of tables, full
-numeric grammar, floats, local date/time variants, comments within values,
-Unicode escape forms and complete table redefinition rules remain unsupported.
-The current array parser is intentionally limited and should be treated as
-pending local validation.
+- Value: String, Integer, Float, Bool, DateTime, Array, Table.
+- Document: len, get, getMut, set, insertUnique, remove, keyAt, valueAt,
+  getPath, setPath, stringify.
+- TomlOptions: maxDepth, maxBytes, maxEntries.
+- parse, parseWithOptions, parseReader, stringify, get.
+- TomlDomSerializer, TomlDomDeserializer, encode<T>, decode<T>.
+
+The implemented subset supports basic and literal single-line strings, Unicode
+escapes in basic strings, booleans, signed decimal/hex/octal/binary integers,
+decimal floats retained as their exact source lexeme, local dates, local times,
+offset date-times, arrays, inline tables, dotted keys, nested tables, comments,
+duplicate-key checks, and bounded input/depth/entry counts.
+
+Float values and date/time values retain their original text. No f64 conversion
+is performed. TOML serde currently supports string, integer, boolean, sequence,
+and string-keyed map codecs; floating-point, null/optional and date-time codecs
+are unsupported.
+
+This is not a complete TOML 1.0 implementation. Multiline strings, multiline
+arrays, arrays of tables, full table redefinition semantics, and all edge cases
+of the specification remain unsupported. Do not advertise full TOML 1.0
+conformance. Runtime validation remains pending.

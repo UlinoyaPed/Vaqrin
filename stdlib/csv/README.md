@@ -1,13 +1,20 @@
 # csv
 
-The CSV reader is a byte-oriented state machine over the existing io.Reader
-interface. It preserves empty and trailing fields, doubled quotes, quoted
-CR/LF sequences, CRLF/LF record endings, and supports optional header-row
-capture. It enforces field, record, and record-count limits while reading.
-The writer escapes fields and emits the configured line ending.
+## API
 
-The parser uses strict quote placement: a quote may only begin an empty field,
-and after a closing quote only a delimiter, record terminator, or EOF is valid.
-The implementation is intended to cover the common RFC 4180 dialect plus
-configurable delimiter and line endings. It has not been runtime-tested in
-Vaqrin; local acceptance is required for short reads, EOF and multiline cases.
+- CsvOptions: delimiter, quote, lineEnding, hasHeader, maxFieldBytes,
+  maxRecordBytes, maxInputBytes, maxRecords.
+- CsvReader: init, readRecord, readFields, headers, position, close.
+- CsvWriter: init, writeRecord, writeAll, flush.
+- parseRecord, parse, stringify, escapeField.
+
+CsvReader is a byte-oriented state machine over the existing io.Reader. It
+preserves empty and trailing fields, doubled quotes, quoted CR/LF sequences,
+and CRLF/LF record endings. When hasHeader is enabled, the first record is
+captured by headers() and omitted from readRecord results. Limits are enforced
+while reading and before writing a record.
+
+Quote placement is strict: a quote may only begin an empty field; after a
+closing quote, only a delimiter, record terminator, or EOF is valid. The
+implementation has not been compiled or run locally. Test short reads, EOF,
+multiline fields, and maxInputBytes boundaries before integration.

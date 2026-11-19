@@ -13,7 +13,7 @@ pub class DecodeLimits {
     pub var maxDepth: usize;
     pub var maxElements: usize;
     pub var maxBytes: usize;
-
+public:
     func init()
         : maxDepth(128), maxElements(1_000_000), maxBytes(16 * 1024 * 1024) {}
 

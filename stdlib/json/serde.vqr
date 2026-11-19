@@ -137,7 +137,7 @@ public:
     }
     func readNumber() !string {
         switch *current.unwrap() {
-            Value.Number(&value) => text.fromBytes(value.raw.asBytes()),
+            Value.Number(&value) => text.fromBytes(value.text().asBytes()),
             _ => serde.SerdeError.TypeMismatch,
         }
     }

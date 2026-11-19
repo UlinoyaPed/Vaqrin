@@ -1,18 +1,21 @@
 # serde
 
-The serde package defines a format-independent data model protocol. Format
-packages implement Serializer and Deserializer; user types implement Codec<T>
-explicitly.
+The serde package provides format-independent Serializer, Deserializer,
+Encode<T>, Decode<T>, and Codec<T> interfaces. Implement Codec<T> explicitly
+for application-defined types; there is no reflection or derive support.
 
-The protocol supports null, booleans, signed and unsigned integers,
-floating-point values, strings, sequences, and string-keyed maps.
-OptionalCodec<T>, SequenceCodec<T>, and StringMapCodec<T> provide reusable
-implementations. SignedIntegerCodec<T>, UnsignedIntegerCodec<T>, and
-FloatCodec<T> cover numeric primitive types through checked conversions.
+Primitive codecs cover bool, signed and unsigned integer types, float types,
+string and char. OptionalCodec<T>, SequenceCodec<T>, and StringMapCodec<T>
+provide reusable composition. Sequence and map codecs use Vec-backed values.
 
-There is no automatic reflection or derive support. A user-defined class must
-supply its own codec. DecodeBudget provides shared depth, element, and byte
-accounting for concrete decoders.
+DecodeLimits and DecodeBudget provide shared depth, element and byte counters.
+Concrete format adapters must charge the budget; limits are not applied
+automatically by the abstract protocol.
 
-ByteSerializer and ByteDeserializer are optional byte-backed adapters. They
-keep byte collection separate from the core streaming protocol.
+JSON and TOML provide DOM-backed Serializer and Deserializer adapters. JSON
+preserves raw numeric lexemes and currently rejects f64 serialization and
+non-integral f64 conversion. TOML does not support null, floating-point
+conversion, or date-time codecs. ByteSerializer and ByteDeserializer are
+extension interfaces; concrete byte adapters are not yet supplied.
+
+All runtime behavior remains pending local compilation and acceptance.

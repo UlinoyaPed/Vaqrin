@@ -132,6 +132,25 @@ func epsilonClosure(regex: *const Regex, seeds: []const Thread,
     }
 }
 
+func regexDigit(regex: *const Regex, cp: u32) bool {
+    if (regex.flags & 8) != 0 { unicode.isDigit(__vqr_char(cp)) }
+    else { 48 <= cp && cp <= 57 }
+}
+
+func regexWhitespace(regex: *const Regex, cp: u32) bool {
+    if (regex.flags & 8) != 0 { unicode.isWhitespace(__vqr_char(cp)) }
+    else { cp == 32 || (9 <= cp && cp <= 13) }
+}
+
+func regexWord(regex: *const Regex, cp: u32) bool {
+    if (cp == 95) { return true; }
+    if (regex.flags & 8) != 0 { unicode.isXidContinue(__vqr_char(cp)) }
+    else {
+        (65 <= cp && cp <= 90) || (97 <= cp && cp <= 122) ||
+        (48 <= cp && cp <= 57)
+    }
+}
+
 func rawClassContains(regex: *const Regex, classId: usize, cp: u32) bool {
     if classId >= regex.classes.len() { return false; }
     var descriptor = regex.classes[classId];
@@ -140,13 +159,14 @@ func rawClassContains(regex: *const Regex, classId: usize, cp: u32) bool {
         var range = regex.ranges[i];
         if range.first <= cp && cp <= range.last { found = true; break; }
     }
-    var ch = __vqr_char(cp);
     var mask = descriptor.builtinMask;
-    if (mask & 1) != 0 && unicode.isDigit(ch) { found = true; }
-    if (mask & 2) != 0 && !unicode.isDigit(ch) { found = true; }
-    if (mask & 4) != 0 && unicode.isWhitespace(ch) { found = true; }
-    if (mask & 8) != 0 && !unicode.isWhitespace(ch) { found = true; }
-    var word = unicode.isXidContinue(ch) || cp == 0x5f;
+    var digit = regexDigit(regex, cp);
+    var whitespace = regexWhitespace(regex, cp);
+    var word = regexWord(regex, cp);
+    if (mask & 1) != 0 && digit { found = true; }
+    if (mask & 2) != 0 && !digit { found = true; }
+    if (mask & 4) != 0 && whitespace { found = true; }
+    if (mask & 8) != 0 && !whitespace { found = true; }
     if (mask & 16) != 0 && word { found = true; }
     if (mask & 32) != 0 && !word { found = true; }
     found
@@ -158,6 +178,10 @@ func classContains(regex: *const Regex, classId: usize, cp: u32) bool {
     if (regex.flags & 1) != 0 {
         var lower = convert.fromChar(unicode.toLowerSimple(__vqr_char(cp)));
         var upper = convert.fromChar(unicode.toUpperSimple(__vqr_char(cp)));
+        if (regex.flags & 8) == 0 {
+            if 65 <= cp && cp <= 90 { lower = cp + 32; }
+            if 97 <= cp && cp <= 122 { upper = cp - 32; }
+        }
         if rawClassContains(regex, classId, lower) || rawClassContains(regex, classId, upper) {
             found = true;
         }
@@ -165,8 +189,15 @@ func classContains(regex: *const Regex, classId: usize, cp: u32) bool {
     if regex.classes[classId].negated { !found } else { found }
 }
 
-func simpleCaseEqual(a: u32, b: u32) bool {
+func simpleCaseEqual(regex: *const Regex, a: u32, b: u32) bool {
     if a == b { return true; }
+    if (regex.flags & 8) == 0 {
+        var left = a;
+        var right = b;
+        if 65 <= left && left <= 90 { left += 32; }
+        if 65 <= right && right <= 90 { right += 32; }
+        return left == right;
+    }
     var left = __vqr_char(a);
     var right = __vqr_char(b);
     unicode.toLowerSimple(left) == unicode.toLowerSimple(right) ||
@@ -176,7 +207,7 @@ func simpleCaseEqual(a: u32, b: u32) bool {
 func accepts(regex: *const Regex, state: State, cp: u32) bool {
     switch state.op {
         Op.Character => {
-            if (regex.flags & 1) != 0 { simpleCaseEqual(state.value, cp) }
+            if (regex.flags & 1) != 0 { simpleCaseEqual(regex, state.value, cp) }
             else { state.value == cp }
         },
         Op.Any => {

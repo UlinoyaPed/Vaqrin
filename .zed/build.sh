@@ -2,7 +2,7 @@
 set -e
 
 build_dir="$PWD/build/host"
-if [[ ! -f "$build_dir/CMakeCache.txt" ]]; then
+if [[ ! -f "$build_dir/CMakeCache.txt" || ! -f "$build_dir/CMakeFiles/rules.ninja" ]]; then
     llvm_dir="$(llvm-config --cmakedir)"
     cmake -S compiler -B "$build_dir" -G Ninja \
         -DCMAKE_CXX_COMPILER=clang++ -DLLVM_DIR="$llvm_dir" \

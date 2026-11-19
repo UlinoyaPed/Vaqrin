@@ -68,14 +68,15 @@ pub class Regex {
     pub var maxInputBytes: usize;
     pub var maxSteps: usize;
     pub var captures: usize;
+    pub var startState: i32;
 
 public:
     func init(states: coll.Vec<State>, classes: coll.Vec<CharacterClass>,
               ranges: coll.Vec<CharRange>, pattern: string, flags: u8,
-              maxInputBytes: usize, maxSteps: usize, captureCount: usize)
+              maxInputBytes: usize, maxSteps: usize, captureCount: usize, startState: i32)
         : states(move(states)), classes(move(classes)), ranges(move(ranges)),
           patternText(move(pattern)), flags(flags), maxInputBytes(maxInputBytes),
-          maxSteps(maxSteps), captures(captureCount) {}
+          maxSteps(maxSteps), captures(captureCount), startState(startState) {}
 
     static func compile(pattern: str) !Self {
         RegexBuilder(pattern).compile()

@@ -315,11 +315,11 @@ func runNfa(regex: *const Regex, input: str, start: usize, captureOutput: bool) 
 
         if active.isEmpty() {
             if candidate != null || position == input.byteLen() {
-                return buildSearchResult(candidate, candidateEnd, input, &history, regex.captures);
+                return buildSearchResult(candidate, candidateEnd, input, &history, regex.captureGroups, captureOutput);
             }
         }
         if position == input.byteLen() {
-            return buildSearchResult(candidate, candidateEnd, input, &history, regex.captures);
+            return buildSearchResult(candidate, candidateEnd, input, &history, regex.captureGroups, captureOutput);
         }
 
         var decoded = unicode.decodeUtf8(input.asBytes()[position..]) catch { return RegexError.InvalidUtf8; };
@@ -343,7 +343,7 @@ func runNfa(regex: *const Regex, input: str, start: usize, captureOutput: bool) 
         }
         if nextSeeds.isEmpty() {
             if candidate != null {
-                return buildSearchResult(candidate, candidateEnd, input, &history, regex.captures);
+                return buildSearchResult(candidate, candidateEnd, input, &history, regex.captureGroups, captureOutput);
             }
             position += decoded.1;
             current.clear();
@@ -354,5 +354,5 @@ func runNfa(regex: *const Regex, input: str, start: usize, captureOutput: bool) 
         for thread in nextSeeds.asSlice() { current.push(thread)!; }
         position += decoded.1;
     }
-    buildSearchResult(candidate, candidateEnd, input, &history, regex.captures)
+    buildSearchResult(candidate, candidateEnd, input, &history, regex.captureGroups, captureOutput)
 }

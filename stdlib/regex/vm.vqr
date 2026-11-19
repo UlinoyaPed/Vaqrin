@@ -54,7 +54,7 @@ func assertEnd(regex: *const Regex, input: str, position: usize) bool {
 func appendHistory(history: *coll.Vec<CaptureHistory>, previous: i32,
                    slot: usize, offset: usize) !i32 {
     history.push(CaptureHistory{previous: previous, slot: slot, offset: offset})!;
-    i32(history.len() - 1)
+    i32(history.len() - 1)!
 }
 
 func epsilonClosure(regex: *const Regex, seeds: []const Thread,
@@ -73,7 +73,7 @@ func epsilonClosure(regex: *const Regex, seeds: []const Thread,
             switch popped {
                 null => { draining = false; },
                 some(thread) => {
-                    if thread.state < 0 || usize(thread.state) >= regex.states.len() {
+                    if thread.state < 0 || usize(thread.state)! >= regex.states.len() {
                         return RegexError.InvalidCapture;
                     }
                     if budget.* == 0 { return RegexError.StepLimitExceeded; }
@@ -102,7 +102,7 @@ func epsilonClosure(regex: *const Regex, seeds: []const Thread,
                             }
                         },
                         Op.Save => {
-                            if state.value >= u32(regex.captureGroups + 1) * 2 {
+                            if state.value >= u32(regex.captureGroups + 1)! * 2 {
                                 return RegexError.InvalidCapture;
                             }
                             thread.history = appendHistory(history, thread.history,
@@ -229,7 +229,7 @@ func buildSearchResult(candidate: ?Thread, endByte: usize, input: str,
             for i in usize(0)..slotCount { slots.push(null)!; }
             var head = appendHistory(history, thread.history, 1, endByte)!;
             for head >= 0 {
-                var item = history[usize(head)];
+                var item = history[usize(head)!];
                 if item.slot < slots.len() && slots[item.slot] == null {
                     slots[item.slot] = some(item.offset);
                 }
@@ -289,7 +289,7 @@ func runNfa(regex: *const Regex, input: str, start: usize) !?SearchResult {
 
         var matchIndex: ?usize = null;
         for i in usize(0)..active.len() {
-            if regex.states[usize(active[i].state)].op == Op.Match {
+            if regex.states[usize(active[i].state)!].op == Op.Match {
                 matchIndex = some(i);
                 break;
             }

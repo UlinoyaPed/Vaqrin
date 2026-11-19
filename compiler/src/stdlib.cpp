@@ -76,6 +76,24 @@ ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::v
     };
     return {p.boolTy, ir.CreateICmpULT(order(a), order(b))};
   }
+  if (key == "__vqr_little_endian") {
+    arity(0);
+    return {p.boolTy, ir.getInt1(p.module->getDataLayout().isLittleEndian())};
+  }
+  if (key == "__vqr_move_bytes") {
+    arity(3);
+    auto *byte = p.integer(8, false);
+    auto destination = expression(n->children[1], p.pointer(byte, false));
+    if (!live()) return neverValue();
+    auto *output = read(destination, n->span);
+    auto source = expression(n->children[2], p.pointer(byte, true));
+    if (!live()) return neverValue();
+    auto *input = read(source, n->span);
+    auto count = expression(n->children[3], p.sizeTy);
+    if (!live()) return neverValue();
+    ir.CreateMemMove(output, Align(1), input, Align(1), read(count, n->span));
+    return voidValue();
+  }
   if (key == "__vqr_type_name" || key == "__vqr_alloc_size" || key == "__vqr_alignment" ||
       key == "__vqr_bit_width" || key == "__vqr_copyable" || key == "__vqr_movable" ||
       key == "__vqr_trivial_drop") {

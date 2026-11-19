@@ -982,6 +982,53 @@ class Acceptance(unittest.TestCase):
         self.process(VAQC, invalid, "-o", "invalid")
         self.assertLess(self.process("./invalid", good=False).returncode, 0)
 
+    def test_binary_endianness_and_cursor(self):
+        self.hosted("""
+            import (binary, core)
+            func main() !void {
+                var bytes = [32]u8{0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+                var writer = binary.Writer(bytes[:], binary.Endian.Big);
+                writer.writeU16(258)!;
+                writer.writeI32(-6)!;
+                writer.writeF64(-0.5)!;
+                writer.writeVarUint(300)!;
+                writer.writeVarInt(-3)!;
+                writer.writeU8(3)!;
+                var payload = [_]u8{31, 32, 33};
+                writer.writeBytes(payload[:])!;
+                io.println(writer.position())!;
+                var reader = binary.Reader(writer.written(), binary.Endian.Big);
+                io.println(bytes[0])!; io.println(bytes[1])!;
+                io.println(reader.readU16()!)!;
+                io.println(reader.readI32()!)!;
+                io.println(reader.readF64()!)!;
+                io.println(reader.readVarUint()!)!;
+                io.println(reader.readVarInt()!)!;
+                var rejected = reader.readLengthPrefixed(2);
+                io.println(core.isErr(&rejected))!;
+                io.println(reader.position())!;
+                var payloadRead = reader.readLengthPrefixed(3)!;
+                io.println(payloadRead[2])!;
+                var end = reader.readU8();
+                io.println(core.isErr(&end))!;
+                reader.seek(0)!;
+                io.println(reader.readI8()!)!;
+                var small = [_]u8{8};
+                var failedWrite = binary.writeVarUint(300, small[:]);
+                io.println(core.isErr(&failedWrite))!;
+                io.println(small[0])!;
+                var invalid = [_]u8{128, 0};
+                var bad = binary.readVarUint(invalid[:]);
+                io.println(core.isErr(&bad))!;
+                var value = binary.u32ToBytes(0x01020304u32, binary.Endian.Little);
+                io.println(value[0])!;
+                io.println(binary.readU32(value[:], binary.Endian.Little)!)!;
+                binary.writeF32(value[:], 1.25f32, binary.Endian.Native)!;
+                io.println(binary.readF32(value[:], binary.Endian.Native)!)!;
+                io.println(binary.zigZagDecode(binary.zigZagEncode(bitCast<i64>(0x8000000000000000u64))))!;
+            }
+        """, "21\n1\n2\n258\n-6\n-0.5\n300\n-3\ntrue\n17\n33\ntrue\n1\ntrue\n8\ntrue\n4\n16909060\n1.25\n-9223372036854775808\n")
+
     def test_build_artifacts(self):
         source = self.source("math.vqr", '''
             package math

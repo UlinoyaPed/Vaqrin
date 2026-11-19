@@ -81,6 +81,22 @@ Type *Body::hint(const Ast &n) {
     auto key = path(callee);
     auto dot = key.find('.');
     if (!key.empty() && findLocal(key.substr(0, dot)) < 0) {
+      if (owner && dot == key.npos && findLocal("self") >= 0) {
+        auto methods = p.methods(owner, key, false);
+        if (!methods.empty()) {
+          Type *result = nullptr;
+          for (auto def : methods) {
+            auto &method = *def.decl;
+            if (method.params.size() + 1 != n->children.size() || !method.generics.empty() ||
+                hasComptimeParameters(method))
+              continue;
+            auto *type = p.type(method.type, *def.file, p.classTypes(owner));
+            if (result && result != type) return nullptr;
+            result = type;
+          }
+          return result;
+        }
+      }
       auto ds = p.resolve(file, key, n->span);
       if (ds.size() == 1 && ds[0].decl->kind == DeclKind::Function && ds[0].decl->generics.empty() &&
           !hasComptimeParameters(*ds[0].decl))

@@ -1,6 +1,6 @@
 # Vaqrin 标准包
 
-可用 `import (core, coll, iter, opt, result, cmp, convert, meta, mem, mmio, bits, algo, atomic, binary, bytes, cell, encoding, simd, text, io)` 导入标准包，也可使用 `std/` 前缀。CMake 在构建目录生成 `share/vaqrin/stdlib`，安装时将标准包源码复制到安装前缀下。编译器按使用情况实例化泛型声明。完整的目标接口见[标准包 API 清单](../docs/stdlib/Vaqrin-stdlib-API-complete-draft.md)。
+可用 `import (core, coll, iter, opt, result, cmp, convert, meta, mem, mmio, bits, algo, atomic, binary, bytes, cell, encoding, simd, text, parse, io)` 导入标准包，也可使用 `std/` 前缀。CMake 在构建目录生成 `share/vaqrin/stdlib`，安装时将标准包源码复制到安装前缀下。编译器按使用情况实例化泛型声明。完整的目标接口见[标准包 API 清单](../docs/stdlib/Vaqrin-stdlib-API-complete-draft.md)。
 
 | 包 | 当前接口 |
 | --- | --- |
@@ -23,6 +23,7 @@
 | `encoding` | Hex、Base64、百分号编码、ASCII、Latin-1、UTF-8 和 UTF-16，含跨块 UTF 校验与解码 |
 | `simd` | 定宽标量通道、掩码、载入与存储、重排和归约 |
 | `text` | UTF-8 字节相等比较 `equal`、`byteLen`、`scalarCount`、`chars`、`fromBytes`、`StringBuilder` |
+| `parse` | 整串及前缀整数解析、布尔值、Unicode 标量、UTF-8 字节偏移游标和空白分词 |
 | `io` | 读写与定位接口、内存流、限制与计数适配器、短读短写进度及宿主 `println` |
 
 ```cpp
@@ -51,5 +52,7 @@ Vec 按值接收可移动元素。其 `reserve` 先分配，再搬迁已有元�
 `RefCell` 用借用守卫管理共享和独占访问，守卫或其映射结果释放时归还借用。`OnceCell` 检测重入，`OnceLock` 使用 Acquire/Release 发布已初始化的值，争抢初始化的线程采用自旋等待。可失败的初始化失败后允许重试。守卫和借出的指针必须在对应容器的有效期内使用。
 
 `binary` 支持显式小端、大端和目标本机端序。VarUint 使用最短编码，读到非最短或超出 64 位范围的值时返回错误。读取长度前缀失败时保留游标位置，写入容量不足时保留缓冲区内容。
+
+`parseInt` 和 `parseUint` 支持 2 到 36 进制，按目标整数的取值范围检查溢出。`parseIntPrefix` 返回解析结果和消耗的字节数。`parseHex`、`parseBinary` 和 `parseOctal` 接受对应的可选进制前缀。`Cursor` 和 `splitFields` 返回借用输入的文本视图，游标位置总落在 UTF-8 标量边界。
 
 `new(allocator) T(...)` 借用一个实现 `mem.Allocator` 的可变位置。分配器及其缓冲区必须比所有借用它的 Box 活得更久。拆出自定义分配的 Box 时使用 `Box.intoRawParts`，恢复时传回原释放上下文。由于同一个 `^T` 类型可保存借用的分配器，当前线程能力检查保守地拒绝跨线程移交或共享 Box。

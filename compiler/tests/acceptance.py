@@ -1643,6 +1643,58 @@ class Acceptance(unittest.TestCase):
             }
         """, "001fff\n255\ntrue\ntrue\na%2B/%20%F0%9F%98%80\n中+/\né\ntrue\n233\n6\n45\n中😀\n216\n😀\ntrue\ntrue\n8\nZg==\nZm8=\nZm9v\nfoo\ntrue\n_w\n255\ntrue\n3\n0\n中😀\nZm9v\nYmFy\nfoobar\n")
 
+    def test_parsing_boundaries_and_utf8_cursor(self):
+        self.hosted("""
+            import (convert, parse)
+            func wrapped(value: str) !u16 { parse.parseHex<u16>(value) }
+            func main() !void {
+                io.println(parse.parseInt<i8>("-128", 10)!)!;
+                io.println(parse.parseInt<i8>("128", 10) catch i8(91))!;
+                io.println(parse.parseInt<i8>("-129", 10) catch i8(92))!;
+                io.println(parse.parseUint<u8>("-0", 10) catch u8(93))!;
+                io.println(parse.parseInt<i64>("-9223372036854775808", 10)!)!;
+                var top = parse.parseUint<u128>("340282366920938463463374607431768211455", 10)!;
+                var bottom = parse.parseInt<i128>("-170141183460469231731687303715884105728", 10)!;
+                io.println(top == ~u128(0))!;
+                io.println(convert.bitCast<u128, i128>(bottom) == (1u128 << 127))!;
+                var overflow = parse.parseUint<u128>("340282366920938463463374607431768211456", 10)
+                               catch u128(73);
+                io.println(overflow == 73)!;
+                var prefix = parse.parseIntPrefix<i32>("+Z0𐐷", 36)!;
+                io.println(prefix.value)!;
+                io.println(prefix.consumed)!;
+                io.println(parse.parseInt<i32>("1a", 10) catch i32(94))!;
+                io.println(parse.parseInt<i32>("1", 1) catch i32(95))!;
+                io.println(parse.parseWith<u16, func(str) !u16>("0x1a", wrapped)!)!;
+                io.println(parse.parseBinary<u16>("0B1011")!)!;
+                io.println(parse.parseOctal<i16>("-0o17")!)!;
+                io.println(parse.isInt("+Aabc", 16))!;
+                io.println(parse.isInt(" 3", 10))!;
+                io.println(parse.parseBool("true")!)!;
+                io.println(convert.fromChar(parse.parseChar("𐐷")!))!;
+                var cursor = parse.Cursor("\u2003中𝄞+abc");
+                cursor.skipWhitespace();
+                io.println(cursor.offset())!;
+                var mark = cursor.mark();
+                io.println(cursor.consumeString("中𝄞"))!;
+                io.println(cursor.remaining())!;
+                cursor.reset(mark);
+                io.println(convert.fromChar(cursor.next().unwrap()))!;
+                io.println(cursor.offset())!;
+                for field in parse.splitFields("  α\u00a0 β \t中 ") { io.println(field)!; }
+            }
+        """, "-128\n91\n92\n93\n-9223372036854775808\ntrue\ntrue\ntrue\n1260\n3\n94\n95\n26\n11\n-15\ntrue\nfalse\ntrue\n66615\n3\ntrue\n+abc\n20013\n6\nα\nβ\n中\n")
+        source = self.source("bare.vqr", """
+            import (parse)
+            export "C" func read_number(data: u8, radix: u8) i32 {
+                if data == 0 { return 0; }
+                parse.parseInt<i32>("ABC123!", radix) catch i32(-1)
+            }
+        """)
+        self.process(VAQC, source, "--target", "thumbv7m-none-eabi", "--cpu", "cortex-m3",
+                     "--profile", "freestanding", "--emit=obj", "-O2", "-o", "bare.o")
+        self.assertEqual(self.process("llvm-nm", "-u", "bare.o").stdout, b"")
+
     def test_cells_and_borrow_guards(self):
         self.hosted("""
             import (cell, core, meta)

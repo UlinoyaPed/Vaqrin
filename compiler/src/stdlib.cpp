@@ -74,6 +74,55 @@ ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::v
     if (op == "bit_cast") return builtin("bitCast", n, types, nullptr);
     fail(n->span, "unknown conversion operation");
   }
+  if (key.starts_with("__vqr_parse_")) {
+    auto operation = key.substr(12);
+    if (types.size() != 1) fail(n->span, "integer parsing requires one target type");
+    auto *target = parseType(types[0]);
+    if (target->kind != Kind::Int || target->bits > 128)
+      fail(n->span, "integer parsing requires an integer type of at most 128 bits");
+    if (operation == "signed") {
+      arity(0);
+      return {p.boolTy, ir.getInt1(target->sign)};
+    }
+    auto *wide = p.integer(128, false);
+    if (operation == "bits") {
+      arity(1);
+      auto bits = expression(n->children[1], wide);
+      if (!live()) return neverValue();
+      return {target, ir.CreateTruncOrBitCast(read(bits, n->span), target->ir)};
+    }
+    if (operation == "quotient" || operation == "remainder" || operation == "scale") {
+      arity(2);
+      auto *word = IntegerType::get(ir.getContext(), target->bits <= 32 ? 32 : target->bits <= 64 ? 64 : 128);
+      auto value = expression(n->children[1], wide);
+      if (!live()) return neverValue();
+      auto *amount = ir.CreateTruncOrBitCast(read(value, n->span), word);
+      auto radix = expression(n->children[2], p.integer(8, false));
+      if (!live()) return neverValue();
+      auto *base = ir.CreateZExt(read(radix, n->span), word);
+      auto *out = operation == "quotient" ? ir.CreateUDiv(amount, base) :
+                  operation == "remainder" ? ir.CreateURem(amount, base) : ir.CreateMul(amount, base);
+      return {wide, ir.CreateZExtOrBitCast(out, wide->ir)};
+    }
+    if (operation != "limit") fail(n->span, "unknown integer parsing operation");
+    arity(1);
+    auto negative = expression(n->children[1], p.boolTy);
+    if (!live()) return neverValue();
+    APInt max = target->sign ? APInt::getSignedMaxValue(target->bits) : APInt::getMaxValue(target->bits);
+    auto *positiveLimit = ConstantInt::get(ir.getContext(), max.zextOrTrunc(128));
+    if (!target->sign) return {wide, positiveLimit};
+    auto *negativeLimit = ConstantInt::get(ir.getContext(), APInt::getSignedMinValue(target->bits).zextOrTrunc(128));
+    return {wide, ir.CreateSelect(read(negative, n->span), negativeLimit, positiveLimit)};
+  }
+  if (key == "__vqr_text_borrow_utf8") {
+    arity(1);
+    if (!unsafeDepth) fail(n->span, "borrowing validated UTF-8 requires unsafe", "E240");
+    auto data = expression(n->children[1], p.slice(p.integer(8, false), true));
+    if (!live()) return neverValue();
+    auto *slice = read(data, n->span);
+    auto *view = ir.CreateInsertValue(UndefValue::get(p.viewTy->ir), ir.CreateExtractValue(slice, 0), 0);
+    return {p.viewTy, ir.CreateInsertValue(view, ir.CreateExtractValue(slice, 1), 1)};
+  }
   if (key == "__vqr_char_code") {
     arity(1);
     auto value = expression(n->children[1], p.charTy);

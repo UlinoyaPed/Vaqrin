@@ -1,0 +1,93 @@
+package parse
+import (core, text)
+
+pub error ParseError { InvalidRadix, InvalidSyntax, OutOfRange, TrailingInput }
+
+pub class Parsed<T> {
+public:
+    var value: T;
+    var consumed: usize;
+    func init(value: T, consumed: usize) : value(move(value)), consumed(consumed) {}
+}
+
+func digit(byte: u8) u32 {
+    var code = u32(byte);
+    if 48 <= code && code <= 57 { return code - 48; }
+    if 65 <= code && code <= 90 { return code - 55; }
+    if 97 <= code && code <= 122 { return code - 87; }
+    36
+}
+
+func scanInteger<T>(source: []const u8, radix: u8, allowNegative: bool, allowPrefix: bool) !Parsed<T> {
+    if radix < 2 || radix > 36 { return ParseError.InvalidRadix; }
+    if source.len() == 0 { return ParseError.InvalidSyntax; }
+    var negative = source[0] == 45;
+    if negative && (!allowNegative || !__vqr_parse_signed<T>()) { return ParseError.InvalidSyntax; }
+    var position: usize = if negative || source[0] == 43 { 1 } else { 0 };
+    if allowPrefix && source.len() - position >= 2 && source[position] == 48 {
+        var marker = source[position + 1];
+        if (radix == 16 && (marker == 120 || marker == 88)) ||
+           (radix == 8 && (marker == 111 || marker == 79)) ||
+           (radix == 2 && (marker == 98 || marker == 66)) { position += 2; }
+    }
+    var start = position;
+    var limit = __vqr_parse_limit<T>(negative);
+    var quotient = __vqr_parse_quotient<T>(limit, radix);
+    var remainder = __vqr_parse_remainder<T>(limit, radix);
+    var magnitude: u128 = 0;
+    for position < source.len() {
+        var value = digit(source[position]);
+        if value >= u32(radix) { break; }
+        var wide = u128(value);
+        if magnitude > quotient || (magnitude == quotient && wide > remainder) {
+            return ParseError.OutOfRange;
+        }
+        magnitude = __vqr_parse_scale<T>(magnitude, radix) + wide;
+        position++;
+    }
+    if position == start { return ParseError.InvalidSyntax; }
+    var bits = if negative { 0u128 -% magnitude } else { magnitude };
+    Parsed<T>(__vqr_parse_bits<T>(bits), position)
+}
+
+func wholeInteger<T>(value: str, radix: u8, allowNegative: bool, allowPrefix: bool) !T {
+    var result = scanInteger<T>(value.asBytes(), radix, allowNegative, allowPrefix)!;
+    if result.consumed != value.byteLen() { return ParseError.TrailingInput; }
+    result.value
+}
+
+pub func parseInt<T>(value: str, radix: u8) !T { wholeInteger<T>(value, radix, true, false) }
+pub func parseUint<T>(value: str, radix: u8) !T { wholeInteger<T>(value, radix, false, false) }
+pub func parseIntPrefix<T>(value: str, radix: u8) !Parsed<T> {
+    scanInteger<T>(value.asBytes(), radix, true, false)
+}
+pub func parseHex<T>(value: str) !T { wholeInteger<T>(value, 16, true, true) }
+pub func parseBinary<T>(value: str) !T { wholeInteger<T>(value, 2, true, true) }
+pub func parseOctal<T>(value: str) !T { wholeInteger<T>(value, 8, true, true) }
+
+pub func isInt(value: str, radix: u8) bool {
+    var source = value.asBytes();
+    if radix < 2 || radix > 36 || source.len() == 0 { return false; }
+    var start: usize = if source[0] == 45 || source[0] == 43 { 1 } else { 0 };
+    if start == source.len() { return false; }
+    for index in start..source.len() {
+        if digit(source[index]) >= u32(radix) { return false; }
+    }
+    true
+}
+
+pub func parseBool(value: str) !bool {
+    if value == "true" { return true; }
+    if value == "false" { return false; }
+    ParseError.InvalidSyntax
+}
+
+pub func parseChar(value: str) !char {
+    var cursor = text.chars(value);
+    var first = cursor.next();
+    var rest = cursor.next();
+    if core.isNone(&first) || core.isSome(&rest) { return ParseError.InvalidSyntax; }
+    first.unwrap()
+}
+
+pub func parseWith<T, F>(value: str, parser: F) !T { parser(value) }

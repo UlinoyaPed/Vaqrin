@@ -248,7 +248,7 @@ func runNfa(regex: *const Regex, input: str, start: usize) !?SearchResult {
 
         if candidate == null {
             var initialHistory = appendHistory(&history, -1, 0, position)!;
-            seeds.push(Thread{state: 0, startByte: position, history: initialHistory})!;
+            seeds.push(Thread{state: regex.startState, startByte: position, history: initialHistory})!;
         }
 
         active.clear();

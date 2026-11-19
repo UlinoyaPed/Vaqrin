@@ -21,10 +21,14 @@ target_include_directories(vaqc SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 separate_arguments(llvm_definitions NATIVE_COMMAND "${LLVM_DEFINITIONS}")
 target_compile_options(vaqc PRIVATE ${llvm_definitions}
     $<$<CXX_COMPILER_ID:Clang,GNU>:-Wall;-Wextra;-pedantic-errors>)
-if(TARGET LLVM)
+option(VAQRIN_USE_LLVM_DYLIB "Prefer the complete LLVM shared library when exported by the SDK" ON)
+if(VAQRIN_USE_LLVM_DYLIB AND TARGET LLVM AND "all" IN_LIST LLVM_DYLIB_COMPONENTS)
     target_link_libraries(vaqc PRIVATE LLVM)
 else()
-    llvm_map_components_to_libnames(llvm_libs all)
+    # Installed SDKs can leave LLVM_COMPONENT_LIBS unset, making "all" expand to nothing.
+    llvm_map_components_to_libnames(llvm_libs
+        Core Support TargetParser BitWriter Passes IPO CodeGen MC Target
+        AllTargetsCodeGens AllTargetsDescs AllTargetsInfos)
     target_link_libraries(vaqc PRIVATE ${llvm_libs})
 endif()
 set(VAQRIN_STDLIB_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/../stdlib")
@@ -44,7 +48,8 @@ endforeach()
 install(DIRECTORY "${VAQRIN_STDLIB_SOURCE}/" DESTINATION share/vaqrin/stdlib
     FILES_MATCHING PATTERN "*.vqr")
 configure_file(runtime/tasks.c "${CMAKE_CURRENT_BINARY_DIR}/share/vaqrin/runtime/tasks.c" COPYONLY)
-install(FILES runtime/tasks.c DESTINATION share/vaqrin/runtime)
+configure_file(runtime/io_posix.cpp "${CMAKE_CURRENT_BINARY_DIR}/share/vaqrin/runtime/io_posix.cpp" COPYONLY)
+install(FILES runtime/tasks.c runtime/io_posix.cpp DESTINATION share/vaqrin/runtime)
 
 install(TARGETS vaqc RUNTIME DESTINATION bin)
 install(FILES UNICODE-LICENSE DESTINATION share/licenses/vaqc)

@@ -1,0 +1,150 @@
+package path
+import (coll, text)
+
+pub error PathError { Empty, InvalidComponent, Capacity }
+
+func view(value: string) str { unsafe { __vqr_text_borrow_utf8(value.asBytes()) } }
+
+pub enum Component { Root, Current, Parent, Normal(str) }
+
+pub class PathComponents {
+    var value: string;
+    var position: usize;
+    var rootPending: bool;
+public:
+    func init(source: str) : value(text.fromBytes(source.asBytes())!), position(0),
+        rootPending(source.byteLen() != 0 && source.asBytes()[0] == u8('/')) {
+        if rootPending { position = 1; }
+    }
+    func next() ?Component {
+        if rootPending { rootPending = false; return some(Component.Root); }
+        var bytes = value.asBytes();
+        for position < bytes.len() && bytes[position] == u8('/') { position++; }
+        if position == bytes.len() { return null; }
+        var start = position;
+        for position < bytes.len() && bytes[position] != u8('/') { position++; }
+        var part = unsafe { __vqr_text_borrow_utf8(bytes[start..position]) };
+        if part == "." { return some(Component.Current); }
+        if part == ".." { return some(Component.Parent); }
+        some(Component.Normal(part))
+    }
+}
+
+pub class Path {
+    var value: string;
+public:
+    func init(source: str) : value(text.fromBytes(source.asBytes())!) {}
+    const func asString() str { view(value) }
+    const func isAbsolute() bool {
+        var bytes = value.asBytes();
+        bytes.len() != 0 && bytes[0] == u8('/')
+    }
+    const func isRelative() bool { !isAbsolute() }
+
+    const func filename() ?str {
+        var bytes = value.asBytes();
+        var end = bytes.len();
+        for end > 0 && bytes[end - 1] == u8('/') { end--; }
+        if end == 0 { return null; }
+        var start = end;
+        for start > 0 && bytes[start - 1] != u8('/') { start--; }
+        some(unsafe { __vqr_text_borrow_utf8(bytes[start..end]) })
+    }
+
+    const func parent() ?Path {
+        var bytes = value.asBytes();
+        var end = bytes.len();
+        for end > 0 && bytes[end - 1] == u8('/') { end--; }
+        if end == 0 { return null; }
+        var start = end;
+        for start > 0 && bytes[start - 1] != u8('/') { start--; }
+        if start == 0 { return some(Path(".")); }
+        var parentEnd = start - 1;
+        for parentEnd > 0 && bytes[parentEnd - 1] == u8('/') { parentEnd--; }
+        if parentEnd == 0 { return some(Path("/")); }
+        some(Path(unsafe { __vqr_text_borrow_utf8(bytes[0..parentEnd]) }))
+    }
+
+    const func extension() ?str {
+        var name = filename() ?? { return null; };
+        var bytes = name.asBytes();
+        var index = bytes.len();
+        for index > 0 && bytes[index - 1] != u8('.') { index--; }
+        if index == 0 || index == 1 || index == bytes.len() { return null; }
+        some(unsafe { __vqr_text_borrow_utf8(bytes[index..bytes.len()]) })
+    }
+
+    const func stem() ?string {
+        var name = filename() ?? { return null; };
+        var bytes = name.asBytes();
+        var index = bytes.len();
+        for index > 0 && bytes[index - 1] != u8('.') { index--; }
+        if index == 0 || index == 1 || index == bytes.len() { return some(text.fromBytes(bytes)!); }
+        some(text.fromBytes(bytes[0..index - 1])!)
+    }
+
+    const func components() PathComponents { PathComponents(view(value)) }
+
+    const func normalize() !Path {
+        var bytes = value.asBytes();
+        var absolute = isAbsolute();
+        var segments = coll.Vec<string>();
+        var position: usize = 0;
+        for position < bytes.len() {
+            for position < bytes.len() && bytes[position] == u8('/') { position++; }
+            if position == bytes.len() { break; }
+            var start = position;
+            for position < bytes.len() && bytes[position] != u8('/') { position++; }
+            var part = unsafe { __vqr_text_borrow_utf8(bytes[start..position]) };
+            if part == "." || part.byteLen() == 0 { continue; }
+            if part == ".." {
+                if segments.len() != 0 && segments[segments.len() - 1] != ".." {
+                    var removed = segments.pop();
+                } else if !absolute {
+                    segments.push(text.fromBytes(part.asBytes())!)!;
+                }
+            } else { segments.push(text.fromBytes(part.asBytes())!)!; }
+        }
+        var output = text.StringBuilder();
+        if absolute { output.append("/")!; }
+        for index in usize(0)..segments.len() {
+            if index != 0 { output.append("/")!; }
+            output.append(view(segments[index]))!;
+        }
+        if !absolute && segments.len() == 0 { output.append(".")!; }
+        Path(view(output.build()!))
+    }
+
+    const func withExtension(extension: str) !Path {
+        var name = stem() ?? { return PathError.Empty; };
+        var output = text.StringBuilder();
+        output.append(view(name))!;
+        if extension.byteLen() != 0 { output.append(".")!; output.append(extension)!; }
+        var parentPath = parent();
+        switch parentPath {
+            null => Path(view(output.build()!)),
+            some(base) => join(base, Path(view(output.build()!))),
+        }
+    }
+}
+
+pub type PathBuf = Path;
+pub func join(base: Path, child: Path) !Path {
+    if child.isAbsolute() { return Path(child.asString()); }
+    if child.asString().byteLen() == 0 { return Path(base.asString()); }
+    if base.asString().byteLen() == 0 { return Path(child.asString()); }
+    var output = text.StringBuilder();
+    output.append(base.asString())!;
+    if base.asString().asBytes()[base.asString().byteLen() - 1] != u8('/') { output.append("/")!; }
+    output.append(child.asString())!;
+    Path(view(output.build()!))
+}
+pub func normalize(value: Path) !Path { value.normalize() }
+pub func filename(value: Path) ?str { value.filename() }
+pub func parent(value: Path) ?Path { value.parent() }
+pub func extension(value: Path) ?str { value.extension() }
+pub func stem(value: Path) ?string { value.stem() }
+pub func isAbsolute(value: Path) bool { value.isAbsolute() }
+pub func isRelative(value: Path) bool { value.isRelative() }
+pub func components(value: Path) PathComponents { value.components() }
+pub func withExtension(value: Path, extension: str) !Path { value.withExtension(extension) }

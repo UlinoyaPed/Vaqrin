@@ -1,0 +1,45 @@
+name: io-stack-static-validation
+
+on:
+  push:
+    branches:
+      - feature/io-stack
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  static-validation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LLVM 20.1.8
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: 20.1.8
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build python3
+
+      - name: Configure compiler
+        run: |
+          cmake -S compiler -B build/io-static -G Ninja \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DLLVM_DIR="$(llvm-config --cmakedir)" \
+            -DBUILD_TESTING=OFF
+
+      - name: Build compiler
+        run: cmake --build build/io-static --parallel 2
+
+      - name: Validate POSIX runtime translation unit
+        run: |
+          clang++ -std=c++20 -Wall -Wextra -pedantic-errors \
+            -fno-exceptions -fno-rtti -fsyntax-only compiler/runtime/io_posix.cpp
+
+      - name: Type-check I/O example
+        run: python3 compiler/tests/io_static_validation.py build/io-static/vaqc

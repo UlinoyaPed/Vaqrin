@@ -930,7 +930,8 @@ FunctionEntry &Program::function(Definition d, Types substitutions, Type *owner,
     if (!cSymbols.insert(decl.name).second) fail(decl.span, "duplicate C symbol '" + decl.name + "'");
     auto scalar = [](Type *t) {
       return (t->kind == Kind::Int && (t->bits == 8 || t->bits == 16 || t->bits == 32 || t->bits == 64)) ||
-             t->kind == Kind::Float || (t->kind == Kind::Pointer && t->ir->isPointerTy()) || (t->kind == Kind::Function && t->cAbi);
+             t->kind == Kind::Error || t->kind == Kind::Float ||
+             (t->kind == Kind::Pointer && t->ir->isPointerTy()) || (t->kind == Kind::Function && t->cAbi);
     };
     if ((ret != voidTy && !scalar(ret)) || !std::ranges::all_of(params, scalar))
       fail(decl.span, "C ABI requires supported scalar types; aggregate bridges are not yet supported",

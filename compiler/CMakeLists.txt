@@ -59,4 +59,12 @@ if(BUILD_TESTING)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     add_test(NAME vaqc-acceptance COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/acceptance.py $<TARGET_FILE:vaqc>)
+    add_test(NAME vaqc-container-acceptance COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/coll_acceptance.py $<TARGET_FILE:vaqc>)
+    add_test(NAME vaqc-io-acceptance COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/io_acceptance.py $<TARGET_FILE:vaqc>)
+    add_test(NAME vaqc-io-static COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/io_static_validation.py $<TARGET_FILE:vaqc>)
+    add_test(NAME vaqc-container-static COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/coll_static_audit.py)
 endif()

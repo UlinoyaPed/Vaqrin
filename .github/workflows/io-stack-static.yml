@@ -1,4 +1,4 @@
-name: io-stack-static-validation
+name: io-stack-validation
 
 on:
   push:
@@ -31,7 +31,7 @@ jobs:
           cmake -S compiler -B build/io-static -G Ninja \
             -DCMAKE_CXX_COMPILER=clang++ \
             -DLLVM_DIR="$(llvm-config --cmakedir)" \
-            -DBUILD_TESTING=OFF
+            -DVAQRIN_REQUIRE_BASELINE=ON
 
       - name: Build compiler
         run: cmake --build build/io-static --parallel 2
@@ -41,5 +41,5 @@ jobs:
           clang++ -std=c++20 -Wall -Wextra -pedantic-errors \
             -fno-exceptions -fno-rtti -fsyntax-only compiler/runtime/io_posix.cpp
 
-      - name: Type-check I/O example
-        run: python3 compiler/tests/io_static_validation.py build/io-static/vaqc
+      - name: Compile and run I/O acceptance
+        run: ctest --test-dir build/io-static --output-on-failure -R '^vaqc-io-(static|acceptance)$'

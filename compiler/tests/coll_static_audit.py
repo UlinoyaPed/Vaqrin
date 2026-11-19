@@ -9,6 +9,7 @@ Run from any directory with: python3 compiler/tests/coll_static_audit.py
 from __future__ import annotations
 
 import re
+import argparse
 import subprocess
 import sys
 from pathlib import Path
@@ -118,16 +119,16 @@ def source_imports(source: str) -> list[str]:
     return imported
 
 
-def changed_paths(errors: list[str]) -> None:
+def changed_paths(scope: tuple[str, str], errors: list[str]) -> None:
     result = subprocess.run(
-        ["git", "diff", "--name-only", "master...HEAD"],
+        ["git", "diff", "--name-only", f"{scope[0]}...{scope[1]}", "--"],
         cwd=ROOT,
         text=True,
         capture_output=True,
         check=False,
     )
     if result.returncode != 0:
-        print("NOTE: master...HEAD diff unavailable; skipped changed-path audit.")
+        errors.append(f"cannot inspect container branch scope: {result.stderr.strip()}")
         return
 
     for path in filter(None, result.stdout.splitlines()):
@@ -138,6 +139,10 @@ def changed_paths(errors: list[str]) -> None:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--scope", nargs=2, metavar=("BASE", "TIP"),
+                        help="also audit the original container branch's Git range")
+    args = parser.parse_args()
     errors: list[str] = []
     loaded: dict[str, str] = {}
 
@@ -191,7 +196,7 @@ def main() -> int:
 
     check("ownerIndex: usize" in linked and "nodes: Vec<^ListNode<T>>" in linked,
           "LinkedList lacks explicit Box ownership tracking", errors)
-    check("nodes.getMut(ownerIndex).unwrap().asPtr().ownerIndex = ownerIndex" in linked,
+    check("(*nodes.getMut(ownerIndex).unwrap()).asPtr().ownerIndex = ownerIndex" in linked,
           "LinkedList swap-removal does not repair the moved node index", errors)
     check("nodes.append(&other.nodes)!" in linked,
           "LinkedList append does not transfer Box ownership", errors)
@@ -237,7 +242,8 @@ def main() -> int:
     check("hashI32" in hash_source and "eqI32" in hash_source,
           "hash package lacks primitive integer callbacks", errors)
 
-    changed_paths(errors)
+    if args.scope:
+        changed_paths(tuple(args.scope), errors)
 
     if errors:
         for error in errors:

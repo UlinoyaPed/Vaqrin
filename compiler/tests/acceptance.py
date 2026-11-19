@@ -10,7 +10,7 @@ VAQC = pathlib.Path(sys.argv.pop(1)).resolve()
 REPOSITORY = pathlib.Path(__file__).resolve().parents[2]
 
 
-class Acceptance(unittest.TestCase):
+class CompilerCase(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="vaqrin-test-")
         self.addCleanup(temporary.cleanup)
@@ -22,9 +22,9 @@ class Acceptance(unittest.TestCase):
         path.write_text(text, encoding="utf-8")
         return path
 
-    def process(self, *args, good=True):
+    def process(self, *args, good=True, input=None):
         result = subprocess.run(
-            [str(arg) for arg in args], cwd=self.root, capture_output=True, timeout=25
+            [str(arg) for arg in args], cwd=self.root, input=input, capture_output=True, timeout=25
         )
         if good:
             self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
@@ -36,6 +36,40 @@ class Acceptance(unittest.TestCase):
         source = self.source("main.vqr", "package main\nimport (io)\n" + program)
         self.process(VAQC, *flags, source, "-o", "program")
         self.assertEqual(self.process("./program").stdout.decode(), output)
+
+
+class Acceptance(CompilerCase):
+    def test_shipped_packages_load_together(self):
+        packages = sorted({source.parent.name for source in (REPOSITORY / "stdlib").glob("*/*.vqr")})
+        program = self.source("packages.vqr", "import (" + ", ".join(packages) + ")\nfunc f() void {}")
+        self.process(VAQC, "check", program)
+
+    def test_tuple_projections_and_optional_tag_without_copy(self):
+        self.hosted('''
+            class Owned {
+                #copy: disabled
+                pub var value: i32;
+                func deinit() void { io.println(value) catch {}; }
+            }
+            func main() !void {
+                var tuple = ((1, 2), 3);
+                tuple.0.1 = 9;
+                var pointer: *const ((i32, i32), i32) = &tuple;
+                io.println(pointer.0.1)!;
+                var optional = some(tuple.0);
+                io.println(optional?.1.unwrap())!;
+                var moveOnly = some(Owned{value: 40});
+                io.println(null != moveOnly)!;
+                io.println(move(moveOnly) == null)!;
+            }
+        ''', '9\n9\ntrue\n40\nfalse\n')
+        for code, diagnostic in (
+            ("func f(t: (i32,i32)) i32 { t.2 }", "tuple field index is out of range"),
+            ("func f(t: *const (i32,i32)) void { t.0 = 9; }", "writable"),
+        ):
+            file = self.source("invalid_tuple.vqr", code)
+            result = self.process(VAQC, "check", file, good=False)
+            self.assertIn(diagnostic.encode(), result.stderr)
 
     def test_syntax_sema(self):
         self.source("geometry/math.vqr", '''
@@ -435,16 +469,35 @@ class Acceptance(unittest.TestCase):
         options = ["--target", "thumbv7m-none-eabi", "--cpu", "cortex-m3", "--profile", "freestanding"]
         self.process(VAQC, source, *options, "-O2", "--emit=obj", "-o", "empty.o")
         self.assertEqual(self.process("llvm-nm", "-u", "empty.o").stdout, b"")
-        fail = self.source("fail.vqr", """
+        allocation = self.source("allocation.vqr", """
             package denied
-            import (coll)
-            func allocate() !void {
+            import (coll, mem)
+            export "C" func allocate_default() c_int {
                 var v = coll.Vec<u8>();
-                v.push(1)!;
+                v.push(1) catch (reason) {
+                    if reason == mem.AllocationError.AllocatorUnavailable { return 37; }
+                    return 4;
+                };
+                5
+            }
+            export "C" func allocate_explicit() c_int {
+                var backing = mem.zeroedBytes<64>();
+                var allocator = mem.FixedBufferAllocator(backing[:]);
+                var v = coll.Vec<u8>.withAllocator(&allocator);
+                v.push(19) catch { return 3; };
+                v.push(10) catch { return 4; };
+                i32(v[0]) + i32(v[1])
             }
         """)
-        diagnostic = self.process(VAQC, "check", fail, *options, good=False).stderr.decode()
-        self.assertIn("no allocator for growing collections", diagnostic)
+        self.process(VAQC, allocation, *options, "-O2", "--emit=obj", "-o", "bare-storage.o")
+        self.assertEqual(self.process("llvm-nm", "-u", "bare-storage.o").stdout, b"")
+        self.process(VAQC, allocation, "--profile", "freestanding", "-O2", "--emit=obj", "-o", "native-storage.o")
+        consumer = self.source("storage.c", """
+            extern int allocate_default(void), allocate_explicit(void);
+            int main(void) { return allocate_default() != 37 || allocate_explicit() != 29; }
+        """)
+        self.process("cc", consumer, "native-storage.o", "-o", "storage")
+        self.process("./storage")
 
     def test_standard_intrinsics_require_standard_package(self):
         source = self.source("bad.vqr", """
@@ -2412,9 +2465,9 @@ class Acceptance(unittest.TestCase):
                 var first = group.spawn<i32>(move(waitForOther))!;
                 var source = [move(definite)]() !void => {
                     var moved = move(definite);
-                    var atomic = moved.asPtr();
+                    var flag = moved.asPtr();
                     // This fixture has a unique writer and the cell operations are atomic.
-                    unsafe { constCast<*atomic.Atomic<u8>>(atomic).store(1, atomic.Order.Release); }
+                    unsafe { constCast<*atomic.Atomic<u8>>(flag).store(1, atomic.Order.Release); }
                 };
                 var signal = group.spawn<void>(move(source))!;
                 io.println(first.join()!)!;

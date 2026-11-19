@@ -1,0 +1,81 @@
+package regex
+import (coll, convert, unicode)
+
+func addState(regex: *Regex, list: *coll.Vec<i32>, seen: *coll.Vec<bool>, index: i32, position: usize, input: str, budget: *usize) !void {
+    if index < 0 { return; }
+    if usize(index) >= regex.states.len() { return RegexError.InvalidCapture; }
+    if usize(index) >= seen.len() { return RegexError.InvalidCapture; }
+    if seen[usize(index)] { return; }
+    seen[usize(index)] = true;
+    budget.* -= 1;
+    if budget.* == 0 { return RegexError.TooManyStates; }
+    var state = regex.states[usize(index)];
+    switch state.op {
+        Op.Split => {
+            addState(regex,list,seen,state.out,position,input,budget)!;
+            addState(regex,list,seen,state.alternate,position,input,budget)!;
+        },
+        Op.Jump => addState(regex,list,seen,state.out,position,input,budget)!,
+        Op.AssertStart => {
+            if position == 0 || ((regex.flags & 2) != 0 && input.asBytes()[position - 1] == 10) {
+                addState(regex,list,seen,state.out,position,input,budget)!;
+            }
+        },
+        Op.AssertEnd => {
+            if position == input.byteLen() || ((regex.flags & 2) != 0 && input.asBytes()[position] == 10) {
+                addState(regex,list,seen,state.out,position,input,budget)!;
+            }
+        },
+        else => list.push(index)!
+    }
+}
+func runNfa(regex: *Regex, input: str, start: usize) ?Match {
+    var position = start;
+    var candidate: ?Match = null;
+    var budget = regex.states.len() * (input.byteLen() + 1);
+    for position <= input.byteLen() {
+        var active = coll.Vec<i32>();
+        var seen = coll.Vec<bool>();
+        seen.resize(regex.states.len(), false)!;
+        for i in usize(0)..regex.states.len() { seen[i] = false; }
+        // The compiled start state is stored at index zero.
+        addState(regex,&active,&seen,0,position,input,&budget) catch { return candidate; };
+        var matched = false;
+        for index in active.asSlice() {
+            if regex.states[usize(index)].op == Op.Match {
+                candidate = some(Match{startByte:start,endByte:position,source:input});
+                matched = true;
+                break;
+            }
+        }
+        if matched { return candidate; }
+        if position == input.byteLen() { break; }
+        var decoded = unicode.decodeUtf8(input.asBytes()[position..]) catch { return null; };
+        var cp = convert.fromChar(decoded.0);
+        var next = coll.Vec<i32>();
+        var nextSeen = coll.Vec<bool>();
+        nextSeen.resize(regex.states.len(),false)!;
+        for index in active.asSlice() {
+            var state = regex.states[usize(index)];
+            var accepts = false;
+            if state.op == Op.Any { accepts = (regex.flags & 4) != 0 || cp != 10; }
+            else if state.op == Op.Character { accepts = state.value == cp; }
+            else if state.op == Op.Class { accepts = classContains(regex,state.value,cp); }
+            if accepts { addState(regex,&next,&nextSeen,state.out,position + decoded.1,input,&budget) catch { return candidate; }; }
+        }
+        active = move(next);
+        position += decoded.1;
+    }
+    candidate
+}
+func runCaptures(regex: *Regex, input: str, start: usize) ?Captures {
+    var found = runNfa(regex,input,start);
+    if found == null { return null; }
+    var result = Captures(input);
+    result.groups.push(some((found.unwrap().startByte,found.unwrap().endByte)))!;
+    result
+}
+func classContains(regex: *Regex, classId: u32, cp: u32) bool {
+    // Character class descriptors are emitted adjacent to the compiled program.
+    false
+}

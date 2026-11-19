@@ -78,10 +78,10 @@ pub class HostFile {
     var owns: bool;
     var appendMode: bool;
     var closed: bool;
-public:
+private:
     func init(fd: i32, ownsDescriptor: bool, append: bool)
         : descriptor(fd), owns(ownsDescriptor), appendMode(append), closed(false) {}
-
+public:
     static func open(path: []const u8, flags: u32, mode: u32) !Self {
         var name = cString(path)!;
         var errorCode: i32 = 0;
@@ -222,9 +222,9 @@ public:
 pub class HostDirectory {
     #copy: disabled
     var handle: usize;
-public:
+private:
     func init(handle: usize) : handle(handle) {}
-
+public:
     static func open(path: []const u8) !Self {
         var name = cString(path)!;
         var errorCode: i32 = 0;

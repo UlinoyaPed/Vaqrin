@@ -1935,6 +1935,125 @@ class Acceptance(unittest.TestCase):
         self.process("cc", client, "ownership.o", "-Wl,--wrap=pthread_create", "-pthread", "-o", "ownership")
         self.process("./ownership")
 
+    def test_mutex_guards_and_once(self):
+        self.hosted('''
+            import (cell, core, meta, sync)
+            error Failure { Retry }
+            class Pair {
+                #copy: disabled
+                pub var value: i32;
+                pub var other: i32;
+            }
+            func choose(pair: *Pair) *i32 { &pair.other }
+            func main() !void {
+                var lock = sync.Mutex<Pair>.new(Pair{value: 13, other: 2});
+                {
+                    var first = lock.lock()!;
+                    var unavailable = lock.tryLock();
+                    io.println(core.isNone(&unavailable))!;
+                    var entry = sync.MutexGuard<Pair>.map<i32>(move(first), choose);
+                    &number := entry.get();
+                    number *= 4;
+                    entry.unlock();
+                }
+                var observe = (pair: *Pair) !void => io.println(pair.other);
+                sync.withLock(&lock, observe)!;
+                var value = sync.Mutex<Pair>.intoInner(move(lock));
+                io.println(value.value)!;
+                io.println(meta.isShareable<sync.Mutex<cell.Cell<i32>>>())!;
+                io.println(meta.isSendable<sync.MutexGuard<Pair>>())!;
+                var once = sync.Once.new();
+                var retries = 0;
+                var fail = [&retries]() !void => { retries++; Failure.Retry };
+                once.callOnce(fail) catch {};
+                io.println(once.isDone())!;
+                var finish = [&retries]() void => { retries++; };
+                once.callOnce(finish)!;
+                once.callOnce(finish)!;
+                io.println(once.isDone())!;
+                io.println(retries)!;
+            }
+        ''', 'true\n8\n13\ntrue\nfalse\nfalse\ntrue\n2\n')
+
+    def test_mutex_condition_and_wait_group_across_threads(self):
+        source = self.source("synchronization.vqr", '''
+            import (sync)
+            class Counter {
+                pub var value: u32;
+                pub var waiting: bool;
+            }
+            class State {
+                pub var counter: sync.Mutex<Counter>;
+                pub var pending: sync.WaitGroup;
+                pub var condition: sync.CondVar;
+            public:
+                func init() : counter(sync.Mutex<Counter>.new(Counter{value: 0, waiting: false})),
+                              pending(sync.WaitGroup.new()), condition(sync.CondVar.new()) {}
+            }
+            export "C" func make_state() *State {
+                var value = new State() catch { panic("state allocation failed"); };
+                value.asPtr().pending.add(6) catch { panic("add failed"); };
+                Box.intoRaw(move(value))
+            }
+            export "C" func worker(state: *const State) void {
+                for index in 0..2000 {
+                    var guard = state.counter.lock() catch { panic("lock failed"); };
+                    var value = guard.get();
+                    value.value++;
+                }
+                state.pending.done();
+                state.condition.notifyAll();
+            }
+            export "C" func monitor(state: *const State) void {
+                var guard = state.counter.lock() catch { panic("lock failed"); };
+                guard.get().waiting = true;
+                var threshold = (value: *Counter) bool => value.value == 12000;
+                var final = sync.waitUntil(&state.condition, move(guard), threshold)
+                            catch { panic("condition failed"); };
+            }
+            export "C" func is_waiting(state: *const State) c_int {
+                var guard = state.counter.lock() catch { panic("lock failed"); };
+                if guard.get().waiting { 1 } else { 0 }
+            }
+            export "C" func finish(state: *State) u32 {
+                state.pending.wait() catch { panic("wait failed"); };
+                var guard = state.counter.lock() catch { panic("lock failed"); };
+                guard.get().value
+            }
+            export "C" func free_state(state: *State) void {
+                var owned = unsafe { Box<State>.fromRaw(state) };
+            }
+        ''')
+        client = self.source("synchronization.c", '''
+            #include <pthread.h>
+            #include <sched.h>
+            #include <stdint.h>
+
+            extern void *make_state(void);
+            extern void worker(const void *), monitor(const void *), free_state(void *);
+            extern int is_waiting(const void *);
+            extern uint32_t finish(void *);
+            static void *run_worker(void *value) { worker(value); return 0; }
+            static void *run_monitor(void *value) { monitor(value); return 0; }
+            int main(void) {
+                void *state = make_state();
+                pthread_t watcher, threads[6];
+                if (pthread_create(&watcher, 0, run_monitor, state)) return 1;
+                while (!is_waiting(state)) sched_yield();
+                for (int i = 0; i < 6; ++i)
+                    if (pthread_create(&threads[i], 0, run_worker, state)) return 2;
+                if (finish(state) != 12000) return 3;
+                for (int i = 0; i < 6; ++i)
+                    if (pthread_join(threads[i], 0)) return 4;
+                if (pthread_join(watcher, 0)) return 5;
+                free_state(state);
+                return 0;
+            }
+        ''')
+        self.process(VAQC, source, "--emit=obj", "-O2", "-o", "sync.o")
+        self.process("cc", client, "sync.o", "-pthread", "-o", "sync-client")
+        self.process("./sync-client")
+
     def test_build_artifacts(self):
         source = self.source("math.vqr", '''
             package math

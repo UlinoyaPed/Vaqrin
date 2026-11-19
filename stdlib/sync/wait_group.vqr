@@ -1,0 +1,51 @@
+package sync
+import (atomic)
+
+pub error SyncError { CountOverflow }
+
+pub class WaitGroup {
+    #copy: disabled
+    var pending: u32;
+    func init() : pending(0) {}
+public:
+    static func new() Self { WaitGroup() }
+
+    const func add(n: usize) !void {
+        var amount = u32(n) catch { return SyncError.CountOverflow; };
+        var state = unsafe { constCast<*u32>(&pending) };
+        var old = __vqr_atomic_load(state, atomic.Order.Relaxed);
+        for {
+            if amount > ~u32(0) - old { return SyncError.CountOverflow; }
+            observed, done := __vqr_atomic_compare_weak(state, old, old + amount,
+                                                      atomic.Order.Relaxed, atomic.Order.Relaxed);
+            if done { return; }
+            old = observed;
+        }
+    }
+
+    const func done() void {
+        var state = unsafe { constCast<*u32>(&pending) };
+        var old = __vqr_atomic_load(state, atomic.Order.Relaxed);
+        for {
+            if old == 0 { panic("WaitGroup.done requires a pending operation"); }
+            observed, changed := __vqr_atomic_compare_weak(state, old, old - 1,
+                                                         atomic.Order.Release, atomic.Order.Relaxed);
+            if changed {
+                if old == 1 { __vqr_sync_wake(state, 0x7fffffffu32); }
+                return;
+            }
+            old = observed;
+        }
+    }
+
+    const func count() usize { usize(__vqr_atomic_load(&pending, atomic.Order.Acquire)) }
+
+    const func wait() !void {
+        var state = &pending;
+        for {
+            var left = __vqr_atomic_load(state, atomic.Order.Acquire);
+            if left == 0 { return; }
+            __vqr_sync_wait(state, left);
+        }
+    }
+}

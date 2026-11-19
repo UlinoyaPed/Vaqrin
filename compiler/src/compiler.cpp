@@ -681,10 +681,10 @@ bool Program::movable(Type *t) {
 }
 
 bool Program::transferable(Type *t, bool shared) {
-  std::set<Type *> inspecting;
-  auto trait = [&](auto &&self, Type *type) -> bool {
-    if (!inspecting.insert(type).second) return true;
-    auto check = [&](Type *inner) { return self(self, inner); };
+  std::set<std::pair<Type *, bool>> inspecting;
+  auto trait = [&](auto &&self, Type *type, bool shared) -> bool {
+    if (!inspecting.emplace(type, shared).second) return true;
+    auto check = [&](Type *inner) { return self(self, inner, shared); };
     ensureSized(type, {});
     bool allowed = false;
     switch (type->kind) {
@@ -711,6 +711,8 @@ bool Program::transferable(Type *t, bool shared) {
         allowed = check(type->parts[0]);
       else if (file.standard && file.package == "thread" && name == "Thread")
         allowed = !shared && check(type->parts[0]);
+      else if (file.standard && file.package == "sync" && name == "Mutex")
+        allowed = self(self, type->parts[0], false);
       else if (shared && file.standard && file.package == "cell")
         allowed = false;
       else if (file.standard && file.package == "coll" && (name == "Vec" || name == "FixedVec"))
@@ -732,10 +734,10 @@ bool Program::transferable(Type *t, bool shared) {
     default:
       break;
     }
-    inspecting.erase(type);
+    inspecting.erase({type, shared});
     return allowed;
   };
-  return trait(trait, t);
+  return trait(trait, t, shared);
 }
 
 bool Program::drops(Type *t) {

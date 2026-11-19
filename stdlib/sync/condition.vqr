@@ -1,0 +1,55 @@
+package sync
+import (atomic, cell, core)
+
+pub class CondVar {
+    #copy: disabled
+    var sequence: u32;
+    func init() : sequence(0) {}
+public:
+    static func new() Self { CondVar() }
+
+    const func wait<T>(guard: MutexGuard<T>) !MutexGuard<T> {
+        var address = &sequence;
+        var version = __vqr_atomic_load(address, atomic.Order.Relaxed);
+        var awaitSignal = [address, version]() void => { __vqr_sync_wait(address, version); };
+        unsafe { MutexGuard<T>.unlockWhile(move(guard), awaitSignal) }
+    }
+
+    const func notifyOne() void { notify(1); }
+    const func notifyAll() void { notify(0x7fffffff); }
+private:
+    const func notify(count: u32) void {
+        var address = unsafe { constCast<*u32>(&sequence) };
+        var previous = __vqr_atomic_add(address, 1u32, atomic.Order.Relaxed);
+        __vqr_sync_wake(address, count);
+    }
+}
+
+pub func waitUntil<T, F>(condition: *const CondVar, guard: MutexGuard<T>, pred: F) !MutexGuard<T> {
+    for !pred(guard.get()) { guard = condition.wait<T>(move(guard))!; }
+    move(guard)
+}
+
+pub type OnceLock<T> = cell.OnceLock<T>;
+
+pub class Once {
+    #copy: disabled
+    var cell: cell.OnceLock<bool>;
+    func init() : cell(cell.OnceLock<bool>.new()) {}
+public:
+    static func new() Self { Once() }
+
+    func callOnce<F: Movable>(callback: F) !void {
+        var initialize = [move(callback)]() !bool => {
+            var outcome: !void = move(callback)();
+            outcome!;
+            true
+        };
+        var published = cell.getOrTryInit(move(initialize))!;
+    }
+
+    const func isDone() bool {
+        var initialized = cell.get();
+        core.isSome<*const bool>(&initialized)
+    }
+}

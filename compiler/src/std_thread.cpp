@@ -1,11 +1,18 @@
 #include "compiler_internal.hpp"
 
 namespace vqr::detail {
+namespace {
+
+bool nativeThreadTarget(const Program &p) {
+  auto target = p.targetTriple();
+  return p.options.profile == "hosted" && target.isOSLinux() && target.isGNUEnvironment() &&
+         (target.getArch() == Triple::x86_64 || target.getArch() == Triple::aarch64) && p.pointerBits() == 64;
+}
+
+} // namespace
 
 ValueAt Body::threadIntrinsic(std::string_view op, const Ast &n, const std::vector<Ast> &types) {
-  auto target = p.targetTriple();
-  if (p.options.profile != "hosted" || !target.isOSLinux() || !target.isGNUEnvironment() ||
-      (target.getArch() != Triple::x86_64 && target.getArch() != Triple::aarch64) || p.pointerBits() != 64)
+  if (!nativeThreadTarget(p))
     fail(n->span, "native threads require a hosted GNU/Linux x86-64 or AArch64 target", "E290");
 
   auto arity = [&](unsigned count, unsigned typeCount = 0) {
@@ -99,6 +106,29 @@ ValueAt Body::threadIntrinsic(std::string_view op, const Ast &n, const std::vect
                                       Constant::getNullValue(optional->ir))};
   }
   fail(n->span, "unknown native thread intrinsic");
+}
+
+ValueAt Body::syncIntrinsic(std::string_view op, const Ast &n) {
+  if (!nativeThreadTarget(p))
+    fail(n->span, "blocking synchronization requires a hosted GNU/Linux x86-64 or AArch64 target", "E290");
+  if ((op != "wait" && op != "wake") || n->children.size() != 3)
+    fail(n->span, "invalid futex operation");
+  auto *u32 = p.integer(32, false);
+  auto address = expression(n->children[1], p.pointer(u32, true));
+  if (!live()) return neverValue();
+  auto *location = read(address, n->span);
+  auto argument = expression(n->children[2], u32);
+  if (!live()) return neverValue();
+  auto *word = p.sizeTy->ir;
+  auto *signature = FunctionType::get(word, {word}, true);
+  auto syscall = p.module->getOrInsertFunction("syscall", signature);
+  auto *number = ConstantInt::get(word, p.targetTriple().isX86() ? 202 : 98);
+  // Linux FUTEX_WAIT_PRIVATE and FUTEX_WAKE_PRIVATE compare or wake a process-local word.
+  auto *command = ConstantInt::get(word, op == "wait" ? 128 : 129);
+  auto *value = ir.CreateZExt(read(argument, n->span), word);
+  auto *null = ConstantPointerNull::get(ir.getPtrTy());
+  ir.CreateCall(syscall, {number, location, command, value, null, null, ConstantInt::get(word, 0)});
+  return voidValue();
 }
 
 } // namespace vqr::detail

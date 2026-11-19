@@ -1,0 +1,105 @@
+package sync
+import (atomic, core, opt)
+
+func tryLockWord(word: *u32) bool {
+    previous, acquired := __vqr_atomic_compare(word, 0u32, 1u32, atomic.Order.Acquire, atomic.Order.Relaxed);
+    acquired
+}
+
+func lockWord(word: *u32) void {
+    if tryLockWord(word) { return; }
+    for __vqr_atomic_swap(word, 2u32, atomic.Order.Acquire) != 0 {
+        __vqr_sync_wait(word, 2u32);
+    }
+}
+
+func unlockWord(word: *u32) void {
+    if __vqr_atomic_swap(word, 0u32, atomic.Order.Release) == 2 {
+        __vqr_sync_wake(word, 1u32);
+    }
+}
+
+pub class Mutex<T: Movable & Sendable> {
+    #copy: disabled
+    var word: u32;
+    var value: ?T;
+    func init(value: T) : word(0), value(some(move(value))) {}
+public:
+    static func new(value: T) Self { Mutex<T>(move(value)) }
+
+    const func lock() !MutexGuard<T> {
+        var state = unsafe { constCast<*u32>(&word) };
+        lockWord(state);
+        guard(state)
+    }
+
+    const func tryLock() ?MutexGuard<T> {
+        var state = unsafe { constCast<*u32>(&word) };
+        if !tryLockWord(state) { return null; }
+        some(guard(state))
+    }
+
+    static func intoInner(value: Self) T {
+        var item = opt.take<T>(&value.value);
+        move(item).unwrap()
+    }
+
+    const func isPoisoned() bool { false }
+
+    func deinit() void {
+        if __vqr_atomic_load(&word, atomic.Order.Relaxed) != 0 {
+            panic("a locked mutex cannot be destroyed");
+        }
+    }
+private:
+    const func guard(state: *u32) MutexGuard<T> {
+        var place = unsafe { constCast<*?T>(&value) };
+        unsafe { MutexGuard<T>.fromLocked(state, opt.asMutPtr(place).unwrap()) }
+    }
+}
+
+pub class MutexGuard<T> {
+    #copy: disabled
+    var word: ?*u32;
+    var value: *T;
+    func init(word: *u32, value: *T) : word(some(word)), value(value) {}
+public:
+    unsafe static func fromLocked(word: *u32, value: *T) Self { MutexGuard<T>(word, value) }
+
+    func get() *T {
+        if core.isNone<*u32>(&word) { panic("the mutex guard has been released"); }
+        value
+    }
+
+    func unlock() void {
+        switch word {
+            some(ptr) => { word = null; unlockWord(ptr); },
+            null => {},
+        }
+    }
+
+    static func map<U, F>(guard: Self, transform: F) MappedMutexGuard<U> {
+        var projected = transform(guard.get());
+        var state = guard.word.unwrap();
+        guard.word = null;
+        unsafe { MutexGuard<U>.fromLocked(state, projected) }
+    }
+
+    unsafe static func unlockWhile<F>(guard: Self, wait: F) Self {
+        var state = guard.word.unwrap();
+        var place = guard.value;
+        guard.unlock();
+        wait();
+        lockWord(state);
+        MutexGuard<T>(state, place)
+    }
+
+    func deinit() void { unlock(); }
+}
+
+pub type MappedMutexGuard<T> = MutexGuard<T>;
+
+pub func withLock<T: Movable & Sendable, F>(mutex: *const Mutex<T>, use: F) !void {
+    var held = mutex.lock()!;
+    use(held.get())
+}

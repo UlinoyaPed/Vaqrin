@@ -28,7 +28,7 @@ public:
                 null => {},
             }
             var locked = state.compareExchange(0, 1, atomic.Order.AcqRel, atomic.Order.Acquire);
-            if locked.exchanged { return publish(factory()); }
+            if locked.exchanged { return publish(move(factory)()); }
         }
     }
 
@@ -40,7 +40,7 @@ public:
             }
             var locked = state.compareExchange(0, 1, atomic.Order.AcqRel, atomic.Order.Acquire);
             if locked.exchanged {
-                var value = factory() catch (reason) {
+                var value = move(factory)() catch (reason) {
                     state.store(0, atomic.Order.Release);
                     return reason;
                 };

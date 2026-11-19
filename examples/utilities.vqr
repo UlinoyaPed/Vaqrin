@@ -44,10 +44,10 @@ func main() !void {
 
     // Synchronous structured logging with two independent handlers.
     var memory = io.MemoryWriter();
-    var textHandler = log.TextHandler(&memory);
+    var textHandler = log.TextHandler.new(&memory);
     var bufferHandler = log.BufferHandler();
     var handlers = [2]*log.Handler{&textHandler, &bufferHandler};
-    var multi = log.MultiHandler(handlers[:]);
+    var multi = log.MultiHandler.new(handlers[:]);
     var logger = log.newLogger(&multi)!;
     logger.setLevel(log.Level.Info);
     var attributes = [_]log.Attr{

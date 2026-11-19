@@ -272,6 +272,7 @@ pub class TextHandler {
     var writer: *io.Writer;
     func init(writer: *io.Writer) : writer(writer) {}
 public:
+    static func new(writer: *io.Writer) Self { TextHandler(writer) }
     const func enabled(level: Level) bool { true }
     func handle(record: *const Record) !void {
         io.writeString(writer, levelText(record.level()))!;
@@ -301,6 +302,7 @@ pub class MultiHandler {
     var handlers: []const *Handler;
     func init(handlers: []const *Handler) : handlers(handlers) {}
 public:
+    static func new(handlers: []const *Handler) Self { MultiHandler(handlers) }
     const func enabled(level: Level) bool {
         for handler in handlers { if handler.enabled(level) { return true; } }
         false

@@ -30,8 +30,9 @@ public:
     func writeNumber(value: str) !void {
         var options = TomlOptions();
         var parsed = parseValue(value, 0, &options)!;
-        switch parsed {
-            Value.Integer(_), Value.Float(_) => appendValue(move(parsed)),
+        switch move(parsed) {
+            Value.Integer(value) => appendValue(Value.Integer(value)),
+            Value.Float(value) => appendValue(Value.Float(move(value))),
             _ => TomlSerdeError.UnsupportedValue,
         }
     }
@@ -232,7 +233,7 @@ pub func encode<T>(value: *const T, codec: *const serde.Codec<T>) !string {
     serde.encode<T>(value, &serializer, codec)!;
     var root = serializer.takeValue()!;
     switch move(root) {
-        Value.Table(&document) => stringify(&document),
+        Value.Table(document) => stringify(&document),
         _ => TomlError.TypeMismatch,
     }
 }

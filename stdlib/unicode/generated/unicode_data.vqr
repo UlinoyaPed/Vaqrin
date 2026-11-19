@@ -3,7 +3,7 @@ package unicode
 // Source: https://www.unicode.org/Public/17.0.0/ucd/
 // Do not edit by hand. Regenerate with tools/generate.mjs.
 
-const unicodePropertyRanges = [_]u64{
+pub const unicodePropertyRanges = [_]u64{
     0x8u64,
     0xc01000021u64,
     0x1200009u64,
@@ -11252,7 +11252,7 @@ const unicodePropertyRanges = [_]u64{
     0x0u64
 };
 
-const simpleCaseMappings = [_]u32{
+pub const simpleCaseMappings = [_]u32{
     0x41u32,
     0x61u32,
     0x41u32,
@@ -23211,7 +23211,7 @@ const simpleCaseMappings = [_]u32{
     0x1e921u32
 };
 
-const decompositionIndex = [_]u32{
+pub const decompositionIndex = [_]u32{
     0xa0u32,
     0x0u32,
     0x101u32,
@@ -40956,7 +40956,7 @@ const decompositionIndex = [_]u32{
     0x1u32
 };
 
-const decompositionScalars = [_]u32{
+pub const decompositionScalars = [_]u32{
     0x20u32,
     0x20u32,
     0x308u32,
@@ -49699,7 +49699,7 @@ const decompositionScalars = [_]u32{
     0x2a600u32
 };
 
-const compositionPairs = [_]u32{
+pub const compositionPairs = [_]u32{
     0x3cu32,
     0x338u32,
     0x226eu32,
@@ -52585,7 +52585,7 @@ const compositionPairs = [_]u32{
     0x16d6au32
 };
 
-const caseFoldIndex = [_]u32{
+pub const caseFoldIndex = [_]u32{
     0x41u32,
     0x0u32,
     0x1u32,
@@ -57343,7 +57343,7 @@ const caseFoldIndex = [_]u32{
     0x1u32
 };
 
-const caseFoldScalars = [_]u32{
+pub const caseFoldScalars = [_]u32{
     0x61u32,
     0x62u32,
     0x63u32,

@@ -49,4 +49,4 @@
 - `Regex.compile("\\d+")` 在 Unicode 模式匹配阿拉伯-印度数字。
 - `Regex.compile("a|aa")` 对 `aa` 遵循左分支优先，结果为 `a`。
 - 空模式在长度为 N 的 N 标量文本上产生 N+1 个 FindIter 结果。
-- `replaceAll("a", "banana", "$0$0")` 的结果为 `banaana`。
+- `replaceAll("a", "banana", "$0$0")` 的结果为 `baanaanaa`。

@@ -34,6 +34,7 @@
 
 - [ ] 超过 maxStates 的模式返回 TooManyStates
 - [ ] 超过 32 个捕获组返回 CaptureLimit
+- [ ] 超过 4,194,304 个捕获历史节点返回 StepLimitExceeded
 - [ ] 超过 16 MiB 默认输入上限返回 InputTooLarge
 - [ ] 超过工作预算返回 StepLimitExceeded
 - [ ] 长输入与 `(a+)+$`、`(a|aa)*b` 对抗模式在预算内退出

@@ -1,0 +1,153 @@
+package serde
+import (coll)
+
+pub error SerdeError {
+    TypeMismatch, InvalidState, InvalidLength, InvalidValue, UnexpectedEnd,
+    TrailingInput, DuplicateKey, DepthLimit, ElementLimit, ByteLimit,
+    Unsupported, InexactNumber, IntegerOutOfRange,
+}
+
+pub enum DataKind { Null, Bool, Number, String, Sequence, Map }
+
+pub class DecodeLimits {
+    pub var maxDepth: usize;
+    pub var maxElements: usize;
+    pub var maxBytes: usize;
+
+    func init()
+        : maxDepth(128), maxElements(1_000_000), maxBytes(16 * 1024 * 1024) {}
+
+    static func withLimits(depth: usize, elements: usize, bytes: usize) Self {
+        var result = DecodeLimits();
+        result.maxDepth = depth;
+        result.maxElements = elements;
+        result.maxBytes = bytes;
+        move(result)
+    }
+}
+
+pub class DecodeBudget {
+    var limits: DecodeLimits;
+    var depth: usize;
+    var elements: usize;
+    var bytes: usize;
+public:
+    func init(limits: DecodeLimits)
+        : limits(move(limits)), depth(0), elements(0), bytes(0) {}
+
+    func enter() !void {
+        if depth >= limits.maxDepth { return SerdeError.DepthLimit; }
+        depth++;
+    }
+
+    func leave() void {
+        if depth != 0 { depth--; }
+    }
+
+    func consumeElement() !void {
+        if elements >= limits.maxElements { return SerdeError.ElementLimit; }
+        elements++;
+    }
+
+    func consumeBytes(count: usize) !void {
+        if count > limits.maxBytes || bytes > limits.maxBytes - count {
+            return SerdeError.ByteLimit;
+        }
+        bytes += count;
+    }
+
+    const func currentDepth() usize { depth }
+    const func elementCount() usize { elements }
+    const func byteCount() usize { bytes }
+}
+
+pub interface Serializer {
+    func writeNull() !void;
+    func writeBool(value: bool) !void;
+    func writeI64(value: i64) !void;
+    func writeU64(value: u64) !void;
+    func writeF64(value: f64) !void;
+    func writeNumber(value: str) !void;
+    func writeString(value: str) !void;
+    func beginSeq(length: ?usize) !void;
+    func endSeq() !void;
+    func beginMap(length: ?usize) !void;
+    func writeKey(value: str) !void;
+    func endMap() !void;
+}
+
+pub interface Deserializer {
+    func kind() !DataKind;
+    func readNull() !void;
+    func readBool() !bool;
+    func readI64() !i64;
+    func readU64() !u64;
+    func readF64() !f64;
+    func readNumber() !string;
+    func readString() !string;
+    func beginSeq() !?usize;
+    func nextElement() !bool;
+    func endSeq() !void;
+    func beginMap() !?usize;
+    func nextKey() !?string;
+    func endMap() !void;
+}
+
+pub interface Encode<T> {
+    func encode(value: *const T, serializer: *Serializer) !void;
+}
+
+pub interface Decode<T> {
+    func decode(deserializer: *Deserializer) !T;
+}
+
+pub interface Codec<T> {
+    func encode(value: *const T, serializer: *Serializer) !void;
+    func decode(deserializer: *Deserializer) !T;
+}
+
+pub interface ByteSerializer {
+    func serializer() *Serializer;
+    func takeBytes() !coll.Vec<u8>;
+}
+
+pub interface ByteDeserializer {
+    func load(bytes: []const u8) !void;
+    func deserializer() *Deserializer;
+    func finish() !void;
+}
+
+pub func encode<T>(
+    value: *const T,
+    serializer: *Serializer,
+    codec: *const Codec<T>,
+) !void {
+    codec.encode(value, serializer)
+}
+
+pub func decode<T>(
+    deserializer: *Deserializer,
+    codec: *const Codec<T>,
+) !T {
+    codec.decode(deserializer)
+}
+
+pub func encodeToBytes<T>(
+    value: *const T,
+    serializer: *ByteSerializer,
+    codec: *const Codec<T>,
+) !coll.Vec<u8> {
+    codec.encode(value, serializer.serializer())!;
+    serializer.takeBytes()
+}
+
+pub func decodeFromBytes<T>(
+    bytes: []const u8,
+    deserializer: *ByteDeserializer,
+    codec: *const Codec<T>,
+) !T {
+    deserializer.load(bytes)!;
+    var result = codec.decode(deserializer.deserializer())!;
+    deserializer.finish()!;
+    move(result)
+}

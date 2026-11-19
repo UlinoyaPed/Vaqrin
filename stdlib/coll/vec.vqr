@@ -3,6 +3,11 @@ import (core, iter as iterator)
 
 pub error CapacityError { Overflow, IndexOutOfBounds }
 
+pub enum ReplaceResult<T: Movable> {
+    Replaced(T),
+    InvalidIndex(T),
+}
+
 pub class Vec<T: Movable> {
     #copy: disabled
     var data: ?*T;
@@ -10,12 +15,14 @@ pub class Vec<T: Movable> {
     var reserved: usize;
 public:
     func init() : data(null), length(0), reserved(0) {}
+
     static func withCapacity(n: usize) !Self {
         var out = Vec<T>();
         out.reserve(n)!;
         move(out)
     }
 
+    // Copies each element; this method is available when T is Copyable.
     static func fromSlice(values: []const T) !Self {
         var out = Vec<T>.withCapacity(values.len())!;
         for item in values { out.push(move(item))!; }
@@ -86,10 +93,18 @@ private:
 public:
     func push(value: T) !void {
         ensureRoomForOne()!;
-        unsafe {
-            __vqr_slot_write<T>(data.unwrap().offset(length), move(value));
-        }
+        unsafe { __vqr_slot_write<T>(data.unwrap().offset(length), move(value)); }
         length++;
+    }
+
+    // Returns the original value if allocation or capacity growth fails.
+    func pushPreserving(value: T) PushResult<T> {
+        ensureRoomForOne() catch (reason) {
+            return PushResult<T>.Failed(reason, move(value));
+        };
+        unsafe { __vqr_slot_write<T>(data.unwrap().offset(length), move(value)); }
+        length++;
+        PushResult<T>.Stored()
     }
 
     func pop() ?T {
@@ -109,6 +124,24 @@ public:
             __vqr_slot_write<T>(base.offset(index), move(value));
         }
         length++;
+    }
+
+    func insertPreserving(index: usize, value: T) PushResult<T> {
+        if index > length {
+            return PushResult<T>.Failed(CapacityError.IndexOutOfBounds, move(value));
+        }
+        ensureRoomForOne() catch (reason) {
+            return PushResult<T>.Failed(reason, move(value));
+        };
+        unsafe {
+            var base = data.unwrap();
+            for position := length; position > index; position-- {
+                __vqr_slot_write<T>(base.offset(position), __vqr_slot_take<T>(base.offset(position - 1)));
+            }
+            __vqr_slot_write<T>(base.offset(index), move(value));
+        }
+        length++;
+        PushResult<T>.Stored()
     }
 
     func remove(index: usize) ?T {
@@ -140,18 +173,83 @@ public:
         }
     }
 
+    func replacePreserving(index: usize, value: T) ReplaceResult<T> {
+        if index >= length { return ReplaceResult<T>.InvalidIndex(move(value)); }
+        var previous = replace(index, move(value)).unwrap();
+        ReplaceResult<T>.Replaced(move(previous))
+    }
+
+    func retain<F: Movable>(predicate: F) void {
+        var kept: usize = 0;
+        for i in usize(0)..length {
+            var address = data.unwrap().offset(i);
+            if predicate(address) {
+                if kept != i {
+                    unsafe { __vqr_slot_write<T>(data.unwrap().offset(kept), __vqr_slot_take<T>(address)); }
+                }
+                kept++;
+            } else {
+                unsafe { __vqr_slot_drop<T>(address); }
+            }
+        }
+        length = kept;
+    }
+
+    func extend<I: Movable>(values: I) !void {
+        for item in move(values) { push(move(item))!; }
+    }
+
+    // Reserves first, then transfers elements. On allocation failure both vectors are unchanged.
+    func append(other: *Self) !void {
+        if self == other || other.length == 0 { return; }
+        reserveAdditional(other.length)!;
+        var source = other.data.unwrap();
+        var target = data.unwrap();
+        for i in usize(0)..other.length {
+            unsafe {
+                __vqr_slot_write<T>(target.offset(length), __vqr_slot_take<T>(source.offset(i)));
+            }
+            length++;
+        }
+        other.length = 0;
+    }
+
+    // The suffix is transferred only after the result buffer has been allocated.
+    func splitOff(index: usize) !Self {
+        if index > length { return CapacityError.IndexOutOfBounds; }
+        var count = length - index;
+        var result = Vec<T>.withCapacity(count)!;
+        if count != 0 {
+            var source = data.unwrap();
+            var target = result.data.unwrap();
+            for i in usize(0)..count {
+                unsafe {
+                    __vqr_slot_write<T>(target.offset(i), __vqr_slot_take<T>(source.offset(index + i)));
+                }
+            }
+        }
+        result.length = count;
+        length = index;
+        move(result)
+    }
+
+    // Requires T: Copyable. Copying is explicit at this API boundary.
     const func clone() !Self {
-        var result = Vec<T>();
-        result.reserve(length)!;
-        for value in asSlice() { result.push(move(value))!; }
+        var result = Vec<T>.withCapacity(length)!;
+        for item in iterRef() { result.push(*item)!; }
         move(result)
     }
 
     const func iter() iterator.SliceIter<T> { iterator.SliceIter<T>(asSlice()) }
     const func iterRef() iterator.SliceIterRef<T> { iterator.SliceIterRef<T>(asSlice()) }
     func iterMut() iterator.SliceIterMut<T> { iterator.SliceIterMut<T>(asSlice()) }
-    const func asConstSlice() []const T { asSlice() }
+    const func reverseIter() iterator.RevIter<iterator.SliceIterRef<T>, *const T> {
+        iterator.rev<iterator.SliceIterRef<T>, *const T>(iterRef())
+    }
 
+    static func intoIter(value: Self) IntoVecIter<T> { IntoVecIter<T>(move(value)) }
+
+    const func asConstSlice() []const T { asSlice() }
     func asPtr() ?*T { if length == 0 { null } else { data } }
     const func asConstPtr() ?*const T { if length == 0 { null } else { some(data.unwrap()) } }
 
@@ -196,5 +294,16 @@ public:
             null => {},
             some(address) => unsafe { __vqr_free<T>(address); },
         }
+        data = null;
+        reserved = 0;
     }
+}
+
+pub class IntoVecIter<T: Movable> {
+    var source: Vec<T>;
+public:
+    func init(values: Vec<T>) : source(move(values)) {}
+    func next() ?T { source.remove(0) }
+    func nextBack() ?T { source.pop() }
+    const func remaining() usize { source.len() }
 }

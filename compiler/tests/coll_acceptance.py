@@ -183,6 +183,41 @@ class ContainerAcceptance(CompilerCase):
         ''')
         self.assertEqual(sorted(map(int, dropped)), list(range(129)))
 
+    def test_btree_remove_by_borrowed_move_only_key(self):
+        self.assertEqual(self.run_container('''
+            class Key {
+                #copy: disabled
+                pub var id: i32;
+            }
+            func less(a, b: *const Key) bool { a.id < b.id }
+            func main() !void {
+                var tree = coll.BTreeMap<Key, i32>.withComparator(less);
+                for id in 0..129 { var inserted = tree.insert(Key{id: id}, id)!; }
+                for step in 0..129 {
+                    var id = (step * 107) % 129;
+                    var query = Key{id: id};
+                    var borrowed = tree.lowerBound(&query).unwrap();
+                    if borrowed.id != id { panic("borrowed key lookup"); }
+                    var entry = tree.removeEntry(borrowed).unwrap();
+                    if entry.0.id != id || entry.1 != id || tree.containsKey(&query) {
+                        panic("removal invalidated its own query");
+                    }
+                }
+                if !tree.isEmpty() { panic("root did not contract"); }
+                for id in 0..129 { var inserted = tree.insert(Key{id: id}, id)!; }
+                for expected in 0..64 {
+                    var first = tree.popFirst().unwrap();
+                    var last = tree.popLast().unwrap();
+                    if first.0.id != expected || last.0.id != 128 - expected {
+                        panic("wrong extreme while repairing a child");
+                    }
+                }
+                if tree.popLast().unwrap().0.id != 64 || !tree.isEmpty() {
+                    panic("wrong final key");
+                }
+            }
+        '''), [])
+
     def test_allocator_failure_preserves_value_and_layout(self):
         self.assertEqual(self.run_container('''
             error Injected { Exhausted }

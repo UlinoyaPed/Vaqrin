@@ -278,7 +278,7 @@ private:
         }
     }
 
-    func mergeChildren(parent: *BTreeNode<K, V>, index: usize) *BTreeNode<K, V> {
+    func mergeChildren(parent: *BTreeNode<K, V>, index: usize) void {
         var left = parent.childAt(index);
         var right = parent.childAt(index + 1);
         var separator = parent.removeEntry(index);
@@ -296,38 +296,38 @@ private:
 
         var detached = parent.removeChild(index + 1);
         destroyBTreeNode<K, V>(detached);
-        left
+    }
+
+    func repairUnderflow(parent: *BTreeNode<K, V>, index: usize) void {
+        if parent.childAt(index).entryCount() >= btreeMinimumDegree - 1 { return; }
+
+        if index > 0 && parent.childAt(index - 1).entryCount() >= btreeMinimumDegree {
+            borrowFromPrevious(parent, index);
+        } else if index < parent.entryCount() &&
+                  parent.childAt(index + 1).entryCount() >= btreeMinimumDegree {
+            borrowFromNext(parent, index);
+        } else if index < parent.entryCount() {
+            mergeChildren(parent, index);
+        } else {
+            mergeChildren(parent, index - 1);
+        }
     }
 
     func removeMinimum(node: *BTreeNode<K, V>) (K, V) {
         if node.isLeaf() { return node.removeEntry(0); }
 
-        var index: usize = 0;
-        var child = node.childAt(index);
-        if child.entryCount() == 3 {
-            if node.childCount() > 1 && node.childAt(1).entryCount() >= btreeMinimumDegree {
-                borrowFromNext(node, index);
-            } else {
-                mergeChildren(node, index);
-            }
-        }
-        removeMinimum(node.childAt(index))
+        var removed = removeMinimum(node.childAt(0));
+        repairUnderflow(node, 0);
+        move(removed)
     }
 
     func removeMaximum(node: *BTreeNode<K, V>) (K, V) {
         if node.isLeaf() { return node.removeEntry(node.entryCount() - 1); }
 
         var index = node.childCount() - 1;
-        var child = node.childAt(index);
-        if child.entryCount() == 3 {
-            if index > 0 && node.childAt(index - 1).entryCount() >= btreeMinimumDegree {
-                borrowFromPrevious(node, index);
-            } else {
-                mergeChildren(node, index - 1);
-                index--;
-            }
-        }
-        removeMaximum(node.childAt(index))
+        var removed = removeMaximum(node.childAt(index));
+        repairUnderflow(node, index);
+        move(removed)
     }
 
     func removeFrom(node: *BTreeNode<K, V>, key: *const K) ?(K, V) {
@@ -341,43 +341,19 @@ private:
         if found {
             if node.isLeaf() { return some(node.removeEntry(index)); }
 
-            var left = node.childAt(index);
-            var right = node.childAt(index + 1);
-            if left.entryCount() >= btreeMinimumDegree {
-                var predecessor = removeMaximum(left);
-                var removed = node.removeEntry(index);
-                node.insertEntry(index, move(predecessor));
-                return some(move(removed));
-            }
-            if right.entryCount() >= btreeMinimumDegree {
-                var successor = removeMinimum(right);
-                var removed = node.removeEntry(index);
-                node.insertEntry(index, move(successor));
-                return some(move(removed));
-            }
-            mergeChildren(node, index);
-            return removeFrom(left, key);
+            var predecessor = removeMaximum(node.childAt(index));
+            var removed = node.removeEntry(index);
+            node.insertEntry(index, move(predecessor));
+            repairUnderflow(node, index);
+            return some(move(removed));
         }
 
         if node.isLeaf() { return null; }
 
-        var childIndex = index;
-        var child = node.childAt(childIndex);
-        if child.entryCount() == 3 {
-            if childIndex > 0 &&
-               node.childAt(childIndex - 1).entryCount() >= btreeMinimumDegree {
-                borrowFromPrevious(node, childIndex);
-            } else if childIndex < node.entryCount() &&
-                      node.childAt(childIndex + 1).entryCount() >= btreeMinimumDegree {
-                borrowFromNext(node, childIndex);
-            } else if childIndex < node.entryCount() {
-                mergeChildren(node, childIndex);
-            } else {
-                mergeChildren(node, childIndex - 1);
-                childIndex--;
-            }
-        }
-        removeFrom(node.childAt(childIndex), key)
+        // Complete all comparisons before rebalancing can move a borrowed key.
+        var removed = removeFrom(node.childAt(index), key);
+        if removed != null { repairUnderflow(node, index); }
+        move(removed)
     }
 
     func contractRoot() void {

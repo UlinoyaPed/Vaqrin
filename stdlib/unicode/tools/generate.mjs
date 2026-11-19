@@ -242,7 +242,7 @@ const scriptSource = [
   ...scriptNames.map((name,index) => "        " + index + " => Script." + name + ","),
   "        else => Script.Unknown,", "    }", "}", ""
 ].join("\n");
-const out = new URL("../generated/", import.meta.url);
+const out = new URL("../", import.meta.url);
 await mkdir(out, { recursive: true });
 await writeFile(new URL("unicode_data.vqr", out), dataSource);
 await writeFile(new URL("script.vqr", out), scriptSource);

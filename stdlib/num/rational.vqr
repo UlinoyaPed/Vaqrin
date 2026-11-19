@@ -1,0 +1,88 @@
+package num
+import (cmp)
+
+pub class Rational<T: Copyable & Movable> {
+    var numeratorValue: T;
+    var denominatorValue: T;
+
+    func init(numerator: T, denominator: T)
+        : numeratorValue(numerator), denominatorValue(denominator) {}
+
+    static func fromBig(numerator: BigInt, denominator: BigInt) !Self {
+        if denominator.isZero() { return NumError.ZeroDenominator; }
+        var divisor = BigInt.gcd(&numerator, &denominator)!;
+        var reducedNumerator = numerator.div(&divisor)!;
+        var reducedDenominator = denominator.div(&divisor)!;
+        if reducedDenominator.isNegative() {
+            reducedNumerator = reducedNumerator.negate()!;
+            reducedDenominator = reducedDenominator.negate()!;
+        }
+        Rational<T>(reducedNumerator.toInteger<T>()!, reducedDenominator.toInteger<T>()!)
+    }
+
+public:
+    pub static func new(numerator: T, denominator: T) !Self {
+        if denominator == T(0) { return NumError.ZeroDenominator; }
+        var top = BigInt.fromInteger<T>(numerator)!;
+        var bottom = BigInt.fromInteger<T>(denominator)!;
+        fromBig(move(top), move(bottom))
+    }
+
+    pub const func numerator() T { numeratorValue }
+    pub const func denominator() T { denominatorValue }
+
+    pub func add(other: *const Self) !Self {
+        var leftTop = BigInt.fromInteger<T>(numeratorValue)!;
+        var rightTop = BigInt.fromInteger<T>(other.numeratorValue)!;
+        var leftBottom = BigInt.fromInteger<T>(denominatorValue)!;
+        var rightBottom = BigInt.fromInteger<T>(other.denominatorValue)!;
+        var left = leftTop.mul(&rightBottom)!;
+        var right = rightTop.mul(&leftBottom)!;
+        var top = left.add(&right)!;
+        var bottom = leftBottom.mul(&rightBottom)!;
+        fromBig(move(top), move(bottom))
+    }
+
+    pub func sub(other: *const Self) !Self {
+        var leftTop = BigInt.fromInteger<T>(numeratorValue)!;
+        var rightTop = BigInt.fromInteger<T>(other.numeratorValue)!;
+        var leftBottom = BigInt.fromInteger<T>(denominatorValue)!;
+        var rightBottom = BigInt.fromInteger<T>(other.denominatorValue)!;
+        var left = leftTop.mul(&rightBottom)!;
+        var right = rightTop.mul(&leftBottom)!;
+        var top = left.sub(&right)!;
+        var bottom = leftBottom.mul(&rightBottom)!;
+        fromBig(move(top), move(bottom))
+    }
+
+    pub func mul(other: *const Self) !Self {
+        var leftTop = BigInt.fromInteger<T>(numeratorValue)!;
+        var rightTop = BigInt.fromInteger<T>(other.numeratorValue)!;
+        var leftBottom = BigInt.fromInteger<T>(denominatorValue)!;
+        var rightBottom = BigInt.fromInteger<T>(other.denominatorValue)!;
+        var top = leftTop.mul(&rightTop)!;
+        var bottom = leftBottom.mul(&rightBottom)!;
+        fromBig(move(top), move(bottom))
+    }
+
+    pub func div(other: *const Self) !Self {
+        if other.numeratorValue == T(0) { return NumError.DivisionByZero; }
+        var leftTop = BigInt.fromInteger<T>(numeratorValue)!;
+        var rightBottom = BigInt.fromInteger<T>(other.denominatorValue)!;
+        var leftBottom = BigInt.fromInteger<T>(denominatorValue)!;
+        var rightTop = BigInt.fromInteger<T>(other.numeratorValue)!;
+        var top = leftTop.mul(&rightBottom)!;
+        var bottom = leftBottom.mul(&rightTop)!;
+        fromBig(move(top), move(bottom))
+    }
+
+    pub const func compare(other: *const Self) !cmp.Ordering {
+        var leftTop = BigInt.fromInteger<T>(numeratorValue)!;
+        var rightTop = BigInt.fromInteger<T>(other.numeratorValue)!;
+        var leftBottom = BigInt.fromInteger<T>(denominatorValue)!;
+        var rightBottom = BigInt.fromInteger<T>(other.denominatorValue)!;
+        var left = leftTop.mul(&rightBottom)!;
+        var right = rightTop.mul(&leftBottom)!;
+        left.compare(&right)
+    }
+}

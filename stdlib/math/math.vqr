@@ -1,0 +1,462 @@
+package math
+import (cmp, convert, math_ffi as ffi, meta)
+
+pub enum FpClass { Nan, Infinite, Zero, Subnormal, Normal }
+pub error MathError { Domain, Pole, InvalidInterval, Overflow, DivisionByZero }
+
+func toF32<T>(value: T) f32 { convert.checkedCast<f32, T>(value)!.unwrap() }
+func toF64<T>(value: T) f64 { convert.checkedCast<f64, T>(value)!.unwrap() }
+func fromF32<T>(value: f32) T { convert.checkedCast<T, f32>(value)!.unwrap() }
+func fromF64<T>(value: f64) T { convert.checkedCast<T, f64>(value)!.unwrap() }
+
+
+func absValue<T>(x: T) T { if signbit(x) { -x } else { x } }
+func copysignValue<T>(x: T, y: T) T { if signbit(x) == signbit(y) { x } else { -x } }
+func sqrtValue<T>(x: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.sqrtf(toF32<T>(x)) }) }
+    else { fromF64<T>(unsafe { ffi.sqrt(toF64<T>(x)) }) }
+}
+func expValue<T>(x: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.expf(toF32<T>(x)) }) }
+    else { fromF64<T>(unsafe { ffi.exp(toF64<T>(x)) }) }
+}
+func logValue<T>(x: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.logf(toF32<T>(x)) }) }
+    else { fromF64<T>(unsafe { ffi.log(toF64<T>(x)) }) }
+}
+func sinValue<T>(x: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.sinf(toF32<T>(x)) }) }
+    else { fromF64<T>(unsafe { ffi.sin(toF64<T>(x)) }) }
+}
+func cosValue<T>(x: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.cosf(toF32<T>(x)) }) }
+    else { fromF64<T>(unsafe { ffi.cos(toF64<T>(x)) }) }
+}
+func midpointValue<T>(a: T, b: T) T {
+    if (a < T(0)) != (b < T(0)) {
+        a / T(2) + b / T(2)
+    } else {
+        a + (b - a) / T(2)
+    }
+}
+
+pub func pi<T>() T { T(3.14159265358979323846264338327950288) }
+pub func tau<T>() T { T(6.28318530717958647692528676655900576) }
+pub func e<T>() T { T(2.71828182845904523536028747135266250) }
+pub func sqrt2<T>() T { T(1.41421356237309504880168872420969808) }
+pub func ln2<T>() T { T(0.69314718055994530941723212145817657) }
+pub func ln10<T>() T { T(2.30258509299404568401799145468436421) }
+
+func nan32(x: f32) bool {
+    var raw = convert.bitCast<u32, f32>(x);
+    (raw & 0x7f800000u32) == 0x7f800000u32 && (raw & 0x007fffffu32) != 0
+}
+func nan64(x: f64) bool {
+    var raw = convert.bitCast<u64, f64>(x);
+    (raw & 0x7ff0000000000000u64) == 0x7ff0000000000000u64 &&
+        (raw & 0x000fffffffffffffu64) != 0
+}
+func infinite32(x: f32) bool {
+    (convert.bitCast<u32, f32>(x) & 0x7fffffffu32) == 0x7f800000u32
+}
+func infinite64(x: f64) bool {
+    (convert.bitCast<u64, f64>(x) & 0x7fffffffffffffffu64) == 0x7ff0000000000000u64
+}
+func normal32(x: f32) bool {
+    var exponent = convert.bitCast<u32, f32>(x) & 0x7f800000u32;
+    exponent != 0 && exponent != 0x7f800000u32
+}
+func normal64(x: f64) bool {
+    var exponent = convert.bitCast<u64, f64>(x) & 0x7ff0000000000000u64;
+    exponent != 0 && exponent != 0x7ff0000000000000u64
+}
+func signbit32(x: f32) bool {
+    (convert.bitCast<u32, f32>(x) & 0x80000000u32) != 0
+}
+func signbit64(x: f64) bool {
+    (convert.bitCast<u64, f64>(x) & 0x8000000000000000u64) != 0
+}
+
+pub func isNan<T>(x: T) bool {
+    if meta.bitWidth<T>() == 32 { nan32(toF32<T>(x)) } else { nan64(toF64<T>(x)) }
+}
+pub func isInfinite<T>(x: T) bool {
+    if meta.bitWidth<T>() == 32 { infinite32(toF32<T>(x)) } else { infinite64(toF64<T>(x)) }
+}
+pub func isFinite<T>(x: T) bool { !isNan(x) && !isInfinite(x) }
+pub func isNormal<T>(x: T) bool {
+    if meta.bitWidth<T>() == 32 { normal32(toF32<T>(x)) } else { normal64(toF64<T>(x)) }
+}
+pub func signbit<T>(x: T) bool {
+    if meta.bitWidth<T>() == 32 { signbit32(toF32<T>(x)) } else { signbit64(toF64<T>(x)) }
+}
+pub func fpClassify<T>(x: T) FpClass {
+    if isNan(x) { return FpClass.Nan; }
+    if isInfinite(x) { return FpClass.Infinite; }
+    if x == T(0) { return FpClass.Zero; }
+    if isNormal(x) { FpClass.Normal } else { FpClass.Subnormal }
+}
+pub func inf<T>() T {
+    if meta.bitWidth<T>() == 32 {
+        fromF32<T>(convert.bitCast<f32, u32>(0x7f800000u32))
+    } else {
+        fromF64<T>(convert.bitCast<f64, u64>(0x7ff0000000000000u64))
+    }
+}
+pub func nan<T>() T {
+    if meta.bitWidth<T>() == 32 {
+        fromF32<T>(convert.bitCast<f32, u32>(0x7fc00000u32))
+    } else {
+        fromF64<T>(convert.bitCast<f64, u64>(0x7ff8000000000000u64))
+    }
+}
+pub func abs<T>(x: T) T { absValue(x) }
+pub func copysign<T>(x: T, y: T) T { copysignValue(x, y) }
+
+pub func floor<T>(x: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.floorf(toF32<T>(x)) }) }
+    else { fromF64<T>(unsafe { ffi.floor(toF64<T>(x)) }) }
+}
+pub func ceil<T>(x: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.ceilf(toF32<T>(x)) }) }
+    else { fromF64<T>(unsafe { ffi.ceil(toF64<T>(x)) }) }
+}
+pub func trunc<T>(x: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.truncf(toF32<T>(x)) }) }
+    else { fromF64<T>(unsafe { ffi.trunc(toF64<T>(x)) }) }
+}
+pub func round<T>(x: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.roundf(toF32<T>(x)) }) }
+    else { fromF64<T>(unsafe { ffi.round(toF64<T>(x)) }) }
+}
+
+func roundEven32(x: f32) f32 {
+    if !isFinite(x) || x == 0.0 { return x; }
+    var magnitude = if signbit32(x) { -x } else { x };
+    var lower = unsafe { ffi.floorf(magnitude) };
+    var fraction = magnitude - lower;
+    var result = lower;
+    if fraction > 0.5 {
+        result += 1.0;
+    } else if fraction == 0.5 {
+        var half = unsafe { ffi.floorf(lower * 0.5) };
+        if lower - half * 2.0 != 0.0 { result += 1.0; }
+    }
+    if signbit32(x) { -result } else { result }
+}
+func roundEven64(x: f64) f64 {
+    if !isFinite(x) || x == 0.0 { return x; }
+    var magnitude = if signbit64(x) { -x } else { x };
+    var lower = unsafe { ffi.floor(magnitude) };
+    var fraction = magnitude - lower;
+    var result = lower;
+    if fraction > 0.5 {
+        result += 1.0;
+    } else if fraction == 0.5 {
+        var half = unsafe { ffi.floor(lower * 0.5) };
+        if lower - half * 2.0 != 0.0 { result += 1.0; }
+    }
+    if signbit64(x) { -result } else { result }
+}
+pub func roundEven<T>(x: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(roundEven32(toF32<T>(x))) }
+    else { fromF64<T>(roundEven64(toF64<T>(x))) }
+}
+
+pub func fract<T>(x: T) T { x - trunc(x) }
+pub func modf<T>(x: T) (T, T) {
+    if meta.bitWidth<T>() == 32 {
+        var integer: f32 = 0.0;
+        var fraction = unsafe { ffi.modff(toF32<T>(x), &integer) };
+        (fromF32<T>(fraction), fromF32<T>(integer))
+    } else {
+        var integer: f64 = 0.0;
+        var fraction = unsafe { ffi.modf(toF64<T>(x), &integer) };
+        (fromF64<T>(fraction), fromF64<T>(integer))
+    }
+}
+pub func fmod<T>(x: T, y: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.fmodf(toF32<T>(x), toF32<T>(y)) }) }
+    else { fromF64<T>(unsafe { ffi.fmod(toF64<T>(x), toF64<T>(y)) }) }
+}
+pub func remainder<T>(x: T, y: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.remainderf(toF32<T>(x), toF32<T>(y)) }) }
+    else { fromF64<T>(unsafe { ffi.remainder(toF64<T>(x), toF64<T>(y)) }) }
+}
+pub func remQuo<T>(x: T, y: T) (T, i32) {
+    var quotient: i32 = 0;
+    if meta.bitWidth<T>() == 32 {
+        var result = fromF32<T>(unsafe { ffi.remquof(toF32<T>(x), toF32<T>(y), &quotient) });
+        (result, quotient)
+    } else {
+        var result = fromF64<T>(unsafe { ffi.remquo(toF64<T>(x), toF64<T>(y), &quotient) });
+        (result, quotient)
+    }
+}
+
+pub func sqrt<T>(x: T) T { sqrtValue(x) }
+pub func cbrt<T>(x: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.cbrtf(toF32<T>(x)) }) }
+    else { fromF64<T>(unsafe { ffi.cbrt(toF64<T>(x)) }) }
+}
+pub func hypot<T>(x: T, y: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.hypotf(toF32<T>(x), toF32<T>(y)) }) }
+    else { fromF64<T>(unsafe { ffi.hypot(toF64<T>(x), toF64<T>(y)) }) }
+}
+pub func pow<T>(x: T, y: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.powf(toF32<T>(x), toF32<T>(y)) }) }
+    else { fromF64<T>(unsafe { ffi.pow(toF64<T>(x), toF64<T>(y)) }) }
+}
+pub func powi<T>(x: T, n: i32) T {
+    var exponent: u32 = if n < 0 {
+        convert.checkedCast<u32, i32>(-(n + 1))!.unwrap() + 1
+    } else {
+        convert.checkedCast<u32, i32>(n)!.unwrap()
+    };
+    var factor = if n < 0 { T(1) / x } else { x };
+    var result = T(1);
+    for exponent > 0 {
+        if (exponent & 1) != 0 { result *= factor; }
+        exponent >>= 1;
+        if exponent != 0 { factor *= factor; }
+    }
+    result
+}
+pub func exp<T>(x: T) T { expValue(x) }
+pub func exp2<T>(x: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.exp2f(toF32<T>(x)) }) }
+    else { fromF64<T>(unsafe { ffi.exp2(toF64<T>(x)) }) }
+}
+pub func expm1<T>(x: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.expm1f(toF32<T>(x)) }) }
+    else { fromF64<T>(unsafe { ffi.expm1(toF64<T>(x)) }) }
+}
+pub func log<T>(x: T) T { logValue(x) }
+pub func log2<T>(x: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.log2f(toF32<T>(x)) }) }
+    else { fromF64<T>(unsafe { ffi.log2(toF64<T>(x)) }) }
+}
+pub func log10<T>(x: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.log10f(toF32<T>(x)) }) }
+    else { fromF64<T>(unsafe { ffi.log10(toF64<T>(x)) }) }
+}
+pub func log1p<T>(x: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.log1pf(toF32<T>(x)) }) }
+    else { fromF64<T>(unsafe { ffi.log1p(toF64<T>(x)) }) }
+}
+pub func sin<T>(x: T) T { sinValue(x) }
+pub func cos<T>(x: T) T { cosValue(x) }
+pub func tan<T>(x: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.tanf(toF32<T>(x)) }) }
+    else { fromF64<T>(unsafe { ffi.tan(toF64<T>(x)) }) }
+}
+pub func asin<T>(x: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.asinf(toF32<T>(x)) }) }
+    else { fromF64<T>(unsafe { ffi.asin(toF64<T>(x)) }) }
+}
+pub func acos<T>(x: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.acosf(toF32<T>(x)) }) }
+    else { fromF64<T>(unsafe { ffi.acos(toF64<T>(x)) }) }
+}
+pub func atan<T>(x: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.atanf(toF32<T>(x)) }) }
+    else { fromF64<T>(unsafe { ffi.atan(toF64<T>(x)) }) }
+}
+pub func atan2<T>(y: T, x: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.atan2f(toF32<T>(y), toF32<T>(x)) }) }
+    else { fromF64<T>(unsafe { ffi.atan2(toF64<T>(y), toF64<T>(x)) }) }
+}
+pub func sinh<T>(x: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.sinhf(toF32<T>(x)) }) }
+    else { fromF64<T>(unsafe { ffi.sinh(toF64<T>(x)) }) }
+}
+pub func cosh<T>(x: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.coshf(toF32<T>(x)) }) }
+    else { fromF64<T>(unsafe { ffi.cosh(toF64<T>(x)) }) }
+}
+pub func tanh<T>(x: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.tanhf(toF32<T>(x)) }) }
+    else { fromF64<T>(unsafe { ffi.tanh(toF64<T>(x)) }) }
+}
+pub func asinh<T>(x: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.asinhf(toF32<T>(x)) }) }
+    else { fromF64<T>(unsafe { ffi.asinh(toF64<T>(x)) }) }
+}
+pub func acosh<T>(x: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.acoshf(toF32<T>(x)) }) }
+    else { fromF64<T>(unsafe { ffi.acosh(toF64<T>(x)) }) }
+}
+pub func atanh<T>(x: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.atanhf(toF32<T>(x)) }) }
+    else { fromF64<T>(unsafe { ffi.atanh(toF64<T>(x)) }) }
+}
+pub func fma<T>(x: T, y: T, z: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.fmaf(toF32<T>(x), toF32<T>(y), toF32<T>(z)) }) }
+    else { fromF64<T>(unsafe { ffi.fma(toF64<T>(x), toF64<T>(y), toF64<T>(z)) }) }
+}
+pub func nextAfter<T>(x: T, toward: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.nextafterf(toF32<T>(x), toF32<T>(toward)) }) }
+    else { fromF64<T>(unsafe { ffi.nextafter(toF64<T>(x), toF64<T>(toward)) }) }
+}
+pub func erf<T>(x: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.erff(toF32<T>(x)) }) }
+    else { fromF64<T>(unsafe { ffi.erf(toF64<T>(x)) }) }
+}
+pub func erfc<T>(x: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.erfcf(toF32<T>(x)) }) }
+    else { fromF64<T>(unsafe { ffi.erfc(toF64<T>(x)) }) }
+}
+pub func gamma<T>(x: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.tgammaf(toF32<T>(x)) }) }
+    else { fromF64<T>(unsafe { ffi.tgamma(toF64<T>(x)) }) }
+}
+pub func logGamma<T>(x: T) T {
+    if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.lgammaf(toF32<T>(x)) }) }
+    else { fromF64<T>(unsafe { ffi.lgamma(toF64<T>(x)) }) }
+}
+pub func j0(x: f64) f64 { unsafe { ffi.j0(x) } }
+pub func j1(x: f64) f64 { unsafe { ffi.j1(x) } }
+pub func y0(x: f64) f64 { unsafe { ffi.y0(x) } }
+pub func y1(x: f64) f64 { unsafe { ffi.y1(x) } }
+pub func beta<T>(x: T, y: T) T { gamma(x) * gamma(y) / gamma(x + y) }
+
+pub func sinCos<T>(x: T) (T, T) { (sin(x), cos(x)) }
+pub func ulp<T>(x: T) T {
+    if isNan(x) || isInfinite(x) { return nan<T>(); }
+    var toward = if signbit(x) { -inf<T>() } else { inf<T>() };
+    var next = nextAfter(x, toward);
+    if isInfinite(next) { next = nextAfter(x, T(0)); }
+    abs(next - x)
+}
+pub func maxNum<T>(a: T, b: T) T {
+    if isNan(a) { return b; }
+    if isNan(b) { return a; }
+    if a == T(0) && b == T(0) { return if signbit(a) { b } else { a }; }
+    if a > b { a } else { b }
+}
+pub func minNum<T>(a: T, b: T) T {
+    if isNan(a) { return b; }
+    if isNan(b) { return a; }
+    if a == T(0) && b == T(0) { return if signbit(a) { a } else { b }; }
+    if a < b { a } else { b }
+}
+pub func totalMin<T>(a: T, b: T) T {
+    if cmp.totalCmp(&a, &b) == cmp.Ordering.Greater { b } else { a }
+}
+pub func totalMax<T>(a: T, b: T) T {
+    if cmp.totalCmp(&a, &b) == cmp.Ordering.Less { b } else { a }
+}
+pub func clamp<T>(x: T, low: T, high: T) T {
+    if isNan(low) || isNan(high) || low > high { panic("invalid clamp bounds"); }
+    if x < low { low } else if x > high { high } else { x }
+}
+pub func lerp<T>(a: T, b: T, t: T) T {
+    if (a <= T(0) && b >= T(0)) || (a >= T(0) && b <= T(0)) {
+        a * (T(1) - t) + b * t
+    } else {
+        a + (b - a) * t
+    }
+}
+pub func midpoint<T>(a: T, b: T) T { midpointValue(a, b) }
+pub func degrees<T>(radians: T) T { radians * T(180) / pi<T>() }
+pub func radians<T>(degrees: T) T { degrees * pi<T>() / T(180) }
+pub func distance2D<T>(x1: T, y1: T, x2: T, y2: T) T {
+    hypot(x2 - x1, y2 - y1)
+}
+pub func reduceAngle<T>(x: T) T { remainder(x, tau<T>()) }
+
+pub class Complex<T> {
+    pub var re: T;
+    pub var im: T;
+    func init(real: T, imag: T) : re(real), im(imag) {}
+    pub static func new(real: T, imag: T) Self { Complex<T>(real, imag) }
+    pub const func real() T { re }
+    pub const func imag() T { im }
+    pub const func conjugate() Self { Complex<T>(re, -im) }
+    pub const func norm() T { re * re + im * im }
+    pub const func abs() T { hypot(re, im) }
+    pub const func arg() T { atan2(im, re) }
+    pub const func add(other: Self) Self { Complex<T>(re + other.re, im + other.im) }
+    pub const func sub(other: Self) Self { Complex<T>(re - other.re, im - other.im) }
+    pub const func mul(other: Self) Self {
+        Complex<T>(re * other.re - im * other.im, re * other.im + im * other.re)
+    }
+    pub const func div(other: Self) !Self {
+        if other.re == T(0) && other.im == T(0) { return MathError.DivisionByZero; }
+        if abs(other.re) >= abs(other.im) {
+            var ratio = other.im / other.re;
+            var denominator = other.re + other.im * ratio;
+            Complex<T>((re + im * ratio) / denominator,
+                       (im - re * ratio) / denominator)
+        } else {
+            var ratio = other.re / other.im;
+            var denominator = other.im + other.re * ratio;
+            Complex<T>((re * ratio + im) / denominator,
+                       (im * ratio - re) / denominator)
+        }
+    }
+    pub const func sqrt() Self {
+        if re == T(0) && im == T(0) { return Complex<T>(T(0), im); }
+        var radius = abs();
+        if re >= T(0) {
+            var realPart = sqrtValue((radius + re) / T(2));
+            Complex<T>(realPart, im / (T(2) * realPart))
+        } else {
+            var imaginaryPart = copysignValue(sqrtValue((radius - re) / T(2)), im);
+            Complex<T>(absValue(im) / (T(2) * absValue(imaginaryPart)), imaginaryPart)
+        }
+    }
+    pub const func exp() Self {
+        var scale = expValue(re);
+        Complex<T>(scale * cosValue(im), scale * sinValue(im))
+    }
+    pub const func log() Self { Complex<T>(logValue(abs()), arg()) }
+    pub const func pow(other: Self) Self { (other.mul(log())).exp() }
+}
+
+pub class Interval<T> {
+    pub var low: T;
+    pub var high: T;
+    func init(lower: T, upper: T) : low(lower), high(upper) {}
+    pub static func new(lower: T, upper: T) !Self {
+        if isNan(lower) || isNan(upper) || lower > upper { return MathError.InvalidInterval; }
+        Interval<T>(lower, upper)
+    }
+    pub const func contains(value: T) bool { low <= value && value <= high }
+    pub const func containsZero() bool { low <= T(0) && T(0) <= high }
+    pub const func intersects(other: *const Self) bool { low <= other.high && other.low <= high }
+    pub const func intersection(other: *const Self) ?Self {
+        var lower = if low > other.low { low } else { other.low };
+        var upper = if high < other.high { high } else { other.high };
+        if lower > upper { null } else { some(Interval<T>(lower, upper)) }
+    }
+    pub const func hull(other: *const Self) Self {
+        Interval<T>(if low < other.low { low } else { other.low },
+                    if high > other.high { high } else { other.high })
+    }
+    pub const func width() T { high - low }
+    pub const func midpoint() T { midpointValue(low, high) }
+    pub const func add(other: *const Self) Self {
+        Interval<T>(low + other.low, high + other.high)
+    }
+    pub const func sub(other: *const Self) Self {
+        Interval<T>(low - other.high, high - other.low)
+    }
+    pub const func mul(other: *const Self) !Self {
+        var a = low * other.low;
+        var b = low * other.high;
+        var c = high * other.low;
+        var d = high * other.high;
+        if isNan(a) || isNan(b) || isNan(c) || isNan(d) { return MathError.Domain; }
+        var lower = minNum(minNum(a, b), minNum(c, d));
+        var upper = maxNum(maxNum(a, b), maxNum(c, d));
+        Interval<T>(lower, upper)
+    }
+    pub const func div(other: *const Self) !Self {
+        if other.containsZero() { return MathError.Pole; }
+        var a = T(1) / other.low;
+        var b = T(1) / other.high;
+        var reciprocal = Interval<T>(if a < b { a } else { b }, if a > b { a } else { b });
+        mul(&reciprocal)
+    }
+}

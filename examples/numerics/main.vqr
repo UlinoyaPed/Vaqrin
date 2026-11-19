@@ -1,0 +1,35 @@
+package main
+import (io, math, num, random)
+
+func main() !void {
+    var wide = num.BigUint.fromU64(18446744073709551615u64)!;
+    var two = num.BigUint.fromU64(2u64)!;
+    var product = wide.mul(&two)!;
+    io.println(product.toText(10)!)!;
+
+    var minimum = num.BigInt.parse("-9223372036854775808", 10)!;
+    var halfFloor = minimum.shr(1)!;
+    io.println(halfFloor.toText(10)!)!;
+
+    var ratio = num.Rational<i64>.new(-6, -8)!;
+    io.println(ratio.numerator())!;
+    io.println(ratio.denominator())!;
+
+    io.println(math.roundEven<f64>(2.5) == 2.0)!;
+    io.println(math.roundEven<f64>(3.5) == 4.0)!;
+    io.println(math.isNan(math.nan<f64>()))!;
+    io.println(math.isInfinite(math.inf<f64>()))!;
+
+    var first = random.Pcg64.seed(42u64);
+    var second = random.Pcg64.seed(42u64);
+    var reproducible = true;
+    for i in usize(0)..16 {
+        if random.randomU64(&first) != random.randomU64(&second) {
+            reproducible = false;
+        }
+    }
+    io.println(reproducible)!;
+
+    var picked = random.rangeInt(&first, 0u64, 10u64)!;
+    io.println(picked < 10u64)!;
+}

@@ -1,6 +1,6 @@
 # Vaqrin 标准包
 
-可用 `import (core, coll, iter, opt, result, cmp, convert, meta, mem, hash, mmio, bits, algo, atomic, binary, bytes, cell, encoding, simd, text, parse, io, path, fs, bufio, fmt, thread, sync, time, channel, task)` 导入标准包，也可使用 `std/` 前缀。CMake 在构建目录生成 `share/vaqrin/stdlib`，安装时将标准包源码复制到安装前缀下。编译器按使用情况实例化泛型声明。完整的目标接口见[标准包 API 清单](../docs/stdlib/Vaqrin-stdlib-API-complete-draft.md)。
+可用 `import (core, coll, iter, opt, result, cmp, convert, meta, mem, hash, mmio, bits, algo, atomic, binary, bytes, cell, encoding, simd, text, parse, io, path, fs, bufio, fmt, thread, sync, time, channel, task, num, math, random)` 导入标准包，也可使用 `std/` 前缀。CMake 在构建目录生成 `share/vaqrin/stdlib`，安装时将标准包源码复制到安装前缀下。编译器按使用情况实例化泛型声明。完整的目标接口见[标准包 API 清单](../docs/stdlib/Vaqrin-stdlib-API-complete-draft.md)。
 
 | 包 | 当前接口 |
 | --- | --- |
@@ -12,6 +12,9 @@
 | `convert` | 检查转换、整数与浮点舍入、位转换及 Unicode 标量验证 |
 | `cmp` | 标量比较、部分序、浮点总序和上下界助手 |
 | `hash` | Hasher / HashKey 协议、带种子的 FNV-1a 32 位哈希及常用整数哈希/相等回调 |
+| `num` | 定宽整数边界与检查/回绕/饱和运算、BigUint、BigInt、有理数 |
+| `math` | IEEE 754 分类、f32/f64 数学函数、复数与基础区间运算 |
+| `random` | PCG64 XSL-RR 128/64、xoshiro256**、均匀分布、洗牌与抽样 |
 | `meta` | 目标布局、类型名称、数组长度、复制、移动、析构、接口实现及线程间移交和共享特性 |
 | `mem` | 布局、字节操作、原始槽、手动析构、作用域守卫、强弱共享所有权和默认或固定缓冲分配器 |
 | `mmio` | 带边界和对齐检查的寄存器、宽度受限的 volatile 访问、编译器屏障及 ARM 指令屏障 |
@@ -86,3 +89,11 @@ LinkedList 使用双向节点和独立 Box 所有权表，节点地址在插入�
 `Shared<T>` 的复制增加强引用计数，`Weak<T>` 仅延长计数块的寿命。最后一个强引用释放载荷，最后一个弱引用释放计数块。`getMut` 要求唯一强引用且没有显式弱引用，`tryUnwrap` 消费强引用，并在其唯一时移出载荷。只有可安全共享的 T 才允许将这两类拥有者跨线程移交。
 
 当前实现范围、实际直接导入与未覆盖接口见[标准包实现矩阵](../docs/stdlib/Vaqrin-stdlib-package-matrix.md)。容器及 I/O 的接口细节见[容器实现](../docs/stdlib/coll-container-implementation.md)与[I/O 实现](../docs/stdlib/io-stack.md)。
+
+## 数值、数学与随机数
+
+`num` 的固定宽度整数运算面向编译器现有的最多 128 位整数类型。BigUint 使用 base-2^32 小端 limb，BigInt 使用符号-幅值表示；Rational 使用 BigInt 中间值完成约分与算术，再检查最终结果是否能装入 T。当前 `absDiff<T>` 返回 u128，因为语言尚无 `Unsigned<T>` 类型级映射。
+
+`math` 通过内部 `math_ffi` 包调用目标 C 数学 ABI。它为 f32/f64 分别使用对应的 C 数学入口。宿主链接需要目标数学库；编译器不会为任意 extern C 符号自动添加 `-lm`。区间运算采用普通 IEEE 舍入，不提供向外舍入保证，因此 Interval 目前不构成严格的浮点包络证明。
+
+`random` 的 Pcg64 是 PCG XSL-RR 128/64，Xoshiro256 使用 xoshiro256**。两者都可复现且都不是密码学安全随机源。当前没有 OsRng 或 CryptoRng 实现；`newDefault()` 使用固定种子，不从系统时间伪造熵。随机字符串按 Unicode 标量抽样，不按字素簇抽样。

@@ -1,0 +1,251 @@
+package num
+import (convert, meta)
+
+pub func checkedAdd<T>(a: T, b: T) !T {
+    var minimum = minValue<T>();
+    var maximum = maxValue<T>();
+    if __vqr_parse_signed<T>() {
+        if b > T(0) && a > maximum - b { return NumError.Overflow; }
+        if b < T(0) && a < minimum - b { return NumError.Overflow; }
+    } else {
+        if a > maximum - b { return NumError.Overflow; }
+    }
+    a + b
+}
+
+pub func checkedSub<T>(a: T, b: T) !T {
+    var minimum = minValue<T>();
+    var maximum = maxValue<T>();
+    if __vqr_parse_signed<T>() {
+        if b > T(0) && a < minimum + b { return NumError.Underflow; }
+        if b < T(0) && a > maximum + b { return NumError.Overflow; }
+    } else {
+        if a < b { return NumError.Underflow; }
+    }
+    a - b
+}
+
+pub func checkedMul<T>(a: T, b: T) !T {
+    if a == T(0) || b == T(0) { return T(0); }
+    var minimum = minValue<T>();
+    var maximum = maxValue<T>();
+    if __vqr_parse_signed<T>() {
+        var minusOne = __vqr_parse_bits<T>(~u128(0));
+        if (a == minusOne && b == minimum) || (b == minusOne && a == minimum) {
+            return NumError.Overflow;
+        }
+        if a > T(0) {
+            if b > T(0) && a > maximum / b { return NumError.Overflow; }
+            if b < T(0) && b < minimum / a { return NumError.Overflow; }
+        } else {
+            if b > T(0) && a < minimum / b { return NumError.Overflow; }
+            if b < T(0) && a < maximum / b { return NumError.Overflow; }
+        }
+    } else {
+        if b > maximum / a { return NumError.Overflow; }
+    }
+    a * b
+}
+
+pub func checkedDiv<T>(a: T, b: T) !T {
+    if b == T(0) { return NumError.DivisionByZero; }
+    if __vqr_parse_signed<T>() {
+        if a == minValue<T>() && b == __vqr_parse_bits<T>(~u128(0)) {
+            return NumError.Overflow;
+        }
+    }
+    a / b
+}
+
+pub func checkedNeg<T>(value: T) !T {
+    if !__vqr_parse_signed<T>() {
+        if value != T(0) { return NumError.NegativeValue; }
+        return T(0);
+    }
+    if value == minValue<T>() { return NumError.Overflow; }
+    -value
+}
+
+pub func wrappingAdd<T>(a: T, b: T) T { a +% b }
+pub func wrappingSub<T>(a: T, b: T) T { a -% b }
+pub func wrappingMul<T>(a: T, b: T) T { a *% b }
+
+pub func saturatingAdd<T>(a: T, b: T) T {
+    var maximum = maxValue<T>();
+    if __vqr_parse_signed<T>() {
+        if b > T(0) && a > maximum - b { return maximum; }
+        if b < T(0) && a < minValue<T>() - b { return minValue<T>(); }
+    } else if a > maximum - b {
+        return maximum;
+    }
+    a + b
+}
+
+pub func saturatingSub<T>(a: T, b: T) T {
+    if __vqr_parse_signed<T>() {
+        if b > T(0) && a < minValue<T>() + b { return minValue<T>(); }
+        if b < T(0) && a > maxValue<T>() + b { return maxValue<T>(); }
+    } else if a < b {
+        return T(0);
+    }
+    a - b
+}
+
+pub func saturatingMul<T>(a: T, b: T) T {
+    if a == T(0) || b == T(0) { return T(0); }
+    var result: !T = checkedMul<T>(a, b);
+    var value = move(result) catch {
+        if !__vqr_parse_signed<T>() { return maxValue<T>(); }
+        if (a < T(0)) != (b < T(0)) { return minValue<T>(); }
+        return maxValue<T>();
+    };
+    value
+}
+
+pub func abs<T>(value: T) !T {
+    if !__vqr_parse_signed<T>() { return value; }
+    if value == minValue<T>() { return NumError.Overflow; }
+    if value < T(0) { -value } else { value }
+}
+
+func magnitudeU128<T>(value: T) u128 {
+    if __vqr_parse_signed<T>() && value < T(0) {
+        convert.checkedCast<u128, T>(~value)!.unwrap() + u128(1)
+    } else {
+        convert.checkedCast<u128, T>(value)!.unwrap()
+    }
+}
+
+pub func absDiff<T>(a: T, b: T) u128 {
+    var leftNegative = __vqr_parse_signed<T>() && a < T(0);
+    var rightNegative = __vqr_parse_signed<T>() && b < T(0);
+    var left = magnitudeU128<T>(a);
+    var right = magnitudeU128<T>(b);
+    if leftNegative != rightNegative { return left + right; }
+    if left >= right { left - right } else { right - left }
+}
+
+pub func signum<T>(value: T) T {
+    if __vqr_parse_signed<T>() && value < T(0) {
+        __vqr_parse_bits<T>(~u128(0))
+    } else if value > T(0) {
+        T(1)
+    } else {
+        T(0)
+    }
+}
+
+pub func divMod<T>(a: T, b: T) !(T, T) {
+    if b == T(0) { return NumError.DivisionByZero; }
+    if __vqr_parse_signed<T>() &&
+       a == minValue<T>() && b == __vqr_parse_bits<T>(~u128(0)) {
+        return NumError.Overflow;
+    }
+    (a / b, a % b)
+}
+
+pub func divEuclid<T>(a: T, b: T) !T {
+    var pair = divMod<T>(a, b)!;
+    var quotient = pair.0;
+    var remainder = a % b;
+    if __vqr_parse_signed<T>() && remainder < T(0) {
+        if b > T(0) { quotient - T(1) } else { quotient + T(1) }
+    } else {
+        quotient
+    }
+}
+
+pub func remEuclid<T>(a: T, b: T) !T {
+    if b == T(0) { return NumError.DivisionByZero; }
+    if __vqr_parse_signed<T>() &&
+       a == minValue<T>() && b == __vqr_parse_bits<T>(~u128(0)) {
+        return NumError.Overflow;
+    }
+    var remainder = a % b;
+    if __vqr_parse_signed<T>() && remainder < T(0) {
+        if b > T(0) { remainder + b } else { remainder - b }
+    } else {
+        remainder
+    }
+}
+
+pub func gcd<T>(a: T, b: T) !T {
+    var left = magnitudeU128<T>(a);
+    var right = magnitudeU128<T>(b);
+    for right != 0 {
+        var remainder = left % right;
+        left = right;
+        right = remainder;
+    }
+    var converted = convert.checkedCast<T, u128>(left)!;
+    switch converted {
+        some(value) => value,
+        null => NumError.Overflow,
+    }
+}
+
+pub func lcm<T>(a: T, b: T) !T {
+    if a == T(0) || b == T(0) { return T(0); }
+    var divisor = gcd<T>(a, b)!;
+    var left = abs<T>(a)! / divisor;
+    var right = abs<T>(b)!;
+    checkedMul<T>(left, right)
+}
+
+pub func powInt<T>(base: T, exponent: usize) !T {
+    var power = exponent;
+    var factor = base;
+    var result = T(1);
+    for power != 0 {
+        if (power & 1) != 0 { result = checkedMul<T>(result, factor)!; }
+        power >>= 1;
+        if power != 0 { factor = checkedMul<T>(factor, factor)!; }
+    }
+    result
+}
+
+pub func midpoint<T>(a: T, b: T) T {
+    if !__vqr_parse_signed<T>() {
+        if a <= b {
+            a + (b - a) / T(2)
+        } else {
+            var distance = a - b;
+            b + distance / T(2) + distance % T(2)
+        }
+    } else {
+        var remainder = (a % T(2)) + (b % T(2));
+        var result = a / T(2) + b / T(2) + remainder / T(2);
+        if a <= b && remainder < T(0) && (remainder % T(2)) != T(0) {
+            result - T(1)
+        } else if a > b && remainder > T(0) && (remainder % T(2)) != T(0) {
+            result + T(1)
+        } else {
+            result
+        }
+    }
+}
+
+pub func sum<T: Copyable & Movable>(values: []const T) !T {
+    var result = T(0);
+    for value in values { result = checkedAdd<T>(result, value)!; }
+    result
+}
+
+pub func product<T: Copyable & Movable>(values: []const T) !T {
+    var result = T(1);
+    for value in values { result = checkedMul<T>(result, value)!; }
+    result
+}
+
+pub func average<T: Copyable & Movable>(values: []const T) !?T {
+    if values.len() == 0 { return null; }
+    var total = BigInt.zero();
+    for value in values {
+        var term = BigInt.fromInteger<T>(value)!;
+        var next = total.add(&term)!;
+        total = move(next);
+    }
+    var count = BigInt.fromInteger<usize>(values.len())!;
+    var mean = total.div(&count)!;
+    some(mean.toInteger<T>()!)
+}

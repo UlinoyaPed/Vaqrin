@@ -26,7 +26,7 @@ const data = Object.fromEntries(await Promise.all(
 ));
 for (const name of ["DerivedCoreProperties", "DerivedNormalizationProps", "PropList",
                     "Scripts", "PropertyValueAliases", "CaseFolding",
-                    "GraphemeBreakProperty", "EmojiData"]) {
+                    "GraphemeBreakProperty"]) {
   if (!data[name].includes(VERSION)) throw new Error(name + " is not Unicode " + VERSION);
 }
 
@@ -221,13 +221,13 @@ const dataSource = [
   "// Source: https://www.unicode.org/Public/" + VERSION + "/ucd/",
   "// Do not edit by hand. Regenerate with tools/generate.mjs.",
   "",
-  "const unicodePropertyRanges = [_]u64{", "    " + u64(propertyRanges), "};", "",
-  "const simpleCaseMappings = [_]u32{", "    " + u32(simpleCases), "};", "",
-  "const decompositionIndex = [_]u32{", "    " + u32(decompositionIndex), "};", "",
-  "const decompositionScalars = [_]u32{", "    " + u32(decompositionScalars), "};", "",
-  "const compositionPairs = [_]u32{", "    " + u32(compositionPairs.flat()), "};", "",
-  "const caseFoldIndex = [_]u32{", "    " + u32(caseFoldIndex), "};", "",
-  "const caseFoldScalars = [_]u32{", "    " + u32(caseFoldScalars), "};", ""
+  "pub const unicodePropertyRanges = [_]u64{", "    " + u64(propertyRanges), "};", "",
+  "pub const simpleCaseMappings = [_]u32{", "    " + u32(simpleCases), "};", "",
+  "pub const decompositionIndex = [_]u32{", "    " + u32(decompositionIndex), "};", "",
+  "pub const decompositionScalars = [_]u32{", "    " + u32(decompositionScalars), "};", "",
+  "pub const compositionPairs = [_]u32{", "    " + u32(compositionPairs.flat()), "};", "",
+  "pub const caseFoldIndex = [_]u32{", "    " + u32(caseFoldIndex), "};", "",
+  "pub const caseFoldScalars = [_]u32{", "    " + u32(caseFoldScalars), "};", ""
 ].join("\n");
 const pascal = value => value.split("_").map(part =>
   part ? part[0].toUpperCase() + part.slice(1) : "").join("");
@@ -238,7 +238,7 @@ const scriptSource = [
   "// Generated from PropertyValueAliases.txt in Unicode " + VERSION + ".",
   "// Do not edit by hand. Regenerate with tools/generate.mjs.", "",
   "pub enum Script {", "    " + scriptNames.join(",\n    "), "}", "",
-  "func scriptFromId(value: u8) Script {", "    switch value {",
+  "pub func scriptFromId(value: u8) Script {", "    switch value {",
   ...scriptNames.map((name,index) => "        " + index + " => Script." + name + ","),
   "        else => Script.Unknown,", "    }", "}", ""
 ].join("\n");

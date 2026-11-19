@@ -1,0 +1,66 @@
+package num
+import (cmp)
+
+pub class Rational<T: Copyable & Movable> {
+    var numeratorValue: T;
+    var denominatorValue: T;
+
+    func init(numerator: T, denominator: T)
+        : numeratorValue(numerator), denominatorValue(denominator) {}
+
+public:
+    static func new(numerator: T, denominator: T) !Self {
+        if denominator == T(0) { return NumError.ZeroDenominator; }
+        var negative = __vqr_parse_signed<T>() && denominator < T(0);
+        var n = numerator;
+        var d = denominator;
+        if negative {
+            n = checkedNeg<T>(n)!;
+            d = checkedNeg<T>(d)!;
+        }
+        var divisor = gcd<T>(n, d)!;
+        Rational<T>(n / divisor, d / divisor)
+    }
+
+    const func numerator() T { numeratorValue }
+    const func denominator() T { denominatorValue }
+
+    func add(other: *const Self) !Self {
+        var left = checkedMul<T>(numeratorValue, other.denominatorValue)!;
+        var right = checkedMul<T>(other.numeratorValue, denominatorValue)!;
+        var top = checkedAdd<T>(left, right)!;
+        var bottom = checkedMul<T>(denominatorValue, other.denominatorValue)!;
+        Rational<T>.new(top, bottom)
+    }
+
+    func sub(other: *const Self) !Self {
+        var left = checkedMul<T>(numeratorValue, other.denominatorValue)!;
+        var right = checkedMul<T>(other.numeratorValue, denominatorValue)!;
+        var top = checkedSub<T>(left, right)!;
+        var bottom = checkedMul<T>(denominatorValue, other.denominatorValue)!;
+        Rational<T>.new(top, bottom)
+    }
+
+    func mul(other: *const Self) !Self {
+        Rational<T>.new(
+            checkedMul<T>(numeratorValue, other.numeratorValue)!,
+            checkedMul<T>(denominatorValue, other.denominatorValue)!
+        )
+    }
+
+    func div(other: *const Self) !Self {
+        if other.numeratorValue == T(0) { return NumError.DivisionByZero; }
+        Rational<T>.new(
+            checkedMul<T>(numeratorValue, other.denominatorValue)!,
+            checkedMul<T>(denominatorValue, other.numeratorValue)!
+        )
+    }
+
+    const func compare(other: *const Self) !cmp.Ordering {
+        var left = checkedMul<T>(numeratorValue, other.denominatorValue)!;
+        var right = checkedMul<T>(other.numeratorValue, denominatorValue)!;
+        if left < right { return cmp.Ordering.Less; }
+        if left > right { return cmp.Ordering.Greater; }
+        cmp.Ordering.Equal
+    }
+}

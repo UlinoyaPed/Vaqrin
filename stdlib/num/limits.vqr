@@ -1,0 +1,64 @@
+package num
+import (meta)
+
+pub error NumError {
+    Overflow,
+    Underflow,
+    DivisionByZero,
+    InvalidRadix,
+    InvalidDigit,
+    InvalidSyntax,
+    NegativeValue,
+    ZeroDenominator,
+    UnsupportedType,
+}
+
+pub comptime func isSigned<T>() bool { __vqr_parse_signed<T>() }
+
+pub comptime func minValue<T>() T {
+    if __vqr_parse_signed<T>() {
+        __vqr_parse_bits<T>(__vqr_parse_limit<T>(true))
+    } else {
+        T(0)
+    }
+}
+
+pub comptime func maxValue<T>() T {
+    __vqr_parse_bits<T>(__vqr_parse_limit<T>(false))
+}
+
+pub class IntLimits<T> {
+    pub var bits: usize;
+    pub var signed: bool;
+    pub var min: T;
+    pub var max: T;
+
+    func init()
+        : bits(meta.bitWidth<T>()),
+          signed(__vqr_parse_signed<T>()),
+          min(minValue<T>()),
+          max(maxValue<T>()) {}
+}
+
+pub class FloatInfo<T> {
+    pub var bits: usize;
+    pub var precision: usize;
+    pub var exponentBits: usize;
+    pub var minExponent: i32;
+    pub var maxExponent: i32;
+    pub var minNormal: T;
+    pub var maxFinite: T;
+    pub var epsilon: T;
+
+    func init()
+        : bits(meta.bitWidth<T>()),
+          precision(if meta.bitWidth<T>() == 32 { 24 } else { 53 }),
+          exponentBits(if meta.bitWidth<T>() == 32 { 8 } else { 11 }),
+          minExponent(if meta.bitWidth<T>() == 32 { -126 } else { -1022 }),
+          maxExponent(if meta.bitWidth<T>() == 32 { 127 } else { 1023 }),
+          minNormal(if meta.bitWidth<T>() == 32 { T(1.1754943508222875e-38) } else { T(2.2250738585072014e-308) }),
+          maxFinite(if meta.bitWidth<T>() == 32 { T(3.4028234663852886e38) } else { T(1.7976931348623157e308) }),
+          epsilon(if meta.bitWidth<T>() == 32 { T(1.1920928955078125e-7) } else { T(2.2204460492503131e-16) }) {}
+}
+
+pub func floatInfo<T>() FloatInfo<T> { FloatInfo<T>() }

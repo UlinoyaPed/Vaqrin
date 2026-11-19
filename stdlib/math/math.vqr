@@ -1,0 +1,159 @@
+package math
+import (convert, meta, num)
+
+pub enum FpClass { Nan, Infinite, Zero, Subnormal, Normal }
+pub error MathError { Domain, Pole, InvalidInterval, Overflow, DivisionByZero }
+
+pub func pi<T>() T { T(3.14159265358979323846264338327950288) }
+pub func tau<T>() T { T(6.28318530717958647692528676655900576) }
+pub func e<T>() T { T(2.71828182845904523536028747135266250) }
+pub func sqrt2<T>() T { T(1.41421356237309504880168872420969808) }
+pub func ln2<T>() T { T(0.69314718055994530941723212145817657) }
+pub func ln10<T>() T { T(2.30258509299404568401799145468436421) }
+
+pub func isNan<T>(x: T) bool { x != x }
+pub func isInfinite<T>(x: T) bool { x == T(1.0 / 0.0) || x == T(-1.0 / 0.0) }
+pub func isFinite<T>(x: T) bool { !isNan(x) && !isInfinite(x) }
+pub func signbit<T>(x: T) bool {
+    if meta.bitWidth<T>() == 32 {
+        (convert.bitCast<u32, T>(x) & 0x80000000u32) != 0
+    } else {
+        (convert.bitCast<u64, T>(x) & 0x8000000000000000u64) != 0
+    }
+}
+pub func isNormal<T>(x: T) bool {
+    if !isFinite(x) || x == T(0) { return false; }
+    var magnitude = if x < T(0) { -x } else { x };
+    magnitude >= if meta.bitWidth<T>() == 32 { T(1.1754943508222875e-38) } else { T(2.2250738585072014e-308) }
+}
+pub func fpClassify<T>(x: T) FpClass {
+    if isNan(x) { return FpClass.Nan; }
+    if isInfinite(x) { return FpClass.Infinite; }
+    if x == T(0) { return FpClass.Zero; }
+    if isNormal(x) { FpClass.Normal } else { FpClass.Subnormal }
+}
+pub func abs<T>(x: T) T { if signbit(x) { -x } else { x } }
+pub func copysign<T>(x: T, y: T) T { if signbit(x) == signbit(y) { x } else { -x } }
+pub func floor<T>(x: T) T { convert.toFloat<T, i64>(convert.floorToInt<i64, T>(x)!) }
+pub func ceil<T>(x: T) T { convert.toFloat<T, i64>(convert.ceilToInt<i64, T>(x)!) }
+pub func trunc<T>(x: T) T { convert.toFloat<T, i64>(convert.truncToInt<i64, T>(x)!) }
+pub func roundEven<T>(x: T) T { convert.toFloat<T, i64>(convert.roundToInt<i64, T>(x)!) }
+pub func round<T>(x: T) T {
+    if x >= T(0) { floor(x + T(0.5)) } else { ceil(x - T(0.5)) }
+}
+pub func clamp<T>(x: T, low: T, high: T) T {
+    if low > high { panic("invalid clamp bounds"); }
+    if x < low { low } else if x > high { high } else { x }
+}
+pub func lerp<T>(a: T, b: T, t: T) T { a + (b - a) * t }
+pub func midpoint<T>(a: T, b: T) T { a / T(2) + b / T(2) }
+pub func degrees<T>(radians: T) T { radians * T(180) / pi<T>() }
+pub func radians<T>(degrees: T) T { degrees * pi<T>() / T(180) }
+
+extern "C" func sqrt(value: f64) f64;
+extern "C" func cbrt(value: f64) f64;
+extern "C" func hypot(x: f64, y: f64) f64;
+extern "C" func pow(x: f64, y: f64) f64;
+extern "C" func exp(value: f64) f64;
+extern "C" func exp2(value: f64) f64;
+extern "C" func log(value: f64) f64;
+extern "C" func log2(value: f64) f64;
+extern "C" func log10(value: f64) f64;
+extern "C" func sin(value: f64) f64;
+extern "C" func cos(value: f64) f64;
+extern "C" func tan(value: f64) f64;
+extern "C" func asin(value: f64) f64;
+extern "C" func acos(value: f64) f64;
+extern "C" func atan(value: f64) f64;
+extern "C" func atan2(y: f64, x: f64) f64;
+extern "C" func sinh(value: f64) f64;
+extern "C" func cosh(value: f64) f64;
+extern "C" func tanh(value: f64) f64;
+extern "C" func fma(x: f64, y: f64, z: f64) f64;
+extern "C" func nextafter(x: f64, y: f64) f64;
+
+pub func sqrt<T>(x: T) T { T(unsafe { sqrt(f64(x)) }) }
+pub func cbrt<T>(x: T) T { T(unsafe { cbrt(f64(x)) }) }
+pub func hypot<T>(x: T, y: T) T { T(unsafe { hypot(f64(x), f64(y)) }) }
+pub func pow<T>(x: T, y: T) T { T(unsafe { pow(f64(x), f64(y)) }) }
+pub func powi<T>(x: T, n: i32) T {
+    var exponent = n;
+    var factor = x;
+    var result = T(1);
+    if exponent < 0 {
+        factor = T(1) / factor;
+        exponent = -exponent;
+    }
+    for exponent > 0 {
+        if (exponent & 1) != 0 { result *= factor; }
+        exponent >>= 1;
+        if exponent != 0 { factor *= factor; }
+    }
+    result
+}
+pub func exp<T>(x: T) T { T(unsafe { exp(f64(x)) }) }
+pub func exp2<T>(x: T) T { T(unsafe { exp2(f64(x)) }) }
+pub func log<T>(x: T) T { T(unsafe { log(f64(x)) }) }
+pub func log2<T>(x: T) T { T(unsafe { log2(f64(x)) }) }
+pub func log10<T>(x: T) T { T(unsafe { log10(f64(x)) }) }
+pub func sin<T>(x: T) T { T(unsafe { sin(f64(x)) }) }
+pub func cos<T>(x: T) T { T(unsafe { cos(f64(x)) }) }
+pub func tan<T>(x: T) T { T(unsafe { tan(f64(x)) }) }
+pub func asin<T>(x: T) T { T(unsafe { asin(f64(x)) }) }
+pub func acos<T>(x: T) T { T(unsafe { acos(f64(x)) }) }
+pub func atan<T>(x: T) T { T(unsafe { atan(f64(x)) }) }
+pub func atan2<T>(y: T, x: T) T { T(unsafe { atan2(f64(y), f64(x)) }) }
+pub func sinh<T>(x: T) T { T(unsafe { sinh(f64(x)) }) }
+pub func cosh<T>(x: T) T { T(unsafe { cosh(f64(x)) }) }
+pub func tanh<T>(x: T) T { T(unsafe { tanh(f64(x)) }) }
+pub func fma<T>(x: T, y: T, z: T) T { T(unsafe { fma(f64(x), f64(y), f64(z)) }) }
+pub func nextAfter<T>(x: T, toward: T) T { T(unsafe { nextafter(f64(x), f64(toward)) }) }
+
+pub class Complex<T> {
+    pub var re: T;
+    pub var im: T;
+    func init(real: T, imag: T) : re(real), im(imag) {}
+    pub const func real() T { re }
+    pub const func imag() T { im }
+    pub const func conjugate() Self { Complex<T>(re, -im) }
+    pub const func norm() T { re * re + im * im }
+    pub const func abs() T { hypot(re, im) }
+    pub const func add(other: Self) Self { Complex<T>(re + other.re, im + other.im) }
+    pub const func sub(other: Self) Self { Complex<T>(re - other.re, im - other.im) }
+    pub const func mul(other: Self) Self {
+        Complex<T>(re * other.re - im * other.im, re * other.im + im * other.re)
+    }
+    pub const func div(other: Self) !Self {
+        var scale = abs(other.re);
+        if abs(other.im) > scale { scale = abs(other.im); }
+        if scale == T(0) { return MathError.DivisionByZero; }
+        var c = other.re / scale;
+        var d = other.im / scale;
+        var denominator = c * c + d * d;
+        Complex<T>((re * c + im * d) / (scale * denominator),
+                   (im * c - re * d) / (scale * denominator))
+    }
+}
+
+pub class Interval<T> {
+    pub var low: T;
+    pub var high: T;
+    func init(lower: T, upper: T) : low(lower), high(upper) {}
+    pub static func new(lower: T, upper: T) !Self {
+        if isNan(lower) || isNan(upper) || lower > upper { return MathError.InvalidInterval; }
+        Interval<T>(lower, upper)
+    }
+    pub const func contains(value: T) bool { low <= value && value <= high }
+    pub const func intersects(other: *const Self) bool { low <= other.high && other.low <= high }
+    pub const func intersection(other: *const Self) ?Self {
+        var lower = if low > other.low { low } else { other.low };
+        var upper = if high < other.high { high } else { other.high };
+        if lower > upper { null } else { some(Interval<T>(lower, upper)) }
+    }
+    pub const func hull(other: *const Self) Self {
+        Interval<T>(if low < other.low { low } else { other.low },
+                    if high > other.high { high } else { other.high })
+    }
+    pub const func width() T { high - low }
+    pub const func midpoint() T { math.midpoint<T>(low, high) }
+}

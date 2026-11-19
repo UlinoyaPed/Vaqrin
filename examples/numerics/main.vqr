@@ -1,0 +1,15 @@
+package main
+import (io, num, random, math)
+
+func main() !void {
+    var a = num.BigUint.fromU64(18446744073709551615u64)!;
+    var b = num.BigUint.fromU64(2)!;
+    var product = a.mul(&b)!;
+    io.println(product.toText(10)!)!;
+    var ratio = num.Rational<i64>.new(-6, -8)!;
+    io.println(ratio.numerator())!;
+    io.println(ratio.denominator())!;
+    io.println(math.sqrt<f64>(2.0))!;
+    var rng = random.Pcg64.seed(42);
+    io.println(random.rangeInt(&rng, 0, 10)!)!;
+}

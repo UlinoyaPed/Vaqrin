@@ -1,81 +1,301 @@
 package regex
-import (coll, convert, unicode)
+import (coll, core, convert, unicode)
 
-func addState(regex: *Regex, list: *coll.Vec<i32>, seen: *coll.Vec<bool>, index: i32, position: usize, input: str, budget: *usize) !void {
-    if index < 0 { return; }
-    if usize(index) >= regex.states.len() { return RegexError.InvalidCapture; }
-    if usize(index) >= seen.len() { return RegexError.InvalidCapture; }
-    if seen[usize(index)] { return; }
-    seen[usize(index)] = true;
-    budget.* -= 1;
-    if budget.* == 0 { return RegexError.TooManyStates; }
-    var state = regex.states[usize(index)];
-    switch state.op {
-        Op.Split => {
-            addState(regex,list,seen,state.out,position,input,budget)!;
-            addState(regex,list,seen,state.alternate,position,input,budget)!;
-        },
-        Op.Jump => addState(regex,list,seen,state.out,position,input,budget)!,
-        Op.AssertStart => {
-            if position == 0 || ((regex.flags & 2) != 0 && input.asBytes()[position - 1] == 10) {
-                addState(regex,list,seen,state.out,position,input,budget)!;
+pub record Thread {
+    pub var state: i32;
+    pub var startByte: usize;
+    pub var history: i32;
+}
+
+pub record CaptureHistory {
+    pub var previous: i32;
+    pub var slot: usize;
+    pub var offset: usize;
+}
+
+pub record SearchResult {
+    pub var matched: Match;
+    pub var captures: Captures;
+}
+
+func isLineTerminatorAt(input: str, position: usize) bool {
+    if position >= input.byteLen() { return false; }
+    var bytes = input.asBytes();
+    if bytes[position] == 10 || bytes[position] == 13 { return true; }
+    if input.byteLen() - position < 3 { return false; }
+    bytes[position] == 0xe2 && bytes[position + 1] == 0x80 &&
+        (bytes[position + 2] == 0xa8 || bytes[position + 2] == 0xa9)
+}
+
+func isLineTerminatorBefore(input: str, position: usize) bool {
+    if position == 0 { return false; }
+    var bytes = input.asBytes();
+    if bytes[position - 1] == 10 { return true; }
+    if bytes[position - 1] == 13 {
+        return position == input.byteLen() || bytes[position] != 10;
+    }
+    if position >= 3 {
+        return bytes[position - 3] == 0xe2 && bytes[position - 2] == 0x80 &&
+            (bytes[position - 1] == 0xa8 || bytes[position - 1] == 0xa9);
+    }
+    false
+}
+
+func assertStart(regex: *const Regex, input: str, position: usize) bool {
+    position == 0 || ((regex.flags & 2) != 0 && isLineTerminatorBefore(input, position))
+}
+
+func assertEnd(regex: *const Regex, input: str, position: usize) bool {
+    position == input.byteLen() ||
+        ((regex.flags & 2) != 0 && isLineTerminatorAt(input, position) &&
+         !(position > 0 && input.asBytes()[position] == 10 && input.asBytes()[position - 1] == 13))
+}
+
+func appendHistory(history: *coll.Vec<CaptureHistory>, previous: i32,
+                   slot: usize, offset: usize) !i32 {
+    history.push(CaptureHistory{previous: previous, slot: slot, offset: offset})!;
+    i32(history.len() - 1)
+}
+
+func epsilonClosure(regex: *const Regex, seeds: []const Thread,
+                    output: *coll.Vec<Thread>, history: *coll.Vec<CaptureHistory>,
+                    input: str, position: usize, budget: *usize) !void {
+    var seen = coll.Vec<bool>();
+    for i in usize(0)..regex.states.len() { seen.push(false)!; }
+    var stack = coll.Vec<Thread>();
+
+    for seed in seeds {
+        stack.clear();
+        stack.push(seed)!;
+        for {
+            var popped = stack.pop();
+            switch popped {
+                null => break,
+                some(thread) => {
+                    if thread.state < 0 || usize(thread.state) >= regex.states.len() {
+                        return RegexError.InvalidCapture;
+                    }
+                    if budget.* == 0 { return RegexError.StepLimitExceeded; }
+                    budget.* -= 1;
+                    var index = usize(thread.state);
+                    if seen[index] { continue; }
+                    seen[index] = true;
+                    var state = regex.states[index];
+
+                    switch state.op {
+                        Op.Split => {
+                            if state.alternate >= 0 {
+                                var alternate = thread;
+                                alternate.state = state.alternate;
+                                stack.push(alternate)!;
+                            }
+                            if state.out >= 0 {
+                                thread.state = state.out;
+                                stack.push(thread)!;
+                            }
+                        },
+                        Op.Jump => {
+                            if state.out >= 0 {
+                                thread.state = state.out;
+                                stack.push(thread)!;
+                            }
+                        },
+                        Op.Save => {
+                            if state.value >= u32(regex.captures + 1) * 2 {
+                                return RegexError.InvalidCapture;
+                            }
+                            thread.history = appendHistory(history, thread.history,
+                                usize(state.value), position)!;
+                            if state.out >= 0 {
+                                thread.state = state.out;
+                                stack.push(thread)!;
+                            }
+                        },
+                        Op.AssertStart => {
+                            if assertStart(regex, input, position) && state.out >= 0 {
+                                thread.state = state.out;
+                                stack.push(thread)!;
+                            }
+                        },
+                        Op.AssertEnd => {
+                            if assertEnd(regex, input, position) && state.out >= 0 {
+                                thread.state = state.out;
+                                stack.push(thread)!;
+                            }
+                        },
+                        else => output.push(thread)!
+                    }
+                }
             }
-        },
-        Op.AssertEnd => {
-            if position == input.byteLen() || ((regex.flags & 2) != 0 && input.asBytes()[position] == 10) {
-                addState(regex,list,seen,state.out,position,input,budget)!;
-            }
-        },
-        else => list.push(index)!
+        }
     }
 }
-func runNfa(regex: *Regex, input: str, start: usize) ?Match {
+
+func rawClassContains(regex: *const Regex, classId: usize, cp: u32) bool {
+    if classId >= regex.classes.len() { return false; }
+    var descriptor = regex.classes[classId];
+    var found = false;
+    for i in descriptor.firstRange..(descriptor.firstRange + descriptor.rangeCount) {
+        var range = regex.ranges[i];
+        if range.first <= cp && cp <= range.last { found = true; break; }
+    }
+    var ch = __vqr_char(cp);
+    var mask = descriptor.builtinMask;
+    if (mask & 1) != 0 && unicode.isDigit(ch) { found = true; }
+    if (mask & 2) != 0 && !unicode.isDigit(ch) { found = true; }
+    if (mask & 4) != 0 && unicode.isWhitespace(ch) { found = true; }
+    if (mask & 8) != 0 && !unicode.isWhitespace(ch) { found = true; }
+    var word = unicode.isXidContinue(ch) || cp == 0x5f;
+    if (mask & 16) != 0 && word { found = true; }
+    if (mask & 32) != 0 && !word { found = true; }
+    found
+}
+
+func classContains(regex: *const Regex, classId: usize, cp: u32) bool {
+    if classId >= regex.classes.len() { return false; }
+    var found = rawClassContains(regex, classId, cp);
+    if (regex.flags & 1) != 0 {
+        var lower = convert.fromChar(unicode.toLowerSimple(__vqr_char(cp)));
+        var upper = convert.fromChar(unicode.toUpperSimple(__vqr_char(cp)));
+        if rawClassContains(regex, classId, lower) || rawClassContains(regex, classId, upper) {
+            found = true;
+        }
+    }
+    if regex.classes[classId].negated { !found } else { found }
+}
+
+func simpleCaseEqual(a: u32, b: u32) bool {
+    if a == b { return true; }
+    var left = __vqr_char(a);
+    var right = __vqr_char(b);
+    unicode.toLowerSimple(left) == unicode.toLowerSimple(right) ||
+        unicode.toUpperSimple(left) == unicode.toUpperSimple(right)
+}
+
+func accepts(regex: *const Regex, state: State, cp: u32) bool {
+    switch state.op {
+        Op.Character => {
+            if (regex.flags & 1) != 0 { simpleCaseEqual(state.value, cp) }
+            else { state.value == cp }
+        },
+        Op.Any => {
+            (regex.flags & 4) != 0 ||
+            (cp != 10 && cp != 13 && cp != 0x2028 && cp != 0x2029)
+        },
+        Op.Class => classContains(regex, usize(state.value), cp),
+        else => false
+    }
+}
+
+func buildSearchResult(candidate: ?Thread, endByte: usize, input: str,
+                       history: *coll.Vec<CaptureHistory>, captureCount: usize) !?SearchResult {
+    switch candidate {
+        null => null,
+        some(thread) => {
+            var slotCount = (captureCount + 1) * 2;
+            var slots = coll.Vec<?usize>();
+            for i in usize(0)..slotCount { slots.push(null)!; }
+            var head = appendHistory(history, thread.history, 1, endByte)!;
+            for head >= 0 {
+                var item = history[usize(head)];
+                if item.slot < slots.len() && slots[item.slot] == null {
+                    slots[item.slot] = some(item.offset);
+                }
+                head = item.previous;
+            }
+            var groups = coll.Vec<?(usize, usize)>();
+            for group in usize(0)..(captureCount + 1) {
+                var start = slots[group * 2];
+                var finish = slots[group * 2 + 1];
+                switch start {
+                    some(a) => switch finish {
+                        some(b) => {
+                            if a <= b { groups.push(some((a, b)))!; }
+                            else { groups.push(null)!; }
+                        },
+                        null => groups.push(null)!
+                    },
+                    null => groups.push(null)!
+                }
+            }
+            var matched = Match{startByte: thread.startByte, endByte: endByte, source: input};
+            var captures = Captures(input, move(groups));
+            some(SearchResult{matched: matched, captures: move(captures)})
+        }
+    }
+}
+
+func runNfa(regex: *const Regex, input: str, start: usize) !?SearchResult {
+    if input.byteLen() > regex.maxInputBytes { return RegexError.InputTooLarge; }
+    if start > input.byteLen() { return RegexError.InvalidOffset; }
+    if start < input.byteLen() && (input.asBytes()[start] & 0xc0) == 0x80 {
+        return RegexError.InvalidOffset;
+    }
+
+    var current = coll.Vec<Thread>();
+    var seeds = coll.Vec<Thread>();
+    var active = coll.Vec<Thread>();
+    var nextSeeds = coll.Vec<Thread>();
+    var history = coll.Vec<CaptureHistory>();
+    var candidate: ?Thread = null;
+    var candidateEnd: usize = 0;
     var position = start;
-    var candidate: ?Match = null;
-    var budget = regex.states.len() * (input.byteLen() + 1);
+    var budget = regex.maxSteps;
+
     for position <= input.byteLen() {
-        var active = coll.Vec<i32>();
-        var seen = coll.Vec<bool>();
-        seen.resize(regex.states.len(), false)!;
-        for i in usize(0)..regex.states.len() { seen[i] = false; }
-        // The compiled start state is stored at index zero.
-        addState(regex,&active,&seen,0,position,input,&budget) catch { return candidate; };
-        var matched = false;
-        for index in active.asSlice() {
-            if regex.states[usize(index)].op == Op.Match {
-                candidate = some(Match{startByte:start,endByte:position,source:input});
-                matched = true;
+        seeds.clear();
+        for thread in current.asSlice() { seeds.push(thread)!; }
+
+        if candidate == null {
+            var initialHistory = appendHistory(&history, -1, 0, position)!;
+            seeds.push(Thread{state: 0, startByte: position, history: initialHistory})!;
+        }
+
+        active.clear();
+        epsilonClosure(regex, seeds.asConstSlice(), &active, &history,
+                       input, position, &budget)!;
+
+        var matchIndex: ?usize = null;
+        for i in usize(0)..active.len() {
+            if regex.states[usize(active[i].state)].op == Op.Match {
+                matchIndex = some(i);
                 break;
             }
         }
-        if matched { return candidate; }
-        if position == input.byteLen() { break; }
-        var decoded = unicode.decodeUtf8(input.asBytes()[position..]) catch { return null; };
-        var cp = convert.fromChar(decoded.0);
-        var next = coll.Vec<i32>();
-        var nextSeen = coll.Vec<bool>();
-        nextSeen.resize(regex.states.len(),false)!;
-        for index in active.asSlice() {
-            var state = regex.states[usize(index)];
-            var accepts = false;
-            if state.op == Op.Any { accepts = (regex.flags & 4) != 0 || cp != 10; }
-            else if state.op == Op.Character { accepts = state.value == cp; }
-            else if state.op == Op.Class { accepts = classContains(regex,state.value,cp); }
-            if accepts { addState(regex,&next,&nextSeen,state.out,position + decoded.1,input,&budget) catch { return candidate; }; }
+        switch matchIndex {
+            some(index) => {
+                candidate = some(active[index]);
+                candidateEnd = position;
+                active.truncate(index);
+            },
+            null => {}
         }
-        active = move(next);
+
+        if active.isEmpty() || position == input.byteLen() {
+            return buildSearchResult(candidate, candidateEnd, input, &history, regex.captures);
+        }
+
+        var decoded = unicode.decodeUtf8(input.asBytes()[position..])!;
+        var cp = convert.fromChar(decoded.0);
+        nextSeeds.clear();
+        for thread in active.asSlice() {
+            var state = regex.states[usize(thread.state)];
+            if accepts(regex, state, cp) {
+                if state.out < 0 { return RegexError.InvalidCapture; }
+                nextSeeds.push(Thread{
+                    state: state.out, startByte: thread.startByte, history: thread.history
+                })!;
+                if budget == 0 { return RegexError.StepLimitExceeded; }
+                budget--;
+            }
+        }
+        if nextSeeds.isEmpty() {
+            return buildSearchResult(candidate, candidateEnd, input, &history, regex.captures);
+        }
+
+        current.clear();
+        for thread in nextSeeds.asSlice() { current.push(thread)!; }
         position += decoded.1;
     }
-    candidate
-}
-func runCaptures(regex: *Regex, input: str, start: usize) ?Captures {
-    var found = runNfa(regex,input,start);
-    if found == null { return null; }
-    var result = Captures(input);
-    result.groups.push(some((found.unwrap().startByte,found.unwrap().endByte)))!;
-    result
-}
-func classContains(regex: *Regex, classId: u32, cp: u32) bool {
-    // Character class descriptors are emitted adjacent to the compiled program.
-    false
+    buildSearchResult(candidate, candidateEnd, input, &history, regex.captures)
 }

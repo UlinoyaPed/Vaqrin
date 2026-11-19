@@ -1,0 +1,24 @@
+import (csv, io)
+
+func main() !void {
+    var options = csv.CsvOptions();
+    options.hasHeader = true;
+
+    var source = "name,note\r\nAlice,\"first line\r\nsecond line\"\r\nBob,\"say \"\"hello\"\"\"";
+    var records = csv.parse(source, options)!;
+    io.println(records.len())!;
+
+    var trailing = csv.parseRecord("a,,", options)!;
+    io.println(trailing.len())!;
+
+    var escaped = csv.escapeField("value,with,commas", options)!;
+    io.println(escaped)!;
+
+    var memory = io.MemoryWriter();
+    var writer = csv.CsvWriter(&memory, options);
+    var fields = [_]str{"alpha", "contains,comma", "line one\nline two"};
+    writer.writeRecord(fields[:])!;
+    writer.flush()!;
+    var bytes = io.MemoryWriter.intoBytes(move(memory));
+    io.println(bytes.len())!;
+}

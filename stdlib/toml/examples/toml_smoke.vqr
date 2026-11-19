@@ -1,0 +1,22 @@
+import (core, io, toml)
+
+func main() !void {
+    var source = "title = \"Vaqrin\"\ncount = 42\nratio = 1.25\nactive = true\nwhen = 1979-05-27T07:32:00Z\nfeatures = [\"json\", \"csv\"]\n[server]\nport = 8080\n[server.tls]\nenabled = true\n";
+    var document = toml.parse(source)!;
+    io.println(document.len())!;
+
+    var port = toml.get(&document, "server.port").unwrap();
+    switch *port {
+        toml.Value.Integer(value) => io.println(value)!,
+        _ => panic("unexpected TOML value kind"),
+    };
+
+    var output = toml.stringify(&document)!;
+    io.println(output)!;
+
+    var duplicate = toml.parse("value = 1\nvalue = 2");
+    io.println(core.isErr(&duplicate))!;
+
+    var invalidDate = toml.parse("when = 2024-02-31");
+    io.println(core.isErr(&invalidDate))!;
+}

@@ -1,0 +1,28 @@
+import (core, io, json)
+
+func main() !void {
+    var parsed = json.parse("{\"ok\":true,\"items\":[1,2,{\"name\":\"Vaqrin\"}],\"rocket\":\"\\uD83D\\uDE80\"}");
+    io.println(core.isOk(&parsed))!;
+    var value = move(parsed)!;
+    io.println(json.stringify(&value)!)!;
+    io.println(json.stringifyPretty(&value, 2)!)!;
+
+    var second = json.pointerGet(&value, "/items/2/name");
+    io.println(second != null)!;
+
+    var invalidNumber = json.parse("{\"n\":01}");
+    io.println(core.isErr(&invalidNumber))!;
+
+    var duplicateOptions = json.ParseOptions();
+    duplicateOptions.duplicateKeys = json.DuplicateKeyPolicy.KeepLast;
+    var duplicate = json.parseWithOptions("{\"x\":1,\"x\":2}", duplicateOptions)!;
+    var object = json.asObject(&duplicate).unwrap();
+    io.println(object.len())!;
+
+    var preciseNumber = json.JsonNumber.parse("9007199254740993")!;
+    var approximate = preciseNumber.asF64();
+    io.println(core.isErr(&approximate))!;
+
+    var invalidEscape = json.parse("\"\\uD800\"");
+    io.println(core.isErr(&invalidEscape))!;
+}

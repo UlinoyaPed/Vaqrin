@@ -1,0 +1,59 @@
+import (convert, io, json, serde, toml)
+
+class User {
+    pub var name: string;
+    pub var age: i32;
+}
+
+class UserCodec {
+    #implements: serde.Codec<User>
+
+    pub func encode(value: *const User, serializer: *serde.Serializer) !void {
+        serializer.beginMap(some(2))!;
+        serializer.writeKey("name")!;
+        serializer.writeString(value.name)!;
+        serializer.writeKey("age")!;
+        serializer.writeI64(convert.widen<i64>(value.age))!;
+        serializer.endMap()
+    }
+
+    pub func decode(deserializer: *serde.Deserializer) !User {
+        var count = deserializer.beginMap()!;
+        var name = "";
+        var age: i32 = 0;
+        for {
+            var key = deserializer.nextKey()!;
+            switch move(key) {
+                null => break,
+                some(field) => {
+                    if field == "name" {
+                        name = deserializer.readString()!;
+                    } else if field == "age" {
+                        age = convert.narrow<i32>(deserializer.readI64()!)!;
+                    } else {
+                        return serde.SerdeError.InvalidValue;
+                    }
+                },
+            }
+        }
+        deserializer.endMap()!;
+        User{name: move(name), age: age}
+    }
+}
+
+func main() !void {
+    var user = User{name: "Ada", age: 37};
+    var codec = UserCodec();
+
+    var jsonText = json.marshal(&user, &codec)!;
+    io.println(jsonText)!;
+    var fromJson = json.unmarshal<User>(jsonText, &codec)!;
+    io.println(fromJson.name)!;
+    io.println(fromJson.age)!;
+
+    var tomlText = toml.encode(&user, &codec)!;
+    io.println(tomlText)!;
+    var fromToml = toml.decode<User>(tomlText, &codec)!;
+    io.println(fromToml.name)!;
+    io.println(fromToml.age)!;
+}

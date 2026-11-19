@@ -56,3 +56,106 @@ bytes are never replayed by a later flush.
 - Formatter supports a small brace-format subset; user-defined Display/DebugFormat
   dispatch, locale-aware formatting and cached FormatPlan are not implemented.
 - Host I/O is synchronous. No asynchronous or network interfaces are added.
+
+
+## Public API inventory
+
+The following is the first implemented API surface. It is intentionally narrower than
+the full package-matrix proposal; items listed here correspond to declarations in the
+current source files.
+
+### io
+
+Interfaces: Reader, Writer, Seeker, ReaderAt, WriterAt, Closer.
+
+Types: SeekOrigin(Start, Current, End), ReadStatus(Bytes, Eof, WouldBlock, Interrupted),
+IoProgress(processed, status), IoError(WriteFailed, UnexpectedEof, NoProgress,
+WouldBlock, Interrupted, InvalidCount, PositionOutOfRange, LimitExceeded, Closed,
+InvalidArgument, Unsupported), MemoryReader, MemoryWriter, FixedWriter, LimitedReader,
+CountingReader, CountingWriter, MultiReader, MultiWriter, TeeReader, HostFile,
+HostMetadata, HostDirEntry, HostDirectory.
+
+Functions:
+- read(reader, dst), write(writer, src)
+- readExact(reader, dst), readExactProgress(reader, dst), readAtLeast(reader, dst, min)
+- readExactAt(reader, offset, dst), writeAllAt(writer, offset, src)
+- writeAll(writer, src), writeAllProgress(writer, src), writeString(writer, value)
+- readToEnd(reader, limit), readToEnd(reader), readToString(reader, limit)
+- copy(reader, writer), copy(reader, writer, scratch), copyN(reader, writer, n, scratch),
+  copyAll(reader, writer), discard(reader, n, scratch)
+- limit(reader, n), tee(reader, writer)
+- stdin(), stdout(), stderr(), print(str), println<T>(value), eprint(str), eprintln(str),
+  flushStdout()
+- systemError(errno), systemErrorCode(error), isSystemError(error),
+  isInterrupted(error), isWouldBlock(error)
+- hostStat(pathBytes, follow), hostMkdir(pathBytes, mode), hostRemove(pathBytes),
+  hostRemoveDir(pathBytes), hostRename(fromBytes, toBytes), hostChmod(pathBytes, mode),
+  currentDir(), setCurrentDir(pathBytes)
+
+HostFile methods: open(pathBytes, flags, mode), read, write, readAt, writeAt, seek,
+flush, syncAll, syncData, truncate, metadata, setMode, close. Standard descriptor
+constructors are exposed through stdin/stdout/stderr. readAt/writeAt do not change the
+shared file cursor; writeAt rejects append-mode handles.
+
+### path
+
+Types: Path, PathBuf (alias of Path), PathComponents, Component(Root, Current, Parent,
+Normal(str)), PathError(Empty, InvalidComponent, Capacity).
+
+Path methods: asString, isAbsolute, isRelative, filename, parent, extension, stem,
+components, normalize, withExtension.
+
+Functions: join(base, child), normalize(path), filename(path), parent(path),
+extension(path), stem(path), isAbsolute(path), isRelative(path), components(path),
+withExtension(path, extension).
+
+### fs
+
+Types: File, OpenOptions, FileType(File, Directory, Symlink, Device, Socket, Other),
+Metadata, Permissions, Directory, DirectoryEntry, FsError(InvalidOptions, NotFound,
+NotDirectory, IsDirectory).
+
+OpenOptions methods: read, write, append, create, createNew, truncate, mode, open.
+File methods: read, write, readAt, writeAt, seek, flush, close, syncAll, syncData,
+truncate, metadata, setPermissions.
+Metadata methods: len, isFile, isDir, isSymlink, fileType, permissions,
+modifiedUnixSeconds. Permissions methods: mode, readonly, setReadonly.
+Directory methods: next, close. DirectoryEntry methods: name, fileType, path, metadata.
+
+Functions: open(path, options), create(path), openRead(path), openWrite(path),
+readFile(path, limit), readText(path, limit), writeFile(path, bytes), appendFile(path,
+bytes), copy(source, destination), exists(path), stat(path), lstat(path), chmod(path,
+permissions), mkdir(path), remove(path), removeDir(path), rename(from, to), readDir(path),
+currentDir(), setCurrentDir(path).
+
+### bufio
+
+Types: BufferedReader, BufferedWriter, Scanner, Token, BufferError(InvalidCapacity,
+BufferFull, UnreadUnavailable, TokenTooLong).
+
+BufferedReader methods: init(reader, capacity), fill, read, readByte, unreadByte, peek,
+discard, readUntil(delimiter, maxBytes), readString(delimiter, maxBytes), readLine(maxBytes),
+bufferLen, reset.
+BufferedWriter methods: init(writer, capacity), write, writeByte, writeString, buffered,
+available, flush, finish, reset.
+Scanner methods: init(reader), setMaxToken, next, nextString, position, reset.
+Token methods: text, start, end.
+Functions: newReader(reader, capacity), newWriter(writer, capacity), newScanner(reader),
+readLine(reader, maxBytes).
+
+### fmt
+
+Types: Alignment(Left, Right, Center), FloatStyle(General, Fixed, Scientific),
+FormatOptions(radix, width, precision, fill, alignment, uppercase, showSign, floatStyle),
+FormatArg(Text, Signed, Unsigned, Float, Boolean, Character), FormatError(InvalidRadix,
+InvalidPrecision, WidthTooLarge, UnsupportedType, InvalidFormat).
+
+Functions: formatInt(i8/i16/i32/i64/i128, radix), formatUint(u8/u16/u32/u64/u128,
+radix), formatFloat(value, style, precision), arg(value), writeString(writer, value,
+options), writeBool, writeChar, writeFloat, writeSigned, writeUnsigned, writeInt,
+writeUint, writeHex, writeTo(writer, value), writeTo(writer, pattern, args),
+format(value), format(pattern, args), print, println, eprint, eprintln.
+
+The brace formatter supports automatic positional placeholders, escaped braces, integer
+radices b/o/d/x/X, float styles f/e/g, optional sign, width, alignment and precision.
+The FormatOptions value can also specify an arbitrary Unicode fill character.

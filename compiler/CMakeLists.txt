@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(Vaqrin VERSION 0.1.2 LANGUAGES C CXX)
+project(Vaqrin VERSION 0.1.3 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -16,7 +16,7 @@ if(LLVM_PACKAGE_VERSION VERSION_LESS 20.1.8)
     message(FATAL_ERROR "Vaqrin requires LLVM 20.1.8 or newer")
 endif()
 
-add_executable(vaqc src/driver.cpp src/source.cpp src/parser.cpp src/compiler.cpp src/body.cpp src/expressions.cpp src/patterns.cpp src/numeric.cpp src/ctfe.cpp src/stdlib.cpp)
+add_executable(vaqc src/driver.cpp src/inputs.cpp src/source.cpp src/parser.cpp src/compiler.cpp src/body.cpp src/expressions.cpp src/patterns.cpp src/numeric.cpp src/ctfe.cpp src/stdlib.cpp)
 target_include_directories(vaqc SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 separate_arguments(llvm_definitions NATIVE_COMMAND "${LLVM_DEFINITIONS}")
 target_compile_options(vaqc PRIVATE ${llvm_definitions}
@@ -30,9 +30,16 @@ endif()
 set(VAQRIN_STDLIB_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/../stdlib")
 file(GLOB_RECURSE vaqrin_package_files CONFIGURE_DEPENDS
     RELATIVE "${VAQRIN_STDLIB_SOURCE}" "${VAQRIN_STDLIB_SOURCE}/*.vqr")
+set(VAQRIN_STDLIB_BUILD "${CMAKE_CURRENT_BINARY_DIR}/share/vaqrin/stdlib")
+file(GLOB_RECURSE staged_packages RELATIVE "${VAQRIN_STDLIB_BUILD}" "${VAQRIN_STDLIB_BUILD}/*.vqr")
+foreach(staged_file IN LISTS staged_packages)
+    if(NOT staged_file IN_LIST vaqrin_package_files)
+        file(REMOVE "${VAQRIN_STDLIB_BUILD}/${staged_file}")
+    endif()
+endforeach()
 foreach(package_file IN LISTS vaqrin_package_files)
     configure_file("${VAQRIN_STDLIB_SOURCE}/${package_file}"
-        "${CMAKE_CURRENT_BINARY_DIR}/share/vaqrin/stdlib/${package_file}" COPYONLY)
+        "${VAQRIN_STDLIB_BUILD}/${package_file}" COPYONLY)
 endforeach()
 install(DIRECTORY "${VAQRIN_STDLIB_SOURCE}/" DESTINATION share/vaqrin/stdlib
     FILES_MATCHING PATTERN "*.vqr")

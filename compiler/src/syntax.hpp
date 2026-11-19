@@ -101,15 +101,20 @@ struct Decl {
 };
 
 struct Import {
+  bool filePath = false;
   std::string path, alias;
   Span span;
 };
 struct File {
-  std::string package;
+  std::string package, module;
   Span span;
   std::vector<Import> imports;
   std::vector<Decl> declarations;
   bool standard = false;
+  bool anonymous = false;
+  bool selected = false;
+  bool explicitInput = false;
+  std::string identity;
 };
 
 File parse(const Source &source);

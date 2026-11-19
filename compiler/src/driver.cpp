@@ -1,4 +1,5 @@
 #include "codegen.hpp"
+#include "inputs.hpp"
 
 #include <llvm/Bitcode/BitcodeWriter.h>
 #include <llvm/Config/llvm-config.h>
@@ -12,6 +13,7 @@
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/TargetParser/Host.h>
+#include <llvm/Transforms/IPO/GlobalDCE.h>
 
 #include <algorithm>
 #include <deque>
@@ -63,7 +65,7 @@ namespace fs = std::filesystem;
 struct Request {
   Options options;
   std::vector<fs::path> inputs, linkInputs, packagePaths;
-  fs::path output, sysroot, linkerScript;
+  fs::path output, sysroot, linkerScript, entry;
   std::string cDriver, archiver;
 };
 
@@ -79,6 +81,7 @@ void help() {
                "  --cpu CPU               Target processor\n"
                "  --features FEATURES     Target feature string\n"
                "  --profile PROFILE       hosted or freestanding\n"
+               "  --entry FILE            Select a file-local main\n"
                "  --package-path DIR      Search additional local package roots\n"
                "  --cc PROGRAM            C driver for linking\n"
                "  --ar PROGRAM            Archiver for static libraries\n"
@@ -131,6 +134,8 @@ Request arguments(int argc, char **argv) {
       r.options.features = value();
     else if (flag == "--profile")
       r.options.profile = value();
+    else if (flag == "--entry")
+      r.entry = value();
     else if (flag == "--package-path")
       r.packagePaths.emplace_back(value());
     else if (flag == "--cc")
@@ -159,137 +164,6 @@ Request arguments(int argc, char **argv) {
   return r;
 }
 
-class Inputs {
-public:
-  Inputs(const Request &request, const fs::path &executable) : request(request) {
-    for (auto directory : {executable.parent_path(), executable.parent_path().parent_path()}) {
-      auto candidate = directory / "share/vaqrin/stdlib";
-      if (fs::is_directory(candidate)) {
-        standardRoot = fs::weakly_canonical(candidate);
-        break;
-      }
-    }
-  }
-  void load();
-  std::deque<Source> sources;
-  std::vector<File> files;
-  std::string rootName;
-
-private:
-  const Request &request;
-  fs::path standardRoot;
-  std::map<std::string, std::vector<fs::path>> packages;
-  std::map<std::string, std::vector<std::pair<std::string, Span>>> edges;
-  std::map<fs::path, std::string> loaded;
-  std::vector<fs::path> roots;
-  std::vector<std::string> active;
-  std::set<std::string> complete;
-  std::string add(std::vector<fs::path> paths, Span span);
-  void dependencies(const std::string &name);
-};
-
-std::vector<fs::path> sourcesIn(const fs::path &directory) {
-  std::vector<fs::path> result;
-  for (const auto &p : fs::directory_iterator(directory))
-    if (p.is_regular_file() && p.path().extension() == ".vqr") result.push_back(p.path());
-  std::ranges::sort(result);
-  return result;
-}
-
-std::string Inputs::add(std::vector<fs::path> paths, Span span) {
-  std::string name;
-  if (paths.empty()) fail(span, "package has no .vqr files", "E301");
-  for (const auto &path : paths) {
-    if (path.extension() != ".vqr")
-      fail(span, "Vaqrin source files require a .vqr extension: " + path.string(), "E301");
-    auto canonical = fs::weakly_canonical(path);
-    auto already = loaded.find(canonical);
-    if (already != loaded.end()) {
-      if (!name.empty() && name != already->second) fail(span, "files name different packages", "E301");
-      name = already->second;
-      continue;
-    }
-    std::ifstream f(path, std::ios::binary);
-    if (!f) fail(span, "cannot open source file " + path.string(), "E301");
-    std::string bytes(std::istreambuf_iterator<char>{f}, {});
-    sources.push_back({path.string(), std::move(bytes)});
-    auto input = parse(sources.back());
-    input.standard = !standardRoot.empty() && canonical.parent_path().parent_path() == standardRoot;
-    if (!name.empty() && name != input.package) fail(input.span, "files name different packages", "E301");
-    name = input.package;
-    for (const auto &i : input.imports)
-      edges[name].emplace_back(i.path, i.span);
-    loaded.emplace(canonical, name);
-    files.push_back(std::move(input));
-  }
-  if (auto p = packages.find(name); p != packages.end()) {
-    std::set<fs::path> expected, actual;
-    for (const auto &file : p->second)
-      expected.insert(fs::weakly_canonical(file));
-    for (const auto &file : paths)
-      actual.insert(fs::weakly_canonical(file));
-    if (expected != actual) fail(span, "two source groups use the same package name '" + name + "'", "E301");
-  } else
-    packages.emplace(name, std::move(paths));
-  return name;
-}
-
-void Inputs::dependencies(const std::string &name) {
-  if (complete.contains(name)) return;
-  active.push_back(name);
-  for (const auto &[path, span] : edges[name]) {
-    static const std::set<std::string> standard{"core", "coll", "opt", "text", "io"};
-    auto logical = path.starts_with("std/") ? path.substr(4) : path;
-    std::string dependency;
-    if (standard.contains(logical)) {
-      auto package = standardRoot / logical;
-      if (standardRoot.empty() || !fs::is_directory(package))
-        fail(span, "standard package '" + logical + "' is missing beside vaqc", "E301");
-      dependency = add(sourcesIn(package), span);
-    }
-    if (path == "task" || path == "channel") continue;
-    for (const auto &root : roots) {
-      if (!dependency.empty()) break;
-      auto candidate = root / path;
-      if (!fs::is_directory(candidate)) continue;
-      dependency = add(sourcesIn(candidate), span);
-      break;
-    }
-    if (dependency.empty()) fail(span, "cannot locate local package '" + path + "'", "E301");
-    if (dependency != fs::path(path).filename())
-      fail(span, "import leaf does not match package declaration '" + dependency + "'", "E301");
-    if (std::ranges::find(active, dependency) != active.end()) {
-      std::string chain;
-      for (const auto &item : active)
-        chain += item + " -> ";
-      fail(span, "cyclic package dependency: " + chain + dependency, "E301");
-    }
-    dependencies(dependency);
-  }
-  active.pop_back();
-  complete.insert(name);
-}
-
-void Inputs::load() {
-  std::vector<fs::path> paths;
-  for (const auto &input : request.inputs) {
-    bool directory = fs::is_directory(input);
-    auto root = directory ? input : input.parent_path();
-    if (root.empty()) root = ".";
-    roots.push_back(root);
-    if (directory) roots.push_back(root.parent_path().empty() ? fs::path(".") : root.parent_path());
-    if (directory) {
-      auto children = sourcesIn(input);
-      paths.insert(paths.end(), children.begin(), children.end());
-    } else
-      paths.push_back(input);
-  }
-  roots.insert(roots.end(), request.packagePaths.begin(), request.packagePaths.end());
-  std::ranges::sort(paths);
-  rootName = add(std::move(paths), {});
-  if (request.options.emit != "ast") dependencies(rootName);
-}
-
 void execute(const std::string &program, const std::vector<std::string> &args) {
   auto path = llvm::sys::findProgramByName(program);
   if (!path) fail({}, "required tool is unavailable: " + program, "E302");
@@ -303,7 +177,8 @@ void execute(const std::string &program, const std::vector<std::string> &args) {
          "E302");
 }
 
-void optimize(llvm::Module &module, llvm::TargetMachine &machine, unsigned level) {
+void optimize(llvm::Module &module, llvm::TargetMachine &machine, const Options &options) {
+  auto level = options.optimization;
   llvm::LoopAnalysisManager lam;
   llvm::FunctionAnalysisManager fam;
   llvm::CGSCCAnalysisManager cam;
@@ -318,6 +193,7 @@ void optimize(llvm::Module &module, llvm::TargetMachine &machine, unsigned level
                                                 llvm::OptimizationLevel::O2, llvm::OptimizationLevel::O3};
   auto passes =
       level ? pb.buildPerModuleDefaultPipeline(levels[level]) : pb.buildO0DefaultPipeline(levels[0]);
+  if (options.emit == "exe") passes.addPass(llvm::GlobalDCEPass());
   passes.run(module, mam);
   if (llvm::verifyModule(module, &llvm::errs()))
     fail({}, "LLVM verification failed after optimization", "E900");
@@ -373,8 +249,8 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
   auto &target = machine.getTargetTriple();
   auto output = fs::absolute(r.output.empty() ? defaultOutput(r, inputs.rootName, target) : r.output);
   if (!fs::is_directory(output.parent_path())) fail({}, "output directory does not exist", "E302");
-  for (const auto &s : inputs.sources)
-    if (fs::weakly_canonical(s.path) == fs::weakly_canonical(output))
+  for (const auto &s : inputs.files)
+    if (fs::weakly_canonical(s.span.source->path) == fs::weakly_canonical(output))
       fail({}, "output would overwrite a source file", "E302");
   auto kind = r.options.emit;
   llvm::SmallString<256> dir;
@@ -433,7 +309,7 @@ int main(int argc, char **argv) {
     return 0;
   }
   if (argc == 2 && std::string_view(argv[1]) == "--version") {
-    std::cout << "vaqc 0.1.2 (Vaqrin 0.1.2, LLVM " << LLVM_VERSION_STRING << ")\n";
+    std::cout << "vaqc 0.1.3 (Vaqrin 0.1.3, LLVM " << LLVM_VERSION_STRING << ")\n";
     return 0;
   }
   std::unique_ptr<Inputs> inputs;
@@ -441,8 +317,9 @@ int main(int argc, char **argv) {
     auto request = arguments(argc, argv);
     static int executableAnchor;
     auto executable = llvm::sys::fs::getMainExecutable(argv[0], &executableAnchor);
-    inputs = std::make_unique<Inputs>(request, executable);
-    inputs->load();
+    inputs = std::make_unique<Inputs>(executable);
+    inputs->load(request.inputs, request.packagePaths, request.entry, !request.options.check &&
+                 request.options.emit == "exe" && request.options.profile == "hosted");
     if (request.options.emit == "ast") {
       for (const auto &f : inputs->files)
         printAst(f);
@@ -450,9 +327,9 @@ int main(int argc, char **argv) {
     }
     auto machine = makeTarget(request.options);
     llvm::LLVMContext context;
-    auto module = compile(context, *machine, request.options, inputs->files, inputs->rootName);
+    auto module = compile(context, *machine, request.options, *inputs);
     if (!request.options.check) {
-      optimize(*module, *machine, request.options.optimization);
+      optimize(*module, *machine, request.options);
       produce(request, *module, *machine, *inputs);
     }
     return 0;

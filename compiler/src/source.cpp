@@ -111,7 +111,7 @@ constexpr std::string_view punctuation[] = {
 class Lexer {
 public:
   explicit Lexer(const Source &source) : source(source), input(source.bytes) {}
-  std::vector<Token> run();
+  void run(std::vector<Token> &tokens, bool indexOnly);
 
 private:
   const Source &source;
@@ -337,17 +337,17 @@ Token Lexer::quoted(std::size_t begin) {
   return {quote == '\'' ? TokenKind::Character : TokenKind::Text, std::move(output), span(begin), newline};
 }
 
-std::vector<Token> Lexer::run() {
+void Lexer::run(std::vector<Token> &tokens, bool indexOnly) {
+  if (!indexOnly)
   for (std::size_t i = 0; i < input.size();)
     scalar(input, i, {&source, i, i + 1});
-  std::vector<Token> tokens;
   for (;;) {
     newline = false;
     trivia();
     auto begin = pos;
     if (pos == input.size()) {
       tokens.push_back({TokenKind::End, "", span(begin), newline});
-      return tokens;
+      return;
     }
     if (digit(peek()) < 10) {
       tokens.push_back(number(begin));
@@ -369,10 +369,6 @@ std::vector<Token> Lexer::run() {
       auto word = normalize(input.substr(begin, pos - begin), span(begin));
       auto kind =
           std::ranges::find(keywords, word) == std::end(keywords) ? TokenKind::Name : TokenKind::Keyword;
-      if (word == "move" && peek() == '=' && !starts("==")) {
-        word += input[pos++];
-        kind = TokenKind::Punctuation;
-      }
       tokens.push_back({kind, std::move(word), span(begin), newline});
       continue;
     }
@@ -392,7 +388,22 @@ std::vector<Token> Lexer::run() {
 }
 } // namespace
 
-std::vector<Token> lex(const Source &source) {
-  return Lexer(source).run();
+std::vector<Token> lex(const Source &source, bool indexOnly) {
+  std::vector<Token> tokens;
+  try {
+    Lexer(source).run(tokens, indexOnly);
+  } catch (const Diagnostic &d) {
+    if (!indexOnly) throw;
+    tokens.push_back({TokenKind::End, "", d.span});
+  }
+  return tokens;
+}
+
+std::string identifier(std::string_view spelling) {
+  Source source{"", std::string(spelling)};
+  auto tokens = lex(source, true);
+  if (tokens.size() == 2 && tokens[0].kind == TokenKind::Name &&
+      tokens[0].span.begin == 0 && tokens[0].span.end == spelling.size()) return tokens[0].text;
+  return {};
 }
 } // namespace vqr

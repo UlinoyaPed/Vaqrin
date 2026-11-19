@@ -1,5 +1,5 @@
-package text;
-import (coll);
+package text
+import (coll)
 
 pub func equal(a, b: str) bool { a == b }
 

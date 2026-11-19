@@ -20,9 +20,8 @@ std::string typeKey(std::string key, const std::vector<Type *> &parts) {
   return key + '>';
 }
 
-Program::Program(LLVMContext &c, TargetMachine &target, const Options &o, const std::vector<File> &f,
-                 std::string r)
-    : context(c), module(std::make_unique<Module>("Vaqrin", c)), options(o), files(f), root(std::move(r)) {
+Program::Program(LLVMContext &c, TargetMachine &target, const Options &o, Inputs &sources)
+    : context(c), module(std::make_unique<Module>("Vaqrin", c)), options(o), inputs(sources), files(sources.files), root(sources.rootName) {
 #if LLVM_VERSION_MAJOR >= 21
   module->setTargetTriple(target.getTargetTriple());
 #else
@@ -30,9 +29,9 @@ Program::Program(LLVMContext &c, TargetMachine &target, const Options &o, const 
 #endif
   module->setDataLayout(target.createDataLayout());
   module->setSourceFileName(root);
-  module->addModuleFlag(Module::Warning, "Vaqrin language version", MDString::get(c, "0.1.2"));
+  module->addModuleFlag(Module::Warning, "Vaqrin language version", MDString::get(c, "0.1.3"));
   voidTy = add(Kind::Void, llvm::Type::getVoidTy(c), "void");
-  neverTy = add(Kind::Never, voidTy->ir, "<never>");
+  neverTy = add(Kind::Never, voidTy->ir, "never");
   boolTy = add(Kind::Bool, llvm::Type::getInt1Ty(c), "bool");
   charTy = add(Kind::Char, llvm::Type::getInt32Ty(c), "char");
   errorTy = add(Kind::Error, llvm::Type::getInt32Ty(c), "<error>");
@@ -51,22 +50,22 @@ Program::Program(LLVMContext &c, TargetMachine &target, const Options &o, const 
     debug = std::make_unique<DIBuilder>(*module);
     auto *di =
         debug->createFile(std::filesystem::path(files.front().span.source->path).filename().string(), ".");
-    unit = debug->createCompileUnit(0xb001, di, "vaqc 0.1.2", options.optimization != 0, "", 0);
+    unit = debug->createCompileUnit(0xb001, di, "vaqc 0.1.3", options.optimization != 0, "", 0);
   }
-  for (const auto &source : files) {
+  indexFiles();
+}
+
+void Program::indexFiles() {
+  while (indexed < files.size()) {
+    const auto &source = files[indexed++];
     for (const auto &d : source.declarations) {
-      const auto id = source.package + "." + d.name;
-      auto &group = definitions[id];
+      auto &group = definitions[key({&source, &d})];
+      if (d.name == "main" && (d.kind != DeclKind::Function || !group.empty() || d.visible ||
+          d.unsafe || d.comptime || !d.params.empty() || !d.generics.empty()))
+        fail(d.span, "main must be a unique file-private function with no parameters");
       if (!group.empty() && (d.kind != DeclKind::Function || group.front().decl->kind != DeclKind::Function))
         fail(d.span, "duplicate declaration '" + d.name + "'");
       group.push_back({&source, &d});
-    }
-  }
-  for (const auto &source : files) {
-    std::set<std::string> names;
-    for (const auto &i : source.imports) {
-      if (!names.insert(i.alias).second || definitions.contains(source.package + "." + i.alias))
-        fail(i.span, "conflicting import alias '" + i.alias + "'");
     }
   }
 }
@@ -157,22 +156,22 @@ Type *Program::aggregate(Kind kind, std::vector<Type *> parts, std::uint64_t cou
 }
 
 std::string Program::import(const File &file, std::string_view name) {
-  for (const auto &i : file.imports)
-    if (i.alias == name) return i.path;
-  return {};
+  return inputs.qualifier(file, name, file.span);
 }
 
 std::vector<Definition> Program::resolve(const File &f, std::string_view name, Span span) {
   auto dot = name.find('.');
-  auto package = dot == name.npos ? f.package : import(f, name.substr(0, dot));
-  if (auto slash = package.rfind('/'); slash != package.npos) package.erase(0, slash + 1);
+  auto symbol = dot == name.npos ? name : name.substr(dot + 1);
+  if (symbol == "main" && dot != name.npos) return {};
+  auto package = dot == name.npos ? inputs.scope(f, name, span) : inputs.qualifier(f, name.substr(0, dot), span);
+  indexFiles();
   if (package.empty()) return {};
-  auto id = package + "." + std::string(dot == name.npos ? name : name.substr(dot + 1));
+  auto id = package + (symbol == "main" ? ":" + f.identity : "") + "." + std::string(symbol);
   auto i = definitions.find(id);
   if (i == definitions.end()) return {};
   auto out = i->second;
-  if (package != f.package) {
-    std::erase_if(out, [](auto d) { return !d.decl->visible; });
+  if (package != f.module) {
+    std::erase_if(out, [&](auto d) { return !d.decl->visible && !inputs.directoryVisible(f, *d.file); });
     if (out.empty()) fail(span, "declaration '" + std::string(name) + "' is private");
   }
   return out;
@@ -551,7 +550,7 @@ GlobalEntry &Program::global(Definition d) {
   }
   g.type = t;
   g.ir = new GlobalVariable(*module, storage(t), d.decl->readOnly,
-                            d.decl->visible ? GlobalValue::ExternalLinkage : GlobalValue::InternalLinkage, c,
+                            d.decl->visible && options.emit != "exe" ? GlobalValue::ExternalLinkage : GlobalValue::InternalLinkage, c,
                             "vqr." + id);
   g.resolving = false;
   return g;
@@ -624,10 +623,11 @@ FunctionEntry &Program::function(Definition d, Types substitutions, Type *owner,
     if (!decl.params[i].comptime) args.push_back(storage(params[offset + i]));
   auto *signature = FunctionType::get(ret->ir, args, false);
   bool c = decl.external || decl.exported;
-  bool publiclyLinked = c || (decl.visible && !owner && (!d.file->standard || d.file->package == root));
+  bool publiclyLinked = c || (options.emit != "exe" && decl.visible && !owner && (!d.file->standard || d.file->package == root));
   auto linkage = publiclyLinked ? GlobalValue::ExternalLinkage : GlobalValue::InternalLinkage;
   auto *fn = Function::Create(signature, linkage, c ? decl.name : "vqr." + instance, *module);
   fn->setDoesNotThrow();
+  if (ret == neverTy) fn->setDoesNotReturn();
   if (c && extendCNarrowInteger()) {
     if (ret->kind == Kind::Int && ret->bits < 32)
       fn->addRetAttr(ret->sign ? llvm::Attribute::SExt : llvm::Attribute::ZExt);
@@ -687,7 +687,10 @@ std::pair<Type *, Constant *> Program::evaluate(const Ast &node, const File &fil
 }
 
 std::unique_ptr<Module> Program::build() {
-  for (const auto &file : files) {
+  std::size_t checked = 0;
+  while (checked < files.size()) {
+    indexFiles();
+    const auto &file = files[checked++];
     if (file.standard && file.package != root) continue;
     for (const auto &d : file.declarations) {
       std::set<std::string> seen;
@@ -702,6 +705,15 @@ std::unique_ptr<Module> Program::build() {
         fail(a.span, "invalid attribute '" + a.name + "' for declaration");
       }
       Definition def{&file, &d};
+      if (d.name == "main") {
+        if (d.external || d.exported)
+          fail(d.span, "C symbol main conflicts with the file entry; use a separate native entry");
+        auto *result = type(d.type, file);
+        if (result->kind == Kind::Result) result = result->parts[0];
+        if (result != voidTy && result != integer(32, true))
+          fail(d.span, "main must return void, !void, i32 or !i32");
+        if (!file.explicitInput && !file.selected) continue;
+      }
       if (d.kind == DeclKind::Global) global(def);
       if ((d.kind == DeclKind::Enum || d.kind == DeclKind::Class) && d.generics.empty()) {
         auto *t = nominal(def, {});
@@ -712,21 +724,16 @@ std::unique_ptr<Module> Program::build() {
       if (d.kind == DeclKind::Function && d.generics.empty() && !hasComptimeParameters(d)) function(def);
       if (d.kind == DeclKind::Alias && d.generics.empty()) named(d.name, file, d.span);
     }
+    for (auto &[_, entry] : functions) lower(entry);
   }
-  for (auto &[_, entry] : functions)
-    lower(entry);
   if (!options.check && options.emit == "exe" && options.profile == "hosted") {
-    auto found = definitions.find(root + ".main");
-    if (found == definitions.end() || found->second.size() != 1 ||
-        found->second.front().decl->kind != DeclKind::Function)
-      fail({}, "hosted executable requires a unique func main() void or func main() !void");
-    auto def = found->second.front();
-    if (def.decl->external || def.decl->exported || def.decl->unsafe || def.decl->comptime ||
-        !def.decl->generics.empty() || !def.decl->params.empty() || module->getNamedValue("main"))
-      fail(def.decl->span, "invalid hosted entry function");
+    auto selected = std::ranges::find(files, true, &File::selected);
+    if (selected == files.end()) fail({}, "no entry selected");
+    auto def = resolve(*selected, "main", selected->span).at(0);
+    if (module->getNamedValue("main")) fail(def.decl->span, "duplicate C entry symbol main");
     auto &entry = function(def);
-    bool fallible = entry.result->kind == Kind::Result && entry.result->parts[0] == voidTy;
-    if (entry.result != voidTy && !fallible) fail(def.decl->span, "main must return void or !void");
+    bool fallible = entry.result->kind == Kind::Result;
+    bool returnsStatus = (fallible ? entry.result->parts[0] : entry.result) == integer(32, true);
     IRBuilder<> b(context);
     auto *main = Function::Create(FunctionType::get(b.getInt32Ty(), false), GlobalValue::ExternalLinkage,
                                   "main", *module);
@@ -760,7 +767,7 @@ std::unique_ptr<Module> Program::build() {
       b.CreateRet(b.getInt32(1));
       b.SetInsertPoint(ok);
     }
-    b.CreateRet(b.getInt32(0));
+    b.CreateRet(returnsStatus ? (fallible ? b.CreateExtractValue(value, 1) : value) : b.getInt32(0));
   }
   if (debug) debug->finalize();
   if (verifyModule(*module, &errs())) fail({}, "LLVM module verification failed", "E900");
@@ -772,9 +779,8 @@ std::unique_ptr<Module> Program::build() {
 namespace vqr {
 
 std::unique_ptr<llvm::Module> compile(llvm::LLVMContext &context, llvm::TargetMachine &target,
-                                      const Options &options, const std::vector<File> &files,
-                                      const std::string &rootPackage) {
-  return detail::Program(context, target, options, files, rootPackage).build();
+                                      const Options &options, Inputs &inputs) {
+  return detail::Program(context, target, options, inputs).build();
 }
 
 } // namespace vqr

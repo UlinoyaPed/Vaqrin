@@ -26,16 +26,25 @@ int Body::findLocal(std::string_view name) const {
 }
 
 int Body::bind(std::string name, Type *t, bool writable, Value *initial, Span span) {
+  bool reference = name.starts_with('&');
+  if (reference) {
+    name.erase(0, 1);
+    if (t->kind != Kind::Pointer || !initial)
+      fail(span, "dereference binding requires an initialized pointer");
+    writable = !t->readOnly;
+    t = t->parts[0];
+  }
+  if (name == "_") name = " <discarded parameter " + std::to_string(locals.size()) + ">";
   if (std::ranges::any_of(scopes.back(), [&](int i) { return locals[i].name == name; }))
     fail(span, "duplicate local '" + name + "'");
   int i = static_cast<int>(locals.size());
-  auto *address = slot(t, name);
-  auto *order = p.drops(t) ? slot(p.integer(32, false), "drop.order") : nullptr;
+  auto *address = reference ? initial : slot(t, name);
+  auto *order = !reference && p.drops(t) ? slot(p.integer(32, false), "drop.order") : nullptr;
   if (order) ir.CreateStore(ir.getInt32(0), order);
-  locals.push_back({std::move(name), t, address, order, nullptr, false, scopes.size() - 1, writable});
+  locals.push_back({std::move(name), t, address, order, nullptr, reference, scopes.size() - 1, writable});
   scopes.back().push_back(i);
   initialized.resize(locals.size(), false);
-  if (initial && t != p.voidTy) ir.CreateStore(initial, address);
+  if (!reference && initial && t != p.voidTy) ir.CreateStore(initial, address);
   setAlive(i, initial != nullptr);
   return i;
 }
@@ -420,6 +429,7 @@ ValueAt Body::asPointer(ValueAt v, Span span) {
 
 void Body::emitReturn(ValueAt value, Span span) {
   if (value.type == p.neverTy) return;
+  if (result == p.neverTy) fail(span, "never function cannot return normally");
   value = coerce(value, result, span);
   auto *returned = read(value, span);
   clean(0);
@@ -510,9 +520,10 @@ void Body::debugLocal(int id, Span span, unsigned argument) {
   if (argument) {
     local.debug = p.debug->createParameterVariable(debug, local.name, argument, debug->getFile(), line, type);
     local.debugParameter = true;
-    auto *before = &*fn->getEntryBlock().getFirstInsertionPt();
-    p.debug->insertDbgValueIntrinsic(fn->getArg(argument - 1), local.debug, p.debug->createExpression(),
-                                     ir.getCurrentDebugLocation().get(), before);
+    auto before = fn->getEntryBlock().getFirstInsertionPt();
+    if (!local.refCapture)
+      p.debug->insertDbgValueIntrinsic(fn->getArg(argument - 1), local.debug, p.debug->createExpression(),
+                                       ir.getCurrentDebugLocation().get(), before);
   } else
     local.debug = p.debug->createAutoVariable(debug, local.name, debug->getFile(), line, type);
   if (initialized[id]) debugValue(id, true);
@@ -723,19 +734,12 @@ void Body::statement(const Ast &n) {
     auto l = place(n->children[0]);
     if (l.type == p.neverTy) return;
     if (!l.writable) fail(n->span, "assignment requires a writable location");
-    bool whole = l.local >= 0 && locals[l.local].slot == l.address;
+    bool whole = l.local >= 0 && !locals[l.local].refCapture && locals[l.local].slot == l.address;
     if (!whole) requireInit(l, n->span);
     const auto &op = n->text;
     ValueAt value;
-    if (op == "=" || op == "move=") {
+    if (op == "=") {
       auto rhs = n->children[1];
-      if (op == "move=") {
-        auto moved = std::make_shared<Node>();
-        moved->kind = NodeKind::Move;
-        moved->span = rhs->span;
-        moved->children = {rhs};
-        rhs = moved;
-      }
       bool moved = rhs->kind == NodeKind::Move;
       auto source = moved ? rhs->children[0] : rhs;
       if (whole && source->kind == NodeKind::Name && findLocal(source->text) == l.local) {
@@ -828,7 +832,8 @@ ValueAt Body::loop(const Ast &n) {
       element = start.type;
     } else {
       if (range->kind == NodeKind::Call && path(range->children[0]) == "enumerate" &&
-          range->children.size() == 2 && findLocal("enumerate") < 0) {
+          range->children.size() == 2 && findLocal("enumerate") < 0 &&
+          p.resolve(file, "enumerate", n->span).empty()) {
         enumerate = true;
         range = range->children[1];
       }
@@ -837,7 +842,7 @@ ValueAt Body::loop(const Ast &n) {
         leave();
         return neverValue();
       }
-      if (array.type->kind == Kind::Class && !enumerate) {
+      if (array.type->kind == Kind::Class) {
         auto call = std::make_shared<Node>();
         call->kind = NodeKind::Call;
         call->span = n->span;
@@ -856,6 +861,10 @@ ValueAt Body::loop(const Ast &n) {
         int i = bind(" <iterator>", source.type, true, read(source, n->span), n->span);
         iterator = {source.type, nullptr, locals[i].slot, true, i, true};
         nextCall = call;
+        if (enumerate) {
+          if (n->names.size() != 2) fail(n->span, "enumerate binds an index and an item");
+          start = {p.sizeTy, ConstantInt::get(p.sizeTy->ir, 0)};
+        }
       } else {
         if (array.type->kind != Kind::Array && array.type->kind != Kind::Slice)
           fail(n->span, "iteration requires a range, array, slice or iterator");
@@ -878,7 +887,7 @@ ValueAt Body::loop(const Ast &n) {
         last = {p.sizeTy, length};
       }
     }
-    if (!iterator.type) {
+    if (!iterator.type || enumerate) {
       indexSlot = slot(start.type, "iteration.index");
       ir.CreateStore(start.value, indexSlot);
     }
@@ -935,7 +944,11 @@ ValueAt Body::loop(const Ast &n) {
       else if (p.drops(value.type))
         drop(value.type, asPointer(value, n->span).value);
     };
-    if (n->names.size() == 1)
+    if (enumerate) {
+      counter = ir.CreateLoad(start.type->ir, indexSlot);
+      bindItem(n->names[0], {p.sizeTy, counter});
+      bindItem(n->names[1], item);
+    } else if (n->names.size() == 1)
       bindItem(n->names[0], item);
     else {
       if (element->kind != Kind::Tuple || n->names.size() != element->parts.size())
@@ -978,14 +991,16 @@ ValueAt Body::loop(const Ast &n) {
     ir.CreateUnreachable();
   else {
     merge(backEdges, initial.size());
-    if (each && !iterator.type) {
+    if (each && (!iterator.type || enumerate)) {
       if (closed) {
         auto *increment = block("loop.increment");
         ir.CreateCondBr(ir.CreateICmpEQ(counter, last.value), end, increment);
         exits.push_back(initialized);
         ir.SetInsertPoint(increment);
       }
-      auto *updated = ir.CreateAdd(counter, ConstantInt::get(start.type->ir, 1));
+      auto *one = ConstantInt::get(start.type->ir, 1);
+      auto *updated = enumerate ? binaryNumber(ir, "+", counter, one, false, false)
+                                : ir.CreateAdd(counter, one);
       ir.CreateStore(updated, indexSlot);
     } else if (step)
       statement(step);
@@ -1064,7 +1079,7 @@ ValueAt Body::expression(const Ast &n, Type *expected) {
     if (i < 0) fail(n->span, "move requires a complete local or parameter", "E230");
     auto l = name(src);
     requireInit(l, n->span);
-    if (!l.writable || locals[i].refCapture || !p.movable(l.type))
+    if (patternBorrows.contains(i) || !l.writable || locals[i].refCapture || !p.movable(l.type))
       fail(n->span, "source cannot be moved", "E230");
     if (locals[i].captureFlag) closure->consuming = true;
     v = {l.type, read(l, n->span, false)};

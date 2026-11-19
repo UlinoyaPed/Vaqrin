@@ -1,6 +1,7 @@
 #pragma once
 
 #include "codegen.hpp"
+#include "inputs.hpp"
 
 #include <llvm/BinaryFormat/Dwarf.h>
 #include <llvm/Config/llvm-config.h>
@@ -172,6 +173,7 @@ private:
   Type *closure = nullptr;
   unsigned unsafeDepth = 0;
   std::vector<Local> locals;
+  std::multiset<int> patternBorrows;
   std::vector<std::vector<int>> scopes;
   std::vector<bool> initialized;
   std::vector<Loop> loops;
@@ -238,13 +240,15 @@ private:
 
 class Program {
 public:
-  Program(LLVMContext &context, TargetMachine &target, const Options &options, const std::vector<File> &files,
-          std::string root);
+  Program(LLVMContext &context, TargetMachine &target, const Options &options, Inputs &inputs);
   std::unique_ptr<Module> build();
   LLVMContext &context;
   std::unique_ptr<Module> module;
   const Options &options;
-  const std::vector<File> &files;
+  Inputs &inputs;
+  const std::deque<File> &files;
+  std::size_t indexed = 0;
+  void indexFiles();
   std::string root;
   std::deque<Type> types;
   Types canonical;
@@ -304,7 +308,7 @@ public:
   bool extendCNarrowInteger() const;
   bool heapAvailable() const { return options.profile == "hosted" && targetTriple().isOSLinux(); }
   unsigned pointerBits() const { return module->getDataLayout().getPointerSizeInBits(); }
-  std::string key(Definition d) const { return d.file->package + "." + d.decl->name; }
+  std::string key(Definition d) const { return d.file->module + (d.decl->name == "main" ? ":" + d.file->identity : "") + "." + d.decl->name; }
   Types classTypes(Type *t) {
     Types out{{"Self", t}};
     for (std::size_t i = 0; i < t->parts.size(); ++i)

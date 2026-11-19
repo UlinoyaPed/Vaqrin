@@ -1,0 +1,46 @@
+package iter
+
+pub class OnceOptional<T: Movable> {
+    var item: ?T;
+public:
+    func init(value: ?T) : item(move(value)) {}
+    func next() ?T {
+        unsafe {
+            var old = __vqr_slot_take<?T>(&item);
+            __vqr_slot_write<?T>(&item, null);
+            move(old)
+        }
+    }
+}
+
+pub class OnceIter<T: Movable> {
+    var source: OnceOptional<T>;
+public:
+    func init(value: T) : source(OnceOptional<T>(some(move(value)))) {}
+    func next() ?T { source.next() }
+}
+
+pub class EmptyIter<T> {
+    pub func init() {}
+    pub func next() ?T { null }
+}
+
+pub class RepeatIter<T: Copyable & Movable> {
+    var item: T;
+public:
+    func init(value: T) : item(move(value)) {}
+    func next() ?T { some(item) }
+}
+
+pub class FromFnIter<T, F: Movable> {
+    var callback: F;
+public:
+    func init(callback: F) : callback(move(callback)) {}
+    func next() ?T { callback() }
+}
+
+pub func once<T: Movable>(value: T) OnceIter<T> { OnceIter<T>(move(value)) }
+pub func onceOptional<T: Movable>(value: ?T) OnceOptional<T> { OnceOptional<T>(move(value)) }
+pub func empty<T>() EmptyIter<T> { EmptyIter<T>() }
+pub func repeat<T: Copyable & Movable>(value: T) RepeatIter<T> { RepeatIter<T>(move(value)) }
+pub func fromFn<T, F: Movable>(callback: F) FromFnIter<T, F> { FromFnIter<T, F>(move(callback)) }

@@ -1,4 +1,5 @@
-package opt;
+package opt
+import (core, coll, iter as iterator)
 
 pub func flatten<T: Movable>(value: ??T) ?T {
     switch move(value) {
@@ -7,16 +8,114 @@ pub func flatten<T: Movable>(value: ??T) ?T {
     }
 }
 
-pub func map<T: Movable, U: Movable>(value: ?T, transform: func(T) U) ?U {
+pub func map<T: Movable, U: Movable, F: Movable>(value: ?T, transform: F) ?U {
     switch move(value) {
         null => null,
         some(item) => some(transform(move(item))),
     }
 }
 
-pub func andThen<T: Movable, U: Movable>(value: ?T, transform: func(T) ?U) ?U {
+pub func andThen<T: Movable, U: Movable, F: Movable>(value: ?T, transform: F) ?U {
     switch move(value) {
         null => null,
         some(item) => transform(move(item)),
+    }
+}
+
+pub func isSome<T>(value: *const ?T) bool { core.isSome(value) }
+pub func isNone<T>(value: *const ?T) bool { core.isNone(value) }
+pub func asPtr<T>(value: *const ?T) ?*const T { __vqr_optional_pointer(value) }
+pub func asMutPtr<T>(value: *?T) ?*T { __vqr_optional_pointer(value) }
+
+pub func filter<T: Movable, F: Movable>(value: ?T, pred: F) ?T {
+    switch move(value) {
+        null => null,
+        some(item) => if (pred(&item)) some(move(item)) else null,
+    }
+}
+
+pub func inspect<T: Movable, F: Movable>(value: ?T, observer: F) ?T {
+    switch move(value) {
+        null => null,
+        some(item) => {
+            observer(&item);
+            some(move(item))
+        },
+    }
+}
+
+pub func zip<A: Movable, B: Movable>(a: ?A, b: ?B) ?(A, B) {
+    switch move(a) {
+        null => null,
+        some(x) => switch move(b) {
+            null => null,
+            some(y) => some((move(x), move(y))),
+        },
+    }
+}
+
+pub func zipWith<A: Movable, B: Movable, U: Movable, F: Movable>(a: ?A, b: ?B, combine: F) ?U {
+    switch move(a) {
+        null => null,
+        some(x) => switch move(b) {
+            null => null,
+            some(y) => some(combine(move(x), move(y))),
+        },
+    }
+}
+
+pub func unzip<A: Movable, B: Movable>(value: ?(A, B)) (?A, ?B) {
+    switch move(value) {
+        null => (null, null),
+        some((a, b)) => (some(move(a)), some(move(b))),
+    }
+}
+
+pub func xor<T: Movable>(a: ?T, b: ?T) ?T {
+    if isSome(&a) == isSome(&b) { return null; }
+    if isSome(&a) { move(a) } else { move(b) }
+}
+
+pub func unwrapOr<T: Movable>(value: ?T, fallback: T) T { move(value) ?? move(fallback) }
+pub func unwrapOrElse<T: Movable, F: Movable>(value: ?T, fallback: F) T { move(value) ?? fallback() }
+pub func expect<T: Movable>(value: ?T, message: str) T { move(value) ?? panic(message) }
+
+pub func contains<T>(value: *const ?T, needle: *const T) bool {
+    switch asPtr(value) { null => false, some(ptr) => *ptr == *needle }
+}
+
+pub func take<T: Movable>(value: *?T) ?T { core.replace<?T>(value, null) }
+pub func replace<T: Movable>(slot: *?T, value: T) ?T { core.replace<?T>(slot, some(move(value))) }
+
+pub func insert<T: Movable>(slot: *?T, value: T) *T {
+    *slot = some(move(value));
+    asMutPtr(slot).unwrap()
+}
+
+pub func getOrInsert<T: Movable>(slot: *?T, value: T) *T {
+    asMutPtr(slot) ?? insert(slot, move(value))
+}
+
+pub func getOrInsertWith<T: Movable, F: Movable>(slot: *?T, factory: F) *T {
+    asMutPtr(slot) ?? insert(slot, factory())
+}
+
+pub func toVec<T: Movable>(value: ?T) !coll.Vec<T> {
+    var out = coll.Vec<T>();
+    switch move(value) {
+        null => {},
+        some(item) => { out.push(move(item))!; },
+    }
+    move(out)
+}
+
+pub func intoIter<T: Movable>(value: ?T) iterator.OnceOptional<T> {
+    iterator.OnceOptional<T>(move(value))
+}
+
+pub func transpose<T: Movable>(value: ?!T) !?T {
+    switch move(value) {
+        null => null,
+        some(inner) => some(move(inner)!),
     }
 }

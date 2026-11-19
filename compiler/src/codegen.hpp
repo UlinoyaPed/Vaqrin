@@ -8,6 +8,8 @@
 
 namespace vqr {
 
+class Inputs;
+
 struct Options {
   std::string triple, cpu, features;
   std::string profile = "hosted";
@@ -35,6 +37,5 @@ llvm::Constant *interpret(llvm::Function &function, std::vector<llvm::Constant *
 
 std::unique_ptr<llvm::TargetMachine> makeTarget(Options &options);
 std::unique_ptr<llvm::Module> compile(llvm::LLVMContext &context, llvm::TargetMachine &target,
-                                      const Options &options, const std::vector<File> &files,
-                                      const std::string &rootPackage);
+                                      const Options &options, Inputs &inputs);
 } // namespace vqr

@@ -749,8 +749,10 @@ ValueAt Body::builtin(std::string_view key, const Ast &n, const std::vector<Ast>
     bool panic = key == "panic";
     if (!panic && p.options.profile != "hosted")
       fail(n->span, "io.println requires the hosted profile", "E290");
-    auto v = expression(n->children[1], panic ? p.textTy : nullptr);
+    auto v = expression(n->children[1]);
     if (!live()) return neverValue();
+    if (panic && v.type != p.textTy && v.type != p.viewTy)
+      fail(n->span, "panic requires a text message");
     auto *value = read(v, n->span, false);
     Value *success = ir.getTrue();
     if (p.options.profile == "hosted") {
@@ -813,12 +815,14 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
     if (d.kind != DeclKind::Function || d.params.size() + 1 != n->children.size()) continue;
     if (classType && !d.visible && owner != classType) continue;
     if (receiver && !d.readOnly && !receiver->writable) continue;
-    if (!args.empty() && args.size() != d.generics.size()) continue;
+    if (args.size() > d.generics.size()) continue;
     Types subst = classType ? p.classTypes(classType) : Types{};
     Constants constants;
     std::set<std::string> typeNames, valueNames;
-    for (const auto &g : d.generics)
+    for (std::size_t i = args.size(); i < d.generics.size(); ++i) {
+      const auto &g = d.generics[i];
       (g.comptime ? valueNames : typeNames).insert(g.name);
+    }
     std::map<std::string, std::uint64_t> lengths;
     bool consistent = true;
     auto infer = [&](auto &&recurse, const Ast &pattern, Type *actual) -> void {
@@ -847,7 +851,7 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
           recurse(recurse, pattern->children[0], actual->parts[0]);
       }
     };
-    if (args.empty() && !d.generics.empty()) {
+    if (args.size() < d.generics.size()) {
       for (unsigned j = 0; j < d.params.size(); ++j) {
         auto node = n->children[j + 1];
         auto *t = hint(node);
@@ -861,7 +865,7 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
     for (unsigned i = 0; i < d.generics.size(); ++i) {
       const auto &g = d.generics[i];
       if (!g.comptime) {
-        if (!args.empty()) subst[g.name] = parseType(args[i]);
+        if (i < args.size()) subst[g.name] = parseType(args[i]);
         if (!subst.contains(g.name)) {
           consistent = false;
           break;
@@ -871,7 +875,7 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
       auto *t = p.type(g.type, *def.file, subst, constants);
       if (t->kind != Kind::Int && t->kind != Kind::Bool && t->kind != Kind::Float && t->kind != Kind::Char)
         fail(g.span, "comptime generic values currently require scalar types", "E290");
-      if (!args.empty()) {
+      if (i < args.size()) {
         auto value = args[i];
         if (value->kind == NodeKind::TypeName && value->children.empty()) {
           value = std::make_shared<Node>(*value);
@@ -992,6 +996,7 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
   }
   auto *called = ir.CreateCall(entry.ir, values);
   called->setAttributes(entry.ir->getAttributes());
+  if (entry.result == p.neverTy) ir.CreateUnreachable();
   leave();
   return entry.result == p.voidTy ? voidValue() : ValueAt{entry.result, called};
 }
@@ -1520,6 +1525,10 @@ ValueAt Body::call(const Ast &n, Type *expected) {
         f->addParamAttr(i, parts[i]->sign ? llvm::Attribute::SExt : llvm::Attribute::ZExt);
   }
   leave();
+  if (ret == p.neverTy) {
+    ir.CreateUnreachable();
+    return neverValue();
+  }
   return ret == p.voidTy ? voidValue() : ValueAt{ret, f};
 }
 

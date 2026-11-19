@@ -1,6 +1,6 @@
-package main;
+package main
 
-import (io);
+import (io)
 
 func square(n: i32) i32 { n * n }
 

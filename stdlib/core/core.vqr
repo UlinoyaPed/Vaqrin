@@ -1,16 +1,34 @@
-package core;
-import (coll);
-
-pub type Vec<T: Movable> = coll.Vec<T>;
+package core
 
 pub type Box<T> = ^T;
 
-pub func isSome<T>(value: *const ?T) bool {
-    switch *value { null => false, some(_) => true }
-}
-
+pub func isSome<T>(value: *const ?T) bool { __vqr_optional_present(value) }
+pub func isNone<T>(value: *const ?T) bool { !isSome(value) }
 pub func isOk<T>(value: *const !T) bool { __vqr_result_ok(value) }
+pub func isErr<T>(value: *const !T) bool { !isOk(value) }
 
 pub func unwrapOr<T: Movable>(value: ?T, fallback: func() T) T {
     move(value) ?? fallback()
 }
+
+pub func swap<T: Movable>(a: *T, b: *T) void {
+    if a == b { return; }
+    unsafe {
+        var previous = __vqr_slot_take<T>(a);
+        __vqr_slot_write<T>(a, __vqr_slot_take<T>(b));
+        __vqr_slot_write<T>(b, move(previous));
+    }
+}
+
+pub func replace<T: Movable>(dst: *T, value: T) T {
+    unsafe {
+        var previous = __vqr_slot_take<T>(dst);
+        __vqr_slot_write<T>(dst, move(value));
+        move(previous)
+    }
+}
+
+pub func identity<T: Movable>(value: T) T { move(value) }
+pub func drop<T: Movable>(value: T) void {}
+pub func unreachable() never { panic("unreachable") }
+pub unsafe func unreachableUnchecked() never { unsafe { __vqr_unreachable() } }

@@ -1,4 +1,5 @@
-package coll;
+package coll
+import (iter as iterator)
 
 pub error CapacityError { Overflow }
 
@@ -65,7 +66,30 @@ public:
         move(result)
     }
 
-    const func iter() SliceIter<T> { SliceIter<T>(asSlice()) }
+    const func iter() iterator.SliceIter<T> { iterator.SliceIter<T>(asSlice()) }
+    const func iterRef() iterator.SliceIterRef<T> { iterator.SliceIterRef<T>(asSlice()) }
+    func iterMut() iterator.SliceIterMut<T> { iterator.SliceIterMut<T>(asSlice()) }
+    const func asConstSlice() []const T { asSlice() }
+
+    func asPtr() ?*T { if length == 0 { null } else { data } }
+    const func asConstPtr() ?*const T { if length == 0 { null } else { some(data.unwrap()) } }
+
+    const func get(index: usize) ?*const T {
+        if index < length { some(&asSlice()[index]) } else { null }
+    }
+    func getMut(index: usize) ?*T {
+        if index < length { some(&asSlice()[index]) } else { null }
+    }
+    const func at(index: usize) *const T { get(index).unwrap() }
+    func atMut(index: usize) *T { getMut(index).unwrap() }
+    const func first() ?*const T { get(0) }
+    func firstMut() ?*T { getMut(0) }
+    const func last() ?*const T {
+        if length == 0 { null } else { get(length - 1) }
+    }
+    func lastMut() ?*T {
+        if length == 0 { null } else { getMut(length - 1) }
+    }
 
     func clear() void {
         for length > 0 {

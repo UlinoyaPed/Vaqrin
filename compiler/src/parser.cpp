@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <initializer_list>
+#include <filesystem>
 #include <iostream>
 #include <utility>
 
@@ -27,7 +28,7 @@ constexpr Operator operators[] = {{"catch", 1}, {"??", 2},  {"||", 3},   {"&&", 
                                   {"<<|", 11},  {"+", 12},  {"-", 12},   {"+%", 12}, {"-%", 12}, {"+|", 12},
                                   {"-|", 12},   {"*", 13},  {"/", 13},   {"%", 13},  {"*%", 13}, {"*|", 13}};
 constexpr std::string_view assignments[] = {
-    "=",  "move=", "+=",  "-=",  "*=",   "/=",  "%=",  "<<=", ">>=",  "&=", "|=",
+    "=",  "+=",  "-=",  "*=",   "/=",  "%=",  "<<=", ">>=",  "&=", "|=",
     "^=", "+%=",   "-%=", "*%=", "<<%=", "+|=", "-|=", "*|=", "<<|=", "++", "--"};
 
 class Parser {
@@ -82,6 +83,12 @@ private:
       fail(current().span, "expected an identifier", "E110");
     return take();
   }
+  Token bindingName(bool ignore = true) {
+    if (!eat("&")) return name(ignore);
+    auto t = name();
+    t.text = "&" + t.text;
+    return t;
+  }
   bool typePunctuation(char c) {
     auto t = current();
     if (t.kind != TokenKind::Punctuation || t.text.empty() || t.text[0] != c) return false;
@@ -127,26 +134,42 @@ private:
   Ast match();
   Ast pattern();
   bool bindingAhead(bool iteration = false) const;
+  bool wrappedLoopHeader() const;
 };
 
 File Parser::file() {
   File f;
-  f.span = require("package").span;
-  f.package = name().text;
-  require(";");
+  f.span = current().span;
+  if (eat("package")) f.package = name().text;
+  if (at(";")) fail(current().span, "package headers have no trailing semicolon", "E110");
   while (eat("import")) {
     require("(");
+    if (at(")")) fail(current().span, "import requires at least one item", "E110");
     list(")", [&] {
-      auto id = name();
-      Import import{id.text, id.text, id.span};
-      while (eat("/")) {
-        import.alias = name().text;
-        import.path += '/' + import.alias;
+      Import item;
+      item.span = current().span;
+      if (current().kind == TokenKind::Text) {
+        item.filePath = true;
+        item.path = take().text;
+        std::filesystem::path target(item.path);
+        if (target.is_absolute() || target.extension() != ".vqr" || item.path.find('\0') != item.path.npos)
+          fail(item.span, "file import requires a relative .vqr path", "E110");
+        if (eat("as")) item.alias = name().text;
+        else {
+          item.alias = identifier(target.stem().string());
+          if (item.alias.empty()) fail(item.span, "file import requires an explicit identifier alias", "E110");
+        }
+      } else {
+        item.path = item.alias = name().text;
+        while (eat("/")) {
+          item.alias = name().text;
+          item.path += '/' + item.alias;
+        }
+        if (eat("as")) item.alias = name().text;
       }
-      if (eat("as")) import.alias = name().text;
-      f.imports.push_back(std::move(import));
+      f.imports.push_back(std::move(item));
     });
-    require(";");
+    if (at(";")) fail(current().span, "import headers have no trailing semicolon", "E110");
   }
   while (current().kind != TokenKind::End)
     f.declarations.push_back(declaration());
@@ -174,7 +197,8 @@ void Parser::parameters(Decl &d) {
     auto start = d.params.size();
     bool comptime = eat("comptime");
     do {
-      auto t = name();
+      auto t = bindingName();
+      if (comptime && t.text.starts_with('&')) fail(t.span, "comptime parameter cannot borrow storage");
       d.params.push_back({t.text, t.span, nullptr, comptime});
     } while (!at(":") && eat(","));
     require(":");
@@ -304,12 +328,13 @@ Decl Parser::declaration(bool member, bool iface) {
     bool publicMembers = d.kind == DeclKind::Interface;
     while (!eat("}")) {
       if (at("public") || at("private")) {
+        if (d.kind == DeclKind::Interface) fail(current().span, "access labels require a class", "E110");
         publicMembers = take().text == "public";
         require(":");
         continue;
       }
       auto m = declaration(true, d.kind == DeclKind::Interface);
-      m.visible = publicMembers;
+      m.visible |= publicMembers;
       d.members.push_back(std::move(m));
     }
   }
@@ -398,7 +423,10 @@ Ast Parser::type(bool inferArray) {
 bool Parser::bindingAhead(bool iteration) const {
   std::size_t i = 0;
   do {
+    bool reference = current(i).text == "&";
+    if (reference) ++i;
     auto t = current(i++);
+    if (reference && t.kind != TokenKind::Name) return false;
     if (t.kind != TokenKind::Name && t.text != "_") return false;
   } while (current(i).text == "," && ++i);
   return current(i).text == (iteration ? "in" : ":=");
@@ -409,7 +437,7 @@ Ast Parser::statement(bool header) {
     auto t = take();
     if (t.text == "comptime") require("const");
     auto n = make(NodeKind::Binding, t.span, t.text);
-    n->names.push_back(name().text);
+    n->names.push_back(t.text == "var" ? bindingName().text : name().text);
     if (eat(":")) n->type = type();
     if (eat("=")) n->children.push_back(expression());
     if (!n->type && n->children.empty()) fail(t.span, "binding requires a type or initializer", "E110");
@@ -419,7 +447,7 @@ Ast Parser::statement(bool header) {
   if (bindingAhead()) {
     auto n = make(NodeKind::Binding, current().span, ":=");
     do {
-      n->names.push_back(name(true).text);
+      n->names.push_back(bindingName().text);
     } while (eat(","));
     require(":=");
     n->children.push_back(expression());
@@ -465,14 +493,30 @@ Ast Parser::block() {
   return block;
 }
 
+bool Parser::wrappedLoopHeader() const {
+  if (!at("(")) return false;
+  unsigned nesting = 0;
+  for (std::size_t i = pos; i + 1 < tokens.size(); ++i) {
+    const auto &t = tokens[i];
+    if (t.kind != TokenKind::Punctuation) continue;
+    if (t.text == "(") ++nesting;
+    if (t.text == ")" && --nesting == 0) {
+      const auto &next = tokens[i + 1];
+      return next.kind == TokenKind::Punctuation && next.text == "{";
+    }
+  }
+  return false;
+}
+
 Ast Parser::loop() {
   auto t = require("for");
-  bool parens = eat("(");
+  bool parens = wrappedLoopHeader();
+  if (parens) require("(");
   if (!parens && at("{")) return make(NodeKind::For, t.span, "", {nullptr, nullptr, nullptr, block()});
   if (bindingAhead(true)) {
     auto n = make(NodeKind::ForIn, t.span);
     do {
-      n->names.push_back(name(true).text);
+      n->names.push_back(bindingName().text);
     } while (eat(","));
     require("in");
     n->children.push_back(expression(1, !parens));
@@ -577,7 +621,7 @@ Ast Parser::lambda(bool excludeFields) {
     require("(");
     std::size_t untyped = 0;
     list(")", [&] {
-      auto param = name();
+      auto param = bindingName();
       node->parameters.push_back({param.text, param.span, nullptr, false});
       if (eat(":")) {
         auto t = type();
@@ -635,7 +679,13 @@ Ast Parser::primary(bool excludeFields) {
     if (paren) require(")");
     auto yes = paren ? expression(1, excludeFields) : block();
     Ast no;
-    if (eat("else")) no = at("if") || paren ? expression(1, excludeFields) : block();
+    if (yes->kind != NodeKind::Block && !at("else")) fail(t.span, "single-expression if requires else", "E110");
+    if (eat("else")) {
+      if (at("if") || paren) no = expression(1, excludeFields);
+      else no = block();
+      if (no->kind != NodeKind::If && (yes->kind == NodeKind::Block) != (no->kind == NodeKind::Block))
+        fail(t.span, "if branches must both be blocks or both be single expressions", "E110");
+    }
     return make(NodeKind::If, t.span, "", {cond, yes, no});
   }
   if (at("switch")) return match();
@@ -651,13 +701,7 @@ Ast Parser::primary(bool excludeFields) {
     auto n = make(NodeKind::Return, t.span);
     if (!at(";") && !at("}") && !at(",")) {
       n->children.push_back(expression());
-      if (!armExpression && eat(",")) {
-        auto tuple = make(NodeKind::Tuple, t.span, "", std::move(n->children));
-        do {
-          tuple->children.push_back(expression());
-        } while (eat(","));
-        n->children = {tuple};
-      }
+      if (!armExpression && at(",")) fail(current().span, "return a tuple using parentheses", "E110");
     }
     return n;
   }
@@ -799,7 +843,7 @@ File parse(const Source &source) {
 }
 
 void printAst(const File &file) {
-  std::cout << "package " << file.package << '\n';
+  if (!file.package.empty()) std::cout << "package " << file.package << '\n';
   for (const auto &d : file.declarations) {
     std::cout << d.name << '\n';
     show(d.body, 2);

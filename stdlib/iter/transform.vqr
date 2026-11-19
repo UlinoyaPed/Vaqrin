@@ -1,0 +1,147 @@
+package iter
+
+pub class MapIter<I: Movable, T: Movable, U: Movable, F: Movable> {
+    var source: I;
+    var transform: F;
+public:
+    func init(source: I, transform: F) : source(move(source)), transform(move(transform)) {}
+    func next() ?U {
+        switch source.next() {
+            null => null,
+            some(item) => some(transform(move(item))),
+        }
+    }
+    const func sizeHint() SizeHint { SizeHint{lower: 0, upper: null} }
+}
+
+pub class FilterIter<I: Movable, T: Movable, F: Movable> {
+    var source: I;
+    var predicate: F;
+public:
+    func init(source: I, predicate: F) : source(move(source)), predicate(move(predicate)) {}
+    func next() ?T {
+        for {
+            switch source.next() {
+                null => return null,
+                some(item) => {
+                    if predicate(&item) { return some(move(item)); }
+                },
+            }
+        }
+    }
+    const func sizeHint() SizeHint { SizeHint{lower: 0, upper: null} }
+}
+
+pub class FilterMapIter<I: Movable, T: Movable, U: Movable, F: Movable> {
+    var source: I;
+    var transform: F;
+public:
+    func init(source: I, transform: F) : source(move(source)), transform(move(transform)) {}
+    func next() ?U {
+        for {
+            switch source.next() {
+                null => return null,
+                some(item) => {
+                    switch transform(move(item)) {
+                        null => {},
+                        some(value) => return some(move(value)),
+                    }
+                },
+            }
+        }
+    }
+    const func sizeHint() SizeHint { SizeHint{lower: 0, upper: null} }
+}
+
+pub class TryMapIter<I: Movable, T: Movable, U: Movable, F: Movable> {
+    var source: I;
+    var transform: F;
+public:
+    func init(source: I, transform: F) : source(move(source)), transform(move(transform)) {}
+    func next() !?U {
+        switch source.next() {
+            null => null,
+            some(item) => some(transform(move(item))!),
+        }
+    }
+}
+
+pub class TryFilterIter<I: Movable, T: Movable, F: Movable> {
+    var source: I;
+    var predicate: F;
+public:
+    func init(source: I, predicate: F) : source(move(source)), predicate(move(predicate)) {}
+    func next() !?T {
+        for {
+            switch source.next() {
+                null => return null,
+                some(item) => {
+                    if predicate(&item)! { return some(move(item)); }
+                },
+            }
+        }
+    }
+}
+
+pub class MapWhileIter<I: Movable, T: Movable, U: Movable, F: Movable> {
+    var source: I;
+    var transform: F;
+    var ended: bool;
+public:
+    func init(source: I, transform: F) : source(move(source)), transform(move(transform)), ended(false) {}
+    func next() ?U {
+        if ended { return null; }
+        var value = switch source.next() {
+            null => { var missing: ?U = null; missing },
+            some(item) => transform(move(item)),
+        };
+        switch move(value) {
+            null => { ended = true; null },
+            some(item) => some(move(item)),
+        }
+    }
+}
+
+pub class InspectIter<I: Movable, T: Movable, F: Movable> {
+    var source: I;
+    var observer: F;
+public:
+    func init(source: I, observer: F) : source(move(source)), observer(move(observer)) {}
+    func next() ?T {
+        switch source.next() {
+            null => null,
+            some(item) => {
+                observer(&item);
+                some(move(item))
+            },
+        }
+    }
+}
+
+pub func map<I: Movable, T: Movable, U: Movable, F: Movable>(source: I, transform: F) MapIter<I, T, U, F> {
+    MapIter<I, T, U, F>(move(source), move(transform))
+}
+
+pub func filter<I: Movable, T: Movable, F: Movable>(source: I, predicate: F) FilterIter<I, T, F> {
+    FilterIter<I, T, F>(move(source), move(predicate))
+}
+
+pub func filterMap<I: Movable, T: Movable, U: Movable, F: Movable>(source: I, transform: F) FilterMapIter<I, T, U, F> {
+    FilterMapIter<I, T, U, F>(move(source), move(transform))
+}
+
+pub func tryMap<I: Movable, T: Movable, U: Movable, F: Movable>(source: I, transform: F) TryMapIter<I, T, U, F> {
+    TryMapIter<I, T, U, F>(move(source), move(transform))
+}
+
+pub func tryFilter<I: Movable, T: Movable, F: Movable>(source: I, predicate: F) TryFilterIter<I, T, F> {
+    TryFilterIter<I, T, F>(move(source), move(predicate))
+}
+
+pub func mapWhile<I: Movable, T: Movable, U: Movable, F: Movable>(source: I, transform: F) MapWhileIter<I, T, U, F> {
+    MapWhileIter<I, T, U, F>(move(source), move(transform))
+}
+
+pub func inspect<I: Movable, T: Movable, F: Movable>(source: I, observer: F) InspectIter<I, T, F> {
+    InspectIter<I, T, F>(move(source), move(observer))
+}

@@ -192,9 +192,12 @@ ValueAt Body::match(const Ast &n, Type *expected) {
   requireInit(subject, n->span);
   Type *ownerType = nullptr;
   AllocaInst *selection = nullptr;
-  if (!subject.borrowed && p.drops(subject.type)) {
+  if (!subject.borrowed) {
     subject.address = asPointer(subject, n->span).value;
     subject.value = nullptr;
+    subject.writable = true;
+  }
+  if (!subject.borrowed && p.drops(subject.type)) {
     auto *layout = StructType::get(p.context, {PointerType::getUnqual(p.context), ir.getInt32Ty()});
     ownerType = p.add(Kind::PatternRemainder, layout,
                       "<pattern remainder " + std::to_string(p.matchCount++) + ">", {subject.type});
@@ -258,9 +261,13 @@ ValueAt Body::match(const Ast &n, Type *expected) {
     }
     for (unsigned j = 0; j < signature.size(); ++j) {
       auto &[key, t, reference] = signature[j];
-      bind(key, t, !reference, ir.CreateLoad(p.storage(t), slots[j]), arm->span);
+      bind(reference ? "&" + key : key, t, true, ir.CreateLoad(p.storage(t), slots[j]), arm->span);
     }
+    auto borrow = patternBorrows.end();
+    if (subject.local >= 0 && std::ranges::any_of(signature, [](const auto &item) { return std::get<2>(item); }))
+      borrow = patternBorrows.insert(subject.local);
     auto v = expression(arm->tail, resultType == p.voidTy ? nullptr : resultType);
+    if (borrow != patternBorrows.end()) patternBorrows.erase(borrow);
     if (live()) {
       if (!resultType) resultType = v.type;
       if (resultType == p.voidTy) {

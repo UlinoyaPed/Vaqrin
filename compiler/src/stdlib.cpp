@@ -18,6 +18,26 @@ ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::v
     if (kind == Kind::Optional) return {p.boolTy, ir.CreateLoad(ir.getInt1Ty(), tag)};
     return {p.boolTy, ir.CreateICmpEQ(ir.CreateLoad(ir.getInt32Ty(), tag), ir.getInt32(0))};
   }
+  if (key == "__vqr_unreachable") {
+    arity(0);
+    if (!unsafeDepth) fail(n->span, "unreachableUnchecked requires unsafe", "E240");
+    ir.CreateUnreachable();
+    return neverValue();
+  }
+  if (key == "__vqr_optional_pointer") {
+    arity(1);
+    auto pointer = expression(n->children[1]);
+    if (!live()) return neverValue();
+    if (pointer.type->kind != Kind::Pointer || pointer.type->parts[0]->kind != Kind::Optional)
+      fail(n->span, "optional payload access requires a pointer to a nullable value");
+    auto *wrapper = pointer.type->parts[0];
+    auto *type = p.aggregate(Kind::Optional, {p.pointer(wrapper->parts[0], pointer.type->readOnly)});
+    auto *address = read(pointer, n->span);
+    auto *tag = ir.CreateLoad(ir.getInt1Ty(), ir.CreateStructGEP(wrapper->ir, address, 0));
+    auto *payload = ir.CreateStructGEP(wrapper->ir, address, 1);
+    return {type, ir.CreateSelect(tag, wrap(type, payload, true).value,
+                                  Constant::getNullValue(type->ir))};
+  }
   if (key == "__vqr_char") {
     arity(1);
     auto scalar = expression(n->children[1], p.integer(32, false));

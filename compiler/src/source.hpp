@@ -38,7 +38,8 @@ struct Token {
   bool newline = false;
 };
 
-std::vector<Token> lex(const Source &source);
+std::vector<Token> lex(const Source &source, bool indexOnly = false);
+std::string identifier(std::string_view spelling);
 char32_t scalar(std::string_view text, std::size_t &index, Span span);
 void appendUtf8(std::string &text, char32_t code);
 

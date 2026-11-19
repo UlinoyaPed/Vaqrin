@@ -8,13 +8,8 @@ pub error TomlError {
 }
 
 pub enum Value {
-    String(string),
-    Integer(i64),
-    Float(string),
-    Bool(bool),
-    DateTime(string),
-    Array(coll.Vec<Value>),
-    Table(Document),
+    String(string), Integer(i64), Float(string), Bool(bool),
+    DateTime(string), Array(coll.Vec<Value>), Table(Document),
 }
 
 pub class TomlOptions {
@@ -97,12 +92,8 @@ func trim(value: str) str {
     var data = value.asBytes();
     var start: usize = 0;
     var end = data.len();
-    for start < end && (data[start] == 32 || data[start] == 9 || data[start] == 13) {
-        start++;
-    }
-    for end > start && (data[end - 1] == 32 || data[end - 1] == 9 || data[end - 1] == 13) {
-        end--;
-    }
+    for start < end && (data[start] == 32 || data[start] == 9 || data[start] == 13) { start++; }
+    for end > start && (data[end - 1] == 32 || data[end - 1] == 9 || data[end - 1] == 13) { end--; }
     unsafe { __vqr_text_borrow_utf8(data[start..end]) }
 }
 
@@ -198,7 +189,7 @@ func parseBasicString(value: str) !string {
                 _ => return TomlError.InvalidString,
             }
         } else {
-            if byte < 0x20 || byte == 0x7f { return TomlError.InvalidString; }
+            if (byte < 0x20 && byte != 9) || byte == 0x7f { return TomlError.InvalidString; }
             output.push(byte)!;
         }
     }
@@ -211,7 +202,9 @@ func parseLiteralString(value: str) !string {
         return TomlError.InvalidString;
     }
     for index in usize(1)..(data.len() - 1) {
-        if data[index] < 0x20 || data[index] == 0x7f { return TomlError.InvalidString; }
+        if (data[index] < 0x20 && data[index] != 9) || data[index] == 0x7f {
+            return TomlError.InvalidString;
+        }
     }
     text.fromBytes(data[1..data.len() - 1]) catch { return TomlError.InvalidString; }
 }
@@ -305,6 +298,22 @@ func parseKeyPath(value: str) !coll.Vec<string> {
         output.push(move(key))!;
     }
     move(output)
+}
+
+pub func get(document: *const Document, path: str) ?*const Value {
+    var keys = parseKeyPath(path) catch { return null; };
+    if keys.len() == 0 { return null; }
+    var current = document;
+    for index in usize(0)..keys.len() {
+        var key = *keys.get(index).unwrap();
+        var value = current.get(key) ?? { return null; };
+        if index + 1 == keys.len() { return value; }
+        switch *value {
+            Value.Table(&table) => current = &table,
+            _ => return null,
+        }
+    }
+    null
 }
 
 func setDotted(document: *Document, path: []const string, value: Value, rejectDuplicate: bool) !void {
@@ -608,8 +617,20 @@ func countEntries(document: *const Document, depth: usize, maxDepth: usize) !usi
     count
 }
 
+func canonicalPath(path: []const string) !string {
+    var builder = text.StringBuilder();
+    for index in usize(0)..path.len() {
+        if index != 0 { builder.append(".")!; }
+        var key = path[index];
+        if bareKey(key) { builder.append(key)!; }
+        else { appendQuoted(&builder, key)!; }
+    }
+    builder.build()
+}
+
 pub func parseWithOptions(value: str, options: TomlOptions) !Document {
     if value.byteLen() > options.maxBytes { return TomlError.SizeLimit; }
+    text.validateUtf8(value.asBytes()) catch { return TomlError.InvalidSyntax; };
     var document = Document();
     var declaredTables = coll.Vec<string>();
     var section = coll.Vec<string>();
@@ -624,7 +645,7 @@ pub func parseWithOptions(value: str, options: TomlOptions) !Document {
             var header = trim(unsafe { __vqr_text_borrow_utf8(data[1..data.len() - 1]) });
             var path = parseKeyPath(header)!;
             if path.len() == 0 || path.len() > options.maxDepth { return TomlError.DepthLimit; }
-            var normalized = text.fromBytes(header.asBytes())!;
+            var normalized = canonicalPath(path.asConstSlice())!;
             for prior in declaredTables {
                 if prior == normalized { return TomlError.DuplicateTable; }
             }
@@ -674,7 +695,17 @@ func appendRaw(builder: *text.StringBuilder, value: str) !void { builder.append(
 
 func appendQuoted(builder: *text.StringBuilder, value: str) !void {
     appendRaw(builder, "\"")!;
-    for byte in value.asBytes() {
+    var data = value.asBytes();
+    var start: usize = 0;
+    for index in usize(0)..data.len() {
+        var byte = data[index];
+        var special = byte == 34 || byte == 92 || byte == 8 || byte == 9 ||
+                      byte == 10 || byte == 12 || byte == 13 || byte < 0x20 || byte == 0x7f;
+        if !special { continue; }
+        if index > start {
+            var raw = unsafe { __vqr_text_borrow_utf8(data[start..index]) };
+            appendRaw(builder, raw)!;
+        }
         switch byte {
             34 => appendRaw(builder, "\\\"")!,
             92 => appendRaw(builder, "\\\\")!,
@@ -684,16 +715,17 @@ func appendQuoted(builder: *text.StringBuilder, value: str) !void {
             12 => appendRaw(builder, "\\f")!,
             13 => appendRaw(builder, "\\r")!,
             _ => {
-                if byte < 0x20 || byte == 0x7f {
-                    var digits = "0123456789abcdef".asBytes();
-                    appendRaw(builder, "\\u00")!;
-                    appendByte(builder, digits[usize(byte >> 4)])!;
-                    appendByte(builder, digits[usize(byte & 15)])!;
-                } else {
-                    appendByte(builder, byte)!;
-                }
+                var digits = "0123456789abcdef".asBytes();
+                appendRaw(builder, "\\u00")!;
+                appendByte(builder, digits[usize(byte >> 4)])!;
+                appendByte(builder, digits[usize(byte & 15)])!;
             },
         }
+        start = index + 1;
+    }
+    if start < data.len() {
+        var raw = unsafe { __vqr_text_borrow_utf8(data[start..data.len()]) };
+        appendRaw(builder, raw)!;
     }
     appendRaw(builder, "\"")
 }

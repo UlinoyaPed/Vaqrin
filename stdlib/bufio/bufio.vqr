@@ -12,10 +12,10 @@ pub class BufferedReader {
     var eof: bool;
     var lastByte: ?u8;
 public:
-    func init(reader: *io.Reader, size: usize) !Self {
+    func init(reader: *io.Reader, size: usize) !void
+        : source(reader), data(coll.Vec<u8>()), position(0), capacity(size), eof(false), lastByte(null) {
         if size == 0 { return BufferError.InvalidCapacity; }
-        var values = coll.Vec<u8>.withCapacity(size)!;
-        BufferedReader(reader, move(values), 0, size, false, null)
+        data.reserve(size)!
     }
     func fill() !void {
         if eof { return; }
@@ -135,9 +135,10 @@ pub class BufferedWriter {
     var data: coll.Vec<u8>;
     var capacity: usize;
 public:
-    func init(writer: *io.Writer, size: usize) !Self {
+    func init(writer: *io.Writer, size: usize) !void
+        : target(writer), data(coll.Vec<u8>()), capacity(size) {
         if size == 0 { return BufferError.InvalidCapacity; }
-        BufferedWriter(writer, coll.Vec<u8>.withCapacity(size)!, size)
+        data.reserve(size)!
     }
     func retainPending(committed: usize) void {
         var pending = data.len() - committed;
@@ -221,7 +222,8 @@ pub class Scanner {
     var maximum: usize;
     var consumed: u64;
 public:
-    func init(source: *io.Reader) !Self { Scanner(BufferedReader(source, 4096)!, 1048576, 0) }
+    func init(source: *io.Reader) !void
+        : reader(BufferedReader(source, 4096)!), maximum(1048576), consumed(0) {}
     func setMaxToken(value: usize) void { maximum = value; }
     const func position() u64 { consumed }
     func next() !?Token {

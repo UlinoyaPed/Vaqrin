@@ -21,8 +21,8 @@ const incbConsonant: u8 = 1;
 const incbExtend: u8 = 2;
 const incbLinker: u8 = 3;
 
-func graphemeProperty(ch: char) u8 { u8((packedInfo(ch) >> 34) & 15) }
-func indicProperty(ch: char) u8 { u8((packedInfo(ch) >> 38) & 3) }
+func graphemeProperty(ch: char) u8 { u8((packedInfo(ch) >> 34) & 15)! }
+func indicProperty(ch: char) u8 { u8((packedInfo(ch) >> 38) & 3)! }
 
 pub func graphemeBreak(ch: char) GraphemeBreak {
     switch graphemeProperty(ch) {

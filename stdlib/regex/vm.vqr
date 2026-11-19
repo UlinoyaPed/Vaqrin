@@ -60,10 +60,9 @@ func appendHistory(history: *coll.Vec<CaptureHistory>, previous: i32,
 
 func epsilonClosure(regex: *const Regex, seeds: []const Thread,
                     output: *coll.Vec<Thread>, history: *coll.Vec<CaptureHistory>,
+                    seen: *coll.Vec<bool>, stack: *coll.Vec<Thread>,
                     input: str, position: usize, budget: *usize) !void {
-    var seen = coll.Vec<bool>();
-    for i in usize(0)..regex.states.len() { seen.push(false)!; }
-    var stack = coll.Vec<Thread>();
+    for i in usize(0)..seen.len() { seen[i] = false; }
 
     for seed in seeds {
         stack.clear();
@@ -272,6 +271,9 @@ func runNfa(regex: *const Regex, input: str, start: usize) !?SearchResult {
     var active = coll.Vec<Thread>();
     var nextSeeds = coll.Vec<Thread>();
     var history = coll.Vec<CaptureHistory>();
+    var seen = coll.Vec<bool>();
+    for i in usize(0)..regex.states.len() { seen.push(false)!; }
+    var stack = coll.Vec<Thread>();
     var candidate: ?Thread = null;
     var candidateEnd: usize = 0;
     var position = start;
@@ -287,7 +289,7 @@ func runNfa(regex: *const Regex, input: str, start: usize) !?SearchResult {
 
         active.clear();
         epsilonClosure(regex, seeds.asConstSlice(), &active, &history,
-                       input, position, &budget)!;
+                       &seen, &stack, input, position, &budget)!;
 
         var matchIndex: ?usize = null;
         for i in usize(0)..active.len() {

@@ -17,7 +17,7 @@
 - auxiliary/GraphemeBreakProperty.txt
 - emoji/emoji-data.txt
 
-生成器位于 `stdlib/unicode/tools/generate.mjs`，要求 Node.js 18+，使用内置 fetch，不依赖第三方包。生成数据位于 `stdlib/unicode/generated/`。数据归属与许可说明位于 `stdlib/unicode/data/UNICODE-LICENSE.txt`。
+生成器位于 `stdlib/unicode/tools/generate.mjs`，要求 Node.js 18+，使用内置 fetch，不依赖第三方包。生成数据位于 `stdlib/unicode/unicode_data.vqr` 与 `stdlib/unicode/script.vqr`，二者与包内源码处于同一显式包。数据归属与许可说明位于 `stdlib/unicode/data/UNICODE-LICENSE.txt`。
 
 当前生成表统计：
 

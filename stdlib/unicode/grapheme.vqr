@@ -24,6 +24,25 @@ const incbLinker: u8 = 3;
 func graphemeProperty(ch: char) u8 { u8((packedInfo(ch) >> 34) & 15) }
 func indicProperty(ch: char) u8 { u8((packedInfo(ch) >> 38) & 3) }
 
+pub func graphemeBreak(ch: char) GraphemeBreak {
+    switch graphemeProperty(ch) {
+        1 => GraphemeBreak.CR,
+        2 => GraphemeBreak.LF,
+        3 => GraphemeBreak.Control,
+        4 => GraphemeBreak.Extend,
+        5 => GraphemeBreak.ZWJ,
+        6 => GraphemeBreak.RegionalIndicator,
+        7 => GraphemeBreak.Prepend,
+        8 => GraphemeBreak.SpacingMark,
+        9 => GraphemeBreak.L,
+        10 => GraphemeBreak.V,
+        11 => GraphemeBreak.T,
+        12 => GraphemeBreak.LV,
+        13 => GraphemeBreak.LVT,
+        else => GraphemeBreak.Other
+    }
+}
+
 pub class GraphemeSegmenter {
     var previous: ?char;
     var regionalRun: usize;

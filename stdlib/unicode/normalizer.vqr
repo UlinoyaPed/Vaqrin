@@ -1,6 +1,5 @@
 package unicode
 import (coll, convert, text, core)
-import ("generated/unicode_data.vqr" as data)
 
 pub class Normalizer {
     var form: NormalForm;
@@ -59,20 +58,20 @@ private:
             return;
         }
         var lo: usize = 0;
-        var hi = data.decompositionIndex.len() / 3;
+        var hi = decompositionIndex.len() / 3;
         for lo < hi {
             var mid = lo + (hi - lo) / 2;
-            var key = data.decompositionIndex[mid * 3];
+            var key = decompositionIndex[mid * 3];
             if cp < key { hi = mid; }
             else if cp > key { lo = mid + 1; }
             else {
-                var offset = data.decompositionIndex[mid * 3 + 1];
-                var flags = data.decompositionIndex[mid * 3 + 2];
+                var offset = decompositionIndex[mid * 3 + 1];
+                var flags = decompositionIndex[mid * 3 + 2];
                 var compat = (flags & 0x100) != 0;
                 if compat && !compatibility { out.push(cp)!; return; }
                 var count = flags & 0xff;
                 for i in usize(0)..count {
-                    decomposeScalar(data.decompositionScalars[offset + i], compatibility, out, depth + 1)!;
+                    decomposeScalar(decompositionScalars[offset + i], compatibility, out, depth + 1)!;
                 }
                 return;
             }
@@ -111,15 +110,15 @@ func composePair(a: u32, b: u32) ?u32 {
         return some(a + b - 0x11a7);
     }
     var lo: usize = 0;
-    var hi = data.compositionPairs.len() / 3;
+    var hi = compositionPairs.len() / 3;
     var key = u64(a) * 0x110000 + u64(b);
     for lo < hi {
         var mid = lo + (hi - lo) / 2;
-        var candidate = u64(data.compositionPairs[mid * 3]) * 0x110000 +
-                        u64(data.compositionPairs[mid * 3 + 1]);
+        var candidate = u64(compositionPairs[mid * 3]) * 0x110000 +
+                        u64(compositionPairs[mid * 3 + 1]);
         if key < candidate { hi = mid; }
         else if key > candidate { lo = mid + 1; }
-        else { return some(data.compositionPairs[mid * 3 + 2]); }
+        else { return some(compositionPairs[mid * 3 + 2]); }
     }
     null
 }

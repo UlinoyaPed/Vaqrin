@@ -16,7 +16,7 @@ build/host/vaqc build examples/hello.vqr -o build/hello
 ./build/hello
 ```
 
-示例依次输出 `Hello, Vaqrin!`、`1`、`4` 和 `9`。宿主链接默认调用 `clang`，归档默认调用 `llvm-ar`。可用 `cmake --install build/host --prefix <安装目录>` 安装 `bin/vaqc` 和标准包源码。
+示例先输出 `Hello, Vaqrin!`，再依次输出 1 到 3000 的平方。宿主链接默认调用 `clang`，归档默认调用 `llvm-ar`。可用 `cmake --install build/host --prefix <安装目录>` 安装 `bin/vaqc` 和标准包源码。
 
 ```bash
 build/host/vaqc check examples/hello.vqr
@@ -40,7 +40,7 @@ build/host/vaqc build -O2 -g examples/hello.vqr -o build/hello
 | 数值和控制流 | 1–128 位整数的前端类型、f32/f64、目标宽度整数、检查/回绕/饱和运算、转换、短路和比较链、分支、范围与数组循环、`iter()` / `next()` 协议、switch |
 | 值和资源 | 元组、固定数组、切片、普通指针、可空值与错误结果、类和构造器委托、带载荷枚举、解引用绑定与模式借用、复制和显式移动、析构、默认分配器的 Box 与 Vec |
 | 函数和编译期 | 函数指针、显式捕获 Lambda、受支持签名的重载、函数和类的类型泛型、部分泛型实参推导、函数编译期值参数、可解释的常量和函数 |
-| 目标接口 | Linux 宿主 I/O、标量 C ABI、词法 unsafe、普通指针转换、volatile 访问、DWARF 函数与基础局部信息、Cortex-M3 固件链接 |
+| 目标接口 | Linux 宿主 I/O、标量 C ABI、词法 unsafe、普通指针转换、volatile 访问、按目标宽度提供原子操作、DWARF 函数与基础局部信息、Cortex-M3 固件链接 |
 
 目前缺少完整任务与通道运行时、`select`、接口派发、嵌入方法提升、Unicode 字素分割、通用迭代器组合、独立的目标运行时和 C 聚合 ABI 桥。Box、Vec 与拥有型动态文本的默认分配器在 Linux 宿主可用，自定义分配器接口和不可移动值的通用按值就地构造仍待实现。工程清单支持本地 `[build].entry`，依赖版本、锁文件和依赖获取仍待实现。泛型主要在实例化时检查。循环初始化检查使用保守的回边合并。规范 §19 的并发示例依赖尚未实现的运行时。
 

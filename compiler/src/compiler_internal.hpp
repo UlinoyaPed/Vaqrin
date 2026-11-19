@@ -42,6 +42,7 @@ enum class Kind {
   Pointer,
   Box,
   Allocation,
+  RawStorage,
   Function,
   Closure,
   PatternRemainder,
@@ -49,6 +50,9 @@ enum class Kind {
   Enum
 };
 struct Type;
+using Types = std::map<std::string, Type *>;
+using Constants = std::map<std::string, std::pair<Type *, Constant *>>;
+
 struct Definition {
   const File *file;
   const Decl *decl;
@@ -85,6 +89,8 @@ struct Type {
   Definition def{};
   std::vector<Field> fields;
   std::vector<Variant> variants;
+  Constants comptimeArguments;
+  std::vector<const Decl *> members;
   bool filling = false;
   bool filled = false;
   bool cAbi = false;
@@ -94,8 +100,6 @@ struct Type {
   bool consuming = false;
   std::vector<Ast> patterns;
 };
-using Types = std::map<std::string, Type *>;
-using Constants = std::map<std::string, std::pair<Type *, Constant *>>;
 
 struct ValueAt {
   Type *type = nullptr;
@@ -274,15 +278,20 @@ public:
   Type *pointer(Type *t, bool readOnly);
   Type *slice(Type *t, bool readOnly);
   Type *box(Type *t);
+  Type *rawStorage(Type *element, Span span);
   Type *type(const Ast &n, const File &file, const Types &generics = {}, const Constants &values = {});
   Type *named(std::string name, const File &file, Span span, const Types &generics = {},
-              const std::vector<Type *> &args = {});
-  Type *nominal(Definition def, const std::vector<Type *> &args, bool complete = true);
+              const std::vector<Ast> &args = {}, const Constants &values = {});
+  Type *nominal(Definition def, const std::vector<Type *> &args, bool complete = true,
+                const Constants &values = {});
+  std::pair<Type *, Constant *> genericValue(const Ast &arg, const File &file, Type *expected,
+                                             const Types &types, const Constants &values);
   void fill(Type *t, const Types &substitutions);
   void ensureSized(Type *t, Span span);
   bool copyable(Type *t);
   bool satisfies(Type *t, const Ast &constraint);
   bool movable(Type *t);
+  bool transferable(Type *t, bool shared);
   bool drops(Type *t);
   bool customCopy(Type *t);
   Function *dropGlue(Type *t);
@@ -317,8 +326,9 @@ public:
   }
   Types classTypes(Type *t) {
     Types out{{"Self", t}};
-    for (std::size_t i = 0; i < t->parts.size(); ++i)
-      out[t->def.decl->generics[i].name] = t->parts[i];
+    std::size_t i = 0;
+    for (const auto &g : t->def.decl->generics)
+      if (!g.comptime) out[g.name] = t->parts[i++];
     return out;
   }
 };

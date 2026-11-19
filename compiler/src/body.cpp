@@ -547,6 +547,9 @@ void Body::build(FunctionEntry &entry) {
                                     DINode::FlagZero, DISubprogram::SPFlagDefinition);
     fn->setSubprogram(debug);
   }
+  if (owner)
+    for (const auto &[name, value] : owner->comptimeArguments)
+      bindConstant(name, value.first, value.second, d.span);
   unsigned index = 0, runtime = 0;
   if (owner && !d.associated) {
     auto *arg = fn->getArg(runtime++);
@@ -1124,14 +1127,12 @@ ValueAt Body::expression(const Ast &n, Type *expected) {
   }
   case NodeKind::Fields: {
     auto target = n->children[0];
-    Type *t = nullptr;
+    std::vector<Ast> args;
     if (target->kind == NodeKind::Generic) {
-      std::vector<Type *> args;
-      for (std::size_t i = 1; i < target->children.size(); ++i)
-        args.push_back(parseType(target->children[i]));
-      t = p.named(path(target->children[0]), file, target->span, generics, args);
-    } else
-      t = p.named(path(target), file, target->span, generics);
+      args.assign(target->children.begin() + 1, target->children.end());
+      target = target->children[0];
+    }
+    auto *t = p.named(path(target), file, target->span, generics, args, visibleConstants());
     v = construct(n, t);
     break;
   }

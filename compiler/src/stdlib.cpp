@@ -1,5 +1,8 @@
 #include "compiler_internal.hpp"
 
+#include <llvm/IR/IntrinsicsAArch64.h>
+#include <llvm/IR/IntrinsicsARM.h>
+
 namespace vqr::detail {
 
 ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::vector<Ast> &types) {
@@ -8,6 +11,34 @@ ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::v
   auto arity = [&](unsigned count) {
     if (n->children.size() != count + 1) fail(n->span, "wrong intrinsic argument count");
   };
+  if (key == "__vqr_pointer_address") {
+    arity(1);
+    auto pointer = expression(n->children[1]);
+    if (!live()) return neverValue();
+    if (pointer.type->kind != Kind::Pointer) fail(n->span, "address conversion requires a pointer");
+    return {p.sizeTy, ir.CreatePtrToInt(read(pointer, n->span), p.sizeTy->ir)};
+  }
+  if (key == "__vqr_mmio_load" || key == "__vqr_mmio_store" || key == "__vqr_mmio_pointer") {
+    auto operation = key == "__vqr_mmio_load" ? "volatileLoad" :
+                     key == "__vqr_mmio_store" ? "volatileStore" : "ptrFromInt";
+    return builtin(operation, n, types, nullptr);
+  }
+  if (key == "__vqr_mmio_compiler_barrier" || key == "__vqr_mmio_memory_barrier") {
+    arity(0);
+    ir.CreateFence(AtomicOrdering::SequentiallyConsistent,
+                   key == "__vqr_mmio_compiler_barrier" ? SyncScope::SingleThread : SyncScope::System);
+    return voidValue();
+  }
+  if (key == "__vqr_mmio_instruction_barrier") {
+    arity(0);
+    auto target = p.targetTriple();
+    if (!target.isARM() && !target.isThumb() && !target.isAArch64())
+      fail(n->span, "instruction barriers are supported on ARM targets", "E290");
+    Intrinsic::ID id = target.isAArch64() ? static_cast<Intrinsic::ID>(Intrinsic::aarch64_isb)
+                                         : static_cast<Intrinsic::ID>(Intrinsic::arm_isb);
+    ir.CreateCall(Intrinsic::getOrInsertDeclaration(p.module.get(), id), {ir.getInt32(15)});
+    return voidValue();
+  }
   if (key == "__vqr_optional_present" || key == "__vqr_result_ok") {
     arity(1);
     auto pointer = expression(n->children[1]);
@@ -76,6 +107,22 @@ ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::v
     };
     return {p.boolTy, ir.CreateICmpULT(order(a), order(b))};
   }
+  if (key == "__vqr_uninitialized") {
+    arity(0);
+    if (types.size() != 1) fail(n->span, "uninitialized storage requires an element type");
+    auto *raw = p.rawStorage(parseType(types[0]), n->span);
+    return {raw, UndefValue::get(raw->ir)};
+  }
+  if (key == "__vqr_raw_address") {
+    arity(1);
+    auto value = expression(n->children[1]);
+    if (!live()) return neverValue();
+    if (value.type->kind != Kind::Pointer || value.type->parts[0]->kind != Kind::RawStorage)
+      fail(n->span, "expected a pointer to raw storage");
+    auto *raw = value.type->parts[0];
+    auto *pointer = p.pointer(raw->parts[0], value.type->readOnly);
+    return {pointer, ir.CreateStructGEP(raw->ir, read(value, n->span), 0)};
+  }
   if (key == "__vqr_little_endian") {
     arity(0);
     return {p.boolTy, ir.getInt1(p.module->getDataLayout().isLittleEndian())};
@@ -96,7 +143,7 @@ ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::v
   }
   if (key == "__vqr_type_name" || key == "__vqr_alloc_size" || key == "__vqr_alignment" ||
       key == "__vqr_bit_width" || key == "__vqr_copyable" || key == "__vqr_movable" ||
-      key == "__vqr_trivial_drop") {
+      key == "__vqr_trivial_drop" || key == "__vqr_sendable" || key == "__vqr_shareable") {
     arity(0);
     if (types.size() != 1) fail(n->span, "metadata requires one type argument");
     auto *type = parseType(types[0]);
@@ -108,6 +155,8 @@ ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::v
     if (key == "__vqr_copyable") return {p.boolTy, ir.getInt1(p.copyable(type))};
     if (key == "__vqr_movable") return {p.boolTy, ir.getInt1(p.movable(type))};
     if (key == "__vqr_trivial_drop") return {p.boolTy, ir.getInt1(!p.drops(type))};
+    if (key == "__vqr_sendable" || key == "__vqr_shareable")
+      return {p.boolTy, ir.getInt1(p.transferable(type, key == "__vqr_shareable"))};
     const auto &layout = p.module->getDataLayout();
     auto *storage = p.storage(type);
     auto count = layout.getTypeAllocSize(storage).getFixedValue();

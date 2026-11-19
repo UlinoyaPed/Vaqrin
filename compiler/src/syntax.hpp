@@ -79,7 +79,7 @@ struct Attribute {
   std::string value;
 };
 
-enum class DeclKind { Function, Global, Alias, Error, Enum, Class, Interface, Field, Variant };
+enum class DeclKind { Function, Global, Alias, Error, Enum, Class, Interface, Field, Variant, Conditional };
 struct Decl {
   DeclKind kind;
   Span span;
@@ -88,7 +88,7 @@ struct Decl {
   std::vector<Parameter> params;
   std::vector<Parameter> generics;
   std::vector<Attribute> attributes;
-  std::vector<Decl> members;
+  std::vector<Decl> members, otherwise;
   std::vector<std::pair<std::string, Ast>> initializers;
   bool visible = false;
   bool external = false;

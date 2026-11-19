@@ -1,16 +1,18 @@
 # Vaqrin 标准包
 
-可用 `import (core, coll, iter, opt, result, cmp, meta, bits, algo, atomic, binary, text, io)` 导入标准包，也可使用 `std/` 前缀。CMake 在构建目录生成 `share/vaqrin/stdlib`，安装时将标准包源码复制到安装前缀下。编译器按使用情况实例化泛型声明。完整的目标接口见[标准包 API 清单](../docs/stdlib/Vaqrin-stdlib-API-complete-draft.md)。
+可用 `import (core, coll, iter, opt, result, cmp, meta, mem, mmio, bits, algo, atomic, binary, text, io)` 导入标准包，也可使用 `std/` 前缀。CMake 在构建目录生成 `share/vaqrin/stdlib`，安装时将标准包源码复制到安装前缀下。编译器按使用情况实例化泛型声明。完整的目标接口见[标准包 API 清单](../docs/stdlib/Vaqrin-stdlib-API-complete-draft.md)。
 
 | 包 | 当前接口 |
 | --- | --- |
 | `core` | `Box<T>`、可空及错误结果状态检查、`unwrapOr`、`identity`、`drop`、`swap`、`replace`、`unreachable`、`unreachableUnchecked` |
-| `coll` | `Vec<T>`、容量调整、位置插入和移除、借用访问和可变迭代 |
+| `coll` | `Vec<T>`、零堆分配的 `FixedVec<T, N>`、容量调整、位置插入和移除、借用访问和可变迭代 |
 | `iter` | 按值和按指针遍历切片、单项和空游标、映射、过滤、枚举、组合、反向及截取适配器 |
 | `opt` | 可空值的组合、访问、原地替换、容器转换和外层交换 |
 | `result` | 错误结果的组合、恢复、观察、只读载荷访问与收集 |
 | `cmp` | 标量比较、部分序、浮点总序和上下界助手 |
-| `meta` | 目标布局、类型名称、数组长度、复制、移动和析构特性 |
+| `meta` | 目标布局、类型名称、数组长度、复制、移动、析构及线程间移交和共享特性 |
+| `mem` | 布局与对齐、字节操作、原始槽、手动析构和作用域守卫 |
+| `mmio` | 带边界和对齐检查的寄存器、宽度受限的 volatile 访问、编译器屏障及 ARM 指令屏障 |
 | `bits` | 定宽整数位操作、对齐及可指定顺序的位流读写 |
 | `algo` | 切片查找、二分、堆操作、排序、翻转和旋转 |
 | `atomic` | 原生标量、可空指针、原子标志、比较交换、读改写和内存栅栏 |

@@ -1029,6 +1029,179 @@ class Acceptance(unittest.TestCase):
             }
         """, "21\n1\n2\n258\n-6\n-0.5\n300\n-3\ntrue\n17\n33\ntrue\n1\ntrue\n8\ntrue\n4\n16909060\n1.25\n-9223372036854775808\n")
 
+    def test_comptime_nominal_types_and_members(self):
+        self.hosted("""
+            import (core)
+            comptime const size: usize = 3;
+            type Buffer<T, comptime N: usize> = [N]T;
+            class Sized<T, comptime N: usize> {
+            public:
+                var data: Buffer<T, N>;
+                func init(data: Buffer<T, N>) : data(move(data)) {}
+                const func len() usize { N }
+                const func tail() [1]T { [1]T{data[N - 1]} }
+                comptime if N == 3 {
+                    const func marker() i32 { 3 }
+                } else {
+                    const func marker() i32 { 1 }
+                    var different: MissingType = invalid;
+                }
+            }
+            class Selection<comptime Enabled: bool> {
+                comptime if Enabled {
+                    pub static func selected() i32 { 10 }
+                } else {
+                    pub static func selected() i32 { 20 }
+                }
+            }
+            enum Code<comptime N: usize> {
+                Well = N,
+                Next,
+            }
+            func length<T, comptime N: usize>(value: *const Sized<T, N>) usize { N }
+            func main() !void {
+                var one = Sized<i32, size>([_]i32{1, 2, 3});
+                var two = Sized<i32, (1 + 2)>([_]i32{6, 7, 8});
+                one = move(two);
+                io.println(length(&one))!;
+                io.println(one.len())!;
+                io.println(one.marker())!;
+                io.println(one.tail()[0])!;
+                io.println(Selection<true>.selected())!;
+                io.println(Selection<false>.selected())!;
+                var code = Code<4>.fromInt(5);
+                var missing = Code<4>.fromInt(6);
+                io.println(core.isSome(&code))!;
+                io.println(core.isNone(&missing))!;
+            }
+        """, "3\n3\n3\n8\n10\n20\ntrue\ntrue\n")
+
+    def test_raw_storage_and_fixed_vector(self):
+        self.hosted("""
+            import (coll, core, mem, meta)
+            class Probe {
+                var number: i32;
+            public:
+                func init(number: i32) : number(number) {}
+                const func id() i32 { number }
+                func deinit() void { io.println(number) catch {}; }
+            }
+            func even(&n: *const i32) bool { n % 2 == 0 }
+            func cleanup<F: Movable>(callback: F) mem.ScopeGuard<F> {
+                mem.ScopeGuard<F>(move(callback))
+            }
+            func main() !void {
+                io.println(meta.sizeOf<mem.MaybeUninit<[5]u32>>() == meta.sizeOf<[5]u32>())!;
+                io.println(meta.alignOf<mem.MaybeUninit<u64>>() == meta.alignOf<u64>())!;
+                var empty = coll.FixedVec<i32, 0>();
+                switch empty.tryPush(3) {
+                    coll.PushResult.Full(value) => io.println(value)!,
+                    else => panic("zero capacity"),
+                }
+                var numbers = coll.FixedVec<i32, 4>();
+                numbers.push(1); numbers.push(2); numbers.push(4);
+                numbers.insert(2, 6);
+                numbers.retain(even);
+                io.println(numbers.len())!;
+                io.println(numbers.asConstSlice()[1])!;
+                &alias := numbers.getMut(2).unwrap();
+                alias = 8;
+                var cursor = coll.FixedVec<i32, 4>.intoIter(move(numbers));
+                io.println(cursor.nextBack().unwrap())!;
+                io.println(cursor.next().unwrap())!;
+                io.println(cursor.next().unwrap())!;
+                var end = cursor.next();
+                io.println(core.isNone(&end))!;
+                {
+                    var probes = coll.FixedVec<Probe, 2>();
+                    probes.push(Probe(11)); probes.push(Probe(12));
+                    switch probes.push(Probe(13)) {
+                        coll.PushResult.Full(value) => io.println(value.id())!,
+                        else => panic("capacity"),
+                    }
+                    var first = probes.remove(0).unwrap();
+                    io.println(first.id())!;
+                }
+                var slot = mem.MaybeUninit<Probe>.uninit();
+                unsafe { slot.write(Probe(21)); slot.assumeInitDrop(); }
+                var manually = mem.ManuallyDrop<Probe>.new(Probe(22));
+                core.drop<Probe>(mem.ManuallyDrop<Probe>.intoInner(move(manually)));
+                var ran = 0;
+                {
+                    var callback = [&ran]() void => { ran++; };
+                    var guard = cleanup(move(callback));
+                    io.println(guard.isArmed())!;
+                    guard.runNow();
+                    guard.dismiss();
+                }
+                io.println(ran)!;
+            }
+        """, "true\ntrue\n3\n3\n6\n8\n2\n6\ntrue\n13\n13\n11\n11\n12\n21\n22\ntrue\n1\n")
+
+    def test_memory_layout_transferability_and_mmio(self):
+        self.hosted("""
+            import (core, coll, cmp, mem, meta, mmio)
+            class Node {
+                var next: ?^Node;
+            }
+            func inspect<T: Sendable & Shareable>(value: T) bool { true }
+            func main() !void {
+                var byte = mem.Layout.fromSizeAlign(1, 1)!;
+                var wordLayout = mem.layout<u32>();
+                var layout = byte.extend(wordLayout)!;
+                io.println(layout.size())!;
+                io.println(layout.align())!;
+                var empty = mem.Layout.array<u64>(0)!;
+                io.println(empty.size())!;
+                var wrong = mem.Layout.fromSizeAlign(6, 3);
+                io.println(core.isErr(&wrong))!;
+                var overflow = mem.Layout.array<u64>(~usize(0));
+                io.println(core.isErr(&overflow))!;
+                var bytes = [_]u8{1, 2, 3, 4, 5, 6};
+                mem.moveBytes(bytes[0..4], bytes[1..5])!;
+                io.println(bytes[1])!;
+                io.println(bytes[4])!;
+                mem.copyBytes(bytes[1..5], bytes[0..4])!;
+                io.println(bytes[0])!;
+                io.println(bytes[3])!;
+                io.println(mem.compareBytes(bytes[0..2], bytes[0..3]) == cmp.Ordering.Less)!;
+                mem.zeroBytes(bytes[0..2]);
+                io.println(bytes[1])!;
+                io.println(inspect(1))!;
+                io.println(meta.isSendable<^Node>())!;
+                io.println(meta.isShareable<coll.FixedVec<u8, 2>>())!;
+                io.println(meta.isSendable<coll.Vec<*i32>>())!;
+                io.println(meta.isShareable<str>())!;
+                var word: u32 = 3;
+                var lhs = mmio.MmioRegion.new(mmio.addressOf(&word), 4);
+                unsafe {
+                    var reg = lhs.registerAt<u32>(0)!;
+                    reg.setBits(4);
+                    reg.clearBits(2);
+                    io.println(reg.read())!;
+                    var invalid = lhs.registerAt<u32>(1);
+                    io.println(core.isErr(&invalid))!;
+                    var flag = mmio.Volatile<u32>.new(&word);
+                    flag.store(9);
+                    io.println(flag.load())!;
+                }
+            }
+        """, "8\n4\n0\ntrue\ntrue\n1\n4\n1\n4\ntrue\n0\ntrue\ntrue\ntrue\nfalse\nfalse\n5\ntrue\n9\n")
+        source = self.source("mmio.vqr", """
+            import (mmio)
+            export "C" func update(register: *u32) void {
+                unsafe { mmio.volatileStore(register, 7); }
+                mmio.compilerBarrier();
+                mmio.memoryBarrier();
+                mmio.instructionBarrier();
+            }
+        """)
+        self.process(VAQC, source, "--target", "thumbv7m-none-eabi", "--cpu", "cortex-m3",
+                     "--profile", "freestanding", "--emit=asm", "-O2", "-o", "mmio.s")
+        assembly = (self.root / "mmio.s").read_text()
+        self.assertRegex(assembly, r"\bdmb\b")
+        self.assertRegex(assembly, r"\bisb\b")
+
     def test_build_artifacts(self):
         source = self.source("math.vqr", '''
             package math

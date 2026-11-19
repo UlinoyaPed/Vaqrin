@@ -114,6 +114,15 @@ Type *Program::slice(Type *t, bool readOnly) {
   return s;
 }
 
+Type *Program::rawStorage(Type *element, Span span) {
+  ensureSized(element, span);
+  if (element == neverTy) fail(span, "never has no storage");
+  auto key = "<raw storage " + element->name + ">";
+  if (auto item = canonical.find(key); item != canonical.end()) return item->second;
+  std::array layout{storage(element)};
+  return add(Kind::RawStorage, StructType::get(context, layout), key, {element});
+}
+
 Type *Program::aggregate(Kind kind, std::vector<Type *> parts, std::uint64_t count, bool cAbi) {
   std::string key;
   switch (kind) {
@@ -188,32 +197,58 @@ bool Program::extendCNarrowInteger() const {
          (triple.isAArch64() && triple.isOSDarwin());
 }
 
+std::pair<Type *, Constant *> Program::genericValue(const Ast &arg, const File &file, Type *expected,
+                                                    const Types &types, const Constants &values) {
+  if (expected->kind != Kind::Int && expected->kind != Kind::Bool && expected->kind != Kind::Float &&
+      expected->kind != Kind::Char)
+    fail(arg->span, "comptime generic parameters require scalar types", "E290");
+  auto expression = arg;
+  if (arg->kind == NodeKind::TypeName && arg->children.empty()) {
+    expression = std::make_shared<Node>(*arg);
+    expression->kind = NodeKind::Name;
+  }
+  return evaluate(expression, file, expected, types, values);
+}
+
 Type *Program::named(std::string name, const File &file, Span span, const Types &generics,
-                     const std::vector<Type *> &args) {
+                     const std::vector<Ast> &args, const Constants &values) {
   if (auto i = generics.find(name); i != generics.end() && args.empty()) return i->second;
   auto defs = resolve(file, name, span);
   if (!defs.empty()) {
     auto d = defs.front();
-    if (d.decl->kind == DeclKind::Class || d.decl->kind == DeclKind::Enum) return nominal(d, args, false);
-    if (d.decl->kind == DeclKind::Alias) {
-      if (args.size() != d.decl->generics.size()) fail(span, "wrong number of type alias arguments");
-      Types substitutions;
-      for (std::size_t i = 0; i < args.size(); ++i) {
-        const auto &parameter = d.decl->generics[i];
-        if (parameter.comptime) fail(parameter.span, "comptime type alias arguments are unsupported", "E290");
-        if (parameter.type && !satisfies(args[i], parameter.type))
+    const auto kind = d.decl->kind;
+    if (kind == DeclKind::Interface) fail(span, "interface types are not yet supported", "E290");
+    if (kind != DeclKind::Alias && kind != DeclKind::Class && kind != DeclKind::Enum)
+      fail(span, "'" + name + "' does not name a type");
+    if (args.size() != d.decl->generics.size()) fail(span, "wrong number of type arguments for " + name);
+    Types substitutions;
+    Constants constants;
+    std::vector<Type *> typeArgs;
+    for (std::size_t i = 0; i < args.size(); ++i) {
+      const auto &parameter = d.decl->generics[i];
+      if (parameter.comptime) {
+        auto *expected = type(parameter.type, *d.file, substitutions, constants);
+        constants.emplace(parameter.name, genericValue(args[i], file, expected, generics, values));
+      } else {
+        auto *arg = type(args[i], file, generics, values);
+        if (kind == DeclKind::Alias && parameter.type && !satisfies(arg, parameter.type))
           fail(span, "type alias arguments do not satisfy declared constraints");
-        substitutions.emplace(parameter.name, args[i]);
+        substitutions.emplace(parameter.name, arg);
+        typeArgs.push_back(arg);
       }
-      if (!aliases.insert(d.decl).second) fail(span, "cyclic type alias '" + name + "'");
-      auto *t = type(d.decl->type, *d.file, substitutions);
-      aliases.erase(d.decl);
-      return t;
     }
-    if (d.decl->kind == DeclKind::Interface) fail(span, "interface types are not yet supported", "E290");
-    fail(span, "'" + name + "' does not name a type");
+    if (kind != DeclKind::Alias) return nominal(d, typeArgs, false, constants);
+    if (!aliases.insert(d.decl).second) fail(span, "cyclic type alias '" + name + "'");
+    auto *t = type(d.decl->type, *d.file, substitutions, constants);
+    aliases.erase(d.decl);
+    return t;
   }
-  if (name == "Box" && args.size() == 1) return box(args[0]);
+  if (name == "__vqr_RawStorage") {
+    if (!file.standard) fail(span, "raw storage type is private to the Vaqrin standard library");
+    if (args.size() != 1) fail(span, "raw storage requires one element type");
+    return rawStorage(type(args[0], file, generics, values), span);
+  }
+  if (name == "Box" && args.size() == 1) return box(type(args[0], file, generics, values));
   if (!args.empty()) fail(span, "unsupported generic type '" + name + "'", "E290");
   if (name == "usize") return sizeTy;
   if (name == "isize") return integer(pointerBits(), true);
@@ -236,12 +271,8 @@ Type *Program::named(std::string name, const File &file, Span span, const Types 
 }
 
 Type *Program::type(const Ast &n, const File &file, const Types &generics, const Constants &values) {
-  if (n->kind == NodeKind::TypeName || n->kind == NodeKind::Name) {
-    std::vector<Type *> args;
-    for (const auto &a : n->children)
-      args.push_back(type(a, file, generics, values));
-    return named(n->text, file, n->span, generics, args);
-  }
+  if (n->kind == NodeKind::TypeName || n->kind == NodeKind::Name)
+    return named(n->text, file, n->span, generics, n->children, values);
   if (n->kind == NodeKind::TypeArray) {
     if (!n->children[0]) fail(n->span, "inferred array length only applies to constructors");
     auto [integer, c] = evaluate(n->children[0], file, nullptr, generics, values);
@@ -289,10 +320,17 @@ std::string Program::attribute(const Decl &d, std::string_view key) {
   return {};
 }
 
-Type *Program::nominal(Definition d, const std::vector<Type *> &args, bool complete) {
-  if (args.size() != d.decl->generics.size())
+Type *Program::nominal(Definition d, const std::vector<Type *> &args, bool complete,
+                        const Constants &values) {
+  if (args.size() + values.size() != d.decl->generics.size())
     fail(d.decl->span, "wrong number of type arguments for " + d.decl->name);
   auto id = args.empty() ? key(d) : typeKey(key(d), args);
+  for (const auto &[name, value] : values) {
+    std::string operand;
+    raw_string_ostream output(operand);
+    value.second->printAsOperand(output, false);
+    id += "." + name + "=" + value.first->name + ":" + operand;
+  }
   Type *t;
   if (auto i = canonical.find(id); i != canonical.end())
     t = i->second;
@@ -300,6 +338,7 @@ Type *Program::nominal(Definition d, const std::vector<Type *> &args, bool compl
     t = add(d.decl->kind == DeclKind::Enum ? Kind::Enum : Kind::Class, StructType::create(context, id), id,
             args);
     t->def = d;
+    t->comptimeArguments = values;
   }
   if (complete) ensureSized(t, d.decl->span);
   return t;
@@ -319,20 +358,32 @@ void Program::fill(Type *t, const Types &substitutions) {
   if (!attribute(d, "implements").empty())
     fail(d.span, "interface implementation is not yet supported", "E290");
   for (const auto &g : d.generics) {
-    if (g.comptime) fail(g.span, "comptime class parameters are not yet supported", "E290");
-    if (g.type && !satisfies(substitutions.at(g.name), g.type))
+    if (!g.comptime && g.type && !satisfies(substitutions.at(g.name), g.type))
       fail(g.span, "type argument '" + substitutions.at(g.name)->name + "' does not satisfy " + g.type->text);
   }
   std::set<std::string> names;
   std::vector<llvm::Type *> layout;
+  auto collect = [&](auto &&self, const std::vector<Decl> &members) -> void {
+    for (const auto &member : members) {
+      if (member.kind == DeclKind::Conditional) {
+        auto [_, condition] = evaluate(member.body, *t->def.file, boolTy, substitutions,
+                                        t->comptimeArguments);
+        self(self, cast<ConstantInt>(condition)->isOne() ? member.members : member.otherwise);
+      } else {
+        t->members.push_back(&member);
+      }
+    }
+  };
+  collect(collect, d.members);
   if (t->kind == Kind::Class) {
     t->cAbi = attribute(d, "repr") == "C";
-    for (const auto &m : d.members) {
+    for (const auto *member : t->members) {
+      const auto &m = *member;
       if (m.kind != DeclKind::Field) continue;
       if (!names.insert(m.name).second) fail(m.span, "duplicate field '" + m.name + "'");
       if (m.embed) fail(m.span, "embedded method promotion is not yet supported", "E290");
-      auto *field = m.type ? type(m.type, *t->def.file, substitutions)
-                           : evaluate(m.body, *t->def.file, nullptr, substitutions).first;
+      auto *field = m.type ? type(m.type, *t->def.file, substitutions, t->comptimeArguments)
+                           : evaluate(m.body, *t->def.file, nullptr, substitutions, t->comptimeArguments).first;
       ensureSized(field, m.span);
       t->fields.push_back({&m, field, static_cast<unsigned>(layout.size())});
       layout.push_back(storage(field));
@@ -351,7 +402,7 @@ void Program::fill(Type *t, const Types &substitutions) {
     for (const auto &m : d.members) {
       if (!names.insert(m.name).second) fail(m.span, "duplicate enum member '" + m.name + "'");
       if (m.body) {
-        auto [k, c] = evaluate(m.body, *t->def.file, nullptr, substitutions);
+        auto [k, c] = evaluate(m.body, *t->def.file, nullptr, substitutions, t->comptimeArguments);
         if (k->kind != Kind::Int) fail(m.span, "enum tag must be an integer");
         auto v = cast<ConstantInt>(c)->getValue();
         next = k->sign ? v.sext(v.getBitWidth() + 1) : v.zext(v.getBitWidth() + 1);
@@ -362,7 +413,7 @@ void Program::fill(Type *t, const Types &substitutions) {
         fail(m.span, "duplicate enum tag");
       Variant v{m.name, value, {}, static_cast<unsigned>(layout.size())};
       for (const auto &a : m.params) {
-        auto *field = type(a.type, *t->def.file, substitutions);
+        auto *field = type(a.type, *t->def.file, substitutions, t->comptimeArguments);
         ensureSized(field, a.span);
         v.fields.push_back(field);
         layout.push_back(storage(field));
@@ -377,9 +428,10 @@ void Program::fill(Type *t, const Types &substitutions) {
 std::vector<Definition> Program::methods(Type *t, std::string_view name, bool isStatic) {
   std::vector<Definition> out;
   if (t->kind != Kind::Class) return out;
-  for (const auto &m : t->def.decl->members)
-    if (m.kind == DeclKind::Function && m.name == name && m.associated == isStatic)
-      out.push_back({t->def.file, &m});
+  if (!t->filling) ensureSized(t, t->def.decl->span);
+  for (const auto *member : t->members)
+    if (member->kind == DeclKind::Function && member->name == name && member->associated == isStatic)
+      out.push_back({t->def.file, member});
   return out;
 }
 
@@ -388,13 +440,15 @@ bool Program::satisfies(Type *t, const Ast &constraint) {
   auto one = [&](const Ast &requirement) {
     if (requirement->text == "Copyable") return copyable(t);
     if (requirement->text == "Movable") return movable(t);
+    if (requirement->text == "Sendable") return transferable(t, false);
+    if (requirement->text == "Shareable") return transferable(t, true);
     fail(requirement->span, "unsupported generic constraint '" + requirement->text + "'", "E290");
   };
   return one(constraint) && std::ranges::all_of(constraint->children, one);
 }
 
 bool Program::copyable(Type *t) {
-  if (t->kind == Kind::Box || t->kind == Kind::Allocation) return false;
+  if (t->kind == Kind::Box || t->kind == Kind::Allocation || t->kind == Kind::RawStorage) return false;
   if (t->kind == Kind::Closure)
     return std::ranges::all_of(t->captures, [&](const auto &c) { return c.reference || copyable(c.type); });
   if (t->kind == Kind::Class) {
@@ -415,6 +469,7 @@ bool Program::copyable(Type *t) {
 }
 
 bool Program::movable(Type *t) {
+  if (t->kind == Kind::RawStorage) return movable(t->parts[0]);
   if (t->kind == Kind::Class)
     return attribute(*t->def.decl, "move") != "disabled" &&
            std::ranges::all_of(t->fields, [&](const auto &f) { return movable(f.type); });
@@ -426,6 +481,59 @@ bool Program::movable(Type *t) {
       t->kind == Kind::Tuple)
     return std::ranges::all_of(t->parts, [&](auto *f) { return movable(f); });
   return true;
+}
+
+bool Program::transferable(Type *t, bool shared) {
+  std::set<Type *> inspecting;
+  auto trait = [&](auto &&self, Type *type) -> bool {
+    if (!inspecting.insert(type).second) return true;
+    auto check = [&](Type *inner) { return self(self, inner); };
+    ensureSized(type, {});
+    bool allowed = false;
+    switch (type->kind) {
+    case Kind::Void:
+    case Kind::Bool:
+    case Kind::Char:
+    case Kind::Int:
+    case Kind::Float:
+    case Kind::Text:
+    case Kind::Error:
+    case Kind::Function:
+      allowed = true;
+      break;
+    case Kind::Box:
+    case Kind::Array:
+    case Kind::Tuple:
+    case Kind::Optional:
+    case Kind::Result:
+      allowed = std::ranges::all_of(type->parts, check);
+      break;
+    case Kind::Class: {
+      const auto &file = *type->def.file;
+      auto name = type->def.decl->name;
+      if (file.standard && file.package == "coll" && (name == "Vec" || name == "FixedVec"))
+        allowed = check(type->parts[0]);
+      else
+        allowed = std::ranges::all_of(type->fields, [&](const auto &field) { return check(field.type); });
+      break;
+    }
+    case Kind::Enum:
+      allowed = std::ranges::all_of(type->variants, [&](const auto &variant) {
+        return std::ranges::all_of(variant.fields, check);
+      });
+      break;
+    case Kind::Closure:
+      allowed = std::ranges::all_of(type->captures, [&](const auto &capture) {
+        return !capture.reference && (!shared || !capture.writable) && check(capture.type);
+      });
+      break;
+    default:
+      break;
+    }
+    inspecting.erase(type);
+    return allowed;
+  };
+  return trait(trait, t);
 }
 
 bool Program::drops(Type *t) {
@@ -574,6 +682,7 @@ std::vector<Type *> Program::parameters(Definition d, const Types &types, Type *
 
 FunctionEntry &Program::function(Definition d, Types substitutions, Type *owner, Constants values) {
   auto &decl = *d.decl;
+  if (owner) values.insert(owner->comptimeArguments.begin(), owner->comptimeArguments.end());
   auto params = parameters(d, substitutions, owner, values);
   std::string id = owner ? owner->name + "." + decl.name : key(d);
   std::vector<Type *> genericTypes;
@@ -720,9 +829,10 @@ std::unique_ptr<Module> Program::build() {
       if (d.kind == DeclKind::Global) global(def);
       if ((d.kind == DeclKind::Enum || d.kind == DeclKind::Class) && d.generics.empty()) {
         auto *t = nominal(def, {});
-        for (const auto &m : d.members)
-          if (m.kind == DeclKind::Function && m.generics.empty() && !hasComptimeParameters(m))
-            function({&file, &m}, classTypes(t), t);
+        for (const auto *member : t->members)
+          if (member->kind == DeclKind::Function && member->generics.empty() &&
+              !hasComptimeParameters(*member))
+            function({&file, member}, classTypes(t), t);
       }
       if (d.kind == DeclKind::Function && d.generics.empty() && !hasComptimeParameters(d)) function(def);
       if (d.kind == DeclKind::Alias && d.generics.empty()) named(d.name, file, d.span);

@@ -1,0 +1,107 @@
+package coll
+import (mem)
+
+pub enum PushResult<T: Movable> {
+    Stored,
+    Full(T),
+    Failed(ErrorId, T),
+}
+
+pub class FixedVec<T: Movable, comptime N: usize> {
+    var slots: mem.MaybeUninit<[N]T>;
+    var length: usize;
+public:
+    func init() : slots(mem.MaybeUninit<[N]T>.uninit()), length(0) {}
+    const func len() usize { length }
+    const func capacity() usize { N }
+    const func isEmpty() bool { length == 0 }
+
+    func asSlice() []T { (*slots.asPtr())[0..length] }
+    const func asConstSlice() []const T { (*slots.asConstPtr())[0..length] }
+
+    const func get(index: usize) ?*const T {
+        if index >= length { return null; }
+        some(&(*slots.asConstPtr())[index])
+    }
+
+    func getMut(index: usize) ?*T {
+        if index >= length { return null; }
+        some(&(*slots.asPtr())[index])
+    }
+
+    func push(value: T) PushResult<T> { tryPush(move(value)) }
+    func tryPush(value: T) PushResult<T> {
+        if length == N { return PushResult<T>.Full(move(value)); }
+        unsafe { __vqr_slot_write<T>(address(length), move(value)); }
+        length++;
+        PushResult<T>.Stored()
+    }
+
+    func pop() ?T {
+        if length == 0 { return null; }
+        length--;
+        unsafe { some(__vqr_slot_take<T>(address(length))) }
+    }
+
+    func insert(index: usize, value: T) PushResult<T> {
+        if index > length { return PushResult<T>.Failed(CapacityError.IndexOutOfBounds, move(value)); }
+        if length == N { return PushResult<T>.Full(move(value)); }
+        unsafe {
+            for i := length; i > index; i-- { transfer(i - 1, i); }
+            __vqr_slot_write<T>(address(index), move(value));
+        }
+        length++;
+        PushResult<T>.Stored()
+    }
+
+    func remove(index: usize) ?T {
+        if index >= length { return null; }
+        var value = unsafe { __vqr_slot_take<T>(address(index)) };
+        length--;
+        for i := index; i < length; i++ { transfer(i + 1, i); }
+        some(move(value))
+    }
+
+    func truncate(n: usize) void {
+        for length > n {
+            length--;
+            unsafe { __vqr_slot_drop<T>(address(length)); }
+        }
+    }
+
+    func clear() void { truncate(0); }
+
+    func retain<F: Movable>(predicate: F) void {
+        var kept: usize = 0;
+        for i in usize(0)..length {
+            if predicate(address(i)) {
+                if kept != i { transfer(i, kept); }
+                kept++;
+            } else {
+                unsafe { __vqr_slot_drop<T>(address(i)); }
+            }
+        }
+        length = kept;
+    }
+
+    static func intoIter(value: Self) IntoFixedVecIter<T, N> {
+        IntoFixedVecIter<T, N>(move(value))
+    }
+
+    func deinit() void { clear(); }
+
+private:
+    func address(index: usize) *T { &(*slots.asPtr())[index] }
+
+    func transfer(from: usize, to: usize) void {
+        unsafe { __vqr_slot_write<T>(address(to), __vqr_slot_take<T>(address(from))); }
+    }
+}
+
+pub class IntoFixedVecIter<T: Movable, comptime N: usize> {
+    var source: FixedVec<T, N>;
+public:
+    func init(values: FixedVec<T, N>) : source(move(values)) {}
+    func next() ?T { source.remove(0) }
+    func nextBack() ?T { source.pop() }
+}

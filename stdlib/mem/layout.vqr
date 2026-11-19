@@ -1,0 +1,86 @@
+package mem
+import (bits, cmp, core, meta)
+
+pub error LayoutError { InvalidAlignment, Overflow, ShortDestination }
+
+pub class Layout {
+    var bytes: usize;
+    var alignment: usize;
+    func init(bytes: usize, alignment: usize) : bytes(bytes), alignment(alignment) {}
+public:
+    static func fromSizeAlign(size: usize, align: usize) !Self {
+        if !bits.isPowerOfTwo(align) { return LayoutError.InvalidAlignment; }
+        var padding = align - 1;
+        if size > ~usize(0) - padding { return LayoutError.Overflow; }
+        Layout(size, align)
+    }
+
+    static func array<T>(count: usize) !Self {
+        var stride = meta.strideOf<T>();
+        if stride != 0 && count > ~usize(0) / stride { return LayoutError.Overflow; }
+        Layout.fromSizeAlign(stride * count, meta.alignOf<T>())
+    }
+
+    const func size() usize { bytes }
+    const func align() usize { alignment }
+    const func stride() usize { (bytes + (alignment - 1)) & ~(alignment - 1) }
+
+    const func extend(other: Layout) !Layout {
+        var offset = alignUp(bytes, other.align())!;
+        var size = other.size();
+        if size > ~usize(0) - offset { return LayoutError.Overflow; }
+        var align = if (alignment >= other.align()) alignment else other.align();
+        Layout.fromSizeAlign(offset + size, align)
+    }
+}
+
+pub func layout<T>() Layout {
+    Layout.fromSizeAlign(meta.sizeOf<T>(), meta.alignOf<T>()) catch { panic("invalid target layout") }
+}
+
+pub func alignUp(value: usize, alignment: usize) !usize {
+    bits.alignUp(value, alignment)
+}
+
+pub func isAligned(ptr: *const u8, alignment: usize) bool {
+    bits.isPowerOfTwo(alignment) && (__vqr_pointer_address(ptr) & (alignment - 1)) == 0
+}
+
+pub func moveBytes(src: []const u8, dst: []u8) !void {
+    var count = src.len();
+    if count > dst.len() { return LayoutError.ShortDestination; }
+    if count == 0 { return; }
+    var source = __vqr_pointer_address(&src[0]);
+    var target = __vqr_pointer_address(&dst[0]);
+    if source == target { return; }
+    if target > source {
+        for i := count; i != 0; i-- { dst[i - 1] = src[i - 1]; }
+    } else {
+        for i in usize(0)..count { dst[i] = src[i]; }
+    }
+}
+
+pub func copyBytes(src: []const u8, dst: []u8) !void { moveBytes(src, dst) }
+
+pub func zeroBytes(dst: []u8) void {
+    for i in usize(0)..dst.len() { dst[i] = 0; }
+}
+
+pub func compareBytes(a: []const u8, b: []const u8) cmp.Ordering {
+    var count = if (a.len() < b.len()) a.len() else b.len();
+    for i in usize(0)..count {
+        if a[i] < b[i] { return cmp.Ordering.Less; }
+        if a[i] > b[i] { return cmp.Ordering.Greater; }
+    }
+    var lhs = a.len();
+    var rhs = b.len();
+    cmp.compare(&lhs, &rhs)
+}
+
+pub func swap<T: Movable>(a: *T, b: *T) void { core.swap(a, b); }
+pub func replace<T: Movable>(dst: *T, value: T) T { core.replace(dst, move(value)) }
+pub unsafe func dropInPlace<T>(ptr: *T) void { unsafe { __vqr_slot_drop<T>(ptr); } }
+pub unsafe func take<T: Movable>(ptr: *T) T { unsafe { __vqr_slot_take<T>(ptr) } }
+pub unsafe func write<T: Movable>(ptr: *T, value: T) void {
+    unsafe { __vqr_slot_write<T>(ptr, move(value)); }
+}

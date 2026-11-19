@@ -120,6 +120,7 @@ private:
 
   std::vector<Attribute> attributes();
   Decl declaration(bool member = false, bool iface = false);
+  void members(std::vector<Decl> &out, bool publicMembers, bool iface);
   void parameters(Decl &d);
   void genericParameters(Decl &d);
   Ast type(bool inferArray = false);
@@ -325,21 +326,40 @@ Decl Parser::declaration(bool member, bool iface) {
       d.members.push_back(std::move(m));
     });
   } else {
-    bool publicMembers = d.kind == DeclKind::Interface;
-    while (!eat("}")) {
-      if (at("public") || at("private")) {
-        if (d.kind == DeclKind::Interface) fail(current().span, "access labels require a class", "E110");
-        publicMembers = take().text == "public";
-        require(":");
-        continue;
-      }
-      auto m = declaration(true, d.kind == DeclKind::Interface);
-      m.visible |= publicMembers;
-      d.members.push_back(std::move(m));
-    }
+    members(d.members, d.kind == DeclKind::Interface, d.kind == DeclKind::Interface);
   }
   eat(";");
   return d;
+}
+
+void Parser::members(std::vector<Decl> &out, bool publicMembers, bool iface) {
+  Nest nesting(*this);
+  while (!eat("}")) {
+    if (at("public") || at("private")) {
+      if (iface) fail(current().span, "access labels require a class", "E110");
+      publicMembers = take().text == "public";
+      require(":");
+      continue;
+    }
+    if (!iface && at("comptime") && current(1).kind == TokenKind::Keyword && current(1).text == "if") {
+      Decl conditional{};
+      conditional.kind = DeclKind::Conditional;
+      conditional.span = take().span;
+      require("if");
+      conditional.body = expression(1, true);
+      require("{");
+      members(conditional.members, publicMembers, false);
+      if (eat("else")) {
+        require("{");
+        members(conditional.otherwise, publicMembers, false);
+      }
+      out.push_back(std::move(conditional));
+      continue;
+    }
+    auto member = declaration(true, iface);
+    member.visible |= publicMembers;
+    out.push_back(std::move(member));
+  }
 }
 
 std::vector<Ast> Parser::genericArguments() {
@@ -347,7 +367,8 @@ std::vector<Ast> Parser::genericArguments() {
   std::vector<Ast> items;
   do {
     if (closesGeneric()) break;
-    if (current().kind == TokenKind::Number || at("-") || at("true") || at("false"))
+    if (current().kind == TokenKind::Number || current().kind == TokenKind::Character ||
+        at("-") || at("true") || at("false"))
       items.push_back(expression(14));
     else if (at("(")) {
       auto oldPos = pos;

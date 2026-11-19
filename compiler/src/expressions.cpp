@@ -75,7 +75,7 @@ Type *Body::hint(const Ast &n) {
           else if (candidate->readOnly == method->readOnly)
             return nullptr;
         }
-        if (method) return p.type(method->type, *receiver->def.file, p.classTypes(receiver));
+        if (method) return p.type(method->type, *receiver->def.file, p.classTypes(receiver), receiver->comptimeArguments);
       }
     }
     auto key = path(callee);
@@ -90,7 +90,7 @@ Type *Body::hint(const Ast &n) {
             if (method.params.size() + 1 != n->children.size() || !method.generics.empty() ||
                 hasComptimeParameters(method))
               continue;
-            auto *type = p.type(method.type, *def.file, p.classTypes(owner));
+            auto *type = p.type(method.type, *def.file, p.classTypes(owner), owner->comptimeArguments);
             if (result && result != type) return nullptr;
             result = type;
           }
@@ -836,25 +836,41 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
     if (receiver && !d.readOnly && !receiver->writable) continue;
     if (args.size() > d.generics.size()) continue;
     Types subst = classType ? p.classTypes(classType) : Types{};
-    Constants constants;
+    Constants constants = classType ? classType->comptimeArguments : Constants{};
     std::set<std::string> typeNames, valueNames;
     for (std::size_t i = args.size(); i < d.generics.size(); ++i) {
       const auto &g = d.generics[i];
       (g.comptime ? valueNames : typeNames).insert(g.name);
     }
-    std::map<std::string, std::uint64_t> lengths;
     bool consistent = true;
+    Constants inferredValues;
+    auto inferValue = [&](const Ast &pattern, std::pair<Type *, Constant *> value) -> void {
+      if (!pattern || (pattern->kind != NodeKind::TypeName && pattern->kind != NodeKind::Name) ||
+          !pattern->children.empty() || !valueNames.contains(pattern->text))
+        return;
+      auto [it, inserted] = inferredValues.emplace(pattern->text, value);
+      consistent &= inserted || it->second == value;
+    };
     auto infer = [&](auto &&recurse, const Ast &pattern, Type *actual) -> void {
       if (!actual) return;
       if (pattern->kind == NodeKind::TypeName && typeNames.contains(pattern->text)) {
         auto [it, inserted] = subst.emplace(pattern->text, actual);
         consistent &= inserted || it->second == actual;
-      } else if (pattern->kind == NodeKind::TypeArray && actual->kind == Kind::Array) {
-        auto length = pattern->children[0];
-        if (length && length->kind == NodeKind::Name && valueNames.contains(length->text)) {
-          auto [it, inserted] = lengths.emplace(length->text, actual->count);
-          consistent &= inserted || it->second == actual->count;
+      } else if (pattern->kind == NodeKind::TypeName && !pattern->children.empty() &&
+                 (actual->kind == Kind::Class || actual->kind == Kind::Enum)) {
+        auto matches = p.resolve(*def.file, pattern->text, pattern->span);
+        if (matches.size() != 1 || matches.front().decl != actual->def.decl) return;
+        const auto &parameters = actual->def.decl->generics;
+        if (pattern->children.size() != parameters.size()) return;
+        std::size_t typeIndex = 0;
+        for (std::size_t i = 0; i < parameters.size(); ++i) {
+          if (parameters[i].comptime)
+            inferValue(pattern->children[i], actual->comptimeArguments.at(parameters[i].name));
+          else
+            recurse(recurse, pattern->children[i], actual->parts[typeIndex++]);
         }
+      } else if (pattern->kind == NodeKind::TypeArray && actual->kind == Kind::Array) {
+        inferValue(pattern->children[0], {p.sizeTy, ConstantInt::get(p.sizeTy->ir, actual->count)});
         recurse(recurse, pattern->children[1], actual->parts[0]);
       } else if (pattern->kind == NodeKind::TypeFunction && actual->kind == Kind::Function &&
                  pattern->children.size() + 1 == actual->parts.size()) {
@@ -871,14 +887,21 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
       }
     };
     if (args.size() < d.generics.size()) {
+      std::vector<std::pair<Ast, Type *>> untyped;
       for (unsigned j = 0; j < d.params.size(); ++j) {
         auto node = n->children[j + 1];
-        auto *t = hint(node);
-        if (!t && mathInteger(node)) t = p.integer(32, true);
-        if (!t && node->kind == NodeKind::Number && parseNumber(node->text).floating)
-          t = p.canonical.at("f64");
-        infer(infer, d.params[j].type, t);
+        auto parameter = d.params[j].type;
+        if (auto *t = hint(node)) {
+          infer(infer, parameter, t);
+        } else if (mathInteger(node)) {
+          untyped.emplace_back(parameter, p.integer(32, true));
+        } else if (node->kind == NodeKind::Number && parseNumber(node->text).floating) {
+          untyped.emplace_back(parameter, p.canonical.at("f64"));
+        }
       }
+      for (const auto &[parameter, t] : untyped)
+        if (parameter->kind == NodeKind::TypeName && !subst.contains(parameter->text))
+          infer(infer, parameter, t);
     }
     if (!consistent) continue;
     for (unsigned i = 0; i < d.generics.size(); ++i) {
@@ -895,19 +918,22 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
       if (t->kind != Kind::Int && t->kind != Kind::Bool && t->kind != Kind::Float && t->kind != Kind::Char)
         fail(g.span, "comptime generic values currently require scalar types", "E290");
       if (i < args.size()) {
-        auto value = args[i];
-        if (value->kind == NodeKind::TypeName && value->children.empty()) {
-          value = std::make_shared<Node>(*value);
-          value->kind = NodeKind::Name;
-        }
-        constants[g.name] = p.evaluate(value, file, t, generics, visibleConstants());
-      } else if (auto it = lengths.find(g.name); it != lengths.end() && t->kind == Kind::Int) {
-        auto value = APInt(65, it->second);
-        if (!fits(value, t->bits, t->sign)) {
+        constants[g.name] = p.genericValue(args[i], file, t, generics, visibleConstants());
+      } else if (auto it = inferredValues.find(g.name); it != inferredValues.end()) {
+        if (it->second.first == t) constants[g.name] = it->second;
+        else if (t->kind == Kind::Int && it->second.first->kind == Kind::Int) {
+          auto value = cast<ConstantInt>(it->second.second)->getValue();
+          value = it->second.first->sign ? value.sext(value.getBitWidth() + 1)
+                                          : value.zext(value.getBitWidth() + 1);
+          if (!fits(value, t->bits, t->sign)) {
+            consistent = false;
+            break;
+          }
+          constants[g.name] = {t, ConstantInt::get(t->ir, value.sextOrTrunc(t->bits))};
+        } else {
           consistent = false;
           break;
         }
-        constants[g.name] = {t, ConstantInt::get(t->ir, value.zextOrTrunc(t->bits))};
       } else {
         consistent = false;
         break;
@@ -1300,10 +1326,7 @@ ValueAt Body::call(const Ast &n, Type *expected) {
         return invoke(n, ds, types);
       }
       if (d->kind == DeclKind::Class || d->kind == DeclKind::Alias) {
-        std::vector<Type *> args;
-        for (const auto &a : types)
-          args.push_back(parseType(a));
-        auto *t = p.named(key, file, n->span, generics, args);
+        auto *t = p.named(key, file, n->span, generics, types, visibleConstants());
         if (t->kind == Kind::Class) return construct(n, t, p.methods(t, "init", false));
         if (n->children.size() != 2) fail(n->span, "conversion requires one value");
         return castNumber(t, n->children[1], n->span);
@@ -1352,11 +1375,10 @@ ValueAt Body::call(const Ast &n, Type *expected) {
                   ? std::vector<Definition>{}
                   : p.resolve(file, basePath, n->span);
     if (ds.size() == 1 && (ds[0].decl->kind == DeclKind::Class || ds[0].decl->kind == DeclKind::Enum)) {
-      std::vector<Type *> args;
-      if (target != base)
-        for (std::size_t i = 1; i < base->children.size(); ++i)
-          args.push_back(parseType(base->children[i]));
-      auto *t = p.nominal(ds[0], args);
+      std::vector<Ast> args;
+      if (target != base) args.assign(base->children.begin() + 1, base->children.end());
+      auto *t = p.named(basePath, file, n->span, generics, args, visibleConstants());
+      p.ensureSized(t, n->span);
       if (t->kind == Kind::Class) return invoke(n, p.methods(t, callee->text, true), types, std::nullopt, t);
       if (callee->text == "fromInt" && n->children.size() == 2 &&
           std::ranges::all_of(t->variants, [](const auto &v) { return v.fields.empty(); })) {

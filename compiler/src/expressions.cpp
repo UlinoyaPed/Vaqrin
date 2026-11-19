@@ -18,6 +18,9 @@ Type *Body::hint(const Ast &n) {
   case NodeKind::Name: {
     int local = findLocal(n->text);
     if (local >= 0) return locals[local].type;
+    if (owner && findLocal("self") >= 0)
+      for (const auto &field : owner->fields)
+        if (field.decl->name == n->text) return field.type;
     auto defs = p.resolve(file, n->text, n->span);
     if (defs.size() == 1 && defs[0].decl->kind == DeclKind::Global) return p.global(defs[0]).type;
     if (defs.size() == 1 && defs[0].decl->kind == DeclKind::Function && defs[0].decl->generics.empty() &&
@@ -84,7 +87,7 @@ Type *Body::hint(const Ast &n) {
         return p.function(ds[0]).result;
       if (ds.size() == 1 && ds[0].decl->kind == DeclKind::Class && ds[0].decl->generics.empty())
         return p.nominal(ds[0], {});
-      if (key == "bool" || key == "char" || key == "usize" || key == "isize" || key == "f32" ||
+      if (generics.contains(key) || key == "bool" || key == "char" || key == "usize" || key == "isize" || key == "f32" ||
           key == "f64" ||
           (key.size() > 1 && (key[0] == 'i' || key[0] == 'u') && key[1] >= '0' && key[1] <= '9')) {
         auto *target = p.named(key, file, n->span, generics);
@@ -1306,8 +1309,6 @@ ValueAt Body::call(const Ast &n, Type *expected) {
       if (n->children.size() != 2 || !types.empty()) fail(n->span, "conversion requires one value");
       return castNumber(p.named(key, file, n->span, generics), n->children[1], n->span);
     }
-    if ((p.import(file, first) == "task" || p.import(file, first) == "channel") && dot != key.npos)
-      fail(n->span, "task and channel facilities are not yet supported", "E290");
   }
   if (callee->kind == NodeKind::Member) {
     auto base = callee->children[0];
@@ -1331,10 +1332,6 @@ ValueAt Body::call(const Ast &n, Type *expected) {
     }
     auto target = base->kind == NodeKind::Generic ? base->children[0] : base;
     auto basePath = path(target);
-    auto baseName = basePath.substr(0, basePath.find('.'));
-    auto provider = p.import(file, baseName);
-    if (findLocal(baseName) < 0 && (provider == "task" || provider == "channel"))
-      fail(n->span, basePath + " requires the task and channel runtime, which is not yet supported", "E290");
     auto ds = basePath.empty() || findLocal(basePath.substr(0, basePath.find('.'))) >= 0
                   ? std::vector<Definition>{}
                   : p.resolve(file, basePath, n->span);

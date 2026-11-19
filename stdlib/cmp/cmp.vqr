@@ -1,0 +1,59 @@
+package cmp
+
+pub enum Ordering { Less, Equal, Greater }
+
+pub interface Equal<T> {
+    const func equals(other: *const T) bool;
+}
+
+pub interface Compare<T> {
+    const func compare(other: *const T) Ordering;
+}
+
+pub interface TotalOrder<T> {
+    const func compareTotal(other: *const T) Ordering;
+}
+
+pub func eq<T>(a: *const T, b: *const T) bool { *a == *b }
+pub func ne<T>(a: *const T, b: *const T) bool { !eq(a, b) }
+
+pub func partialCmp<T>(a: *const T, b: *const T) ?Ordering {
+    if *a < *b { return Ordering.Less; }
+    if *a > *b { return Ordering.Greater; }
+    if *a == *b { return Ordering.Equal; }
+    null
+}
+
+pub func compare<T>(a: *const T, b: *const T) Ordering {
+    partialCmp(a, b) ?? panic("unordered comparison")
+}
+
+pub func totalCmp<T>(a: *const T, b: *const T) Ordering {
+    if __vqr_total_less(*a, *b) { return Ordering.Less; }
+    if __vqr_total_less(*b, *a) { return Ordering.Greater; }
+    Ordering.Equal
+}
+
+pub func reverse(order: Ordering) Ordering {
+    switch order {
+        Ordering.Less => Ordering.Greater,
+        Ordering.Equal => Ordering.Equal,
+        Ordering.Greater => Ordering.Less,
+    }
+}
+
+pub func min<T: Movable>(a: T, b: T) T { if (compare(&a, &b) == Ordering.Greater) move(b) else move(a) }
+pub func max<T: Movable>(a: T, b: T) T { if (compare(&a, &b) == Ordering.Less) move(b) else move(a) }
+pub func minBy<T: Movable, F: Movable>(a: T, b: T, less: F) T { if (less(&b, &a)) move(b) else move(a) }
+pub func maxBy<T: Movable, F: Movable>(a: T, b: T, less: F) T { if (less(&a, &b)) move(b) else move(a) }
+
+pub func clamp<T: Movable>(value: T, low: T, high: T) T {
+    if compare(&low, &high) == Ordering.Greater { panic("inverted clamp interval"); }
+    if compare(&value, &low) == Ordering.Less { return move(low); }
+    if compare(&value, &high) == Ordering.Greater { return move(high); }
+    move(value)
+}
+
+pub func between<T>(value: *const T, low: *const T, high: *const T) bool {
+    *low <= *value <= *high
+}

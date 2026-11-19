@@ -1,0 +1,78 @@
+package bits
+
+pub enum BitOrder { LsbFirst, MsbFirst }
+
+func bitLength(bytes: usize) usize {
+    if bytes > ~usize(0) / 8 { panic("bit stream is too long"); }
+    bytes * 8
+}
+
+func positionWithinByte(index: usize, order: BitOrder) usize {
+    var offset = index % 8;
+    if (order == BitOrder.LsbFirst) offset else 7 - offset
+}
+
+pub class BitReader {
+    var source: []const u8;
+    var order: BitOrder;
+    var cursor: usize;
+    var end: usize;
+public:
+    func init(source: []const u8, order: BitOrder)
+        : source(source), order(order), cursor(0), end(bitLength(source.len())) {}
+
+    const func peekBits(count: usize) !?u64 {
+        if count > 64 { return BitError.OutOfRange; }
+        if count > remaining() { return null; }
+        var value = 0u64;
+        for i in usize(0)..count {
+            var index = cursor + i;
+            if testBit(source[index / 8], positionWithinByte(index, order)) {
+                var bit = if (order == BitOrder.LsbFirst) i else count - 1 - i;
+                value = setBit(value, bit);
+            }
+        }
+        some(value)
+    }
+
+    func readBits(count: usize) !?u64 {
+        switch peekBits(count)! {
+            null => null,
+            some(value) => { cursor += count; some(value) },
+        }
+    }
+
+    func alignByte() void { cursor += (usize(8) - cursor % 8) % 8; }
+    const func position() usize { cursor }
+    const func remaining() usize { end - cursor }
+}
+
+pub class BitWriter {
+    var destination: []u8;
+    var order: BitOrder;
+    var cursor: usize;
+    var end: usize;
+public:
+    func init(dest: []u8, order: BitOrder)
+        : destination(dest), order(order), cursor(0), end(bitLength(dest.len())) {}
+
+    func writeBits(value: u64, count: usize) !void {
+        if count > 64 || count > remaining() { return BitError.OutOfRange; }
+        for i in usize(0)..count {
+            var index = cursor + i;
+            var bit = if (order == BitOrder.LsbFirst) i else count - 1 - i;
+            var bitInByte = positionWithinByte(index, order);
+            var &byte = &destination[index / 8];
+            byte = if (testBit(value, bit)) setBit(byte, bitInByte) else clearBit(byte, bitInByte);
+        }
+        cursor += count;
+    }
+
+    func alignByte(fillBit: bool) !void {
+        writeBits(if (fillBit) ~0u64 else 0u64, (usize(8) - cursor % 8) % 8)
+    }
+
+    const func position() usize { cursor }
+    const func writtenBytes() usize { cursor / 8 + (if (cursor % 8 == 0) usize(0) else usize(1)) }
+    const func remaining() usize { end - cursor }
+}

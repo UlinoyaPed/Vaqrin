@@ -1,0 +1,100 @@
+package algo
+import (core)
+
+pub func reverse<T: Movable>(values: []T) void {
+    for i in usize(0)..(values.len() / 2) {
+        core.swap<T>(&values[i], &values[values.len() - i - 1]);
+    }
+}
+
+pub func rotate<T: Movable>(values: []T, middle: usize) void {
+    reverse<T>(values[0..middle]);
+    reverse<T>(values[middle..values.len()]);
+    reverse<T>(values);
+}
+
+func siftDown<T: Movable, F>(values: []T, start: usize, end: usize, less: *F) void {
+    var root = start;
+    for root < end / 2 {
+        var child = root * 2 + 1;
+        if child + 1 < end && (*less)(&values[child], &values[child + 1]) { child++; }
+        if !(*less)(&values[root], &values[child]) { return; }
+        core.swap<T>(&values[root], &values[child]);
+        root = child;
+    }
+}
+
+func buildHeap<T: Movable, F>(values: []T, less: *F) void {
+    var i = values.len() / 2;
+    for i > 0 {
+        i--;
+        siftDown<T, F>(values, i, values.len(), less);
+    }
+}
+
+func drainHeap<T: Movable, F>(values: []T, less: *F) void {
+    var end = values.len();
+    for end > 1 {
+        end--;
+        core.swap<T>(&values[0], &values[end]);
+        siftDown<T, F>(values, 0, end, less);
+    }
+}
+
+pub func heapify<T: Movable, F: Movable>(values: []T, less: F) void {
+    buildHeap<T, F>(values, &less);
+}
+
+pub func pushHeap<T: Movable, F: Movable>(values: []T, less: F) void {
+    if values.len() == 0 { return; }
+    var child = values.len() - 1;
+    for child > 0 {
+        var parent = (child - 1) / 2;
+        if !less(&values[parent], &values[child]) { return; }
+        core.swap<T>(&values[parent], &values[child]);
+        child = parent;
+    }
+}
+
+pub func popHeap<T: Movable, F: Movable>(values: []T, less: F) void {
+    if values.len() < 2 { return; }
+    var last = values.len() - 1;
+    core.swap<T>(&values[0], &values[last]);
+    siftDown<T, F>(values, 0, last, &less);
+}
+
+pub func sortHeap<T: Movable, F: Movable>(values: []T, less: F) void {
+    drainHeap<T, F>(values, &less);
+}
+
+pub func sortBy<T: Movable, F: Movable>(values: []T, less: F) void {
+    buildHeap<T, F>(values, &less);
+    drainHeap<T, F>(values, &less);
+}
+
+pub func sort<T: Movable>(values: []T) void {
+    var less = (a, b: *const T) bool => *a < *b;
+    sortBy<T, func(*const T, *const T) bool>(values, less);
+}
+
+pub func isHeapUntil<T, F: Movable>(values: []const T, less: F) usize {
+    for i in usize(1)..values.len() {
+        if less(&values[(i - 1) / 2], &values[i]) { return i; }
+    }
+    values.len()
+}
+
+pub func isHeap<T, F: Movable>(values: []const T, less: F) bool {
+    isHeapUntil<T, F>(values, move(less)) == values.len()
+}
+
+pub func isSortedUntil<T, F: Movable>(values: []const T, less: F) usize {
+    for i in usize(1)..values.len() {
+        if less(&values[i], &values[i - 1]) { return i; }
+    }
+    values.len()
+}
+
+pub func isSorted<T, F: Movable>(values: []const T, less: F) bool {
+    isSortedUntil<T, F>(values, move(less)) == values.len()
+}

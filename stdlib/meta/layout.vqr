@@ -1,0 +1,15 @@
+package meta
+
+pub enum Endian { Little, Big }
+
+pub comptime func typeName<T>() str { __vqr_type_name<T>() }
+pub comptime func sizeOf<T>() usize { __vqr_alloc_size<T>() }
+pub comptime func strideOf<T>() usize { __vqr_alloc_size<T>() }
+pub comptime func alignOf<T>() usize { __vqr_alignment<T>() }
+pub comptime func bitWidth<T>() usize { __vqr_bit_width<T>() }
+pub comptime func isCopyable<T>() bool { __vqr_copyable<T>() }
+pub comptime func isMovable<T>() bool { __vqr_movable<T>() }
+pub comptime func isTriviallyDrop<T>() bool { __vqr_trivial_drop<T>() }
+pub comptime func isZeroSized<T>() bool { sizeOf<T>() == 0 }
+
+pub func arrayLen<T, comptime N: usize>(value: *const [N]T) usize { N }

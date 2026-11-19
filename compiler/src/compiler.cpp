@@ -34,7 +34,7 @@ Program::Program(LLVMContext &c, TargetMachine &target, const Options &o, Inputs
   neverTy = add(Kind::Never, voidTy->ir, "never");
   boolTy = add(Kind::Bool, llvm::Type::getInt1Ty(c), "bool");
   charTy = add(Kind::Char, llvm::Type::getInt32Ty(c), "char");
-  errorTy = add(Kind::Error, llvm::Type::getInt32Ty(c), "<error>");
+  errorTy = add(Kind::Error, llvm::Type::getInt32Ty(c), "ErrorId");
   sizeTy = integer(pointerBits(), false);
   auto *ptr = PointerType::getUnqual(c);
   textTy = add(Kind::Text, StructType::get(c, {ptr, sizeTy->ir, ptr}), "string");
@@ -60,7 +60,7 @@ void Program::indexFiles() {
     const auto &source = files[indexed++];
     for (const auto &d : source.declarations) {
       auto &group = definitions[key({&source, &d})];
-      if (d.name == "main" && (d.kind != DeclKind::Function || !group.empty() || d.visible ||
+      if (d.name == "main" && !d.external && !d.exported && (d.kind != DeclKind::Function || !group.empty() || d.visible ||
           d.unsafe || d.comptime || !d.params.empty() || !d.generics.empty()))
         fail(d.span, "main must be a unique file-private function with no parameters");
       if (!group.empty() && (d.kind != DeclKind::Function || group.front().decl->kind != DeclKind::Function))
@@ -706,13 +706,16 @@ std::unique_ptr<Module> Program::build() {
       }
       Definition def{&file, &d};
       if (d.name == "main") {
-        if (d.external || d.exported)
-          fail(d.span, "C symbol main conflicts with the file entry; use a separate native entry");
-        auto *result = type(d.type, file);
-        if (result->kind == Kind::Result) result = result->parts[0];
-        if (result != voidTy && result != integer(32, true))
-          fail(d.span, "main must return void, !void, i32 or !i32");
-        if (!file.explicitInput && !file.selected) continue;
+        if (d.external || d.exported) {
+          if (!options.check && options.emit == "exe" && options.profile == "hosted")
+            fail(d.span, "C symbol main conflicts with the generated host entry");
+        } else {
+          auto *result = type(d.type, file);
+          if (result->kind == Kind::Result) result = result->parts[0];
+          if (result != voidTy && result != integer(32, true))
+            fail(d.span, "main must return void, !void, i32 or !i32");
+          if (!file.explicitInput && !file.selected) continue;
+        }
       }
       if (d.kind == DeclKind::Global) global(def);
       if ((d.kind == DeclKind::Enum || d.kind == DeclKind::Class) && d.generics.empty()) {

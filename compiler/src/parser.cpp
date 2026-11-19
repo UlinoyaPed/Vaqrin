@@ -247,7 +247,7 @@ Decl Parser::declaration(bool member, bool iface) {
   if (isOperator || eat("func")) {
     d.kind = DeclKind::Function;
     d.readOnly = isConst;
-    auto n = isOperator ? take() : name();
+    auto n = (isOperator || (d.associated && at("new"))) ? take() : name();
     d.name = isOperator ? "operator" + n.text : n.text;
     genericParameters(d);
     parameters(d);
@@ -674,16 +674,34 @@ Ast Parser::primary(bool excludeFields) {
     return n;
   }
   if (eat("if")) {
-    bool paren = eat("(");
-    auto cond = expression(1, !paren);
-    if (paren) require(")");
-    auto yes = paren ? expression(1, excludeFields) : block();
+    Ast cond;
+    bool blockForm = !at("(");
+    if (blockForm)
+      cond = expression(1, true);
+    else {
+      auto start = pos;
+      auto oldSplit = split;
+      try {
+        cond = expression(1, true);
+        blockForm = at("{");
+      } catch (const Diagnostic &) {
+        blockForm = false;
+      }
+      if (!blockForm) {
+        pos = start;
+        split = oldSplit;
+        require("(");
+        cond = expression();
+        require(")");
+      }
+    }
+    auto yes = blockForm ? block() : expression(1, excludeFields);
     Ast no;
-    if (yes->kind != NodeKind::Block && !at("else")) fail(t.span, "single-expression if requires else", "E110");
+    if (!blockForm && !at("else")) fail(t.span, "single-expression if requires else", "E110");
     if (eat("else")) {
-      if (at("if") || paren) no = expression(1, excludeFields);
-      else no = block();
-      if (no->kind != NodeKind::If && (yes->kind == NodeKind::Block) != (no->kind == NodeKind::Block))
+      if (at("if")) no = expression(1, excludeFields);
+      else no = blockForm ? block() : expression(1, excludeFields);
+      if (!blockForm && (yes->kind == NodeKind::Block || no->kind == NodeKind::Block))
         fail(t.span, "if branches must both be blocks or both be single expressions", "E110");
     }
     return make(NodeKind::If, t.span, "", {cond, yes, no});
@@ -734,7 +752,7 @@ Ast Parser::postfix(Ast base, bool excludeFields) {
       arguments.insert(arguments.begin(), base);
       base = make(NodeKind::Call, t.span, "", std::move(arguments));
     } else if (eat(".") || eat("?.")) {
-      auto member = name();
+      auto member = at("new") ? take() : name();
       base = make(NodeKind::Member, member.span, member.text, {base});
       if (t.text == "?.") base->names.push_back("optional");
     } else if (eat("!")) {

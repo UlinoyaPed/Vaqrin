@@ -594,7 +594,20 @@ class Acceptance(unittest.TestCase):
         self.process(VAQC, self.root, "-o", "app")
         self.assertEqual(self.process("./app", good=False).returncode, 3)
 
+    def test_unavailable_hosted_packages_have_target_diagnostics(self):
+        for package in ("task", "channel", "net"):
+            with self.subTest(package=package):
+                source = self.source("target.vqr", f"import ({package}) func f() void {{}}")
+                result = self.process(VAQC, "check", source, "--target", "thumbv7m-none-eabi",
+                                      "--profile", "freestanding", good=False)
+                self.assertIn(b"E290", result.stderr)
+                self.assertIn(package.encode(), result.stderr)
+
     def test_revision_diagnostics(self):
+        c_entry = self.source("native.vqr", 'export "C" func main() i32 { 0 }')
+        self.process(VAQC, c_entry, "--emit=obj", "-o", "native.o")
+        self.assertIn(b" T main", self.process("llvm-nm", "native.o").stdout)
+        self.assertIn(b"C symbol main", self.process(VAQC, c_entry, good=False).stderr)
         for code, diagnostic in (
             ("package x; func main() void {}", "semicolon"),
             ("import (io); func main() void {}", "semicolon"),
@@ -602,7 +615,6 @@ class Acceptance(unittest.TestCase):
             ("pub func main() void {}", "file-private"),
             ("func main(a: i32) void {}", "no parameters"),
             ("func main() bool { true }", "main must return"),
-            ('export "C" func main() i32 { 0 }', "C symbol main"),
             ("func f() (i32,i32) { return 1, 2; }", "tuple"),
             ("func f(x: i32) void { x move= x; }", "expected"),
             ("func f() i32 { if (true) 7 }", "else"),
@@ -719,6 +731,256 @@ class Acceptance(unittest.TestCase):
                 io.println(core.isNone(&o))!;
             }
         """, "18\ntrue\n5\n5\n8\ntrue\ntrue\n8\n8\n12\n8\n2\n8\n23\n11\n12\n2\n8\n8\ntrue\n3\n14\ntrue\n")
+
+    def test_result_contracts(self):
+        self.hosted("""
+            import (result, core, iter)
+            error Problem { Missing }
+            func plus(x: i32) i32 { x + 1 }
+            func twice(x: i32) !i32 { x * 2 }
+            func recover(e: ErrorId) !i32 { if (e == Problem.Missing) 10 else 0 }
+            func recoverValue(e: ErrorId) i32 { if (e == Problem.Missing) 11 else 0 }
+            func main() !void {
+                var original: !i32 = 2;
+                var failed: !i32 = Problem.Missing;
+                io.println(result.isOk(&original))!;
+                io.println(result.isErr(&failed))!;
+                io.println(result.errorOf(&failed).unwrap() == Problem.Missing)!;
+                io.println(*result.okValue(&original).unwrap())!;
+                io.println(result.map<i32, i32>(original, plus)!)!;
+                io.println(result.andThen<i32, i32>(original, twice)!)!;
+                io.println(result.orElse(failed, recover)!)!;
+                io.println(result.unwrapOr(failed, 6))!;
+                io.println(result.unwrapOrElse(failed, recoverValue))!;
+                io.println(result.expect(original, "failed"))!;
+                seen := 0;
+                observe := [&seen](p: *const i32) void => { seen += *p; };
+                onError := [&seen](e: ErrorId) void => { if e == Problem.Missing { seen += 7; } };
+                result.inspect(original, move(observe))!;
+                var checked = result.inspectErr(failed, move(onError));
+                io.println(result.isErr(&checked))!;
+                io.println(seen)!;
+                var missing: !?i32 = null;
+                var absent = result.transpose(missing);
+                io.println(core.isNone(&absent))!;
+                var present: !?i32 = some(9);
+                io.println(result.transpose(present).unwrap()!)!;
+                var rejected: !?i32 = Problem.Missing;
+                io.println(result.transpose(rejected).unwrap() catch 13)!;
+                values := [_]!i32{4, 5};
+                var results = iter.iter(values[:]);
+                var collected = result.collect<i32>(move(results))!;
+                io.println(collected[0] + collected[1])!;
+            }
+        """, "true\ntrue\ntrue\n2\n3\n4\n10\n6\n11\n2\ntrue\n9\ntrue\n9\n13\n9\n")
+
+    def test_layout_ordering_and_vec_contracts(self):
+        self.hosted("""
+            import (cmp, meta, coll, core, iter)
+            const width = meta.bitWidth<u24>();
+            const stride = meta.strideOf<[3]u32>();
+            const typeLabel = meta.typeName<i64>();
+            func shorter(&a: *const i32, &b: *const i32) bool { a < b }
+            func main() !void {
+                io.println(width)!; io.println(stride)!; io.println(typeLabel)!;
+                io.println(meta.alignOf<u32>())!;
+                io.println(meta.isTriviallyDrop<i32>())!;
+                io.println(meta.isCopyable<coll.Vec<i32>>())!;
+                io.println(meta.isMovable<coll.Vec<i32>>())!;
+                io.println(meta.isZeroSized<[0]u8>())!;
+                a := -0.0f64; b := 0.0f64;
+                io.println(cmp.totalCmp(&a, &b) == cmp.Ordering.Less)!;
+                c := bitCast<f64>(0x7ff8000000000001u64);
+                var unordered = cmp.partialCmp(&b, &c);
+                io.println(core.isNone(&unordered))!;
+                io.println(cmp.totalCmp(&b, &c) == cmp.Ordering.Less)!;
+                io.println(cmp.minBy(3, 2, shorter))!;
+                io.println(cmp.clamp(8, 2, 5))!;
+                var input = [_]i32{1, 2, 3};
+                io.println(meta.arrayLen(&input))!;
+                var v = coll.Vec<i32>.fromSlice(input[:])!;
+                v.reserveAdditional(5)!;
+                v.insert(1, 9)!;
+                v.insert(v.len(), 8)!;
+                io.println(v.remove(1).unwrap())!;
+                io.println(v.swapRemove(0).unwrap())!;
+                v.reverse();
+                io.println(v[0])!;
+                io.println(v[2])!;
+                v.truncate(2);
+                v.shrinkToFit()!;
+                io.println(v.capacity())!;
+                v.clear();
+                v.shrinkToFit()!;
+                io.println(v.capacity())!;
+                v.push(15)!;
+                io.println(v[0])!;
+                var source = iter.iter(input[:]);
+                var copy = coll.Vec<i32>.fromIter(move(source))!;
+                io.println(copy[1])!;
+            }
+        """, "24\n12\ni64\n4\ntrue\nfalse\ntrue\ntrue\ntrue\ntrue\ntrue\n2\n5\n3\n9\n1\n3\n8\n2\n0\n15\n2\n")
+
+    def test_bits_and_compile_time_word_size(self):
+        self.hosted("""
+            import (bits, core)
+            const count = bits.countOnes(0xabc123u24);
+            const leading = bits.leadingZeros(0x123u24);
+            const rev = bits.reverseBits(1u7);
+            const rotated = bits.rotateLeft(0x81u8, 9);
+            func main() !void {
+                io.println(count)!; io.println(leading)!;
+                io.println(rev)!; io.println(rotated)!;
+                io.println(bits.trailingZeros(0u7))!;
+                io.println(bits.countZeros(1u7))!;
+                io.println(bits.reverseBytes(0x123456u24))!;
+                io.println(bits.byteSwap(0x1234u16))!;
+                io.println(bits.rotateRight(1u7, 1))!;
+                io.println(bits.firstSet(128u8).unwrap())!;
+                io.println(bits.lastSet(130u8).unwrap())!;
+                var empty = bits.firstSet(0u8);
+                io.println(core.isNone(&empty))!;
+                io.println(bits.clearBit(128u8, 7))!;
+                io.println(bits.toggleBit(0u8, 7))!;
+                io.println(bits.testBit(128u8, 7))!;
+                io.println(bits.maskLow<u24>(24))!;
+                io.println(bits.extractBits(0x124u16, 4, 4))!;
+                io.println(bits.extractBits(0x124u16, 16, 0))!;
+                io.println(bits.insertBits(0x102u16, 0xffu16, 4, 4))!;
+                io.println(bits.nextPowerOfTwo(4u8)!)!;
+                io.println(bits.nextPowerOfTwo(5u8)!)!;
+                io.println(bits.nextPowerOfTwo(127i8) catch 22i8)!;
+                io.println(bits.alignUp(17, 16)!)!;
+                io.println(bits.alignDown(17, 16))!;
+                var data = [_]u8{0, 0};
+                var writer = bits.BitWriter(data[:], bits.BitOrder.MsbFirst);
+                writer.writeBits(5, 3)!;
+                var failed = writer.writeBits(0, 14);
+                io.println(core.isErr(&failed))!;
+                writer.alignByte(true)!;
+                writer.writeBits(1, 8)!;
+                io.println(writer.writtenBytes())!;
+                io.println(data[0])!;
+                var reader = bits.BitReader(data[:], bits.BitOrder.MsbFirst);
+                io.println(reader.peekBits(3)!.unwrap())!;
+                io.println(reader.position())!;
+                io.println(reader.readBits(3)!.unwrap())!;
+                reader.alignByte();
+                io.println(reader.readBits(8)!.unwrap())!;
+                var eof = reader.readBits(1)!;
+                io.println(core.isNone(&eof))!;
+                var little = bits.BitReader(data[:], bits.BitOrder.LsbFirst);
+                io.println(little.readBits(3)!.unwrap())!;
+            }
+        """, "11\n15\n64\n3\n7\n6\n5649426\n13330\n64\n7\n7\ntrue\n0\n128\ntrue\n16777215\n2\n0\n498\n4\n8\n22\n32\n16\ntrue\n2\n191\n5\n0\n5\n1\ntrue\n7\n")
+
+    def test_slice_search_and_heap(self):
+        self.hosted("""
+            import (algo, core)
+            func less(&a, &b: *const i32) bool { a < b }
+            func equal(&a, &b: *const i32) bool { a == b }
+            func positive(&value: *const i32) bool { value > 0 }
+            func main() !void {
+                var values = [_]i32{7, 3, 2, 3, 4};
+                var key = 3;
+                io.println(algo.allOf(values[:], positive))!;
+                io.println(algo.anyOf(values[:], positive))!;
+                io.println(algo.noneOf(values[:], positive))!;
+                io.println(algo.countIf(values[:], positive))!;
+                io.println(algo.count(values[:], &key))!;
+                io.println(algo.find(values[:], &key).unwrap())!;
+                io.println(algo.findLast(values[:], &key).unwrap())!;
+                io.println(algo.findIf(values[:], positive).unwrap())!;
+                var missing = algo.findIfNot(values[:], positive);
+                io.println(core.isNone(&missing))!;
+                algo.heapify(values[:], less);
+                io.println(algo.isHeap(values[:], less))!;
+                algo.popHeap(values[:], less);
+                io.println(values[4])!;
+                algo.pushHeap(values[:], less);
+                io.println(values[0])!;
+                algo.sortHeap(values[:], less);
+                io.println(algo.isSorted(values[:], less))!;
+                lo, hi := algo.equalRange(values[:], &key, less);
+                io.println(lo)!; io.println(hi)!;
+                io.println(algo.lowerBound(values[:], &key, less))!;
+                io.println(algo.upperBound(values[:], &key, less))!;
+                io.println(algo.binarySearch(values[:], &key, less).unwrap())!;
+                io.println(algo.adjacentFind(values[:], equal).unwrap())!;
+                algo.rotate(values[:], 2);
+                io.println(values[4])!;
+                algo.reverse(values[:]);
+                io.println(values[0])!;
+                offset := -1;
+                descending := [offset](&a, &b: *const i32) bool => a * offset < b * offset;
+                algo.sortBy(values[:], move(descending));
+                io.println(values[0])!;
+                algo.sort(values[:]);
+                io.println(values[0])!;
+            }
+        """, "true\ntrue\nfalse\n5\n2\n1\n3\n0\ntrue\ntrue\n7\n7\ntrue\n1\n3\n1\n3\n1\n1\n3\n3\n7\n2\n")
+
+    def test_atomic_orders_and_target_capability(self):
+        source = self.source("atomics.vqr", """
+            import (atomic, core, io)
+            const supported = atomic.isAlwaysLockFree<u32>();
+            func main() !void {
+                var value = atomic.Atomic<i32>.new(1);
+                io.println(supported)!;
+                io.println(value.fetchAdd(2, atomic.Order.AcqRel))!;
+                io.println(value.load(atomic.Order.Acquire))!;
+                var exchanged = value.compareExchange(3, 7, atomic.Order.AcqRel, atomic.Order.Acquire);
+                io.println(exchanged.old)!; io.println(exchanged.exchanged)!;
+                var rejected = value.compareExchange(3, 8);
+                io.println(rejected.old)!; io.println(rejected.exchanged)!;
+                io.println(value.fetchSub(1))!;
+                io.println(value.fetchOr(8))!;
+                io.println(value.fetchAnd(11))!;
+                io.println(value.fetchXor(1))!;
+                io.println(value.fetchMax(-5))!;
+                io.println(value.fetchMin(-4))!;
+                io.println(value.load())!;
+                var flag = atomic.AtomicFlag(false);
+                io.println(flag.testAndSet())!;
+                io.println(flag.test())!;
+                flag.clear(atomic.Order.Release);
+                io.println(flag.test(atomic.Order.Acquire))!;
+                n := 19;
+                var slot = atomic.AtomicPtr<i32>.new(null);
+                var empty = slot.swap(&n);
+                io.println(core.isNone(&empty))!;
+                io.println(*slot.load().unwrap())!;
+                var removed = slot.compareExchange(&n, null);
+                io.println(*removed.old.unwrap())!; io.println(removed.exchanged)!;
+                atomic.compilerFence(atomic.Order.Acquire);
+                atomic.fence(atomic.Order.SeqCst);
+                io.println(atomic.supportedWidths().len())!;
+            }
+        """)
+        self.process(VAQC, source, "-o", "atomic-test")
+        self.assertEqual(self.process("./atomic-test").stdout.decode(),
+                         "true\n1\n3\n3\ntrue\n7\nfalse\n7\n6\n14\n10\n11\n11\n-4\nfalse\ntrue\nfalse\ntrue\n19\n19\ntrue\n4\n")
+        bare = self.source("bare.vqr", """
+            import (atomic)
+            export "C" func update(p: *atomic.Atomic<u32>) u32 {
+                p.fetchAdd(1, atomic.Order.SeqCst)
+            }
+        """)
+        flags = ("--target", "thumbv7m-none-eabi", "--cpu", "cortex-m3", "--profile", "freestanding")
+        self.process(VAQC, bare, *flags, "--emit=obj", "-O2", "-o", "bare.o")
+        self.assertEqual(self.process("llvm-nm", "-u", "bare.o").stdout, b"")
+        bare.write_text("import (atomic) func unsupported() void { x := atomic.Atomic<u64>(0); }")
+        result = self.process(VAQC, "check", bare, *flags, good=False)
+        self.assertIn(b"does not support native atomics", result.stderr)
+        invalid = self.source("invalid.vqr", """
+            import (atomic)
+            func main() i32 {
+                var x = atomic.Atomic<i32>(1);
+                x.load(atomic.Order.Release)
+            }
+        """)
+        self.process(VAQC, invalid, "-o", "invalid")
+        self.assertLess(self.process("./invalid", good=False).returncode, 0)
 
     def test_build_artifacts(self):
         source = self.source("math.vqr", '''

@@ -210,6 +210,8 @@ private:
   ValueAt fallback(const Ast &n, Type *expected);
   ValueAt loop(const Ast &n);
   ValueAt call(const Ast &n, Type *expected);
+  ValueAt atomicIntrinsic(std::string_view op, const Ast &n, const std::vector<Ast> &types);
+  ValueAt bitIntrinsic(std::string_view op, const Ast &n, const std::vector<Ast> &types);
   ValueAt standardIntrinsic(std::string_view key, const Ast &n, const std::vector<Ast> &types);
   ValueAt builtin(std::string_view key, const Ast &n, const std::vector<Ast> &types, Type *expected);
   ValueAt invoke(const Ast &n, const std::vector<Definition> &defs, const std::vector<Ast> &typeArgs,
@@ -308,7 +310,11 @@ public:
   bool extendCNarrowInteger() const;
   bool heapAvailable() const { return options.profile == "hosted" && targetTriple().isOSLinux(); }
   unsigned pointerBits() const { return module->getDataLayout().getPointerSizeInBits(); }
-  std::string key(Definition d) const { return d.file->module + (d.decl->name == "main" ? ":" + d.file->identity : "") + "." + d.decl->name; }
+  std::string key(Definition d) const {
+    return d.file->module +
+           (d.decl->name == "main" && !d.decl->external && !d.decl->exported ? ":" + d.file->identity : "") +
+           "." + d.decl->name;
+  }
   Types classTypes(Type *t) {
     Types out{{"Self", t}};
     for (std::size_t i = 0; i < t->parts.size(); ++i)

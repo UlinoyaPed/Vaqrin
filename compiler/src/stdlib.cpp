@@ -3,6 +3,8 @@
 namespace vqr::detail {
 
 ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::vector<Ast> &types) {
+  if (key.starts_with("__vqr_atomic_")) return atomicIntrinsic(key.substr(13), n, types);
+  if (key.starts_with("__vqr_bits_")) return bitIntrinsic(key.substr(11), n, types);
   auto arity = [&](unsigned count) {
     if (n->children.size() != count + 1) fail(n->span, "wrong intrinsic argument count");
   };
@@ -24,18 +26,24 @@ ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::v
     ir.CreateUnreachable();
     return neverValue();
   }
-  if (key == "__vqr_optional_pointer") {
+  if (key == "__vqr_optional_pointer" || key == "__vqr_result_pointer" || key == "__vqr_result_error") {
     arity(1);
     auto pointer = expression(n->children[1]);
     if (!live()) return neverValue();
-    if (pointer.type->kind != Kind::Pointer || pointer.type->parts[0]->kind != Kind::Optional)
-      fail(n->span, "optional payload access requires a pointer to a nullable value");
+    bool optional = key == "__vqr_optional_pointer";
+    bool error = key == "__vqr_result_error";
+    if (pointer.type->kind != Kind::Pointer ||
+        pointer.type->parts[0]->kind != (optional ? Kind::Optional : Kind::Result))
+      fail(n->span, "payload access requires a pointer to the matching wrapper type");
     auto *wrapper = pointer.type->parts[0];
-    auto *type = p.aggregate(Kind::Optional, {p.pointer(wrapper->parts[0], pointer.type->readOnly)});
+    auto *element = error ? p.errorTy : p.pointer(wrapper->parts[0], pointer.type->readOnly);
+    auto *type = p.aggregate(Kind::Optional, {element});
     auto *address = read(pointer, n->span);
-    auto *tag = ir.CreateLoad(ir.getInt1Ty(), ir.CreateStructGEP(wrapper->ir, address, 0));
-    auto *payload = ir.CreateStructGEP(wrapper->ir, address, 1);
-    return {type, ir.CreateSelect(tag, wrap(type, payload, true).value,
+    auto *tag = ir.CreateLoad(optional ? ir.getInt1Ty() : ir.getInt32Ty(),
+                              ir.CreateStructGEP(wrapper->ir, address, 0));
+    auto *valid = optional ? tag : error ? ir.CreateIsNotNull(tag) : ir.CreateIsNull(tag);
+    Value *payload = error ? static_cast<Value *>(tag) : ir.CreateStructGEP(wrapper->ir, address, 1);
+    return {type, ir.CreateSelect(valid, wrap(type, payload, true).value,
                                   Constant::getNullValue(type->ir))};
   }
   if (key == "__vqr_char") {
@@ -47,6 +55,47 @@ ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::v
         ir.CreateAnd(ir.CreateICmpUGE(raw, ir.getInt32(0xd800)), ir.CreateICmpULE(raw, ir.getInt32(0xdfff)));
     guard(ir, ir.CreateAnd(ir.CreateICmpULE(raw, ir.getInt32(0x10ffff)), ir.CreateNot(surrogate)));
     return {p.charTy, raw};
+  }
+  if (key == "__vqr_total_less") {
+    arity(2);
+    auto left = expression(n->children[1]);
+    if (!live()) return neverValue();
+    auto *a = read(left, n->span, false);
+    auto right = expression(n->children[2], left.type);
+    if (!live()) return neverValue();
+    auto *b = read(right, n->span, false);
+    if (left.type->kind == Kind::Int)
+      return {p.boolTy, binaryNumber(ir, "<", a, b, left.type->sign, left.type->sign)};
+    if (left.type->kind != Kind::Float) fail(n->span, "total ordering requires numbers");
+    auto *bits = ir.getIntNTy(left.type->bits);
+    auto *sign = ConstantInt::get(bits, APInt::getSignMask(left.type->bits));
+    auto order = [&](Value *value) {
+      auto *raw = ir.CreateBitCast(value, bits);
+      auto *negative = ir.CreateICmpSLT(raw, ConstantInt::get(bits, 0));
+      return ir.CreateSelect(negative, ir.CreateNot(raw), ir.CreateXor(raw, sign));
+    };
+    return {p.boolTy, ir.CreateICmpULT(order(a), order(b))};
+  }
+  if (key == "__vqr_type_name" || key == "__vqr_alloc_size" || key == "__vqr_alignment" ||
+      key == "__vqr_bit_width" || key == "__vqr_copyable" || key == "__vqr_movable" ||
+      key == "__vqr_trivial_drop") {
+    arity(0);
+    if (types.size() != 1) fail(n->span, "metadata requires one type argument");
+    auto *type = parseType(types[0]);
+    p.ensureSized(type, n->span);
+    if (key == "__vqr_type_name") {
+      SmallVector<Constant *> fields{p.bytes(type->name), ConstantInt::get(p.sizeTy->ir, type->name.size())};
+      return {p.viewTy, ConstantStruct::get(cast<StructType>(p.viewTy->ir), fields)};
+    }
+    if (key == "__vqr_copyable") return {p.boolTy, ir.getInt1(p.copyable(type))};
+    if (key == "__vqr_movable") return {p.boolTy, ir.getInt1(p.movable(type))};
+    if (key == "__vqr_trivial_drop") return {p.boolTy, ir.getInt1(!p.drops(type))};
+    const auto &layout = p.module->getDataLayout();
+    auto *storage = p.storage(type);
+    auto count = layout.getTypeAllocSize(storage).getFixedValue();
+    if (key == "__vqr_alignment") count = layout.getABITypeAlign(storage).value();
+    if (key == "__vqr_bit_width") count = layout.getTypeSizeInBits(storage).getFixedValue();
+    return {p.sizeTy, ConstantInt::get(p.sizeTy->ir, count)};
   }
   if (!unsafeDepth) fail(n->span, "raw storage intrinsic requires an unsafe block", "E240");
   if (key == "__vqr_text_from_utf8") {

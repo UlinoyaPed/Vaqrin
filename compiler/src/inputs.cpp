@@ -191,7 +191,8 @@ std::string Inputs::resolveImport(const Path &dir, const Import &item) {
       }
   }
   if (directory.empty()) {
-    if (logical == "task" || logical == "channel") return logical;
+    if (logical == "task" || logical == "channel" || logical == "net")
+      fail(item.span, "target runtime for standard package '" + logical + "' is unavailable", "E290");
     fail(item.span, "cannot locate package '" + item.path + "'", "E301");
   }
   std::string module;
@@ -322,6 +323,7 @@ void Inputs::load(const std::vector<Path> &inputs, const std::vector<Path> &pack
   // Foreign exports in the selected module can be referenced by native objects.
   for (std::size_t i = 0; i < files.size(); ++i) {
     auto &f = files[i];
+    if (f.anonymous) continue;
     auto current = Path(f.span.source->path);
     for (auto &p : siblings(current.parent_path())) {
       auto &o = outline(p, {});

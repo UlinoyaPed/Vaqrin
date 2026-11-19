@@ -106,6 +106,7 @@ Data Interpreter::call(Function &fn, ArrayRef<Data> args, unsigned depth) {
       values[phi] = std::move(value);
     auto *next = static_cast<BasicBlock *>(nullptr);
     for (auto &inst : *block) {
+      if (inst.isAtomic()) error("atomic operation is unavailable during compile-time evaluation");
       if (!fuel--) error("compile-time instruction budget exhausted");
       if (isa<PHINode>(inst)) continue;
       if (auto *br = dyn_cast<BranchInst>(&inst)) {
@@ -184,6 +185,14 @@ Data Interpreter::call(Function &fn, ArrayRef<Data> args, unsigned depth) {
           value.roundToIntegral(intrinsic == Intrinsic::trunc ? APFloat::rmTowardZero
                                                               : APFloat::rmNearestTiesToEven);
           values[i] = ConstantFP::get(fn.getContext(), value);
+        } else if (intrinsic == Intrinsic::ctpop || intrinsic == Intrinsic::ctlz ||
+                   intrinsic == Intrinsic::cttz || intrinsic == Intrinsic::bitreverse ||
+                   intrinsic == Intrinsic::fshl || intrinsic == Intrinsic::fshr) {
+          SmallVector<Constant *> arguments;
+          for (auto &argument : callArgs) arguments.push_back(constant(argument));
+          auto *folded = ConstantFoldCall(i, callee, arguments);
+          if (!folded) error("could not evaluate compile-time bit operation");
+          values[i] = folded;
         } else
           values[i] = call(*callee, callArgs, depth + 1);
       } else {

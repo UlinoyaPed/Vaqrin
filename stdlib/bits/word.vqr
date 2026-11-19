@@ -1,0 +1,63 @@
+package bits
+import (meta)
+
+pub error BitError { OutOfRange, InvalidAlignment }
+
+pub func countOnes<T>(value: T) usize { __vqr_bits_popcount(value) }
+pub func countZeros<T>(value: T) usize { meta.bitWidth<T>() - countOnes(value) }
+pub func leadingZeros<T>(value: T) usize { __vqr_bits_leading(value) }
+pub func trailingZeros<T>(value: T) usize { __vqr_bits_trailing(value) }
+pub func reverseBits<T>(value: T) T { __vqr_bits_reverse(value) }
+pub func reverseBytes<T>(value: T) T { __vqr_bits_bytes(value) }
+pub func byteSwap<T>(value: T) T { reverseBytes(value) }
+pub func rotateLeft<T>(value: T, n: usize) T { __vqr_bits_rol(value, n) }
+pub func rotateRight<T>(value: T, n: usize) T { __vqr_bits_ror(value, n) }
+
+pub func firstSet<T>(value: T) ?usize {
+    var index = trailingZeros(value);
+    if (index == meta.bitWidth<T>()) null else some(index)
+}
+
+pub func lastSet<T>(value: T) ?usize {
+    var width = meta.bitWidth<T>();
+    var leading = leadingZeros(value);
+    if (leading == width) null else some(width - leading - 1)
+}
+
+pub func testBit<T>(value: T, index: usize) bool { __vqr_bits_test(value, index) }
+pub func setBit<T>(value: T, index: usize) T { __vqr_bits_set(value, index) }
+pub func clearBit<T>(value: T, index: usize) T { __vqr_bits_clear(value, index) }
+pub func toggleBit<T>(value: T, index: usize) T { __vqr_bits_toggle(value, index) }
+pub func maskLow<T>(count: usize) T { __vqr_bits_mask<T>(count) }
+pub func extractBits<T>(value: T, start: usize, count: usize) T {
+    __vqr_bits_extract(value, start, count)
+}
+pub func insertBits<T>(value: T, field: T, start: usize, count: usize) T {
+    __vqr_bits_insert(value, field, start, count)
+}
+
+pub func isPowerOfTwo<T>(value: T) bool { value > T(0) && countOnes(value) == 1 }
+
+pub func nextPowerOfTwo<T>(value: T) !T {
+    var width = meta.bitWidth<T>();
+    if value < T(0) { return BitError.OutOfRange; }
+    if value <= T(1) { return T(1); }
+    if isPowerOfTwo(value) { return value; }
+    var exponent = width - leadingZeros(value);
+    if exponent >= width { return BitError.OutOfRange; }
+    var rounded = setBit<T>(T(0), exponent);
+    if rounded < T(0) { return BitError.OutOfRange; }
+    rounded
+}
+
+pub func alignUp(value: usize, alignment: usize) !usize {
+    if !isPowerOfTwo(alignment) { return BitError.InvalidAlignment; }
+    var extra = alignment - 1;
+    if value > ~usize(0) - extra { return BitError.OutOfRange; }
+    (value + extra) & ~extra
+}
+
+pub func alignDown(value: usize, alignment: usize) usize {
+    if !isPowerOfTwo(alignment) { panic("invalid alignment"); }
+    value & ~(alignment - 1)
+}

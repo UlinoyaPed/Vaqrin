@@ -1,0 +1,82 @@
+package unicode
+import (coll, convert, text)
+import ("generated/unicode_data.vqr" as data)
+
+const gOther: u8 = 0;
+const gCR: u8 = 1;
+const gLF: u8 = 2;
+const gControl: u8 = 3;
+const gExtend: u8 = 4;
+const gZWJ: u8 = 5;
+const gRI: u8 = 6;
+const gPrepend: u8 = 7;
+const gSpacing: u8 = 8;
+const gL: u8 = 9;
+const gV: u8 = 10;
+const gT: u8 = 11;
+const gLV: u8 = 12;
+const gLVT: u8 = 13;
+
+func graphemeProperty(ch: char) u8 { u8((packedInfo(ch) >> 34) & 15) }
+func indicProperty(ch: char) u8 { u8((packedInfo(ch) >> 38) & 3) }
+
+pub class GraphemeSegmenter {
+    var previous: ?char;
+    var regionalCount: usize;
+    var epBeforeZwj: bool;
+    var indicState: u8;
+public:
+    func init() : previous(null), regionalCount(0), epBeforeZwj(false), indicState(0) {}
+    func reset() void { previous = null; regionalCount = 0; epBeforeZwj = false; indicState = 0; }
+    static func boundaryBetween(previous: char, next: char) bool {
+        var a = graphemeProperty(previous);
+        var b = graphemeProperty(next);
+        if a == gCR && b == gLF { return false; }
+        if a == gCR || a == gLF || a == gControl || b == gCR || b == gLF || b == gControl { return true; }
+        if a == gL && (b == gL || b == gV || b == gLV || b == gLVT) { return false; }
+        if (a == gLV || a == gV) && (b == gV || b == gT) { return false; }
+        if (a == gLVT || a == gT) && b == gT { return false; }
+        if b == gExtend || b == gZWJ || b == gSpacing || a == gPrepend { return false; }
+        if indicProperty(next) == 1 {
+            // GB9c: consonant ... linker ... × consonant.
+            return true;
+        }
+        if isExtendedPictographic(next) && a == gZWJ { return false; }
+        if a == gRI && b == gRI { return false; }
+        true
+    }
+    func feed(ch: char) bool {
+        var boundary = true;
+        switch previous {
+            some(last) => { boundary = GraphemeSegmenter.boundaryBetween(last, ch); },
+            null => {},
+        }
+        previous = some(ch);
+        var prop = graphemeProperty(ch);
+        if prop == gRI { regionalCount++; } else if prop != gExtend { regionalCount = 0; }
+        return boundary;
+    }
+}
+
+pub class Graphemes {
+    var source: str;
+    var offset: usize;
+public:
+    func init(value: str) : source(value), offset(0) {}
+    func next() ?str {
+        if offset >= source.byteLen() { return null; }
+        var bytes = source.asBytes();
+        var start = offset;
+        var first = decodeUtf8(bytes[offset..]) catch { return null; };
+        offset += first.1;
+        var previous = first.0;
+        for offset < bytes.len() {
+            var next = decodeUtf8(bytes[offset..]) catch { return null; };
+            if GraphemeSegmenter.boundaryBetween(previous, next.0) { break; }
+            offset += next.1;
+            previous = next.0;
+        }
+        some(unsafe { __vqr_text_borrow_utf8(bytes[start..offset]) })
+    }
+}
+pub func graphemes(value: str) Graphemes { Graphemes(value) }

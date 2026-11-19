@@ -267,7 +267,7 @@ private:
             if bucket.isOccupied() {
                 var hash = bucket.storedHash();
                 var pair = bucket.take();
-                var key, value := move(pair);
+                key, value := move(pair);
                 insertKnownHash(hash, move(key), move(value));
             }
         }
@@ -306,7 +306,7 @@ public:
             some(index) => {
                 var bucket = buckets.getMut(index).unwrap();
                 var previous = bucket.take();
-                var oldKey, oldValue := move(previous);
+                oldKey, oldValue := move(previous);
                 bucket.write(hash, move(key), move(value));
                 InsertResult<K, V>.Replaced(move(oldValue))
             },
@@ -376,7 +376,7 @@ public:
         switch removeEntry(key) {
             null => null,
             some(pair) => {
-                var oldKey, oldValue := move(pair);
+                oldKey, oldValue := move(pair);
                 some(move(oldValue))
             },
         }
@@ -436,7 +436,7 @@ public:
         switch source.next() {
             null => null,
             some(entry) => {
-                var key, value := move(entry);
+                key, value := move(entry);
                 some(key)
             },
         }
@@ -538,7 +538,7 @@ public:
         switch values.removeEntry(value) {
             null => null,
             some(entry) => {
-                var key, ignored := move(entry);
+                key, ignored := move(entry);
                 some(move(key))
             },
         }

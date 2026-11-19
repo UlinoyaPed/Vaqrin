@@ -11,8 +11,7 @@ func main() !void {
     var file = fs.open(target, options)!;
 
     io.writeString(&file, "Vaqrin I/O\n")!;
-    var probe: [1]u8;
-    probe[0] = 86;
+    var probe = [1]u8{86};
     file.writeAt(0, probe[:])!;
     file.readAt(0, probe[:])!;
     file.seek(0, io.SeekOrigin.Start)!;

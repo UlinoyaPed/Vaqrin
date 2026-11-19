@@ -1,30 +1,28 @@
 package io
-import (coll, text)
+import (coll, text, mem)
 
-extern "C" func __vqr_io_system_error(code: i32) ErrorId;
-extern "C" func __vqr_io_error_code(error: ErrorId) i32;
-extern "C" func __vqr_io_open(path: *const u8, flags: u32, mode: u32, error: *i32) i32;
-extern "C" func __vqr_io_file_read(fd: i32, dst: *u8, length: usize, error: *i32) isize;
-extern "C" func __vqr_io_file_write(fd: i32, src: *const u8, length: usize, error: *i32) isize;
-extern "C" func __vqr_io_file_read_at(fd: i32, dst: *u8, length: usize, offset: u64, error: *i32) isize;
-extern "C" func __vqr_io_file_write_at(fd: i32, src: *const u8, length: usize, offset: u64, error: *i32) isize;
-extern "C" func __vqr_io_file_seek(fd: i32, offset: i64, origin: i32, error: *i32) i64;
-extern "C" func __vqr_io_file_close(fd: i32, error: *i32) i32;
-extern "C" func __vqr_io_file_sync(fd: i32, dataOnly: i32, error: *i32) i32;
-extern "C" func __vqr_io_file_truncate(fd: i32, size: u64, error: *i32) i32;
-extern "C" func __vqr_io_file_metadata(fd: i32, size: *u64, mode: *u32, modified: *i64, kind: *i32, error: *i32) i32;
-extern "C" func __vqr_io_file_set_mode(fd: i32, mode: u32, error: *i32) i32;
-extern "C" func __vqr_io_stat(path: *const u8, follow: i32, size: *u64, mode: *u32, modified: *i64, kind: *i32, error: *i32) i32;
-extern "C" func __vqr_io_mkdir(path: *const u8, mode: u32, error: *i32) i32;
-extern "C" func __vqr_io_remove(path: *const u8, error: *i32) i32;
-extern "C" func __vqr_io_remove_dir(path: *const u8, error: *i32) i32;
-extern "C" func __vqr_io_rename(from: *const u8, to: *const u8, error: *i32) i32;
-extern "C" func __vqr_io_chmod(path: *const u8, mode: u32, error: *i32) i32;
-extern "C" func __vqr_io_dir_open(path: *const u8, error: *i32) usize;
-extern "C" func __vqr_io_dir_next(dir: *u8, name: *u8, capacity: usize, length: *usize, kind: *i32, error: *i32) i32;
-extern "C" func __vqr_io_dir_close(dir: *u8, error: *i32) i32;
-extern "C" func __vqr_io_getcwd(buffer: *u8, capacity: usize, length: *usize, error: *i32) i32;
-extern "C" func __vqr_io_chdir(path: *const u8, error: *i32) i32;
+extern "C" func __vqr_io_open(path: *const u8, flags: u32, mode: u32, status: *i32) i32;
+extern "C" func __vqr_io_file_read(fd: i32, dst: *u8, length: usize, status: *i32) isize;
+extern "C" func __vqr_io_file_write(fd: i32, src: *const u8, length: usize, status: *i32) isize;
+extern "C" func __vqr_io_file_read_at(fd: i32, dst: *u8, length: usize, offset: u64, status: *i32) isize;
+extern "C" func __vqr_io_file_write_at(fd: i32, src: *const u8, length: usize, offset: u64, status: *i32) isize;
+extern "C" func __vqr_io_file_seek(fd: i32, offset: i64, origin: i32, status: *i32) i64;
+extern "C" func __vqr_io_file_close(fd: i32, status: *i32) i32;
+extern "C" func __vqr_io_file_sync(fd: i32, dataOnly: i32, status: *i32) i32;
+extern "C" func __vqr_io_file_truncate(fd: i32, size: u64, status: *i32) i32;
+extern "C" func __vqr_io_file_metadata(fd: i32, size: *u64, mode: *u32, modified: *i64, kind: *i32, status: *i32) i32;
+extern "C" func __vqr_io_file_set_mode(fd: i32, mode: u32, status: *i32) i32;
+extern "C" func __vqr_io_stat(path: *const u8, follow: i32, size: *u64, mode: *u32, modified: *i64, kind: *i32, status: *i32) i32;
+extern "C" func __vqr_io_mkdir(path: *const u8, mode: u32, status: *i32) i32;
+extern "C" func __vqr_io_remove(path: *const u8, status: *i32) i32;
+extern "C" func __vqr_io_remove_dir(path: *const u8, status: *i32) i32;
+extern "C" func __vqr_io_rename(from: *const u8, to: *const u8, status: *i32) i32;
+extern "C" func __vqr_io_chmod(path: *const u8, mode: u32, status: *i32) i32;
+extern "C" func __vqr_io_dir_open(path: *const u8, status: *i32) usize;
+extern "C" func __vqr_io_dir_next(dir: *u8, name: *u8, capacity: usize, length: *usize, kind: *i32, status: *i32) i32;
+extern "C" func __vqr_io_dir_close(dir: *u8, status: *i32) i32;
+extern "C" func __vqr_io_getcwd(buffer: *u8, capacity: usize, length: *usize, status: *i32) i32;
+extern "C" func __vqr_io_chdir(path: *const u8, status: *i32) i32;
 
 func cString(value: []const u8) !coll.Vec<u8> {
     if value.len() == ~usize(0) { return IoError.InvalidArgument; }
@@ -37,24 +35,25 @@ func cString(value: []const u8) !coll.Vec<u8> {
     move(output)
 }
 
-pub func systemError(code: i32) ErrorId { unsafe { __vqr_io_system_error(code) } }
-
-pub func systemErrorCode(reason: ErrorId) ?i32 {
-    var code = unsafe { __vqr_io_error_code(reason) };
-    if code < 0 { return null; }
-    some(code)
+pub func systemError(code: i32) ErrorId {
+    if code <= 0 || code > 0x3fffffff { return IoError.InvalidArgument; }
+    __vqr_encode_system_error(code)
 }
 
-pub func isSystemError(reason: ErrorId) bool { systemErrorCode(reason) != null }
+pub func systemErrorCode(reason: ErrorId) ?i32 { __vqr_decode_system_error(reason) }
+
+pub func isSystemError(reason: ErrorId) bool {
+    switch systemErrorCode(reason) { some(code) => true, null => false }
+}
 
 pub func isInterrupted(reason: ErrorId) bool {
     if reason == IoError.Interrupted { return true; }
-    systemErrorCode(reason) == some(4)
+    switch systemErrorCode(reason) { some(code) => code == 4, null => false }
 }
 
 pub func isWouldBlock(reason: ErrorId) bool {
     if reason == IoError.WouldBlock { return true; }
-    systemErrorCode(reason) == some(11)
+    switch systemErrorCode(reason) { some(code) => code == 11, null => false }
 }
 
 pub class HostMetadata {
@@ -100,7 +99,7 @@ public:
         var errorCode: i32 = 0;
         var count = unsafe { __vqr_io_file_read(descriptor, &dst[0], dst.len(), &errorCode) };
         if count < 0 { return systemError(errorCode); }
-        if u64(count) > u64(dst.len()) { return IoError.InvalidCount; }
+        if usize(count)! > dst.len() { return IoError.InvalidCount; }
         usize(count)
     }
 
@@ -110,7 +109,7 @@ public:
         var errorCode: i32 = 0;
         var count = unsafe { __vqr_io_file_write(descriptor, &src[0], src.len(), &errorCode) };
         if count < 0 { return systemError(errorCode); }
-        if u64(count) > u64(src.len()) { return IoError.InvalidCount; }
+        if usize(count)! > src.len() { return IoError.InvalidCount; }
         usize(count)
     }
 
@@ -121,7 +120,7 @@ public:
         var errorCode: i32 = 0;
         var count = unsafe { __vqr_io_file_read_at(descriptor, &dst[0], dst.len(), offset, &errorCode) };
         if count < 0 { return systemError(errorCode); }
-        if u64(count) > u64(dst.len()) { return IoError.InvalidCount; }
+        if usize(count)! > dst.len() { return IoError.InvalidCount; }
         usize(count)
     }
 
@@ -132,7 +131,7 @@ public:
         var errorCode: i32 = 0;
         var count = unsafe { __vqr_io_file_write_at(descriptor, &src[0], src.len(), offset, &errorCode) };
         if count < 0 { return systemError(errorCode); }
-        if u64(count) > u64(src.len()) { return IoError.InvalidCount; }
+        if usize(count)! > src.len() { return IoError.InvalidCount; }
         usize(count)
     }
 
@@ -236,7 +235,7 @@ public:
     func next() !?HostDirEntry {
         if handle == 0 { return IoError.Closed; }
         var directory = unsafe { ptrFromInt<*u8>(handle) };
-        var name: [4096]u8;
+        var name = mem.zeroedBytes<4096>();
         var length: usize = 0;
         var kind: i32 = 0;
         var errorCode: i32 = 0;
@@ -306,7 +305,7 @@ pub func hostChmod(path: []const u8, mode: u32) !void {
 }
 
 pub func currentDir() !string {
-    var buffer: [4096]u8;
+    var buffer = mem.zeroedBytes<4096>();
     var length: usize = 0;
     var errorCode: i32 = 0;
     if unsafe { __vqr_io_getcwd(&buffer[0], buffer.len(), &length, &errorCode) } != 0 {

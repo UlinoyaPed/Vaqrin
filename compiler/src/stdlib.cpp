@@ -16,9 +16,29 @@ ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::v
       fail(n->span, "native clocks require a hosted GNU/Linux x86-64 or AArch64 target", "E290");
     return voidValue();
   }
+  if (key == "__vqr_default_heap") return {p.boolTy, ir.getInt1(p.heapAvailable())};
+  if (key == "__vqr_validate_channel") {
+    if (!p.hostedLinux64())
+      fail(n->span, "channel requires hosted GNU/Linux x86-64 or AArch64", "E290");
+    return voidValue();
+  }
   auto arity = [&](unsigned count) {
     if (n->children.size() != count + 1) fail(n->span, "wrong intrinsic argument count");
   };
+  if (key == "__vqr_encode_system_error" || key == "__vqr_decode_system_error") {
+    arity(1);
+    constexpr std::uint32_t systemMask = 0xc0000000u, systemTag = 0x40000000u;
+    auto *i32 = p.integer(32, true);
+    bool encode = key == "__vqr_encode_system_error";
+    auto value = expression(n->children[1], encode ? i32 : p.errorTy);
+    if (!live()) return neverValue();
+    auto *raw = read(value, n->span);
+    if (encode) return {p.errorTy, ir.CreateOr(raw, ir.getInt32(systemTag))};
+    auto *status = ir.CreateAnd(raw, ir.getInt32(~systemMask));
+    auto *present = ir.CreateICmpEQ(ir.CreateAnd(raw, ir.getInt32(systemMask)), ir.getInt32(systemTag));
+    auto *type = p.aggregate(Kind::Optional, {i32});
+    return {type, ir.CreateSelect(present, wrap(type, status, true).value, Constant::getNullValue(type->ir))};
+  }
   if (key == "__vqr_unaligned_load" || key == "__vqr_unaligned_store") {
     bool store = key == "__vqr_unaligned_store";
     arity(store ? 2 : 1);

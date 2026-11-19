@@ -721,7 +721,12 @@ bool Program::transferable(Type *t, bool shared) {
         allowed = self(self, type->parts[0], true);
       else if (shared && file.standard && file.package == "cell")
         allowed = false;
-      else if (file.standard && file.package == "coll" && (name == "Vec" || name == "FixedVec"))
+      else if (file.standard && file.package == "coll" && name == "Vec")
+        allowed = false;
+      else if (file.standard && file.package == "coll" && name == "FixedVec")
+        allowed = check(type->parts[0]);
+      // The private channel queue creates its buffers only with the default allocator.
+      else if (file.standard && file.package == "channel" && name == "Queue")
         allowed = check(type->parts[0]);
       else
         allowed = std::ranges::all_of(type->fields, [&](const auto &field) { return check(field.type); });
@@ -928,9 +933,11 @@ FunctionEntry &Program::function(Definition d, Types substitutions, Type *owner,
     if (hasComptimeParameters(decl) || !decl.generics.empty())
       fail(decl.span, "C functions require a fixed runtime signature");
     if (!cSymbols.insert(decl.name).second) fail(decl.span, "duplicate C symbol '" + decl.name + "'");
+    if (d.file->standard && decl.external && decl.name.starts_with("__vqr_io_") && !hostedLinux64())
+      fail(decl.span, "host I/O requires hosted GNU/Linux x86-64 or AArch64", "E290");
     auto scalar = [](Type *t) {
       return (t->kind == Kind::Int && (t->bits == 8 || t->bits == 16 || t->bits == 32 || t->bits == 64)) ||
-             t->kind == Kind::Error || t->kind == Kind::Float ||
+             t->kind == Kind::Float ||
              (t->kind == Kind::Pointer && t->ir->isPointerTy()) || (t->kind == Kind::Function && t->cAbi);
     };
     if ((ret != voidTy && !scalar(ret)) || !std::ranges::all_of(params, scalar))

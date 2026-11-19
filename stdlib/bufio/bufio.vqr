@@ -1,5 +1,5 @@
 package bufio
-import (io, coll, text)
+import (io, coll, text, mem)
 
 pub error BufferError { InvalidCapacity, BufferFull, UnreadUnavailable, TokenTooLong }
 
@@ -28,7 +28,7 @@ public:
         }
         if data.len() >= capacity { return; }
         var room = capacity - data.len();
-        var scratch: [4096]u8;
+        var scratch = mem.zeroedBytes<4096>();
         var count = if room < scratch.len() { room } else { scratch.len() };
         var received = source.read(scratch[0..count])!;
         if received == 0 { eof = true; return; }
@@ -51,19 +51,23 @@ public:
         count
     }
     func readByte() !?u8 {
-        var one: [1]u8;
+        var one = mem.zeroedBytes<1>();
         var count = read(one[:])!;
         if count == 0 { return null; }
         some(one[0])
     }
     func unreadByte(value: u8) !void {
-        if lastByte != some(value) || position == 0 { return BufferError.UnreadUnavailable; }
+        if position == 0 { return BufferError.UnreadUnavailable; }
+        switch lastByte {
+            null => return BufferError.UnreadUnavailable,
+            some(previous) => { if previous != value { return BufferError.UnreadUnavailable; } },
+        }
         position--;
         lastByte = null;
     }
     func peek(count: usize) ![]const u8 {
         if count > capacity { return BufferError.BufferFull; }
-        while data.len() - position < count && !eof {
+        for data.len() - position < count && !eof {
             var before = data.len() - position;
             fill()!;
             if data.len() - position == before { break; }
@@ -102,14 +106,14 @@ public:
     }
     func readString(delimiter: u8, maxBytes: usize) !?string {
         var bytes = readUntil(delimiter, maxBytes)!;
-        switch bytes {
+        switch move(bytes) {
             null => null,
             some(value) => some(text.fromBytes(value.asConstSlice())!),
         }
     }
     func readLine(maxBytes: usize) !?string {
         var line = readUntil(10, maxBytes)!;
-        switch line {
+        switch move(line) {
             null => null,
             some(value) => {
                 if value.len() != 0 && value[value.len() - 1] == 13 {
@@ -164,7 +168,7 @@ public:
         total
     }
     func writeByte(byte: u8) !void {
-        var one: [1]u8;
+        var one = mem.zeroedBytes<1>();
         one[0] = byte;
         var count = write(one[:])!;
         if count != 1 { return io.IoError.NoProgress; }

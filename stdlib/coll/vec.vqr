@@ -71,6 +71,14 @@ public:
     func shrinkToFit() !void { shrinkTo(length) }
 
 private:
+    comptime if mem.hasDefaultAllocator() {
+        func allocateBuffer(capacity: usize) !*T {
+            unsafe { __vqr_alloc<T>(capacity) }
+        }
+    } else {
+        func allocateBuffer(capacity: usize) !*T { mem.AllocationError.AllocatorUnavailable }
+    }
+
     func allocationLayout(capacity: usize) !mem.Layout {
         var layout = mem.Layout.array<T>(capacity)!;
         // Zero-sized elements still need a unique, releasable allocation token.
@@ -84,7 +92,7 @@ private:
         switch allocator {
             null => unsafe { __vqr_free<T>(address); },
             some(owner) => {
-                var layout = allocationLayout(capacity)!;
+                var layout = allocationLayout(capacity) catch { panic("invalid stored Vec capacity"); };
                 var bytes = unsafe { ptrCast<*u8>(address) };
                 owner.free(bytes, layout);
             },
@@ -104,7 +112,7 @@ private:
 
         var next: *T;
         switch allocator {
-            null => { next = unsafe { __vqr_alloc<T>(newCapacity)! }; },
+            null => { next = allocateBuffer(newCapacity)!; },
             some(owner) => {
                 var layout = allocationLayout(newCapacity)!;
                 var raw = owner.alloc(layout)!;

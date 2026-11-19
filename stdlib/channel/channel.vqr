@@ -82,6 +82,7 @@ public:
 
 pub class Channel<T: Movable & Sendable> {
     static func open(capacity: ?usize) !(Sender<T>, Receiver<T>) {
+        __vqr_validate_channel();
         var queue = Queue<T>(capacity)!;
         var shared = mem.Shared<State<T>>.new(State<T>(move(queue)))!;
         var sender = Sender<T>(shared.clone());

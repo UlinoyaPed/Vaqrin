@@ -84,3 +84,11 @@ pub unsafe func take<T: Movable>(ptr: *T) T { unsafe { __vqr_slot_take<T>(ptr) }
 pub unsafe func write<T: Movable>(ptr: *T, value: T) void {
     unsafe { __vqr_slot_write<T>(ptr, move(value)); }
 }
+
+pub func zeroedBytes<comptime N: usize>() [N]u8 {
+    var buffer = MaybeUninit<[N]u8>.uninit();
+    unsafe {
+        zeroBytes((*buffer.asPtr())[:]);
+        buffer.assumeInit()
+    }
+}

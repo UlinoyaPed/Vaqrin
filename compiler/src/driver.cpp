@@ -286,8 +286,9 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
              !function.use_empty();
     });
     if (usesIoRuntime &&
-        (r.options.profile != "hosted" || !target.isOSLinux() || !target.isArch64Bit() ||
-         !(target.isX86() || target.isAArch64())))
+        (r.options.profile != "hosted" || !target.isOSLinux() || !target.isGNUEnvironment() ||
+         module.getDataLayout().getPointerSizeInBits() != 64 ||
+         (target.getArch() != llvm::Triple::x86_64 && target.getArch() != llvm::Triple::aarch64)))
       fail({}, "host I/O currently requires hosted GNU/Linux x86-64 or AArch64", "E290");
     emit(module, machine, object, "obj");
     auto runtime = intermediates / "vaqrin-task-runtime.o";

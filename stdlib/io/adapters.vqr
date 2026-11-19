@@ -92,3 +92,19 @@ public:
         for target in targets { target.flush()!; }
     }
 }
+
+pub class TeeReader {
+    #implements: Reader
+    var source: *Reader;
+    var mirror: *Writer;
+public:
+    func init(reader: *Reader, writer: *Writer) : source(reader), mirror(writer) {}
+    func read(dst: []u8) !usize {
+        if dst.len() == 0 { return 0; }
+        var count = source.read(dst)!;
+        if count > dst.len() { return IoError.InvalidCount; }
+        if count != 0 { writeAll(mirror, dst[0..count])!; }
+        count
+    }
+}
+pub func tee(reader: *Reader, writer: *Writer) TeeReader { TeeReader(reader, writer) }

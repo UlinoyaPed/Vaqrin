@@ -94,8 +94,14 @@ public:
         BinaryHeap<T>(less, HeapOrder.Min)
     }
 
-    static func max() Self { BinaryHeap<T>.withMaxComparator(heapDefaultLess<T>) }
-    static func min() Self { BinaryHeap<T>.withMinComparator(heapDefaultLess<T>) }
+    static func max() Self {
+        var comparator: func(*const T, *const T) bool = (a, b: *const T) bool => heapDefaultLess<T>(a, b);
+        BinaryHeap<T>.withMaxComparator(comparator)
+    }
+    static func min() Self {
+        var comparator: func(*const T, *const T) bool = (a, b: *const T) bool => heapDefaultLess<T>(a, b);
+        BinaryHeap<T>.withMinComparator(comparator)
+    }
 
     static func withAllocator(
         less: func(*const T, *const T) bool, order: HeapOrder,

@@ -1,20 +1,32 @@
 package coll
 import (mem)
 
-pub class ListNode<T: Movable> {
+class ListNode<T: Movable> {
     #copy: disabled
     var slot: mem.MaybeUninit<T>;
+    var initialized: bool;
+public:
     var previous: ?*ListNode<T>;
     var following: ?*ListNode<T>;
     var ownerIndex: usize;
 
     func init(item: T)
-        : slot(mem.MaybeUninit<T>.uninit()), previous(null), following(null), ownerIndex(0) {
+        : slot(mem.MaybeUninit<T>.uninit()), initialized(false),
+          previous(null), following(null), ownerIndex(0) {
         unsafe { slot.write(move(item)); }
+        initialized = true;
     }
 
     const func valueRef() *const T { slot.asConstPtr() }
     func valueMut() *T { slot.asPtr() }
+
+    func take() T {
+        initialized = false;
+        unsafe { slot.assumeInit() }
+    }
+    func deinit() void {
+        if initialized { unsafe { slot.assumeInitDrop(); } }
+    }
 }
 
 pub class ListIterRef<T: Movable> {
@@ -104,9 +116,15 @@ public:
     const func isEmpty() bool { length == 0 }
 
 private:
+    comptime if mem.hasDefaultAllocator() {
+        func defaultNode(value: T) !^ListNode<T> { new ListNode<T>(move(value)) }
+    } else {
+        func defaultNode(value: T) !^ListNode<T> { mem.AllocationError.AllocatorUnavailable }
+    }
+
     func newNode(value: T) !^ListNode<T> {
         switch allocator {
-            null => new ListNode<T>(move(value))!,
+            null => defaultNode(move(value))!,
             some(source) => new(source) ListNode<T>(move(value))!,
         }
     }
@@ -135,17 +153,17 @@ private:
         }
 
         var index = node.ownerIndex;
-        if index >= nodes.len() || nodes.get(index).unwrap().asPtr() != node {
+        var expected: *const ListNode<T> = node;
+        if index >= nodes.len() || (*nodes.get(index).unwrap()).asPtr() != expected {
             panic("LinkedList node ownership index invariant");
         }
         var owner = nodes.swapRemove(index).unwrap();
         if index < nodes.len() {
-            nodes.getMut(index).unwrap().asPtr().ownerIndex = index;
+            (*nodes.getMut(index).unwrap()).asPtr().ownerIndex = index;
         }
 
         length--;
-        var value = unsafe { node.slot.assumeInit() };
-        move(value)
+        node.take()
     }
 
 public:
@@ -264,7 +282,7 @@ public:
         var base = nodes.len();
         nodes.append(&other.nodes)!;
         for i := base; i < nodes.len(); i++ {
-            nodes.getMut(i).unwrap().asPtr().ownerIndex = i;
+            (*nodes.getMut(i).unwrap()).asPtr().ownerIndex = i;
         }
 
         switch lastNode {
@@ -301,10 +319,10 @@ public:
             var ownerIndex = node.ownerIndex;
             var owner = nodes.swapRemove(ownerIndex);
             if ownerIndex < nodes.len() {
-                nodes.getMut(ownerIndex).unwrap().asPtr().ownerIndex = ownerIndex;
+                (*nodes.getMut(ownerIndex).unwrap()).asPtr().ownerIndex = ownerIndex;
             }
             node.ownerIndex = result.nodes.len();
-            result.nodes.push(move(owner.unwrap()))!;
+            result.nodes.push(move(owner).unwrap())!;
         }
 
         result.firstNode = some(split);

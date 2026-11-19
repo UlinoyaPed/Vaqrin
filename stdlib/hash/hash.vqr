@@ -15,7 +15,7 @@ pub class FnvHasher {
     var state: u32;
 public:
     func init() : state(2166136261u32) {}
-    func initSeeded(seed: u32) : state(2166136261u32 ^ seed) {}
+    func init(seed: u32) : state(2166136261u32 ^ seed) {}
 
     func writeByte(byte: u8) void {
         state = (state ^ u32(byte)) *% 16777619u32;
@@ -57,7 +57,7 @@ pub func hashBytesSeeded(bytes: []const u8, seed: u32) usize {
 }
 
 pub func hashCombine(seed: usize, value: usize) usize {
-    (seed ^ (value +% 0x9e3779b9usize +% (seed << 6) +% (seed >> 2)))
+    seed ^ (value +% usize(0x9e3779b9u32) +% (seed << 6) +% (seed >> 2))
 }
 
 pub func hashKey<T: HashKey>(value: *const T, seed: u32) usize {
@@ -82,16 +82,15 @@ pub func hashU8(value: *const u8, seed: u32) usize {
     hasher.finish()
 }
 
-func byte16(value: u16) u8 { u8(value) catch { panic("hash byte conversion invariant"); } }
 func byte32(value: u32) u8 { u8(value) catch { panic("hash byte conversion invariant"); } }
 func byte64(value: u64) u8 { u8(value) catch { panic("hash byte conversion invariant"); } }
 
 pub func hashI16(value: *const i16, seed: u32) usize {
     var hasher = FnvHasher();
     hasher.resetSeeded(seed);
-    var bits = bitCast<u16>(*value);
+    var bits = u32(bitCast<u16>(*value));
     for i in usize(0)..2 {
-        hasher.writeByte(byte16((bits >> (i * 8)) & 255u16));
+        hasher.writeByte(byte32((bits >> (i * 8)) & 255u32));
     }
     hasher.finish()
 }
@@ -100,7 +99,7 @@ pub func hashU16(value: *const u16, seed: u32) usize {
     var hasher = FnvHasher();
     hasher.resetSeeded(seed);
     for i in usize(0)..2 {
-        hasher.writeByte(byte16((*value >> (i * 8)) & 255u16));
+        hasher.writeByte(byte32((u32(*value) >> (i * 8)) & 255u32));
     }
     hasher.finish()
 }

@@ -1,4 +1,6 @@
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #define _DEFAULT_SOURCE
 #define _FILE_OFFSET_BITS 64
 
@@ -6,6 +8,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <locale.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -16,6 +19,13 @@
 
 static void set_error(int32_t *out_error, int value) {
     if (out_error) *out_error = value;
+}
+
+template <class Operation>
+static auto retry_interrupted(Operation operation) {
+    auto result = operation();
+    while (result < 0 && errno == EINTR) result = operation();
+    return result;
 }
 
 static int file_kind(mode_t mode) {
@@ -37,16 +47,6 @@ static void write_metadata(const struct stat *value, uint64_t *size, uint32_t *m
 
 extern "C" {
 
-int32_t __vqr_io_system_error(int32_t code) {
-    return (int32_t)(0x40000000u | ((uint32_t)code & 0x3fffffffu));
-}
-
-int32_t __vqr_io_error_code(int32_t error_id) {
-    uint32_t value = (uint32_t)error_id;
-    if ((value & 0xc0000000u) != 0x40000000u) return -1;
-    return (int32_t)(value & 0x3fffffffu);
-}
-
 int32_t __vqr_io_open(const char *path, uint32_t flags, uint32_t mode, int32_t *out_error) {
     int native_flags = O_CLOEXEC;
     int reading = (flags & 1u) != 0;
@@ -58,7 +58,7 @@ int32_t __vqr_io_open(const char *path, uint32_t flags, uint32_t mode, int32_t *
     if (flags & 8u) native_flags |= O_CREAT;
     if (flags & 16u) native_flags |= O_CREAT | O_EXCL;
     if (flags & 32u) native_flags |= O_TRUNC;
-    int descriptor = open(path, native_flags, (mode_t)mode);
+    int descriptor = retry_interrupted([&] { return open(path, native_flags, (mode_t)mode); });
     if (descriptor < 0) {
         set_error(out_error, errno);
         return -1;
@@ -72,7 +72,7 @@ intptr_t __vqr_io_file_read(int32_t descriptor, uint8_t *dst, size_t length, int
         set_error(out_error, 0);
         return 0;
     }
-    ssize_t count = read(descriptor, dst, length);
+    ssize_t count = retry_interrupted([&] { return read(descriptor, dst, length); });
     if (count < 0) {
         set_error(out_error, errno);
         return -1;
@@ -86,7 +86,7 @@ intptr_t __vqr_io_file_write(int32_t descriptor, const uint8_t *src, size_t leng
         set_error(out_error, 0);
         return 0;
     }
-    ssize_t count = write(descriptor, src, length);
+    ssize_t count = retry_interrupted([&] { return write(descriptor, src, length); });
     if (count < 0) {
         set_error(out_error, errno);
         return -1;
@@ -105,7 +105,7 @@ intptr_t __vqr_io_file_read_at(int32_t descriptor, uint8_t *dst, size_t length,
         set_error(out_error, 0);
         return 0;
     }
-    ssize_t count = pread(descriptor, dst, length, (off_t)offset);
+    ssize_t count = retry_interrupted([&] { return pread(descriptor, dst, length, (off_t)offset); });
     if (count < 0) {
         set_error(out_error, errno);
         return -1;
@@ -124,7 +124,7 @@ intptr_t __vqr_io_file_write_at(int32_t descriptor, const uint8_t *src, size_t l
         set_error(out_error, 0);
         return 0;
     }
-    ssize_t count = pwrite(descriptor, src, length, (off_t)offset);
+    ssize_t count = retry_interrupted([&] { return pwrite(descriptor, src, length, (off_t)offset); });
     if (count < 0) {
         set_error(out_error, errno);
         return -1;
@@ -351,13 +351,22 @@ int32_t __vqr_io_format_float(double value, int32_t style, int32_t precision,
         set_error(out_error, EINVAL);
         return -1;
     }
-    char format[16];
-    char conversion = style == 1 ? 'f' : style == 2 ? 'e' : 'g';
-    if (precision < 0)
-        snprintf(format, sizeof(format), "%%g");
-    else
-        snprintf(format, sizeof(format), "%%.%d%c", precision, conversion);
-    int count = snprintf((char *)buffer, capacity, format, value);
+    locale_t locale = newlocale(LC_NUMERIC_MASK, "C", nullptr);
+    if (!locale) {
+        set_error(out_error, errno);
+        return -1;
+    }
+    locale_t previous = uselocale(locale);
+    if (!previous) {
+        int reason = errno;
+        freelocale(locale);
+        set_error(out_error, reason);
+        return -1;
+    }
+    const char *const formats[] = {"%.*g", "%.*f", "%.*e"};
+    int count = snprintf((char *)buffer, capacity, formats[style], precision < 0 ? 6 : precision, value);
+    uselocale(previous);
+    freelocale(locale);
     if (count < 0) {
         set_error(out_error, EILSEQ);
         return -1;

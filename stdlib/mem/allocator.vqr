@@ -7,7 +7,9 @@ pub interface Allocator {
 
 pub type AllocatorRef = *Allocator;
 
-pub error AllocationError { OutOfMemory }
+pub error AllocationError { OutOfMemory, AllocatorUnavailable }
+
+pub comptime func hasDefaultAllocator() bool { __vqr_default_heap() }
 
 pub class GlobalAllocator {
     #implements: Allocator

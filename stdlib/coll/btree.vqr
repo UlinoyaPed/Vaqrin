@@ -215,7 +215,7 @@ private:
         node: *BTreeNode<K, V>, index: usize, key: K, value: V
     ) ?V {
         var previous = node.removeEntry(index);
-        var oldKey, oldValue := move(previous);
+        oldKey, oldValue := move(previous);
         node.insertEntry(index, (move(key), move(value)));
         some(move(oldValue))
     }
@@ -393,7 +393,7 @@ private:
                         root = some(child);
                         destroyBTreeNode<K, V>(node);
                     }
-                },
+                }
             },
         }
     }
@@ -430,13 +430,13 @@ public:
                         return reason;
                     };
                     root = some(newRoot);
-                },
+                }
             },
         }
 
         var result = insertNonFull(root.unwrap(), move(key), move(value))!;
         if result == null { length++; }
-        result
+        move(result)
     }
 
     const func get(key: *const K) ?*const V {
@@ -480,7 +480,7 @@ public:
                 var removed = removeFrom(node, key);
                 if removed != null { length--; }
                 contractRoot();
-                removed
+                move(removed)
             },
         }
     }
@@ -489,7 +489,7 @@ public:
         switch removeEntry(key) {
             null => null,
             some(entry) => {
-                var oldKey, oldValue := move(entry);
+                oldKey, oldValue := move(entry);
                 some(move(oldValue))
             },
         }
@@ -643,7 +643,7 @@ public:
         switch values.removeEntry(value) {
             null => null,
             some(entry) => {
-                var key, ignored := move(entry);
+                key, ignored := move(entry);
                 some(move(key))
             },
         }
@@ -667,7 +667,7 @@ public:
         switch values.popFirst() {
             null => null,
             some(entry) => {
-                var key, ignored := move(entry);
+                key, ignored := move(entry);
                 some(move(key))
             },
         }
@@ -677,7 +677,7 @@ public:
         switch values.popLast() {
             null => null,
             some(entry) => {
-                var key, ignored := move(entry);
+                key, ignored := move(entry);
                 some(move(key))
             },
         }

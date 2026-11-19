@@ -1,5 +1,5 @@
 package fmt
-import (io, text, coll, convert)
+import (io, text, coll, convert, mem)
 
 pub error FormatError { InvalidRadix, InvalidPrecision, WidthTooLarge, UnsupportedType, InvalidFormat }
 pub enum Alignment { Left, Right, Center }
@@ -22,17 +22,17 @@ public:
 func formatMagnitude(value: u128, radix: u8, negative: bool, uppercase: bool) !string {
     if radix < 2 || radix > 36 { return FormatError.InvalidRadix; }
     var digits = if uppercase { "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ" } else { "0123456789abcdefghijklmnopqrstuvwxyz" };
-    var buffer: [130]u8;
+    var buffer = mem.zeroedBytes<130>();
     var length: usize = 0;
     var number = value;
     for {
-        var digit = usize(number % u128(radix));
+        var digit = usize(number % u128(radix))!;
         buffer[length] = digits.asBytes()[digit];
         length++;
         number = number / u128(radix);
         if number == 0 { break; }
     }
-    if negative { buffer[length] = u8('-'); length++; }
+    if negative { buffer[length] = 45u8; length++; }
     var output = coll.Vec<u8>();
     for index := length; index > 0; index-- { output.push(buffer[index - 1])!; }
     text.fromBytes(output.asConstSlice())
@@ -41,7 +41,7 @@ func formatMagnitude(value: u128, radix: u8, negative: bool, uppercase: bool) !s
 func formatSigned<T>(value: T, radix: u8, uppercase: bool) !string {
     var number = i128(value);
     var negative = number < 0;
-    var magnitude = if negative { 0u128 -% bitCast<u128>(number) } else { u128(number) };
+    var magnitude = if negative { 0u128 -% bitCast<u128>(number) } else { bitCast<u128>(number) };
     formatMagnitude(magnitude, radix, negative, uppercase)
 }
 func formatUnsigned<T>(value: T, radix: u8, uppercase: bool) !string {
@@ -85,7 +85,7 @@ func charBytes(value: char, output: *[4]u8) usize {
 }
 
 func writeCharRaw(writer: *io.Writer, value: char) !void {
-    var bytes: [4]u8;
+    var bytes = mem.zeroedBytes<4>();
     var count = charBytes(value, &bytes);
     io.writeAll(writer, bytes[0..count])!
 }
@@ -96,7 +96,7 @@ func writeFill(writer: *io.Writer, value: char, count: usize) !void {
 pub func writeString(writer: *io.Writer, value: str, options: FormatOptions) !void {
     var length = text.scalarCount(value);
     var padding = if options.width > length { options.width - length } else { 0 };
-    var left = if options.alignment == Alignment.Left { 0 }
+    var left: usize = if options.alignment == Alignment.Left { 0 }
                else if options.alignment == Alignment.Center { padding / 2 }
                else { padding };
     var right = padding - left;
@@ -113,13 +113,13 @@ pub func writeBool(writer: *io.Writer, value: bool, options: FormatOptions) !voi
     writeString(writer, if value { "true" } else { "false" }, options)
 }
 pub func writeChar(writer: *io.Writer, value: char, options: FormatOptions) !void {
-    var bytes: [4]u8;
+    var bytes = mem.zeroedBytes<4>();
     var count = charBytes(value, &bytes);
     var valueText = text.fromBytes(bytes[0..count])!;
     writeString(writer, unsafe { __vqr_text_borrow_utf8(valueText.asBytes()) }, options)
 }
 
-extern "C" func __vqr_io_format_float(value: f64, style: i32, precision: i32, buffer: *u8, capacity: usize, length: *usize, error: *i32) i32;
+extern "C" func __vqr_io_format_float(value: f64, style: i32, precision: i32, buffer: *u8, capacity: usize, length: *usize, status: *i32) i32;
 
 pub func formatFloat(value: f64, style: FloatStyle, precision: ?usize) !string {
     var styleCode = switch style {
@@ -132,10 +132,10 @@ pub func formatFloat(value: f64, style: FloatStyle, precision: ?usize) !string {
         null => { if style != FloatStyle.General { digits = 6; } },
         some(value) => {
             if value > 64 { return FormatError.InvalidPrecision; }
-            digits = i32(value);
+            digits = i32(value)!;
         },
     }
-    var buffer: [512]u8;
+    var buffer = mem.zeroedBytes<512>();
     var length: usize = 0;
     var errorCode: i32 = 0;
     if unsafe { __vqr_io_format_float(value, styleCode, digits, &buffer[0], buffer.len(), &length, &errorCode) } != 0 {
@@ -146,22 +146,40 @@ pub func formatFloat(value: f64, style: FloatStyle, precision: ?usize) !string {
 
 pub func writeFloat(writer: *io.Writer, value: f64, options: FormatOptions) !void {
     var style = options.floatStyle;
-    var precision: ?usize = if options.precision < 0 { null } else { some(usize(options.precision)) };
+    var precision: ?usize = if options.precision < 0 { null } else { some(usize(options.precision)!) };
     var output = formatFloat(value, style, precision)!;
-    writeString(writer, unsafe { __vqr_text_borrow_utf8(output.asBytes()) }, options)!
+    writeNumber(writer, output, options)
 }
+
+func writeNumber(writer: *io.Writer, value: str, options: FormatOptions) !void {
+    var bytes = value.asBytes();
+    var negative = bytes.len() != 0 && bytes[0] == 45;
+    if !negative && !options.showSign { return writeString(writer, value, options); }
+    var sign: str = if negative { "-" } else { "+" };
+    var width = options.width -| value.byteLen();
+    if !negative { width = width -| 1; }
+    var left: usize = if options.alignment == Alignment.Left { 0 }
+                      else if options.alignment == Alignment.Center { width / 2 }
+                      else { width };
+    var zeroFill = options.fill == '0' && options.alignment == Alignment.Right;
+    if !zeroFill { writeFill(writer, options.fill, left)!; }
+    io.writeString(writer, sign)!;
+    if zeroFill { writeFill(writer, options.fill, left)!; }
+    var offset: usize = if negative { 1 } else { 0 };
+    io.writeAll(writer, bytes[offset..bytes.len()])!;
+    writeFill(writer, options.fill, width - left)
+}
+
 pub func writeSigned(writer: *io.Writer, value: i128, options: FormatOptions) !void {
     var output = formatMagnitude(
-        if value < 0 { 0u128 -% bitCast<u128>(value) } else { u128(value) },
+        if value < 0 { 0u128 -% bitCast<u128>(value) } else { bitCast<u128>(value) },
         options.radix, value < 0, options.uppercase
     )!;
-    if options.showSign && value >= 0 { io.writeString(writer, "+")!; }
-    writeString(writer, unsafe { __vqr_text_borrow_utf8(output.asBytes()) }, options)!
+    writeNumber(writer, output, options)
 }
 pub func writeUnsigned(writer: *io.Writer, value: u128, options: FormatOptions) !void {
     var output = formatMagnitude(value, options.radix, false, options.uppercase)!;
-    if options.showSign { io.writeString(writer, "+")!; }
-    writeString(writer, unsafe { __vqr_text_borrow_utf8(output.asBytes()) }, options)!
+    writeNumber(writer, output, options)
 }
 pub func writeInt(writer: *io.Writer, value: i64, options: FormatOptions) !void {
     writeSigned(writer, i128(value), options)
@@ -171,19 +189,19 @@ pub func writeUint(writer: *io.Writer, value: u64, options: FormatOptions) !void
 }
 pub func writeHex(writer: *io.Writer, data: []const u8, uppercase: bool) !void {
     var digits = if uppercase { "0123456789ABCDEF" } else { "0123456789abcdef" };
-    var pair: [2]u8;
+    var pair = mem.zeroedBytes<2>();
     for item in data {
-        pair[0] = digits.asBytes()[usize(item >> 4)];
-        pair[1] = digits.asBytes()[usize(item & 0x0f)];
+        pair[0] = digits.asBytes()[usize(item) >> 4];
+        pair[1] = digits.asBytes()[usize(item) & 0x0f];
         io.writeAll(writer, pair[:])!;
     }
 }
 
 pub enum FormatArg {
-    Text(str), Signed(i128), Unsigned(u128), Float(f64), Boolean(bool), Character(char),
+    Text(str), OwnedText(string), Signed(i128), Unsigned(u128), Float(f64), Boolean(bool), Character(char),
 }
 pub func arg(value: str) FormatArg { FormatArg.Text(value) }
-pub func arg(value: string) FormatArg { FormatArg.Text(unsafe { __vqr_text_borrow_utf8(value.asBytes()) }) }
+pub func arg(value: string) FormatArg { FormatArg.OwnedText(move(value)) }
 pub func arg(value: i8) FormatArg { FormatArg.Signed(i128(value)) }
 pub func arg(value: i16) FormatArg { FormatArg.Signed(i128(value)) }
 pub func arg(value: i128) FormatArg { FormatArg.Signed(value) }
@@ -202,6 +220,7 @@ pub func arg(value: char) FormatArg { FormatArg.Character(value) }
 func writeArg(writer: *io.Writer, value: FormatArg, options: FormatOptions) !void {
     switch value {
         FormatArg.Text(item) => writeString(writer, item, options)!,
+        FormatArg.OwnedText(&item) => writeString(writer, item, options)!,
         FormatArg.Signed(item) => writeSigned(writer, item, options)!,
         FormatArg.Unsigned(item) => writeUnsigned(writer, item, options)!,
         FormatArg.Float(item) => writeFloat(writer, item, options)!,
@@ -214,44 +233,44 @@ func parseSpec(value: str) !FormatOptions {
     var options = FormatOptions();
     var bytes = value.asBytes();
     var index: usize = 0;
-    if index < bytes.len() && bytes[index] == u8('+') { options.showSign = true; index++; }
-    if index < bytes.len() && (bytes[index] == u8('<') || bytes[index] == u8('>') || bytes[index] == u8('^')) {
-        options.alignment = if bytes[index] == u8('<') { Alignment.Left }
-                            else if bytes[index] == u8('^') { Alignment.Center }
+    if index < bytes.len() && bytes[index] == 43u8 { options.showSign = true; index++; }
+    if index < bytes.len() && (bytes[index] == 60u8 || bytes[index] == 62u8 || bytes[index] == 94u8) {
+        options.alignment = if bytes[index] == 60u8 { Alignment.Left }
+                            else if bytes[index] == 94u8 { Alignment.Center }
                             else { Alignment.Right };
         index++;
     }
-    if index < bytes.len() && bytes[index] == u8('0') { options.fill = '0'; }
-    while index < bytes.len() && 48 <= bytes[index] && bytes[index] <= 57 {
-        var digit = usize(bytes[index] - 48);
+    if index < bytes.len() && bytes[index] == 48u8 { options.fill = '0'; }
+    for index < bytes.len() && 48 <= bytes[index] && bytes[index] <= 57 {
+        var digit = usize(bytes[index]) - 48;
         if options.width > (~usize(0) - digit) / 10 { return FormatError.WidthTooLarge; }
         options.width = options.width * 10 + digit;
         index++;
     }
-    if index < bytes.len() && bytes[index] == u8('.') {
+    if index < bytes.len() && bytes[index] == 46u8 {
         index++;
         if index == bytes.len() { return FormatError.InvalidPrecision; }
         var precision: usize = 0;
         var firstDigit = index;
-        while index < bytes.len() && 48 <= bytes[index] && bytes[index] <= 57 {
-            var digit = usize(bytes[index] - 48);
+        for index < bytes.len() && 48 <= bytes[index] && bytes[index] <= 57 {
+            var digit = usize(bytes[index]) - 48;
             if precision > (64 - digit) / 10 { return FormatError.InvalidPrecision; }
             precision = precision * 10 + digit;
             index++;
         }
         if index == firstDigit { return FormatError.InvalidPrecision; }
-        options.precision = i32(precision);
+        options.precision = i32(precision)!;
     }
     if index < bytes.len() {
         switch bytes[index] {
-            98 => options.radix = 2,
-            111 => options.radix = 8,
-            100 => options.radix = 10,
-            120 => options.radix = 16,
+            98 => { options.radix = 2; },
+            111 => { options.radix = 8; },
+            100 => { options.radix = 10; },
+            120 => { options.radix = 16; },
             88 => { options.radix = 16; options.uppercase = true; },
-            102 => options.floatStyle = FloatStyle.Fixed,
-            101 => options.floatStyle = FloatStyle.Scientific,
-            103 => options.floatStyle = FloatStyle.General,
+            102 => { options.floatStyle = FloatStyle.Fixed; },
+            101 => { options.floatStyle = FloatStyle.Scientific; },
+            103 => { options.floatStyle = FloatStyle.General; },
             _ => return FormatError.InvalidFormat,
         }
         index++;
@@ -265,9 +284,10 @@ pub func writeTo(writer: *io.Writer, pattern: str, args: []const FormatArg) !voi
     var index: usize = 0;
     var literal: usize = 0;
     var argument: usize = 0;
+    var indexed = false;
     for index < bytes.len() {
-        if bytes[index] == u8('{') {
-            if index + 1 < bytes.len() && bytes[index + 1] == u8('{') {
+        if bytes[index] == 123u8 {
+            if index + 1 < bytes.len() && bytes[index + 1] == 123u8 {
                 if index > literal { io.writeAll(writer, bytes[literal..index])!; }
                 io.writeString(writer, "{")!;
                 index += 2;
@@ -276,21 +296,38 @@ pub func writeTo(writer: *io.Writer, pattern: str, args: []const FormatArg) !voi
             }
             if index > literal { io.writeAll(writer, bytes[literal..index])!; }
             var end = index + 1;
-            for end < bytes.len() && bytes[end] != u8('}') { end++; }
-            if end == bytes.len() || argument >= args.len() { return FormatError.InvalidFormat; }
-            var spec = if end == index + 1 { "" }
-                       else if bytes[index + 1] == u8(':') {
-                           unsafe { __vqr_text_borrow_utf8(bytes[index + 2..end]) }
+            for end < bytes.len() && bytes[end] != 125u8 { end++; }
+            if end == bytes.len() { return FormatError.InvalidFormat; }
+            var start = index + 1;
+            var cursor = start;
+            var selected: usize = 0;
+            for cursor < end && 48 <= bytes[cursor] && bytes[cursor] <= 57 {
+                var digit = usize(bytes[cursor]) - 48;
+                if selected > (~usize(0) - digit) / 10 { return FormatError.InvalidFormat; }
+                selected = selected * 10 + digit;
+                cursor++;
+            }
+            if cursor != start {
+                if argument != 0 { return FormatError.InvalidFormat; }
+                indexed = true;
+            } else {
+                if indexed || argument >= args.len() { return FormatError.InvalidFormat; }
+                selected = argument;
+                argument++;
+            }
+            if selected >= args.len() { return FormatError.InvalidFormat; }
+            var spec: str = if end == cursor { "" }
+                       else if bytes[cursor] == 58u8 {
+                           unsafe { __vqr_text_borrow_utf8(bytes[cursor + 1..end]) }
                        } else { return FormatError.InvalidFormat; };
             var options = parseSpec(spec)!;
-            writeArg(writer, args[argument], options)!;
-            argument++;
+            writeArg(writer, args[selected], options)!;
             index = end + 1;
             literal = index;
             continue;
         }
-        if bytes[index] == u8('}') {
-            if index + 1 < bytes.len() && bytes[index + 1] == u8('}') {
+        if bytes[index] == 125u8 {
+            if index + 1 < bytes.len() && bytes[index + 1] == 125u8 {
                 if index > literal { io.writeAll(writer, bytes[literal..index])!; }
                 io.writeString(writer, "}")!;
                 index += 2;
@@ -302,7 +339,7 @@ pub func writeTo(writer: *io.Writer, pattern: str, args: []const FormatArg) !voi
         index++;
     }
     if literal < bytes.len() { io.writeAll(writer, bytes[literal..bytes.len()])!; }
-    if argument != args.len() { return FormatError.InvalidFormat; }
+    if !indexed && argument != args.len() { return FormatError.InvalidFormat; }
 }
 
 pub func format(pattern: str, args: []const FormatArg) !string {

@@ -281,6 +281,14 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
       return function.getName().starts_with("__vqr_rt_") && !function.hasExternalWeakLinkage() &&
              !function.use_empty();
     });
+    bool usesIoRuntime = std::ranges::any_of(module, [](const llvm::Function &function) {
+      return function.getName().starts_with("__vqr_io_") && !function.hasExternalWeakLinkage() &&
+             !function.use_empty();
+    });
+    if (usesIoRuntime &&
+        (r.options.profile != "hosted" || !target.isOSLinux() || !target.isArch64Bit() ||
+         !(target.isX86() || target.isAArch64())))
+      fail({}, "host I/O currently requires hosted GNU/Linux x86-64 or AArch64", "E290");
     emit(module, machine, object, "obj");
     auto runtime = intermediates / "vaqrin-task-runtime.o";
     if (usesTasks) {
@@ -291,11 +299,22 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
                                source.string(), "-o", runtime.string()});
       execute(driver, args);
     }
+    auto ioRuntime = intermediates / "vaqrin-io-runtime.o";
+    if (usesIoRuntime) {
+      auto source = inputs.ioRuntimeSource();
+      if (!fs::is_regular_file(source)) fail({}, "the Vaqrin host I/O runtime source is missing", "E302");
+      auto args = targetFlags(r, target, driver);
+      args.insert(args.end(), {"-x", "c++", "-std=c++20", "-O2", "-fPIC", "-fvisibility=hidden",
+                               "-fno-exceptions", "-fno-rtti", "-c", source.string(), "-o",
+                               ioRuntime.string()});
+      execute(driver, args);
+    }
     if (kind == "staticlib") {
       if (!r.linkInputs.empty())
         fail({}, "use --link-input with executable or shared-library emission", "E302");
       std::vector<std::string> args{"rcsD", product.string(), object.string()};
       if (usesTasks) args.push_back(runtime.string());
+      if (usesIoRuntime) args.push_back(ioRuntime.string());
       execute(r.archiver.empty() ? "llvm-ar" : r.archiver, args);
     } else {
       auto args = targetFlags(r, target, driver);
@@ -313,6 +332,7 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
       }
       args.push_back(object.string());
       if (usesTasks) args.push_back(runtime.string());
+      if (usesIoRuntime) args.push_back(ioRuntime.string());
       for (const auto &input : r.linkInputs)
         args.push_back(fs::absolute(input).string());
       if (r.options.profile == "hosted" && target.isOSLinux() &&

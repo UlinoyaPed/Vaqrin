@@ -19,6 +19,7 @@ public:
   std::string scope(const File &file, std::string_view symbol, Span span);
   bool directoryVisible(const File &a, const File &b) const;
   Path taskRuntimeSource() const { return standardRoot.parent_path() / "runtime/tasks.c"; }
+  Path ioRuntimeSource() const { return standardRoot.parent_path() / "runtime/io_posix.cpp"; }
 
   std::deque<File> files;
   std::string rootName;

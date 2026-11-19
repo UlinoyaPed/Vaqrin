@@ -1,3 +1,59 @@
 package io
+import (coll, text)
 
 pub func println<T>(value: T) !void { __vqr_println(move(value)) }
+pub func print<T>(value: T) !void { __vqr_println(move(value)) }
+pub func eprintln<T>(value: T) !void { __vqr_println(move(value)) }
+pub func eprint<T>(value: T) !void { __vqr_println(move(value)) }
+
+pub func readExact(reader: *Reader, dst: []u8) !void {
+    var offset: usize = 0;
+    for offset < dst.len() {
+        var count = reader.read(dst[offset..dst.len()])!;
+        if count == 0 { return IoError.UnexpectedEof; }
+        if count > dst.len() - offset { return IoError.InvalidCount; }
+        offset += count;
+    }
+}
+
+pub func writeAll(writer: *Writer, src: []const u8) !void {
+    var offset: usize = 0;
+    for offset < src.len() {
+        var count = writer.write(src[offset..src.len()])!;
+        if count > src.len() - offset { return IoError.InvalidCount; }
+        if count == 0 { return IoError.NoProgress; }
+        offset += count;
+    }
+}
+
+pub func writeString(writer: *Writer, value: str) !void { writeAll(writer, value.asBytes()) }
+
+pub func copyN(reader: *Reader, writer: *Writer, n: u64, scratch: []u8) !u64 {
+    if n != 0 && scratch.len() == 0 { return IoError.InvalidCount; }
+    var copied: u64 = 0;
+    for copied < n {
+        var capacity = if n - copied < u64(scratch.len()) { usize(n - copied) } else { scratch.len() };
+        var count = reader.read(scratch[0..capacity])!;
+        if count == 0 { break; }
+        writeAll(writer, scratch[0..count])!;
+        copied += u64(count);
+    }
+    copied
+}
+
+pub func copyAll(reader: *Reader, writer: *Writer) !u64 {
+    var scratch: [4096]u8;
+    copyN(reader, writer, ~u64(0), scratch[:])
+}
+
+pub func discard(reader: *Reader, n: u64, scratch: []u8) !u64 {
+    if n != 0 && scratch.len() == 0 { return IoError.InvalidCount; }
+    var total: u64 = 0;
+    for total < n {
+        var capacity = if n - total < u64(scratch.len()) { usize(n - total) } else { scratch.len() };
+        var count = reader.read(scratch[0..capacity])!;
+        if count == 0 { break; }
+        total += u64(count);
+    }
+    total
+}

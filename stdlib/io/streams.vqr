@@ -28,7 +28,7 @@ pub class IoProgress {
 
 pub error IoError {
     WriteFailed, UnexpectedEof, NoProgress, WouldBlock, Interrupted, InvalidCount,
-    PositionOutOfRange, LimitExceeded,
+    PositionOutOfRange, LimitExceeded, Closed, InvalidArgument, Unsupported,
 }
 
 pub func read(reader: *Reader, dst: []u8) !usize {
@@ -50,10 +50,10 @@ pub func readExactProgress(reader: *Reader, dst: []u8) !IoProgress {
     var offset: usize = 0;
     for offset < dst.len() {
         var count = read(reader, dst[offset..dst.len()]) catch (reason) {
-            if reason == IoError.WouldBlock {
+            if isWouldBlock(reason) {
                 return IoProgress{processed: offset, status: ReadStatus.WouldBlock};
             }
-            if reason == IoError.Interrupted {
+            if isInterrupted(reason) {
                 return IoProgress{processed: offset, status: ReadStatus.Interrupted};
             }
             return reason;
@@ -89,10 +89,10 @@ pub func writeAllProgress(writer: *Writer, src: []const u8) !IoProgress {
     var offset: usize = 0;
     for offset < src.len() {
         var count = write(writer, src[offset..src.len()]) catch (reason) {
-            if reason == IoError.WouldBlock {
+            if isWouldBlock(reason) {
                 return IoProgress{processed: offset, status: ReadStatus.WouldBlock};
             }
-            if reason == IoError.Interrupted {
+            if isInterrupted(reason) {
                 return IoProgress{processed: offset, status: ReadStatus.Interrupted};
             }
             return reason;

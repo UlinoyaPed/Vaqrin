@@ -1,0 +1,63 @@
+package fmt
+import (io, text, coll)
+
+pub error FormatError { InvalidRadix, InvalidPrecision, WidthTooLarge, UnsupportedType, InvalidFormat }
+
+pub enum Alignment { Left, Right, Center }
+pub enum FloatStyle { General, Fixed, Scientific }
+
+pub class FormatOptions {
+    pub var radix: u8;
+    pub var width: usize;
+    pub var precision: i32;
+    pub var fill: char;
+    pub var alignment: Alignment;
+    pub var uppercase: bool;
+    pub var showSign: bool;
+public:
+    func init() : radix(10), width(0), precision(-1), fill(' '), alignment(Alignment.Right), uppercase(false), showSign(false) {}
+}
+
+pub func formatInt<T>(value: T, radix: u8) !string {
+    if radix < 2 || radix > 36 { return FormatError.InvalidRadix; }
+    var negative = false;
+    var number = u64(value);
+    if value < 0 { negative = true; number = 0u64 -% number; }
+    var digits = "0123456789abcdefghijklmnopqrstuvwxyz";
+    var buffer: [66]u8;
+    var length: usize = 0;
+    for {
+        var digit = usize(number % u64(radix));
+        buffer[length] = digits.asBytes()[digit];
+        length++;
+        number = number / u64(radix);
+        if number == 0 { break; }
+    }
+    if negative { buffer[length] = u8('-'); length++; }
+    var output = coll.Vec<u8>();
+    for index := length; index > 0; index-- { output.push(buffer[index - 1])!; }
+    text.fromBytes(output.asConstSlice())
+}
+
+pub func writeInt<T>(writer: *io.Writer, value: T, options: FormatOptions) !void {
+    var valueText = formatInt(value, options.radix)!;
+    io.writeString(writer, valueText)!
+}
+
+pub func writeString(writer: *io.Writer, value: str, width: usize, alignment: Alignment, fill: u8) !void {
+    var length = value.byteLen();
+    var padding = if width > length { width - length } else { 0 };
+    var left = if alignment == Alignment.Left { 0 } else if alignment == Alignment.Center { padding / 2 } else { padding };
+    var right = padding - left;
+    var one: [1]u8{fill};
+    for i in usize(0)..left { io.writeAll(writer, one[:])!; }
+    io.writeString(writer, value)!;
+    for i in usize(0)..right { io.writeAll(writer, one[:])!; }
+}
+
+pub func format(value: str) !string { text.fromBytes(value.asBytes()) }
+pub func writeTo(writer: *io.Writer, value: str) !void { io.writeString(writer, value) }
+pub func print(value: str) !void { var output = io.stdout(); io.writeString(&output, value)!; output.flush() }
+pub func println(value: str) !void { print(value)!; print("\n") }
+pub func eprint(value: str) !void { var output = io.stderr(); io.writeString(&output, value)!; output.flush() }
+pub func eprintln(value: str) !void { eprint(value)!; eprint("\n") }

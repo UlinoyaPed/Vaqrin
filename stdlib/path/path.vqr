@@ -1,0 +1,65 @@
+package path
+import (coll, text)
+
+pub error PathError { Empty, InvalidComponent, Capacity }
+
+pub class Path {
+    var value: string;
+public:
+    func init(value: str) : value(text.fromBytes(value.asBytes())!) {}
+    const func asString() str { unsafe { __vqr_text_borrow_utf8(value.asBytes()) } }
+    const func isAbsolute() bool {
+        var bytes = value.asBytes();
+        bytes.len() != 0 && bytes[0] == u8('/')
+    }
+    const func isRelative() bool { !isAbsolute() }
+    const func filename() ?str {
+        var bytes = value.asBytes();
+        if bytes.len() == 0 { return null; }
+        var start = bytes.len();
+        for start > 0 && bytes[start - 1] != u8('/') { start--; }
+        if start == bytes.len() { return null; }
+        some(unsafe { __vqr_text_borrow_utf8(bytes[start..bytes.len()]) })
+    }
+    const func parent() ?string {
+        var bytes = value.asBytes();
+        var end = bytes.len();
+        for end > 0 && bytes[end - 1] == u8('/') { end--; }
+        for end > 0 && bytes[end - 1] != u8('/') { end--; }
+        if end == 0 { return null; }
+        if end == 1 { return some("/"); }
+        some(text.fromBytes(bytes[0..end - 1])!)
+    }
+    const func extension() ?str {
+        var name = filename() ?? { return null; };
+        var bytes = name.asBytes();
+        var index = bytes.len();
+        for index > 0 && bytes[index - 1] != u8('.') { index--; }
+        if index == 0 || index == 1 { return null; }
+        some(unsafe { __vqr_text_borrow_utf8(bytes[index..bytes.len()]) })
+    }
+    const func stem() ?string {
+        var name = filename() ?? { return null; };
+        var bytes = name.asBytes();
+        var index = bytes.len();
+        for index > 0 && bytes[index - 1] != u8('.') { index--; }
+        if index == 0 || index == 1 { return some(text.fromBytes(bytes)!); }
+        some(text.fromBytes(bytes[0..index - 1])!)
+    }
+}
+
+pub func join(base: str, child: str) !string {
+    if child.byteLen() == 0 { return text.fromBytes(base.asBytes()); }
+    if child.asBytes()[0] == u8('/') { return text.fromBytes(child.asBytes()); }
+    var out = text.StringBuilder();
+    out.append(base)!;
+    if base.byteLen() != 0 && base.asBytes()[base.byteLen() - 1] != u8('/') { out.append("/")!; }
+    out.append(child)!;
+    out.build()
+}
+
+pub func filename(value: str) ?str { Path(value).filename() }
+pub func parent(value: str) ?string { Path(value).parent() }
+pub func extension(value: str) ?str { Path(value).extension() }
+pub func stem(value: str) ?string { Path(value).stem() }
+pub func isAbsolute(value: str) bool { Path(value).isAbsolute() }

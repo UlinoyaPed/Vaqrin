@@ -1,0 +1,299 @@
+package io
+import (coll, text)
+
+extern "C" func __vqr_io_system_error(code: i32) ErrorId;
+extern "C" func __vqr_io_error_code(error: ErrorId) i32;
+extern "C" func __vqr_io_open(path: *const u8, flags: u32, mode: u32, error: *i32) i32;
+extern "C" func __vqr_io_file_read(fd: i32, dst: *u8, length: usize, error: *i32) isize;
+extern "C" func __vqr_io_file_write(fd: i32, src: *const u8, length: usize, error: *i32) isize;
+extern "C" func __vqr_io_file_seek(fd: i32, offset: i64, origin: i32, error: *i32) i64;
+extern "C" func __vqr_io_file_close(fd: i32, error: *i32) i32;
+extern "C" func __vqr_io_file_sync(fd: i32, dataOnly: i32, error: *i32) i32;
+extern "C" func __vqr_io_file_truncate(fd: i32, size: u64, error: *i32) i32;
+extern "C" func __vqr_io_file_metadata(fd: i32, size: *u64, mode: *u32, modified: *i64, kind: *i32, error: *i32) i32;
+extern "C" func __vqr_io_file_set_mode(fd: i32, mode: u32, error: *i32) i32;
+extern "C" func __vqr_io_stat(path: *const u8, follow: i32, size: *u64, mode: *u32, modified: *i64, kind: *i32, error: *i32) i32;
+extern "C" func __vqr_io_mkdir(path: *const u8, mode: u32, error: *i32) i32;
+extern "C" func __vqr_io_remove(path: *const u8, error: *i32) i32;
+extern "C" func __vqr_io_remove_dir(path: *const u8, error: *i32) i32;
+extern "C" func __vqr_io_rename(from: *const u8, to: *const u8, error: *i32) i32;
+extern "C" func __vqr_io_chmod(path: *const u8, mode: u32, error: *i32) i32;
+extern "C" func __vqr_io_dir_open(path: *const u8, error: *i32) *u8;
+extern "C" func __vqr_io_dir_next(dir: *u8, name: *u8, capacity: usize, length: *usize, kind: *i32, error: *i32) i32;
+extern "C" func __vqr_io_dir_close(dir: *u8, error: *i32) i32;
+extern "C" func __vqr_io_getcwd(buffer: *u8, capacity: usize, length: *usize, error: *i32) i32;
+extern "C" func __vqr_io_chdir(path: *const u8, error: *i32) i32;
+
+func cString(value: []const u8) !coll.Vec<u8> {
+    if value.len() == ~usize(0) { return IoError.InvalidArgument; }
+    var output = coll.Vec<u8>.withCapacity(value.len() + 1)!;
+    for byte in value { output.push(byte)!; }
+    output.push(0)!;
+    move(output)
+}
+
+pub func systemError(code: i32) ErrorId { unsafe { __vqr_io_system_error(code) } }
+
+pub func systemErrorCode(reason: ErrorId) ?i32 {
+    var code = unsafe { __vqr_io_error_code(reason) };
+    if code < 0 { return null; }
+    some(code)
+}
+
+pub func isSystemError(reason: ErrorId) bool { systemErrorCode(reason) != null }
+
+pub func isInterrupted(reason: ErrorId) bool {
+    if reason == IoError.Interrupted { return true; }
+    systemErrorCode(reason) == some(4)
+}
+
+pub func isWouldBlock(reason: ErrorId) bool {
+    if reason == IoError.WouldBlock { return true; }
+    systemErrorCode(reason) == some(11)
+}
+
+pub class HostMetadata {
+    var fileSize: u64;
+    var permissionMode: u32;
+    var modified: i64;
+    var kind: i32;
+public:
+    func init(size: u64, mode: u32, modified: i64, kind: i32)
+        : fileSize(size), permissionMode(mode), modified(modified), kind(kind) {}
+    const func size() u64 { fileSize }
+    const func mode() u32 { permissionMode }
+    const func modifiedUnixSeconds() i64 { modified }
+    const func kindCode() i32 { kind }
+}
+
+pub class HostFile {
+    #copy: disabled
+    #implements: Reader, Writer, Seeker, Closer
+    var descriptor: i32;
+    var owns: bool;
+    var closed: bool;
+public:
+    func init(fd: i32, ownsDescriptor: bool) : descriptor(fd), owns(ownsDescriptor), closed(false) {}
+
+    static func open(path: []const u8, flags: u32, mode: u32) !Self {
+        var name = cString(path)!;
+        var errorCode: i32 = 0;
+        var fd = unsafe { __vqr_io_open(&name[0], flags, mode, &errorCode) };
+        if fd < 0 { return systemError(errorCode); }
+        HostFile(fd, true)
+    }
+
+    static func standardInput() Self { HostFile(0, false) }
+    static func standardOutput() Self { HostFile(1, false) }
+    static func standardError() Self { HostFile(2, false) }
+
+    func read(dst: []u8) !usize {
+        if closed { return IoError.Closed; }
+        if dst.len() == 0 { return 0; }
+        var errorCode: i32 = 0;
+        var count = unsafe { __vqr_io_file_read(descriptor, &dst[0], dst.len(), &errorCode) };
+        if count < 0 { return systemError(errorCode); }
+        if u64(count) > u64(dst.len()) { return IoError.InvalidCount; }
+        usize(count)
+    }
+
+    func write(src: []const u8) !usize {
+        if closed { return IoError.Closed; }
+        if src.len() == 0 { return 0; }
+        var errorCode: i32 = 0;
+        var count = unsafe { __vqr_io_file_write(descriptor, &src[0], src.len(), &errorCode) };
+        if count < 0 { return systemError(errorCode); }
+        if u64(count) > u64(src.len()) { return IoError.InvalidCount; }
+        usize(count)
+    }
+
+    func seek(offset: i64, origin: SeekOrigin) !u64 {
+        if closed { return IoError.Closed; }
+        var base = switch origin {
+            SeekOrigin.Start => 0,
+            SeekOrigin.Current => 1,
+            SeekOrigin.End => 2,
+        };
+        var errorCode: i32 = 0;
+        var position = unsafe { __vqr_io_file_seek(descriptor, offset, base, &errorCode) };
+        if position < 0 { return systemError(errorCode); }
+        u64(position)
+    }
+
+    func flush() !void { if closed { return IoError.Closed; } }
+
+    func syncAll() !void {
+        if closed { return IoError.Closed; }
+        var errorCode: i32 = 0;
+        if unsafe { __vqr_io_file_sync(descriptor, 0, &errorCode) } != 0 {
+            return systemError(errorCode);
+        }
+    }
+
+    func syncData() !void {
+        if closed { return IoError.Closed; }
+        var errorCode: i32 = 0;
+        if unsafe { __vqr_io_file_sync(descriptor, 1, &errorCode) } != 0 {
+            return systemError(errorCode);
+        }
+    }
+
+    func truncate(size: u64) !void {
+        if closed { return IoError.Closed; }
+        var errorCode: i32 = 0;
+        if unsafe { __vqr_io_file_truncate(descriptor, size, &errorCode) } != 0 {
+            return systemError(errorCode);
+        }
+    }
+
+    func metadata() !HostMetadata {
+        if closed { return IoError.Closed; }
+        var size: u64 = 0;
+        var mode: u32 = 0;
+        var modified: i64 = 0;
+        var kind: i32 = 0;
+        var errorCode: i32 = 0;
+        if unsafe { __vqr_io_file_metadata(descriptor, &size, &mode, &modified, &kind, &errorCode) } != 0 {
+            return systemError(errorCode);
+        }
+        HostMetadata(size, mode, modified, kind)
+    }
+
+    func setMode(mode: u32) !void {
+        if closed { return IoError.Closed; }
+        var errorCode: i32 = 0;
+        if unsafe { __vqr_io_file_set_mode(descriptor, mode, &errorCode) } != 0 {
+            return systemError(errorCode);
+        }
+    }
+
+    func close() !void {
+        if closed || !owns { closed = true; return; }
+        var fd = descriptor;
+        descriptor = -1;
+        closed = true;
+        var errorCode: i32 = 0;
+        if unsafe { __vqr_io_file_close(fd, &errorCode) } != 0 {
+            return systemError(errorCode);
+        }
+    }
+
+    func deinit() void { close() catch {}; }
+}
+
+pub class HostDirEntry {
+    var entryName: string;
+    var kind: i32;
+public:
+    func init(name: string, kind: i32) : entryName(name), kind(kind) {}
+    const func name() str { unsafe { __vqr_text_borrow_utf8(entryName.asBytes()) } }
+    const func kindCode() i32 { kind }
+}
+
+pub class HostDirectory {
+    #copy: disabled
+    var handle: *u8;
+    var closed: bool;
+public:
+    func init(handle: *u8) : handle(handle), closed(false) {}
+
+    static func open(path: []const u8) !Self {
+        var name = cString(path)!;
+        var errorCode: i32 = 0;
+        var directory = unsafe { __vqr_io_dir_open(&name[0], &errorCode) };
+        if directory == null { return systemError(errorCode); }
+        HostDirectory(directory)
+    }
+
+    func next() !?HostDirEntry {
+        if closed { return IoError.Closed; }
+        var name: [4096]u8;
+        var length: usize = 0;
+        var kind: i32 = 0;
+        var errorCode: i32 = 0;
+        var status = unsafe { __vqr_io_dir_next(handle, &name[0], name.len(), &length, &kind, &errorCode) };
+        if status == 0 { return null; }
+        if status < 0 { return systemError(errorCode); }
+        var value = text.fromBytes(name[0..length])!;
+        some(HostDirEntry(move(value), kind))
+    }
+
+    func close() !void {
+        if closed { return; }
+        closed = true;
+        var errorCode: i32 = 0;
+        if unsafe { __vqr_io_dir_close(handle, &errorCode) } != 0 {
+            return systemError(errorCode);
+        }
+        handle = ptrFromInt<*u8>(0);
+    }
+
+    func deinit() void { close() catch {}; }
+}
+
+pub func hostStat(path: []const u8, follow: bool) !HostMetadata {
+    var name = cString(path)!;
+    var size: u64 = 0;
+    var mode: u32 = 0;
+    var modified: i64 = 0;
+    var kind: i32 = 0;
+    var errorCode: i32 = 0;
+    if unsafe { __vqr_io_stat(&name[0], if follow { 1 } else { 0 }, &size, &mode, &modified, &kind, &errorCode) } != 0 {
+        return systemError(errorCode);
+    }
+    HostMetadata(size, mode, modified, kind)
+}
+
+pub func hostMkdir(path: []const u8, mode: u32) !void {
+    var name = cString(path)!;
+    var errorCode: i32 = 0;
+    if unsafe { __vqr_io_mkdir(&name[0], mode, &errorCode) } != 0 { return systemError(errorCode); }
+}
+
+pub func hostRemove(path: []const u8) !void {
+    var name = cString(path)!;
+    var errorCode: i32 = 0;
+    if unsafe { __vqr_io_remove(&name[0], &errorCode) } != 0 { return systemError(errorCode); }
+}
+
+pub func hostRemoveDir(path: []const u8) !void {
+    var name = cString(path)!;
+    var errorCode: i32 = 0;
+    if unsafe { __vqr_io_remove_dir(&name[0], &errorCode) } != 0 { return systemError(errorCode); }
+}
+
+pub func hostRename(from: []const u8, to: []const u8) !void {
+    var source = cString(from)!;
+    var target = cString(to)!;
+    var errorCode: i32 = 0;
+    if unsafe { __vqr_io_rename(&source[0], &target[0], &errorCode) } != 0 {
+        return systemError(errorCode);
+    }
+}
+
+pub func hostChmod(path: []const u8, mode: u32) !void {
+    var name = cString(path)!;
+    var errorCode: i32 = 0;
+    if unsafe { __vqr_io_chmod(&name[0], mode, &errorCode) } != 0 { return systemError(errorCode); }
+}
+
+pub func currentDir() !string {
+    var buffer: [4096]u8;
+    var length: usize = 0;
+    var errorCode: i32 = 0;
+    if unsafe { __vqr_io_getcwd(&buffer[0], buffer.len(), &length, &errorCode) } != 0 {
+        return systemError(errorCode);
+    }
+    text.fromBytes(buffer[0..length])
+}
+
+pub func setCurrentDir(path: []const u8) !void {
+    var name = cString(path)!;
+    var errorCode: i32 = 0;
+    if unsafe { __vqr_io_chdir(&name[0], &errorCode) } != 0 { return systemError(errorCode); }
+}
+
+pub func stdin() HostFile { HostFile.standardInput() }
+pub func stdout() HostFile { HostFile.standardOutput() }
+pub func stderr() HostFile { HostFile.standardError() }
+pub func flushStdout() !void { var output = stdout(); output.flush() }

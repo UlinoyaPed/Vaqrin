@@ -172,8 +172,7 @@ pub func isGraphemeBoundary(value: str, byteOffset: usize) bool {
     var position: usize = 0;
     for position < byteOffset {
         var decoded = decodeUtf8(bytes[position..]) catch { return false; };
-        var boundary = segmenter.feed(decoded.0);
-        if boundary && position != 0 { return false; }
+        segmenter.feed(decoded.0);
         position += decoded.1;
     }
     var next = decodeUtf8(bytes[byteOffset..]) catch { return false; };

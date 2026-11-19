@@ -1822,6 +1822,119 @@ class Acceptance(unittest.TestCase):
         self.process("cc", client, "once.o", "-pthread", "-o", "thread-client")
         self.process("./thread-client")
 
+    def test_native_thread_move_join_and_cooperative_stop(self):
+        self.hosted('''
+            import (meta, thread)
+            error WorkError { Rejected }
+            class Record {
+                #copy: disabled
+                pub var value: i32;
+            }
+            func main() !void {
+                var mainId = thread.currentId().value;
+                var worker = [mainId]() !i32 => {
+                    if thread.currentId().value == mainId { return WorkError.Rejected; }
+                    for !thread.stopRequested() { thread.yieldNow(); }
+                    42
+                };
+                var job = thread.Thread<i32>.spawn(move(worker))!;
+                io.println(job.id().value != mainId)!;
+                io.println(job.isFinished())!;
+                job.requestStop();
+                io.println(job.join()!)!;
+                io.println(job.join() catch i32(-2))!;
+                var transfer = Record{value: 17};
+                var owner = [move(transfer)]() Record => move(transfer);
+                var ownership = thread.Thread<Record>.spawn(move(owner))!;
+                var result = ownership.join()!;
+                io.println(result.value)!;
+                var fail = () !i32 => WorkError.Rejected;
+                var failure = thread.Thread<i32>.spawn(fail)!;
+                io.println(failure.join() catch (reason) {
+                    if reason == WorkError.Rejected { i32(-3) } else { i32(-4) }
+                })!;
+                const noResult: func() void = () void => {};
+                var finished = thread.spawn<void, func() void>(noResult)!;
+                finished.join()!;
+                var abandoned = thread.Thread<void>.spawn(noResult)!;
+                abandoned.detach();
+                io.println(thread.cpuCount() > 0)!;
+                io.println(meta.isSendable<thread.Thread<Record>>())!;
+                io.println(thread.stopRequested())!;
+            }
+        ''', 'true\nfalse\n42\n-2\n17\n-3\ntrue\ntrue\nfalse\n')
+        source = self.source("borrowed.vqr", '''
+            import (thread)
+            func launch() !void {
+                var counter = 0;
+                var callback = [&counter]() i32 => counter;
+                var worker = thread.Thread<i32>.spawn(move(callback))!;
+            }
+        ''')
+        result = self.process(VAQC, "check", source, good=False)
+        self.assertIn(b"error[E202]: no accessible overload", result.stderr)
+        source = self.source("no-host.vqr", '''
+            import (thread)
+            func run() void { thread.yieldNow(); }
+        ''')
+        result = self.process(VAQC, "check", source, "--profile", "freestanding", good=False)
+        self.assertIn(b"native threads require a hosted", result.stderr)
+
+    def test_native_thread_failed_start_and_detached_cleanup(self):
+        source = self.source("ownership.vqr", '''
+            import (thread)
+            extern "C" func record_drop(id: c_int) void;
+            extern "C" func await_permission() void;
+            class Probe {
+                #copy: disabled
+                pub var id: c_int;
+                func deinit() void { unsafe { record_drop(id); } }
+            }
+            export "C" func try_start(which: c_int) c_int {
+                var resource = Probe{id: which};
+                var callback = [move(resource)]() Probe => {
+                    unsafe { await_permission(); }
+                    move(resource)
+                };
+                var threadHandle = thread.Thread<Probe>.spawn(move(callback)) catch (reason) {
+                    if reason == thread.ThreadError.StartFailed { return 1; }
+                    return 2;
+                };
+                threadHandle.detach();
+                0
+            }
+        ''')
+        client = self.source("ownership.c", '''
+            #include <errno.h>
+            #include <pthread.h>
+            #include <sched.h>
+            #include <stdatomic.h>
+
+            extern int try_start(int);
+            extern int __real_pthread_create(pthread_t *, const pthread_attr_t *,
+                                              void *(*)(void *), void *);
+            static int reject = 1;
+            static _Atomic int proceed, freed[2];
+            int __wrap_pthread_create(pthread_t *id, const pthread_attr_t *attributes,
+                                      void *(*work)(void *), void *context) {
+                if (reject) return EAGAIN;
+                return __real_pthread_create(id, attributes, work, context);
+            }
+            void record_drop(int id) { atomic_fetch_add(&freed[id], 1); }
+            void await_permission(void) { while (!atomic_load(&proceed)) sched_yield(); }
+            int main(void) {
+                if (try_start(0) != 1 || atomic_load(&freed[0]) != 1) return 1;
+                reject = 0;
+                if (try_start(1) != 0 || atomic_load(&freed[1])) return 2;
+                atomic_store(&proceed, 1);
+                while (!atomic_load(&freed[1])) sched_yield();
+                return atomic_load(&freed[1]) != 1;
+            }
+        ''')
+        self.process(VAQC, source, "--emit=obj", "-O2", "-o", "ownership.o")
+        self.process("cc", client, "ownership.o", "-Wl,--wrap=pthread_create", "-pthread", "-o", "ownership")
+        self.process("./ownership")
+
     def test_build_artifacts(self):
         source = self.source("math.vqr", '''
             package math

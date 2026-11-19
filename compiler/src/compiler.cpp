@@ -709,6 +709,8 @@ bool Program::transferable(Type *t, bool shared) {
       auto name = type->def.decl->name;
       if (file.standard && file.package == "cell" && name == "OnceLock")
         allowed = check(type->parts[0]);
+      else if (file.standard && file.package == "thread" && name == "Thread")
+        allowed = !shared && check(type->parts[0]);
       else if (shared && file.standard && file.package == "cell")
         allowed = false;
       else if (file.standard && file.package == "coll" && (name == "Vec" || name == "FixedVec"))

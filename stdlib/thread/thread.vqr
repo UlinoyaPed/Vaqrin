@@ -1,0 +1,119 @@
+package thread
+import (atomic, core, opt)
+
+pub error ThreadError { StartFailed, Closed, JoinFailed, SelfJoin, MissingResult }
+
+pub class ThreadId {
+    pub var value: usize;
+}
+
+class State<T: Movable & Sendable> {
+    pub var references: atomic.Atomic<u8>;
+    pub var finished: atomic.Atomic<u8>;
+    pub var stop: atomic.Atomic<u8>;
+    pub var result: ?!T;
+public:
+    func init() : references(atomic.Atomic<u8>(2)), finished(atomic.Atomic<u8>(0)),
+                  stop(atomic.Atomic<u8>(0)), result(null) {}
+}
+
+func release<T: Movable & Sendable>(state: *State<T>) void {
+    if state.references.fetchSub(1, atomic.Order.AcqRel) == 1 {
+        var owned = unsafe { Box<State<T>>.fromRaw(state) };
+    }
+}
+
+class Work<T: Movable & Sendable, F: Movable & Sendable> {
+    var state: *State<T>;
+    var callback: ?F;
+public:
+    func init(state: *State<T>, callback: F) : state(state), callback(some(move(callback))) {}
+
+    func run() void {
+        var owned = unsafe { Box<Work<T, F>>.fromRaw(self) };
+        var shared = state;
+        __vqr_thread_set_stop(&shared.stop);
+        var ready = opt.take<F>(&callback);
+        var call = move(ready).unwrap();
+        var outcome: !T = move(call)();
+        shared.result = some(move(outcome));
+        __vqr_thread_clear_stop();
+        shared.finished.store(1, atomic.Order.Release);
+        release<T>(shared);
+    }
+}
+
+pub class Thread<T: Movable & Sendable> {
+    #copy: disabled
+    var handle: usize;
+    var state: ?*State<T>;
+    func init(handle: usize, state: *State<T>) : handle(handle), state(some(state)) {}
+public:
+    static func spawn<F: Movable & Sendable>(callback: F) !Self {
+        var completion = (new State<T>())!;
+        var work = (new Work<T, F>(completion.asPtr(), move(callback)))!;
+        var rawState = Box.intoRaw(move(completion));
+        var rawWork = Box.intoRaw(move(work));
+        var id: usize = 0;
+        if unsafe { __vqr_thread_start<Work<T, F>>(&id, rawWork) } != 0 {
+            var rejectedWork = unsafe { Box<Work<T, F>>.fromRaw(rawWork) };
+            var rejectedState = unsafe { Box<State<T>>.fromRaw(rawState) };
+            return ThreadError.StartFailed;
+        }
+        Thread<T>(id, rawState)
+    }
+
+    const func id() ThreadId { ThreadId{value: handle} }
+
+    const func isFinished() bool {
+        switch state {
+            some(ptr) => ptr.finished.load(atomic.Order.Acquire) != 0,
+            null => true,
+        }
+    }
+
+    const func requestStop() void {
+        switch state {
+            some(ptr) => { ptr.stop.store(1, atomic.Order.Release); },
+            null => {},
+        }
+    }
+
+    func join() !T {
+        var current = state ?? { return ThreadError.Closed; };
+        if handle == __vqr_thread_id() { return ThreadError.SelfJoin; }
+        if __vqr_thread_join(handle) != 0 { return ThreadError.JoinFailed; }
+        state = null;
+        var result = opt.take<!T>(&current.result);
+        release<T>(current);
+        move(result) ?? ThreadError.MissingResult
+    }
+
+    func detach() void {
+        switch state {
+            some(ptr) => {
+                if __vqr_thread_detach(handle) != 0 { panic("pthread_detach failed"); }
+                state = null;
+                release<T>(ptr);
+            },
+            null => {},
+        }
+    }
+
+    func deinit() void { detach(); }
+}
+
+pub func spawn<T: Movable & Sendable, F: Movable & Sendable>(callback: F) !Thread<T> {
+    Thread<T>.spawn<F>(move(callback))
+}
+
+pub func currentId() ThreadId { ThreadId{value: __vqr_thread_id()} }
+pub func cpuCount() usize { __vqr_thread_cpu_count() }
+pub func yieldNow() void { __vqr_thread_yield(); }
+
+pub func stopRequested() bool {
+    switch __vqr_thread_stop<atomic.Atomic<u8>>() {
+        some(flag) => flag.load(atomic.Order.Acquire) != 0,
+        null => false,
+    }
+}

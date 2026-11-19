@@ -8,6 +8,7 @@ namespace vqr::detail {
 ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::vector<Ast> &types) {
   if (key.starts_with("__vqr_atomic_")) return atomicIntrinsic(key.substr(13), n, types);
   if (key.starts_with("__vqr_bits_")) return bitIntrinsic(key.substr(11), n, types);
+  if (key.starts_with("__vqr_thread_")) return threadIntrinsic(key.substr(13), n, types);
   auto arity = [&](unsigned count) {
     if (n->children.size() != count + 1) fail(n->span, "wrong intrinsic argument count");
   };

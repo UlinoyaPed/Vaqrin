@@ -16,7 +16,7 @@ if(LLVM_PACKAGE_VERSION VERSION_LESS 20.1.8)
     message(FATAL_ERROR "Vaqrin requires LLVM 20.1.8 or newer")
 endif()
 
-add_executable(vaqc src/driver.cpp src/inputs.cpp src/source.cpp src/parser.cpp src/compiler.cpp src/body.cpp src/expressions.cpp src/patterns.cpp src/numeric.cpp src/ctfe.cpp src/stdlib.cpp src/std_bits.cpp src/std_atomic.cpp)
+add_executable(vaqc src/driver.cpp src/inputs.cpp src/source.cpp src/parser.cpp src/compiler.cpp src/body.cpp src/expressions.cpp src/patterns.cpp src/numeric.cpp src/ctfe.cpp src/stdlib.cpp src/std_bits.cpp src/std_atomic.cpp src/std_thread.cpp)
 target_include_directories(vaqc SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 separate_arguments(llvm_definitions NATIVE_COMMAND "${LLVM_DEFINITIONS}")
 target_compile_options(vaqc PRIVATE ${llvm_definitions}

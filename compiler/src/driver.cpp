@@ -295,6 +295,9 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
       for (const auto &input : r.linkInputs)
         args.push_back(fs::absolute(input).string());
       if (r.options.profile == "hosted" && target.isOSLinux() &&
+          (module.getFunction("pthread_create") || module.getFunction("pthread_self")))
+        args.push_back("-pthread");
+      if (r.options.profile == "hosted" && target.isOSLinux() &&
           std::ranges::any_of(module, [](const llvm::Function &function) {
             auto intrinsic = function.getIntrinsicID();
             return intrinsic == llvm::Intrinsic::floor || intrinsic == llvm::Intrinsic::ceil ||

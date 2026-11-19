@@ -222,6 +222,7 @@ private:
   ValueAt call(const Ast &n, Type *expected);
   ValueAt atomicIntrinsic(std::string_view op, const Ast &n, const std::vector<Ast> &types);
   ValueAt bitIntrinsic(std::string_view op, const Ast &n, const std::vector<Ast> &types);
+  ValueAt threadIntrinsic(std::string_view op, const Ast &n, const std::vector<Ast> &types);
   ValueAt standardIntrinsic(std::string_view key, const Ast &n, const std::vector<Ast> &types);
   ValueAt builtin(std::string_view key, const Ast &n, const std::vector<Ast> &types, Type *expected);
   ValueAt invoke(const Ast &n, const std::vector<Definition> &defs, const std::vector<Ast> &typeArgs,

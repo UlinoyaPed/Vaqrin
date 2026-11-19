@@ -234,7 +234,7 @@ public:
 pub func parseRecord(value: str, options: CsvOptions) !coll.Vec<string> {
     if value.byteLen() == 0 {
         var empty = coll.Vec<string>();
-        empty.push(text.fromBytes([]const u8{})!)!;
+        empty.push(text.fromBytes(value.asBytes())!)!;
         return move(empty);
     }
     var localOptions = options;

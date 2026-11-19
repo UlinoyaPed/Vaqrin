@@ -33,9 +33,9 @@ pub class EncodeOptions {
 }
 
 pub class JsonNumber {
-    pub var raw: string;
-public:
+    var raw: string;
     func init(value: string) : raw(move(value)) {}
+public:
     static func parse(value: str) !Self {
         validateNumber(value)!;
         var owned = text.fromBytes(value.asBytes())!;

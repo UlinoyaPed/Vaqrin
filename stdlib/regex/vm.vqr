@@ -76,7 +76,7 @@ func epsilonClosure(regex: *const Regex, seeds: []const Thread,
                     }
                     if budget.* == 0 { return RegexError.StepLimitExceeded; }
                     budget.* -= 1;
-                    var index = usize(thread.state);
+                    var index = usize(thread.state)!;
                     if seen[index] == generation { continue; }
                     seen[index] = generation;
                     var state = regex.states[index];
@@ -325,7 +325,7 @@ func runNfa(regex: *const Regex, input: str, start: usize) !?SearchResult {
         }
         nextSeeds.clear();
         for thread in active.asSlice() {
-            var state = regex.states[usize(thread.state)];
+            var state = regex.states[usize(thread.state)!];
             if accepts(regex, state, cp) {
                 if state.out < 0 { return RegexError.InvalidCapture; }
                 nextSeeds.push(Thread{

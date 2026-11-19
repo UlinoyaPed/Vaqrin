@@ -136,17 +136,18 @@ private:
         var cursor: usize = 0;
         var search: usize = 0;
         var replaced = false;
-        for search <= value.byteLen() {
+        var done = false;
+        for search <= value.byteLen() && !done {
             var result = runNfa(&self, value, search)!;
             switch result {
-                null => { break; },
+                null => { done = true; },
                 some(item) => {
                     var matched = item.matched;
                     for i in cursor..matched.startByte { output.push(value.asBytes()[i])!; }
                     appendReplacement(replacement, &item.captures, &output)!;
                     cursor = matched.endByte;
                     replaced = true;
-                    if !all { break; }
+                    if !all { done = true; }
                     if matched.endByte > matched.startByte {
                         search = matched.endByte;
                     } else if matched.endByte < value.byteLen() {
@@ -158,7 +159,7 @@ private:
                         search = cursor;
                     } else {
                         search = value.byteLen() + 1;
-                        break;
+                        done = true;
                     }
                 }
             }
@@ -354,10 +355,11 @@ pub func findAll(pattern: str, value: str) !coll.Vec<Match> {
     var regex = Regex.compile(pattern)!;
     var result = coll.Vec<Match>();
     var iterator = regex.findAll(value);
-    for {
+    var done = false;
+    for !done {
         var item = iterator.next()!;
         switch item {
-            null => break,
+            null => { done = true; },
             some(found) => result.push(found)!
         }
     }
@@ -368,10 +370,11 @@ pub func split(pattern: str, value: str) !coll.Vec<str> {
     var regex = Regex.compile(pattern)!;
     var result = coll.Vec<str>();
     var iterator = regex.split(value);
-    for {
+    var done = false;
+    for !done {
         var item = iterator.next()!;
         switch item {
-            null => break,
+            null => { done = true; },
             some(part) => result.push(part)!
         }
     }

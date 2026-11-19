@@ -74,7 +74,7 @@ Types: SeekOrigin(Start, Current, End), ReadStatus(Bytes, Eof, WouldBlock, Inter
 IoProgress(processed, status), IoError(WriteFailed, UnexpectedEof, NoProgress,
 WouldBlock, Interrupted, InvalidCount, PositionOutOfRange, LimitExceeded, Closed,
 InvalidArgument, Unsupported), MemoryReader, MemoryWriter, FixedWriter, LimitedReader,
-CountingReader, CountingWriter, MultiReader, MultiWriter, TeeReader, HostFile,
+CountingReader, CountingWriter, MultiReader, MultiWriter, HostFile,
 HostMetadata, HostDirEntry, HostDirectory.
 
 Functions:
@@ -85,7 +85,7 @@ Functions:
 - readToEnd(reader, limit), readToEnd(reader), readToString(reader, limit)
 - copy(reader, writer), copy(reader, writer, scratch), copyN(reader, writer, n, scratch),
   copyAll(reader, writer), discard(reader, n, scratch)
-- limit(reader, n), tee(reader, writer)
+- limit(reader, n)
 - stdin(), stdout(), stderr(), print(str), println<T>(value), eprint(str), eprintln(str),
   flushStdout()
 - systemError(errno), systemErrorCode(error), isSystemError(error),

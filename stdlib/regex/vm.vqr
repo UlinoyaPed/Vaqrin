@@ -60,10 +60,8 @@ func appendHistory(history: *coll.Vec<CaptureHistory>, previous: i32,
 
 func epsilonClosure(regex: *const Regex, seeds: []const Thread,
                     output: *coll.Vec<Thread>, history: *coll.Vec<CaptureHistory>,
-                    seen: *coll.Vec<bool>, stack: *coll.Vec<Thread>,
+                    seen: *coll.Vec<usize>, generation: usize, stack: *coll.Vec<Thread>,
                     input: str, position: usize, budget: *usize) !void {
-    for i in usize(0)..seen.len() { seen[i] = false; }
-
     for seed in seeds {
         stack.clear();
         stack.push(seed)!;
@@ -79,8 +77,8 @@ func epsilonClosure(regex: *const Regex, seeds: []const Thread,
                     if budget.* == 0 { return RegexError.StepLimitExceeded; }
                     budget.* -= 1;
                     var index = usize(thread.state);
-                    if seen[index] { continue; }
-                    seen[index] = true;
+                    if seen[index] == generation { continue; }
+                    seen[index] = generation;
                     var state = regex.states[index];
 
                     switch state.op {
@@ -271,8 +269,9 @@ func runNfa(regex: *const Regex, input: str, start: usize) !?SearchResult {
     var active = coll.Vec<Thread>();
     var nextSeeds = coll.Vec<Thread>();
     var history = coll.Vec<CaptureHistory>();
-    var seen = coll.Vec<bool>();
-    for i in usize(0)..regex.states.len() { seen.push(false)!; }
+    var seen = coll.Vec<usize>();
+    for i in usize(0)..regex.states.len() { seen.push(0)!; }
+    var generation: usize = 0;
     var stack = coll.Vec<Thread>();
     var candidate: ?Thread = null;
     var candidateEnd: usize = 0;
@@ -288,8 +287,9 @@ func runNfa(regex: *const Regex, input: str, start: usize) !?SearchResult {
         }
 
         active.clear();
+        generation++;
         epsilonClosure(regex, seeds.asConstSlice(), &active, &history,
-                       &seen, &stack, input, position, &budget)!;
+                       &seen, generation, &stack, input, position, &budget)!;
 
         var matchIndex: ?usize = null;
         for i in usize(0)..active.len() {

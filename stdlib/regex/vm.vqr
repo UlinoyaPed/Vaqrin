@@ -271,12 +271,22 @@ func runNfa(regex: *const Regex, input: str, start: usize) !?SearchResult {
             null => {}
         }
 
-        if active.isEmpty() || position == input.byteLen() {
+        if active.isEmpty() {
+            if candidate != null || position == input.byteLen() {
+                return buildSearchResult(candidate, candidateEnd, input, &history, regex.captures);
+            }
+        }
+        if position == input.byteLen() {
             return buildSearchResult(candidate, candidateEnd, input, &history, regex.captures);
         }
 
         var decoded = unicode.decodeUtf8(input.asBytes()[position..])!;
         var cp = convert.fromChar(decoded.0);
+        if active.isEmpty() {
+            position += decoded.1;
+            current.clear();
+            continue;
+        }
         nextSeeds.clear();
         for thread in active.asSlice() {
             var state = regex.states[usize(thread.state)];
@@ -290,7 +300,12 @@ func runNfa(regex: *const Regex, input: str, start: usize) !?SearchResult {
             }
         }
         if nextSeeds.isEmpty() {
-            return buildSearchResult(candidate, candidateEnd, input, &history, regex.captures);
+            if candidate != null {
+                return buildSearchResult(candidate, candidateEnd, input, &history, regex.captures);
+            }
+            position += decoded.1;
+            current.clear();
+            continue;
         }
 
         current.clear();

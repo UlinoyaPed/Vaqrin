@@ -1,0 +1,13 @@
+Unicode 17.0.0 data attribution
+
+The generated character property, normalization, case-mapping, and grapheme-break
+tables in this directory are derived from the Unicode Character Database (UCD)
+17.0.0 and synchronized emoji data distributed by The Unicode Consortium.
+
+Copyright © 1991-2025 Unicode, Inc. All rights reserved.
+
+The Unicode data files are distributed under the Unicode Terms of Use:
+https://www.unicode.org/terms_of_use.html
+
+Authoritative release:
+https://www.unicode.org/Public/17.0.0/ucd/

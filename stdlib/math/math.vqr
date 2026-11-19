@@ -4,10 +4,10 @@ import (cmp, convert, math_ffi as ffi, meta)
 pub enum FpClass { Nan, Infinite, Zero, Subnormal, Normal }
 pub error MathError { Domain, Pole, InvalidInterval, Overflow, DivisionByZero }
 
-func toF32<T>(value: T) f32 { convert.checkedCast<f32, T>(value)!.unwrap() }
-func toF64<T>(value: T) f64 { convert.checkedCast<f64, T>(value)!.unwrap() }
-func fromF32<T>(value: f32) T { convert.checkedCast<T, f32>(value)!.unwrap() }
-func fromF64<T>(value: f64) T { convert.checkedCast<T, f64>(value)!.unwrap() }
+func toF32<T>(value: T) f32 { (convert.checkedCast<f32, T>(value) catch { panic("floating-point conversion failed"); }).unwrap() }
+func toF64<T>(value: T) f64 { (convert.checkedCast<f64, T>(value) catch { panic("floating-point conversion failed"); }).unwrap() }
+func fromF32<T>(value: f32) T { (convert.checkedCast<T, f32>(value) catch { panic("floating-point conversion failed"); }).unwrap() }
+func fromF64<T>(value: f64) T { (convert.checkedCast<T, f64>(value) catch { panic("floating-point conversion failed"); }).unwrap() }
 
 
 func absValue<T>(x: T) T { if signbit(x) { -x } else { x } }
@@ -136,11 +136,11 @@ func roundEven32(x: f32) f32 {
     var lower = unsafe { ffi.floorf(magnitude) };
     var fraction = magnitude - lower;
     var result = lower;
-    if fraction > 0.5 {
-        result += 1.0;
-    } else if fraction == 0.5 {
-        var half = unsafe { ffi.floorf(lower * 0.5) };
-        if lower - half * 2.0 != 0.0 { result += 1.0; }
+    if fraction > 0.5f32 {
+        result += 1.0f32;
+    } else if fraction == 0.5f32 {
+        var half = unsafe { ffi.floorf(lower * 0.5f32) };
+        if lower - half * 2.0f32 != 0.0f32 { result += 1.0f32; }
     }
     if signbit32(x) { -result } else { result }
 }

@@ -4,8 +4,8 @@ import (coll, encoding, text)
 pub class QueryParam {
     var keyValue: string;
     var dataValue: string;
-    func init(key: string, value: string) : keyValue(key), dataValue(value) {}
 public:
+    func init(key: string, value: string) : keyValue(move(key)), dataValue(move(value)) {}
     const func key() str { keyValue }
     const func value() str { dataValue }
 }
@@ -88,7 +88,8 @@ public:
     }
 
     const func get(key: str) ?str {
-        for &entry in entries.asConstSlice() {
+        for index in usize(0)..entries.len() {
+            var entry = entries.get(index).unwrap();
             if entry.key() == key { return some(entry.value()); }
         }
         null
@@ -119,9 +120,11 @@ public:
         var output = text.StringBuilder();
         for i := usize(0); i < entries.len(); i++ {
             if i != 0 { output.append("&")!; }
-            output.append(queryEscape(entries[i].key())!)!;
+            var key = queryEscape(entries.get(i).unwrap().key())!;
+            output.append(key)!;
             output.append("=")!;
-            output.append(queryEscape(entries[i].value())!)!;
+            var value = queryEscape(entries.get(i).unwrap().value())!;
+            output.append(value)!;
         }
         output.build()
     }
@@ -136,10 +139,6 @@ func decodeQueryComponent(value: []const u8) !string {
     text.fromBytes(decoded.asConstSlice()) catch { return UrlError.InvalidUtf8; }
 }
 
-func findByte(data: []const u8, needle: u8) ?usize {
-    for i := usize(0); i < data.len(); i++ { if data[i] == needle { return some(i); } }
-    null
-}
 
 pub func queryEscape(value: str) !string {
     encoding.percentEncode(value.asBytes(), "".asBytes())
@@ -159,12 +158,14 @@ pub func parseQuery(value: str) !QueryParams { QueryParams.parse(value) }
 pub func encodeQuery(items: []const (str, str)) !string {
     var output = text.StringBuilder();
     var first = true;
-    for key, value in items {
+    for item in items {
+        var key = queryEscape(item.0)!;
+        var value = queryEscape(item.1)!;
         if !first { output.append("&")!; }
         first = false;
-        output.append(queryEscape(key)!)!;
+        output.append(key)!;
         output.append("=")!;
-        output.append(queryEscape(value)!)!;
+        output.append(value)!;
     }
     output.build()
 }

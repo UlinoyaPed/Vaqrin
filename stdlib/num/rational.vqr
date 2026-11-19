@@ -25,7 +25,7 @@ public:
         if denominator == T(0) { return NumError.ZeroDenominator; }
         var top = BigInt.fromInteger<T>(numerator)!;
         var bottom = BigInt.fromInteger<T>(denominator)!;
-        fromBig(move(top), move(bottom))
+        Rational<T>.fromBig(move(top), move(bottom))
     }
 
     pub const func numerator() T { numeratorValue }
@@ -40,7 +40,7 @@ public:
         var right = rightTop.mul(&leftBottom)!;
         var top = left.add(&right)!;
         var bottom = leftBottom.mul(&rightBottom)!;
-        fromBig(move(top), move(bottom))
+        Rational<T>.fromBig(move(top), move(bottom))
     }
 
     pub func sub(other: *const Self) !Self {
@@ -52,7 +52,7 @@ public:
         var right = rightTop.mul(&leftBottom)!;
         var top = left.sub(&right)!;
         var bottom = leftBottom.mul(&rightBottom)!;
-        fromBig(move(top), move(bottom))
+        Rational<T>.fromBig(move(top), move(bottom))
     }
 
     pub func mul(other: *const Self) !Self {
@@ -62,7 +62,7 @@ public:
         var rightBottom = BigInt.fromInteger<T>(other.denominatorValue)!;
         var top = leftTop.mul(&rightTop)!;
         var bottom = leftBottom.mul(&rightBottom)!;
-        fromBig(move(top), move(bottom))
+        Rational<T>.fromBig(move(top), move(bottom))
     }
 
     pub func div(other: *const Self) !Self {
@@ -73,7 +73,7 @@ public:
         var rightTop = BigInt.fromInteger<T>(other.numeratorValue)!;
         var top = leftTop.mul(&rightBottom)!;
         var bottom = leftBottom.mul(&rightTop)!;
-        fromBig(move(top), move(bottom))
+        Rational<T>.fromBig(move(top), move(bottom))
     }
 
     pub const func compare(other: *const Self) !cmp.Ordering {

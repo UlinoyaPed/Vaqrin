@@ -150,7 +150,7 @@ private:
             var digit = hexValue(data[position + i]);
             switch digit {
                 null => return JsonError.InvalidUnicode,
-                some(n) => value = (value << 4) | u32(n),
+                some(n) => { value = (value << 4) | u32(n); },
             }
         }
         position += 4;
@@ -249,9 +249,9 @@ private:
 }
 
 func hexValue(byte: u8) ?u8 {
-    if 48 <= byte && byte <= 57 { return some(byte - 48); }
-    if 65 <= byte && byte <= 70 { return some(byte - 55); }
-    if 97 <= byte && byte <= 102 { return some(byte - 87); }
+    if 48 <= byte && byte <= 57 { return some(__vqr_parse_bits<u8>(u128(byte) - u128(48))); }
+    if 65 <= byte && byte <= 70 { return some(__vqr_parse_bits<u8>(u128(byte) - u128(55))); }
+    if 97 <= byte && byte <= 102 { return some(__vqr_parse_bits<u8>(u128(byte) - u128(87))); }
     null
 }
 

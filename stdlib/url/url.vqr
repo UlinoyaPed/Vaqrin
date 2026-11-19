@@ -15,12 +15,12 @@ func isHex(value: u8) bool {
     isDigit(value) || (65 <= value && value <= 70) || (97 <= value && value <= 102)
 }
 func hexValue(value: u8) u8 {
-    if isDigit(value) { value - 48 }
-    else if value <= 70 { value - 55 }
-    else { value - 87 }
+    if isDigit(value) { __vqr_parse_bits<u8>(u128(value) - u128(48)) }
+    else if value <= 70 { __vqr_parse_bits<u8>(u128(value) - u128(55)) }
+    else { __vqr_parse_bits<u8>(u128(value) - u128(87)) }
 }
 func hexDigit(value: u8) u8 {
-    if value < 10 { 48 + value } else { 55 + value }
+    if value < 10 { __vqr_parse_bits<u8>(u128(48) + u128(value)) } else { __vqr_parse_bits<u8>(u128(55) + u128(value)) }
 }
 func isUnreserved(value: u8) bool {
     isAlpha(value) || isDigit(value) || value == 45 || value == 46 || value == 95 || value == 126
@@ -92,7 +92,7 @@ func validateIpv4(value: []const u8) !void {
             digits = 0;
         } else {
             if !isDigit(value[i]) || digits >= 3 { return UrlError.InvalidIpv4; }
-            number = number * 10 + u32(value[i] - 48);
+            number = number * 10 + (u32(value[i]) - u32(48));
             digits++;
         }
     }
@@ -167,7 +167,7 @@ func parsePort(value: []const u8) !u16 {
     var number: u32 = 0;
     for byte in value {
         if !isDigit(byte) { return UrlError.InvalidPort; }
-        number = number * 10 + u32(byte - 48);
+        number = number * 10 + (u32(byte) - u32(48));
         if number > 65535 { return UrlError.InvalidPort; }
     }
     u16(number)!
@@ -176,7 +176,7 @@ func lowerAscii(value: str) !string {
     var data = value.asBytes();
     var out = coll.Vec<u8>.withCapacity(data.len())!;
     for byte in data {
-        if 65 <= byte && byte <= 90 { out.push(byte + 32)!; }
+        if 65 <= byte && byte <= 90 { out.push(u8(byte + 32)!)!; }
         else { out.push(byte)!; }
     }
     text.fromBytes(out.asConstSlice())
@@ -206,7 +206,7 @@ func removeLastSegment(output: *coll.Vec<u8>) void {
         if output.asSlice()[output.len() - 1] == 47 { break; }
         var ignored = output.pop();
     }
-    if output.len() > 1 && output.asSlice()[output.len() - 1] == 47 {
+    if output.len() > 0 && output.asSlice()[output.len() - 1] == 47 {
         var ignored = output.pop();
     }
 }
@@ -252,7 +252,7 @@ func mergePaths(basePath: str, relative: str, hasAuthority: bool) !string {
         var slash: ?usize = null;
         for i := usize(0); i < data.len(); i++ { if data[i] == 47 { slash = some(i); } }
         switch slash {
-            some(position) => { builder.append(text.fromBytes(data[0..position + 1])!)!; },
+            some(position) => { var prefix = text.fromBytes(data[0..position + 1])!; builder.append(prefix)!; },
             null => {},
         }
     }
@@ -446,7 +446,8 @@ public:
             result.hostValue = normalizePercent(result.hostValue)!;
             result.hostValue = lowerAscii(result.hostValue)!;
         }
-        result.pathValue = removeDotSegments(normalizePercent(result.pathValue)!)!;
+        var path = normalizePercent(result.pathValue)!;
+        result.pathValue = removeDotSegments(path)!;
         if result.hasQuery { result.queryValue = normalizePercent(result.queryValue)!; }
         if result.hasFragment { result.fragmentValue = normalizePercent(result.fragmentValue)!; }
         move(result)
@@ -583,7 +584,7 @@ pub class UrlBuilder {
     var fragmentValue: string;
     var hasFragment: bool;
 
-    func init()
+    pub func init()
         : schemeValue(""), hasScheme(false), userInfoValue(""), hasUserInfo(false),
           hostValue(""), hasHost(false), hasPort(false), portValue(0),
           pathValue(""), queryValue(""), hasQuery(false), fragmentValue(""),
@@ -649,7 +650,8 @@ public:
         output.append(pathValue)!;
         if hasQuery { output.append("?")!; output.append(queryValue)!; }
         if hasFragment { output.append("#")!; output.append(fragmentValue)!; }
-        Url.parse(output.build()!)
+        var value = output.build()!;
+        Url.parse(value)
     }
 
 private:

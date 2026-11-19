@@ -1,9 +1,9 @@
 package regex
-import (coll, convert, text, unicode)
+import (core, coll, convert, text, unicode)
 
 pub enum NodeKind { Empty, Literal, Any, Class, Concat, Alternate, Repeat, AnchorStart, AnchorEnd, Group }
 
-pub record AstNode {
+pub class AstNode {
     pub var kind: NodeKind;
     pub var value: u32;
     pub var left: i32;
@@ -13,12 +13,12 @@ pub record AstNode {
     pub var greedy: bool;
 }
 
-pub record Escaped {
+pub class Escaped {
     pub var scalar: u32;
     pub var builtinMask: u8;
 }
 
-pub record ParsedPattern {
+pub class ParsedPattern {
     pub var root: i32;
     pub var nodes: coll.Vec<AstNode>;
     pub var classes: coll.Vec<CharacterClass>;
@@ -26,12 +26,12 @@ pub record ParsedPattern {
     pub var captureCount: usize;
 }
 
-pub record Patch {
+pub class Patch {
     pub var state: usize;
     pub var alternate: bool;
 }
 
-pub record Fragment {
+pub class Fragment {
     pub var start: i32;
     pub var outs: coll.Vec<Patch>;
 }
@@ -56,9 +56,9 @@ public:
         if position != source.byteLen() { return RegexError.UnexpectedToken; }
         ParsedPattern{
             root: root,
-            nodes: move(nodes),
-            classes: move(classes),
-            ranges: move(ranges),
+            nodes: core.replace<coll.Vec<AstNode>>(&nodes, coll.Vec<AstNode>()),
+            classes: core.replace<coll.Vec<CharacterClass>>(&classes, coll.Vec<CharacterClass>()),
+            ranges: core.replace<coll.Vec<CharRange>>(&ranges, coll.Vec<CharRange>()),
             captureCount: captureCount
         }
     }
@@ -76,7 +76,7 @@ private:
 
     func readScalar() !u32 {
         if atEnd() { return RegexError.UnexpectedEnd; }
-        var decoded = unicode.decodeUtf8(source.asBytes()[position..]) catch { return RegexError.InvalidUtf8; };
+        var decoded = unicode.decodeUtf8(source.asBytes()[position..source.asBytes().len()]) catch { return RegexError.InvalidUtf8; };
         position += decoded.1;
         convert.fromChar(decoded.0)
     }
@@ -170,7 +170,7 @@ private:
         }
         var value: usize = 0;
         for !atEnd() && currentByte() >= 48 && currentByte() <= 57 {
-            var digit = usize(currentByte() - 48);
+            var digit = (usize(currentByte()) - usize(48));
             if value > (~usize(0) - digit) / 10 { return RegexError.InvalidRepeat; }
             value = value * 10 + digit;
             position++;
@@ -283,9 +283,9 @@ private:
     }
 
     func hexDigit(byte: u8) !u32 {
-        if 48 <= byte && byte <= 57 { return u32(byte - 48); }
-        if 65 <= byte && byte <= 70 { return u32(byte - 55); }
-        if 97 <= byte && byte <= 102 { return u32(byte - 87); }
+        if 48 <= byte && byte <= 57 { return (u32(byte) - u32(48)); }
+        if 65 <= byte && byte <= 70 { return (u32(byte) - u32(55)); }
+        if 97 <= byte && byte <= 102 { return (u32(byte) - u32(87)); }
         RegexError.InvalidEscape
     }
 
@@ -362,8 +362,8 @@ pub class NfaCompiler {
 public:
     func init(parsed: ParsedPattern, maxStates: usize, flags: u8,
               maxInput: usize, maxSteps: usize)
-        : root(parsed.root), nodes(move(parsed.nodes)), classes(move(parsed.classes)),
-          ranges(move(parsed.ranges)), states(coll.Vec<State>()),
+        : root(parsed.root), nodes(core.replace<coll.Vec<AstNode>>(&parsed.nodes, coll.Vec<AstNode>())), classes(core.replace<coll.Vec<CharacterClass>>(&parsed.classes, coll.Vec<CharacterClass>())),
+          ranges(core.replace<coll.Vec<CharRange>>(&parsed.ranges, coll.Vec<CharRange>())), states(coll.Vec<State>()),
           stateLimit(maxStates), captureCount(parsed.captureCount), flags(flags),
           maxInput(maxInput), maxSteps(maxSteps) {}
 
@@ -372,7 +372,9 @@ public:
         var matchState = emit(State{op: Op.Match, value: 0, out: -1, alternate: -1})!;
         patchAll(&fragment.outs, matchState);
         var ownedPattern = text.fromBytes(pattern.asBytes())!;
-        Regex(move(states), move(classes), move(ranges), move(ownedPattern),
+        Regex(core.replace<coll.Vec<State>>(&states, coll.Vec<State>()),
+              core.replace<coll.Vec<CharacterClass>>(&classes, coll.Vec<CharacterClass>()),
+              core.replace<coll.Vec<CharRange>>(&ranges, coll.Vec<CharRange>()), move(ownedPattern),
               flags, maxInput, maxSteps, captureCount, fragment.start)
     }
 
@@ -403,7 +405,8 @@ private:
 
     func concatenate(left: Fragment, right: Fragment) !Fragment {
         patchAll(&left.outs, right.start);
-        Fragment{start: left.start, outs: move(right.outs)}
+        var owned = move(right);
+        Fragment{start: left.start, outs: core.replace<coll.Vec<Patch>>(&owned.outs, coll.Vec<Patch>())}
     }
 
     func emptyFragment() !Fragment {
@@ -419,7 +422,7 @@ private:
     func compileStar(child: i32, greedy: bool, depth: usize) !Fragment {
         var body = compileNode(child, depth + 1)!;
         var split = emit(State{op: Op.Split, value: 0, out: -1, alternate: -1})!;
-        var exitAlternate = !greedy;
+        var exitAlternate = greedy;
         if greedy { states[usize(split)!].out = body.start; }
         else { states[usize(split)!].alternate = body.start; }
         patchAll(&body.outs, split);
@@ -429,7 +432,7 @@ private:
     func compileOptional(child: i32, greedy: bool, depth: usize) !Fragment {
         var body = compileNode(child, depth + 1)!;
         var split = emit(State{op: Op.Split, value: 0, out: -1, alternate: -1})!;
-        var exitAlternate = !greedy;
+        var exitAlternate = greedy;
         if greedy { states[usize(split)!].out = body.start; }
         else { states[usize(split)!].alternate = body.start; }
         var outs = singlePatch(split, exitAlternate)!;
@@ -476,7 +479,7 @@ private:
                 var left = compileNode(node.left, depth + 1)!;
                 var right = compileNode(node.right, depth + 1)!;
                 var split = emit(State{op: Op.Split, value: 0, out: left.start, alternate: right.start})!;
-                var outs = move(left.outs);
+                var outs = core.replace<coll.Vec<Patch>>(&left.outs, coll.Vec<Patch>());
                 appendPatches(&outs, &right.outs)!;
                 return Fragment{start: split, outs: move(outs)};
             },

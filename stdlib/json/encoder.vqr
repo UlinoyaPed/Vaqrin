@@ -17,8 +17,8 @@ pub func escapeString(value: str) !string {
                 if byte < 0x20 {
                     var digits = "0123456789abcdef".asBytes();
                     output.push(92)!; output.push(117)!; output.push(48)!; output.push(48)!;
-                    output.push(digits[usize(byte >> 4)])!;
-                    output.push(digits[usize(byte & 15)])!;
+                    output.push(digits[usize(byte >> 4)!])!;
+                    output.push(digits[usize(byte & 15)!])!;
                 } else { output.push(byte)!; }
             },
         }

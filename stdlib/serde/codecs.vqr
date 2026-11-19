@@ -76,9 +76,9 @@ public:
 }
 
 pub class OptionalCodec<T> {
-    var element: *const Codec<T>;
+    var element: *Codec<T>;
 public:
-    func init(element: *const Codec<T>) : element(element) {}
+    func init(element: *Codec<T>) : element(element) {}
     func encode(value: *const ?T, serializer: *Serializer) !void {
         switch *value {
             null => serializer.writeNull(),
@@ -95,9 +95,9 @@ public:
 }
 
 pub class SequenceCodec<T> {
-    var element: *const Codec<T>;
+    var element: *Codec<T>;
 public:
-    func init(element: *const Codec<T>) : element(element) {}
+    func init(element: *Codec<T>) : element(element) {}
     func encode(value: *const coll.Vec<T>, serializer: *Serializer) !void {
         serializer.beginSeq(some(value.len()))!;
         for index in usize(0)..value.len() {
@@ -119,9 +119,9 @@ public:
 }
 
 pub class StringMapCodec<T> {
-    var element: *const Codec<T>;
+    var element: *Codec<T>;
 public:
-    func init(element: *const Codec<T>) : element(element) {}
+    func init(element: *Codec<T>) : element(element) {}
     func encode(value: *const coll.Vec<(string, T)>, serializer: *Serializer) !void {
         serializer.beginMap(some(value.len()))!;
         for index in usize(0)..value.len() {

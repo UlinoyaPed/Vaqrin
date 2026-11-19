@@ -1,5 +1,5 @@
 package toml
-import (coll, convert, opt, serde, text)
+import (core, coll, convert, opt, serde, text)
 
 pub error TomlSerdeError { InvalidState, UnsupportedValue, MissingRoot }
 
@@ -45,7 +45,7 @@ public:
         if frames.isEmpty() { return TomlSerdeError.InvalidState; }
         var frame = frames.pop().unwrap();
         if frame.mapMode { return TomlSerdeError.InvalidState; }
-        appendValue(Value.Array(move(frame.array)))
+        appendValue(Value.Array(core.replace<coll.Vec<Value>>(&frame.array, coll.Vec<Value>())))
     }
     func beginMap(length: ?usize) !void { frames.push(TomlWriteFrame(true))!; }
     func writeKey(value: str) !void {
@@ -58,11 +58,11 @@ public:
         if frames.isEmpty() { return TomlSerdeError.InvalidState; }
         var frame = frames.pop().unwrap();
         if !frame.mapMode || frame.pendingKey != null { return TomlSerdeError.InvalidState; }
-        appendValue(Value.Table(move(frame.table)))
+        appendValue(Value.Table(core.replace<Document>(&frame.table, Document())))
     }
     func takeValue() !Value {
         if !frames.isEmpty() { return TomlSerdeError.InvalidState; }
-        move(root).unwrap()
+        core.replace<?Value>(&root, null) ?? { return TomlSerdeError.MissingRoot; }
     }
 private:
     func appendValue(value: Value) !void {
@@ -132,7 +132,7 @@ public:
     func readF64() !f64 { return serde.SerdeError.Unsupported; }
     func readNumber() !string {
         switch *current.unwrap() {
-            Value.Integer(value) => integerText(value),
+            Value.Integer(value) => serdeIntegerText(value),
             Value.Float(value) => text.fromBytes(value.asBytes()),
             _ => serde.SerdeError.TypeMismatch,
         }
@@ -212,7 +212,7 @@ func asArray(value: *const Value) ?*const coll.Vec<Value> {
 func asTable(value: *const Value) ?*const Document {
     switch *value { Value.Table(&table) => some(&table), _ => null }
 }
-func integerText(value: i64) !string {
+func serdeIntegerText(value: i64) !string {
     var negative = value < 0;
     var bits = bitCast<u64>(value);
     var magnitude = if negative { 0u64 -% bits } else { bits };
@@ -228,7 +228,7 @@ func integerText(value: i64) !string {
     text.fromBytes(output.asConstSlice())
 }
 
-pub func encode<T>(value: *const T, codec: *const serde.Codec<T>) !string {
+pub func encode<T>(value: *const T, codec: *serde.Codec<T>) !string {
     var serializer = TomlDomSerializer();
     serde.encode<T>(value, &serializer, codec)!;
     var root = serializer.takeValue()!;
@@ -238,7 +238,7 @@ pub func encode<T>(value: *const T, codec: *const serde.Codec<T>) !string {
     }
 }
 
-pub func decode<T>(value: str, codec: *const serde.Codec<T>) !T {
+pub func decode<T>(value: str, codec: *serde.Codec<T>) !T {
     var document = parse(value)!;
     var root = Value.Table(move(document));
     var deserializer = TomlDomDeserializer(move(root));

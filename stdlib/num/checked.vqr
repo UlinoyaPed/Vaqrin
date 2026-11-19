@@ -110,9 +110,9 @@ pub func abs<T>(value: T) !T {
 
 func magnitudeU128<T>(value: T) u128 {
     if __vqr_parse_signed<T>() && value < T(0) {
-        convert.checkedCast<u128, T>(~value)!.unwrap() + u128(1)
+        (convert.checkedCast<u128, T>(~value) catch { panic("invalid integer magnitude"); }).unwrap() + u128(1)
     } else {
-        convert.checkedCast<u128, T>(value)!.unwrap()
+        (convert.checkedCast<u128, T>(value) catch { panic("invalid integer magnitude"); }).unwrap()
     }
 }
 

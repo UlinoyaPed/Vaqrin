@@ -13,7 +13,7 @@ class UserCodec {
         serializer.writeKey("name")!;
         serializer.writeString(value.name)!;
         serializer.writeKey("age")!;
-        serializer.writeI64(convert.widen<i64>(value.age))!;
+        serializer.writeI64(convert.widen<i64, i32>(value.age))!;
         serializer.endMap()
     }
 
@@ -29,7 +29,7 @@ class UserCodec {
                     if field == "name" {
                         name = deserializer.readString()!;
                     } else if field == "age" {
-                        age = convert.narrow<i32>(deserializer.readI64()!)!;
+                        age = convert.narrow<i32, i64>(deserializer.readI64()!)!;
                     } else {
                         return serde.SerdeError.InvalidValue;
                     }
@@ -43,15 +43,15 @@ class UserCodec {
 
 func main() !void {
     var user = User{name: "Ada", age: 37};
-    var codec = UserCodec();
+    var codec = UserCodec{};
 
-    var jsonText = json.marshal(&user, &codec)!;
+    var jsonText = json.marshal<User>(&user, &codec)!;
     io.println(jsonText)!;
     var fromJson = json.unmarshal<User>(jsonText, &codec)!;
     io.println(fromJson.name)!;
     io.println(fromJson.age)!;
 
-    var tomlText = toml.encode(&user, &codec)!;
+    var tomlText = toml.encode<User>(&user, &codec)!;
     io.println(tomlText)!;
     var fromToml = toml.decode<User>(tomlText, &codec)!;
     io.println(fromToml.name)!;

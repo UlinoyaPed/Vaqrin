@@ -41,8 +41,8 @@ pub class CsvReader {
     var byteOffset: usize;
     var headerValues: ?coll.Vec<string>;
 public:
-    func init(reader: *io.Reader, options: CsvOptions)
-        : reader(reader), options(move(options)), pendingByte(null), eof(false),
+    func init(reader: *io.Reader, options: CsvOptions) !void
+        : reader(reader), options(options), pendingByte(null), eof(false),
           recordNumber(0), byteOffset(0), headerValues(null) {
         validateOptions(&options)!;
     }
@@ -89,12 +89,12 @@ private:
         }
         if eof { return null; }
         if byteOffset >= options.maxInputBytes {
-            var probe: [1]u8;
+            var probe = [1]u8{0};
             var probeCount = io.read(reader, probe[:])!;
             if probeCount == 0 { eof = true; return null; }
             return CsvError.InputLimit;
         }
-        var buffer: [1]u8;
+        var buffer = [1]u8{0};
         var count = io.read(reader, buffer[:])!;
         if count == 0 { eof = true; return null; }
         byteOffset++;
@@ -107,10 +107,10 @@ private:
         field.clear();
     }
 
-    func countRecordByte(recordBytes: *usize) !void {
-        if *recordBytes == ~usize(0) { return CsvError.InputLimit; }
-        *recordBytes += 1;
-        if *recordBytes > options.maxRecordBytes { return CsvError.RecordLimit; }
+    func countRecordByte(&recordBytes: *usize) !void {
+        if recordBytes == ~usize(0) { return CsvError.InputLimit; }
+        recordBytes += 1;
+        if recordBytes > options.maxRecordBytes { return CsvError.RecordLimit; }
     }
 
     func readRawRecord() !?coll.Vec<string> {
@@ -209,8 +209,8 @@ pub class CsvWriter {
     var options: CsvOptions;
     var recordNumber: usize;
 public:
-    func init(writer: *io.Writer, options: CsvOptions)
-        : writer(writer), options(move(options)), recordNumber(0) { validateOptions(&options)!; }
+    func init(writer: *io.Writer, options: CsvOptions) !void
+        : writer(writer), options(options), recordNumber(0) { validateOptions(&options)!; }
 
     func writeRecord(fields: []const str) !void {
         var encoded = coll.Vec<u8>();
@@ -242,7 +242,7 @@ pub func parseRecord(value: str, options: CsvOptions) !coll.Vec<string> {
     var localOptions = options;
     localOptions.hasHeader = false;
     var memory = io.MemoryReader(value.asBytes());
-    var reader = CsvReader(&memory, localOptions);
+    var reader = CsvReader(&memory, localOptions)!;
     var fields = reader.readRecord()! ?? { return coll.Vec<string>(); };
     if reader.readRecord()! != null { return CsvError.RecordLimit; }
     move(fields)
@@ -251,7 +251,7 @@ pub func parseRecord(value: str, options: CsvOptions) !coll.Vec<string> {
 pub func parse(value: str, options: CsvOptions) !coll.Vec<coll.Vec<string>> {
     if value.byteLen() > options.maxInputBytes { return CsvError.InputLimit; }
     var memory = io.MemoryReader(value.asBytes());
-    var reader = CsvReader(&memory, options);
+    var reader = CsvReader(&memory, options)!;
     var rows = coll.Vec<coll.Vec<string>>();
     for {
         var row = reader.readRecord()!;
@@ -284,7 +284,7 @@ pub func escapeField(value: str, options: CsvOptions) !string {
 
 pub func stringify(records: []const []const str, options: CsvOptions) !string {
     var writer = io.MemoryWriter();
-    var csvWriter = CsvWriter(&writer, options);
+    var csvWriter = CsvWriter(&writer, options)!;
     csvWriter.writeAll(records)!;
     var data = io.MemoryWriter.intoBytes(move(writer));
     if data.len() > options.maxInputBytes { return CsvError.InputLimit; }

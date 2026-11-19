@@ -67,4 +67,6 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/io_static_validation.py $<TARGET_FILE:vaqc>)
     add_test(NAME vaqc-container-static COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/coll_static_audit.py)
+    add_test(NAME vaqc-stdlib-acceptance COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/stdlib_acceptance.py $<TARGET_FILE:vaqc>)
 endif()

@@ -1,5 +1,5 @@
 package json
-import (coll, convert, iter as iterator, parse, text)
+import (coll, core, convert, iter as iterator, parse, text)
 
 pub error JsonError {
     UnexpectedEnd, TrailingInput, InvalidSyntax, InvalidNumber, InvalidEscape,
@@ -81,52 +81,57 @@ public:
     }
 }
 
+class JsonEntry {
+    pub var key: string;
+    pub var value: Value;
+}
+
 pub class JsonObject {
-    var entries: coll.Vec<(string, Value)>;
+    var entries: coll.Vec<JsonEntry>;
 public:
-    func init() : entries(coll.Vec<(string, Value)>()) {}
+    func init() : entries(coll.Vec<JsonEntry>()) {}
     const func len() usize { entries.len() }
     const func isEmpty() bool { entries.isEmpty() }
     const func containsKey(key: str) bool {
         for index in usize(0)..entries.len() {
             var entry = entries.get(index).unwrap();
-            if entry.0 == key { return true; }
+            if entry.key == key { return true; }
         }
         false
     }
     const func get(key: str) ?*const Value {
         for index in usize(0)..entries.len() {
             var entry = entries.get(index).unwrap();
-            if entry.0 == key { return some(&entry.1); }
+            if entry.key == key { return some(&entry.value); }
         }
         null
     }
     func getMut(key: str) ?*Value {
         for index in usize(0)..entries.len() {
             var entry = entries.getMut(index).unwrap();
-            if entry.0 == key { return some(&entry.1); }
+            if entry.key == key { return some(&entry.value); }
         }
         null
     }
     func insert(key: string, value: Value) !?Value {
         for index in usize(0)..entries.len() {
             var entry = entries.getMut(index).unwrap();
-            if entry.0 == key {
-                var previous = core.replace<Value>(&entry.1, move(value));
+            if entry.key == key {
+                var previous = core.replace<Value>(&entry.value, move(value));
                 return some(move(previous));
             }
         }
-        entries.push((move(key), move(value)))!;
+        entries.push(JsonEntry{key: move(key), value: move(value)})!;
         null
     }
     func remove(key: str) ?Value {
         for index in usize(0)..entries.len() {
             var entry = entries.get(index).unwrap();
-            if entry.0 == key {
+            if entry.key == key {
                 var removed = entries.remove(index);
                 switch move(removed) {
                     null => return null,
-                    some((_, value)) => return some(move(value)),
+                    some(entry) => { return some(core.replace<Value>(&entry.value, Value.Null)); },
                 }
             }
         }
@@ -134,18 +139,18 @@ public:
     }
     const func keyAt(index: usize) ?str {
         if index >= entries.len() { return null; }
-        some(entries.get(index).unwrap().0)
+        some(entries.get(index).unwrap().key)
     }
     const func valueAt(index: usize) ?*const Value {
         if index >= entries.len() { return null; }
-        some(&entries.get(index).unwrap().1)
+        some(&entries.get(index).unwrap().value)
     }
     func valueAtMut(index: usize) ?*Value {
         if index >= entries.len() { return null; }
-        some(&entries.getMut(index).unwrap().1)
+        some(&entries.getMut(index).unwrap().value)
     }
-    const func keys() JsonKeyIter { JsonKeyIter(&self) }
-    const func items() JsonItemIter { JsonItemIter(&self) }
+    const func keys() JsonKeyIter { JsonKeyIter(self) }
+    const func items() JsonItemIter { JsonItemIter(self) }
 }
 
 pub class JsonKeyIter {

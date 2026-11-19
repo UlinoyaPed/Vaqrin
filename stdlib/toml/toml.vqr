@@ -1,5 +1,5 @@
 package toml
-import (bytes, coll, io, parse, text)
+import (bytes, coll, io, parse as numberParser, text)
 
 pub error TomlError {
     InvalidSyntax, InvalidKey, DuplicateKey, DuplicateTable, TypeConflict,
@@ -81,12 +81,12 @@ public:
         some(&entries.get(index).unwrap().value)
     }
 
-    const func getPath(path: str) ?*const Value { get(&self, path) }
+    const func getPath(path: str) ?*const Value { lookupPath(self, path) }
     func setPath(path: str, value: Value) !void {
         var keys = parseKeyPath(path)!;
-        setDotted(&self, keys.asConstSlice(), move(value), true)
+        setDotted(self, keys.asConstSlice(), move(value), true)
     }
-    const func stringify() !string { stringify(&self) }
+    const func stringify() !string { stringifyDocument(self) }
 }
 
 func trim(value: str) str {
@@ -127,9 +127,9 @@ func isDigitFor(byte: u8, radix: u8) bool {
 }
 
 func hexValue(byte: u8) ?u32 {
-    if 48 <= byte && byte <= 57 { return some(u32(byte - 48)); }
-    if 65 <= byte && byte <= 70 { return some(u32(byte - 55)); }
-    if 97 <= byte && byte <= 102 { return some(u32(byte - 87)); }
+    if 48 <= byte && byte <= 57 { return some((u32(byte) - u32(48))); }
+    if 65 <= byte && byte <= 70 { return some((u32(byte) - u32(55))); }
+    if 97 <= byte && byte <= 102 { return some((u32(byte) - u32(87))); }
     null
 }
 
@@ -305,7 +305,9 @@ func parseKeyPath(value: str) !coll.Vec<string> {
     move(output)
 }
 
-pub func get(document: *const Document, path: str) ?*const Value {
+pub func get(document: *const Document, path: str) ?*const Value { lookupPath(document, path) }
+
+func lookupPath(document: *const Document, path: str) ?*const Value {
     var keys = parseKeyPath(path) catch { return null; };
     if keys.len() == 0 { return null; }
     var current = document;
@@ -314,7 +316,7 @@ pub func get(document: *const Document, path: str) ?*const Value {
         var value = current.get(key) ?? { return null; };
         if index + 1 == keys.len() { return value; }
         switch *value {
-            Value.Table(&table) => current = &table,
+            Value.Table(&table) => { current = &table; },
             _ => return null,
         }
     }
@@ -332,7 +334,7 @@ func setDotted(document: *Document, path: []const string, value: Value, rejectDu
             child = current.getMut(key);
         }
         switch *child.unwrap() {
-            Value.Table(&table) => current = &table,
+            Value.Table(&table) => { current = &table; },
             _ => return TomlError.TypeConflict,
         }
     }
@@ -353,7 +355,7 @@ func ensureTablePath(document: *Document, path: []const string) !void {
             child = current.getMut(key);
         }
         switch *child.unwrap() {
-            Value.Table(&table) => current = &table,
+            Value.Table(&table) => { current = &table; },
             _ => return TomlError.TypeConflict,
         }
     }
@@ -448,7 +450,7 @@ func parseDateDigits(data: []const u8, start: usize, count: usize) ?u32 {
     var value: u32 = 0;
     for index in start..(start + count) {
         if data[index] < 48 || data[index] > 57 { return null; }
-        value = value * 10 + u32(data[index] - 48);
+        value = value * 10 + (u32(data[index]) - u32(48));
     }
     some(value)
 }
@@ -595,7 +597,7 @@ func parseValue(value: str, depth: usize, options: *const TomlOptions) !Value {
     }
     var radix: u8 = 10;
     var clean = cleanInteger(source, &radix)!;
-    var integer = parse.parseInt<i64>(clean, radix) catch { return TomlError.InvalidNumber; };
+    var integer = numberParser.parseInt<i64>(clean, radix) catch { return TomlError.InvalidNumber; };
     Value.Integer(integer)
 }
 
@@ -610,8 +612,8 @@ func countEntries(document: *const Document, depth: usize, maxDepth: usize) !usi
                 count += nested;
             },
             Value.Array(&array) => {
-                for item in array {
-                    switch item {
+                for item in array.iterRef() {
+                    switch *item {
                         Value.Table(&table) => {
                             var nested = countEntries(&table, depth + 1, maxDepth)!;
                             if nested > ~usize(0) - count { return TomlError.SizeLimit; }
@@ -727,8 +729,8 @@ func appendQuoted(builder: *text.StringBuilder, value: str) !void {
             _ => {
                 var digits = "0123456789abcdef".asBytes();
                 appendRaw(builder, "\\u00")!;
-                appendByte(builder, digits[usize(byte >> 4)])!;
-                appendByte(builder, digits[usize(byte & 15)])!;
+                appendByte(builder, digits[usize(byte >> 4)!])!;
+                appendByte(builder, digits[usize(byte & 15)!])!;
             },
         }
         start = index + 1;
@@ -846,7 +848,9 @@ func writeDocument(document: *const Document, builder: *text.StringBuilder,
     }
 }
 
-pub func stringify(document: *const Document) !string {
+pub func stringify(document: *const Document) !string { stringifyDocument(document) }
+
+func stringifyDocument(document: *const Document) !string {
     var builder = text.StringBuilder();
     writeDocument(document, &builder, "", 0, 64)!;
     builder.build()

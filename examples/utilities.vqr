@@ -1,5 +1,5 @@
 package utilities_example
-import (url, log, errors, io, core)
+import (url, log, errors, io, core, text)
 
 error NetworkError { Refused, Timeout }
 
@@ -60,7 +60,7 @@ func main() !void {
     log.info(&networkLogger, "connected", attributes[:])!;
     networkLogger.flush()!;
     io.println(bufferHandler.len())!;
-    io.println(memory.asSlice())!;
+    io.println(text.fromBytes(memory.asSlice())!)!;
 
     // Error identity, nested context, source location, and cause tree.
     var report = errors.fromError(NetworkError.Refused)!;

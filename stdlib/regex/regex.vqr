@@ -9,26 +9,26 @@ pub error RegexError {
 
 pub enum Op { Character, Any, Class, Split, Jump, Save, AssertStart, AssertEnd, Match }
 
-pub record State {
+pub class State {
     pub var op: Op;
     pub var value: u32;
     pub var out: i32;
     pub var alternate: i32;
 }
 
-pub record CharRange {
+pub class CharRange {
     pub var first: u32;
     pub var last: u32;
 }
 
-pub record CharacterClass {
+pub class CharacterClass {
     pub var firstRange: usize;
     pub var rangeCount: usize;
     pub var builtinMask: u8;
     pub var negated: bool;
 }
 
-pub record Match {
+pub class Match {
     pub var startByte: usize;
     pub var endByte: usize;
     pub var source: str;
@@ -108,8 +108,8 @@ public:
         if byteOffset < value.byteLen() && (value.asBytes()[byteOffset] & 0xc0) == 0x80 {
             return RegexError.InvalidOffset;
         }
-        var result = runNfa(&self, value, byteOffset, false)!;
-        switch result {
+        var result = runNfa(self, value, byteOffset, false)!;
+        switch move(result) {
             some(item) => some(item.matched),
             null => null
         }
@@ -123,16 +123,16 @@ public:
         if byteOffset < value.byteLen() && (value.asBytes()[byteOffset] & 0xc0) == 0x80 {
             return RegexError.InvalidOffset;
         }
-        var result = runNfa(&self, value, byteOffset, true)!;
-        switch result {
-            some(item) => some(move(item.captures).unwrap()),
+        var result = runNfa(self, value, byteOffset, true)!;
+        switch move(result) {
+            some(item) => some(core.replace<?Captures>(&item.captures, null).unwrap()),
             null => null
         }
     }
 
-    const func findAll(value: str) FindIter { FindIter(&self, value) }
-    const func capturesAll(value: str) CaptureIter { CaptureIter(&self, value) }
-    const func split(value: str) SplitIter { SplitIter(&self, value) }
+    const func findAll(value: str) FindIter { FindIter(self, value) }
+    const func capturesAll(value: str) CaptureIter { CaptureIter(self, value) }
+    const func split(value: str) SplitIter { SplitIter(self, value) }
 
     const func replace(value: str, replacement: str) !string {
         replaceMatches(value, replacement, false)
@@ -150,13 +150,13 @@ private:
         var replaced = false;
         var done = false;
         for search <= value.byteLen() && !done {
-            var result = runNfa(&self, value, search, true)!;
-            switch result {
+            var result = runNfa(self, value, search, true)!;
+            switch move(result) {
                 null => { done = true; },
                 some(item) => {
                     var matched = item.matched;
                     for i in cursor..matched.startByte { output.push(value.asBytes()[i])!; }
-                    var captures = move(item.captures).unwrap();
+                    var captures = core.replace<?Captures>(&item.captures, null).unwrap();
                     appendReplacement(replacement, &captures, &output)!;
                     cursor = matched.endByte;
                     replaced = true;
@@ -164,7 +164,7 @@ private:
                     if matched.endByte > matched.startByte {
                         search = matched.endByte;
                     } else if matched.endByte < value.byteLen() {
-                        var next = unicode.decodeUtf8(value.asBytes()[matched.endByte..]) catch { return RegexError.InvalidUtf8; };
+                        var next = unicode.decodeUtf8(value.asBytes()[matched.endByte..value.asBytes().len()]) catch { return RegexError.InvalidUtf8; };
                         for i in matched.endByte..(matched.endByte + next.1) {
                             output.push(value.asBytes()[i])!;
                         }
@@ -197,13 +197,13 @@ public:
         multiLineValue(false), dotAllValue(false), unicodeValue(true),
         stateLimit(4096), inputLimit(16 * 1024 * 1024), stepLimit(64 * 1024 * 1024) {}
 
-    func ignoreCase(value: bool) Self { ignoreCaseValue = value; move(self) }
-    func multiLine(value: bool) Self { multiLineValue = value; move(self) }
-    func dotAll(value: bool) Self { dotAllValue = value; move(self) }
-    func unicode(value: bool) Self { unicodeValue = value; move(self) }
-    func maxStates(value: usize) Self { stateLimit = value; move(self) }
-    func maxInputBytes(value: usize) Self { inputLimit = value; move(self) }
-    func maxSteps(value: usize) Self { stepLimit = value; move(self) }
+    func ignoreCase(value: bool) Self { ignoreCaseValue = value; *self }
+    func multiLine(value: bool) Self { multiLineValue = value; *self }
+    func dotAll(value: bool) Self { dotAllValue = value; *self }
+    func unicode(value: bool) Self { unicodeValue = value; *self }
+    func maxStates(value: usize) Self { stateLimit = value; *self }
+    func maxInputBytes(value: usize) Self { inputLimit = value; *self }
+    func maxSteps(value: usize) Self { stepLimit = value; *self }
 
     func compile() !Regex {
         var flags: u8 = 0;
@@ -227,18 +227,18 @@ public:
     func next() !?Match {
         if done { return null; }
         var found = regex.findAt(source, offset)!;
-        switch found {
+        switch move(found) {
             null => { done = true; null },
             some(item) => {
                 if item.endByte > item.startByte {
                     offset = item.endByte;
                 } else if item.endByte < source.byteLen() {
-                    var next = unicode.decodeUtf8(source.asBytes()[item.endByte..]) catch { return RegexError.InvalidUtf8; };
+                    var next = unicode.decodeUtf8(source.asBytes()[item.endByte..source.asBytes().len()]) catch { return RegexError.InvalidUtf8; };
                     offset = item.endByte + next.1;
                 } else {
                     done = true;
                 }
-                some(item)
+                some(move(item))
             }
         }
     }
@@ -256,19 +256,19 @@ public:
     func next() !?Captures {
         if done { return null; }
         var found = regex.capturesAt(source, offset)!;
-        switch found {
+        switch move(found) {
             null => { done = true; null },
             some(item) => {
                 var full = item.get(0).unwrap();
                 if full.endByte > full.startByte {
                     offset = full.endByte;
                 } else if full.endByte < source.byteLen() {
-                    var next = unicode.decodeUtf8(source.asBytes()[full.endByte..]) catch { return RegexError.InvalidUtf8; };
+                    var next = unicode.decodeUtf8(source.asBytes()[full.endByte..source.asBytes().len()]) catch { return RegexError.InvalidUtf8; };
                     offset = full.endByte + next.1;
                 } else {
                     done = true;
                 }
-                some(item)
+                some(move(item))
             }
         }
     }
@@ -290,13 +290,13 @@ public:
         if trailingEmpty {
             trailingEmpty = false;
             done = true;
-            return some(unsafe { __vqr_text_borrow_utf8(source.asBytes()[source.byteLen()..]) });
+            return some(unsafe { __vqr_text_borrow_utf8(source.asBytes()[source.byteLen()..source.asBytes().len()]) });
         }
         var found = regex.findAt(source, search)!;
-        switch found {
+        switch move(found) {
             null => {
                 done = true;
-                return some(unsafe { __vqr_text_borrow_utf8(source.asBytes()[cursor..]) });
+                return some(unsafe { __vqr_text_borrow_utf8(source.asBytes()[cursor..source.asBytes().len()]) });
             },
             some(item) => {
                 var part = unsafe { __vqr_text_borrow_utf8(source.asBytes()[cursor..item.startByte]) };
@@ -305,7 +305,7 @@ public:
                     search = item.endByte;
                     if search == source.byteLen() { trailingEmpty = true; }
                 } else if item.endByte < source.byteLen() {
-                    var next = unicode.decodeUtf8(source.asBytes()[item.endByte..]) catch { return RegexError.InvalidUtf8; };
+                    var next = unicode.decodeUtf8(source.asBytes()[item.endByte..source.asBytes().len()]) catch { return RegexError.InvalidUtf8; };
                     search = item.endByte + next.1;
                 } else {
                     search = source.byteLen() + 1;
@@ -338,8 +338,8 @@ func appendReplacement(replacement: str, captures: *const Captures, output: *col
             position += 2;
         } else if 48 <= next && next <= 57 {
             var index: usize = 0;
-            while position + 1 < bytes.len() && 48 <= bytes[position + 1] && bytes[position + 1] <= 57 {
-                index = index * 10 + usize(bytes[position + 1] - 48);
+            for position + 1 < bytes.len() && 48 <= bytes[position + 1] && bytes[position + 1] <= 57 {
+                index = index * 10 + (usize(bytes[position + 1]) - usize(48));
                 position++;
             }
             var capture = captures.get(index);

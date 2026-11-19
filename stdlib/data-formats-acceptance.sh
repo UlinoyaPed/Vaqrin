@@ -2,7 +2,7 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-if [ -n "\${VAQC:-}" ]; then
+if [ -n "${VAQC:-}" ]; then
     COMPILER=$VAQC
 elif [ -x "$ROOT/build/host/vaqc" ]; then
     COMPILER="$ROOT/build/host/vaqc"
@@ -10,8 +10,7 @@ else
     COMPILER=vaqc
 fi
 
-OUT=\${TMPDIR:-/tmp}/vaqrin-data-formats-$$
-mkdir -p "$OUT"
+OUT=$(mktemp -d "${TMPDIR:-/tmp}/vaqrin-data-formats-XXXXXXXX")
 trap 'rm -rf "$OUT"' 0 HUP INT TERM
 
 cd "$ROOT"

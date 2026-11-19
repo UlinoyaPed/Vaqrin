@@ -1,5 +1,5 @@
 package errors
-import (coll, io, mem, text, log)
+import (iter as iterator, coll, io, mem, text, log)
 
 pub enum ErrorSeverity { Info, Warning, Error, Fatal }
 
@@ -10,7 +10,7 @@ pub class SourceLocation {
     var endLineValue: u32;
     var endColumnValue: u32;
     var functionValue: string;
-    func init(file: str, startLine: u32, startColumn: u32,
+    pub func init(file: str, startLine: u32, startColumn: u32,
         endLine: u32, endColumn: u32, function: str) !void
         : fileValue(text.fromBytes(file.asBytes())!), startLineValue(startLine),
           startColumnValue(startColumn), endLineValue(endLine), endColumnValue(endColumn),
@@ -32,10 +32,10 @@ pub class Frame {
     var messageValue: string;
     var locationValue: ?SourceLocation;
     var attrsValue: coll.Vec<log.Attr>;
-    func init(message: str, location: ?SourceLocation, attrs: []const log.Attr) !void
+    pub func init(message: str, location: ?SourceLocation, attrs: []const log.Attr) !void
         : messageValue(text.fromBytes(message.asBytes())!), locationValue(move(location)),
           attrsValue(coll.Vec<log.Attr>()) {
-        for &attr in attrs { attrsValue.push(attr.clone()!)!; }
+        for &attr in iterator.SliceIterRef<log.Attr>(attrs) { attrsValue.push(attr.clone()!)!; }
     }
 public:
     const func message() str { messageValue }
@@ -51,22 +51,22 @@ pub class Report {
     var severityValue: ErrorSeverity;
     var frames: coll.Vec<Frame>;
     var children: coll.Vec<Report>;
-    func init(message: str, error: ?ErrorId) !void
-        : errorValue(error), messageValue(text.fromBytes(message.asBytes())!),
+    pub func init(message: str, cause: ?ErrorId) !void
+        : errorValue(cause), messageValue(text.fromBytes(message.asBytes())!),
           severityValue(ErrorSeverity.Error), frames(coll.Vec<Frame>()),
           children(coll.Vec<Report>()) {}
 public:
-    static func fromError(error: ErrorId) !Self {
-        Report("error", some(error))!
+    static func fromError(cause: ErrorId) !Self {
+        Report("error", some(cause))!
     }
     static func new(message: str) !Self { Report(message, null)! }
     const func message() str { messageValue }
     const func severity() ErrorSeverity { severityValue }
     func setSeverity(value: ErrorSeverity) void { severityValue = value; }
     const func rootError() ?ErrorId {
-        for &child in children.asConstSlice() {
+        for &child in iterator.SliceIterRef<Report>(children.asConstSlice()) {
             switch child.rootError() {
-                some(error) => { return some(error); },
+                some(cause) => { return some(cause); },
                 null => {},
             }
         }
@@ -80,7 +80,8 @@ public:
     const func causeCount() usize { children.len() }
 
     func addContext(message: str) !void {
-        frames.push(Frame(message, null, [_]log.Attr{}[:])!)!
+        var empty = [0]log.Attr{};
+        frames.push(Frame(message, null, empty[:])!)!
     }
     func addContextAt(message: str, location: SourceLocation, attrs: []const log.Attr) !void {
         frames.push(Frame(message, some(move(location)), attrs)!)!
@@ -92,15 +93,15 @@ public:
     }
     func addCause(report: Report) !void { children.push(move(report))!; }
     func join(other: Report) !Self {
-        var result = Report("multiple errors", null)!;
+        var result = Report.new("multiple errors")!;
         result.reserveCauses(2)!;
         result.addCause(clone()!)!;
         result.addCause(move(other))!;
         move(result)
     }
-    const func matches(error: ErrorId) bool {
-        if errorValue == some(error) { return true; }
-        for &child in children.asConstSlice() { if child.matches(error) { return true; } }
+    const func matches(cause: ErrorId) bool {
+        switch errorValue { some(value) => { if value == cause { return true; } }, null => {} }
+        for &child in iterator.SliceIterRef<Report>(children.asConstSlice()) { if child.matches(cause) { return true; } }
         false
     }
     const func causes() ReportCauseIter { ReportCauseIter(children.asConstSlice()) }
@@ -109,11 +110,11 @@ public:
         result.severityValue = severityValue;
         result.reserveFrames(frames.len())!;
         result.reserveCauses(children.len())!;
-        for &frame in frames.asConstSlice() { result.frames.push(frame.clone()!)!; }
-        for &child in children.asConstSlice() { result.children.push(child.clone()!)!; }
+        for &frame in iterator.SliceIterRef<Frame>(frames.asConstSlice()) { result.frames.push(frame.clone()!)!; }
+        for &child in iterator.SliceIterRef<Report>(children.asConstSlice()) { result.children.push(child.clone()!)!; }
         move(result)
     }
-    func format(writer: *io.Writer) !void {
+    const func format(writer: *io.Writer) !void {
         formatNode(messageValue, errorValue, frames.asConstSlice(),
             children.asConstSlice(), writer, 0)
     }
@@ -134,7 +135,7 @@ pub class ReportCauseIter {
     var values: []const Report;
     var index: usize;
 public:
-    func init(values: []const Report) : values(values), index(0) {}
+    pub func init(values: []const Report) : values(values), index(0) {}
     func next() ?*const Report {
         if index >= values.len() { return null; }
         var item = &values[index];
@@ -147,16 +148,16 @@ func indent(writer: *io.Writer, depth: usize) !void {
     for i := usize(0); i < depth; i++ { io.writeString(writer, "  ")!; }
 }
 
-func formatNode(message: str, error: ?ErrorId, frames: []const Frame,
+func formatNode(message: str, cause: ?ErrorId, frames: []const Frame,
     children: []const Report, writer: *io.Writer, depth: usize) !void {
     indent(writer, depth)!;
     io.writeString(writer, message)!;
-    switch error {
+    switch cause {
         some(_) => { io.writeString(writer, " [ErrorId]")!; },
         null => {},
     }
     io.writeString(writer, "\n")!;
-    for &frame in frames {
+    for &frame in iterator.SliceIterRef<Frame>(frames) {
         indent(writer, depth + 1)!;
         io.writeString(writer, "context: ")!;
         io.writeString(writer, frame.message())!;
@@ -165,20 +166,23 @@ func formatNode(message: str, error: ?ErrorId, frames: []const Frame,
                 io.writeString(writer, " (")!;
                 io.writeString(writer, location.file())!;
                 io.writeString(writer, ":")!;
-                io.writeString(writer, formatU32(location.startLine())!)!;
+                var line = formatU32(location.startLine())!;
+                io.writeString(writer, line)!;
                 io.writeString(writer, ":")!;
-                io.writeString(writer, formatU32(location.startColumn())!)!;
+                var column = formatU32(location.startColumn())!;
+                io.writeString(writer, column)!;
                 io.writeString(writer, ")")!;
             },
             null => {},
         }
-        for &attr in frame.attrs() {
+        for &attr in iterator.SliceIterRef<log.Attr>(frame.attrs()) {
             io.writeString(writer, " ")!;
-            io.writeString(writer, log.formatAttr(&attr)!)!;
+            var attribute = log.formatAttr(&attr)!;
+            io.writeString(writer, attribute)!;
         }
         io.writeString(writer, "\n")!;
     }
-    for &child in children {
+    for &child in iterator.SliceIterRef<Report>(children) {
         formatNode(child.message(), child.rootError(), child.contextFrames(),
             child.causeSlice(), writer, depth + 1)!;
     }
@@ -198,7 +202,8 @@ func formatU32(value: u32) !string {
     for count > 0 {
         count--;
         var one = [1]u8{digits[count]};
-        output.append(text.fromBytes(one[:])!)!;
+        var part = text.fromBytes(one[:])!;
+        output.append(part)!;
     }
     output.build()
 }
@@ -206,7 +211,7 @@ func formatU32(value: u32) !string {
 pub class ErrorSink {
     var reports: coll.Vec<Report>;
 public:
-    func init() : reports(coll.Vec<Report>()) {}
+    pub func init() : reports(coll.Vec<Report>()) {}
     func push(report: Report) !void { reports.push(move(report))!; }
     const func len() usize { reports.len() }
     const func isEmpty() bool { reports.isEmpty() }
@@ -219,7 +224,7 @@ public:
     func toReport() !Report {
         if reports.isEmpty() { return ReportError.Empty; }
         if reports.len() == 1 { return reports.pop().unwrap(); }
-        var result = Report("multiple errors", null)!;
+        var result = Report.new("multiple errors")!;
         result.reserveCauses(reports.len())!;
         for reports.len() > 0 {
             var item = reports.remove(0).unwrap();
@@ -232,14 +237,14 @@ public:
 pub class ReportDrain {
     var items: coll.Vec<Report>;
 public:
-    func init(items: coll.Vec<Report>) : items(move(items)) {}
+    pub func init(items: coll.Vec<Report>) : items(move(items)) {}
     func next() ?Report { items.pop() }
 }
 
-pub func fromError(error: ErrorId) !Report { Report.fromError(error) }
+pub func fromError(cause: ErrorId) !Report { Report.fromError(cause) }
 pub func addContext(report: *Report, message: str) !void { report.addContext(message) }
-pub func withContext(error: ErrorId, message: str) !Report {
-    var report = Report.fromError(error)!;
+pub func withContext(cause: ErrorId, message: str) !Report {
+    var report = Report.fromError(cause)!;
     report.addContext(message)!;
     move(report)
 }
@@ -247,15 +252,18 @@ pub func addCause(report: *Report, cause: Report) !void { report.addCause(move(c
 pub func join(a: Report, b: Report) !Report { a.join(move(b)) }
 pub func rootError(report: *const Report) ?ErrorId { report.rootError() }
 pub func causes(report: *const Report) ReportCauseIter { report.causes() }
-pub func matches(report: *const Report, error: ErrorId) bool { report.matches(error) }
-pub func is(report: *const Report, error: ErrorId) bool { report.rootError() == some(error) }
+pub func matches(report: *const Report, cause: ErrorId) bool { report.matches(cause) }
+pub func is(report: *const Report, cause: ErrorId) bool {
+    var root = report.rootError() ?? { return false; };
+    root == cause
+}
 pub func join(reports: []const Report) !Report {
     if reports.len() == 0 { return ReportError.Empty; }
-    var result = Report("multiple errors", null)!;
+    var result = Report.new("multiple errors")!;
     result.reserveCauses(reports.len())!;
-    for &report in reports { result.addCause(report.clone()!)!; }
+    for &report in iterator.SliceIterRef<Report>(reports) { result.addCause(report.clone()!)!; }
     move(result)
 }
-pub func wrap(error: ErrorId, message: str) !Report { withContext(error, message) }
+pub func wrap(cause: ErrorId, message: str) !Report { withContext(cause, message) }
 pub func format(report: *const Report) !string { report.formatString() }
 pub func reportTo(writer: *io.Writer, report: *const Report) !void { report.format(writer) }

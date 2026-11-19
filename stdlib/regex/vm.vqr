@@ -1,19 +1,19 @@
 package regex
 import (coll, core, convert, unicode)
 
-pub record Thread {
+pub class Thread {
     pub var state: i32;
     pub var startByte: usize;
     pub var history: i32;
 }
 
-pub record CaptureHistory {
+pub class CaptureHistory {
     pub var previous: i32;
     pub var slot: usize;
     pub var offset: usize;
 }
 
-pub record SearchResult {
+pub class SearchResult {
     pub var matched: Match;
     pub var captures: ?Captures;
 }
@@ -61,7 +61,7 @@ func appendHistory(history: *coll.Vec<CaptureHistory>, previous: i32,
 func epsilonClosure(regex: *const Regex, seeds: []const Thread,
                     output: *coll.Vec<Thread>, history: *coll.Vec<CaptureHistory>,
                     seen: *coll.Vec<usize>, generation: usize, stack: *coll.Vec<Thread>,
-                    input: str, position: usize, captureOutput: bool, budget: *usize) !void {
+                    input: str, position: usize, captureOutput: bool, &budget: *usize) !void {
     for seed in seeds {
         stack.clear();
         stack.push(seed)!;
@@ -74,12 +74,12 @@ func epsilonClosure(regex: *const Regex, seeds: []const Thread,
                     if thread.state < 0 || usize(thread.state)! >= regex.stateCount() {
                         return RegexError.InvalidCapture;
                     }
-                    if budget.* == 0 { return RegexError.StepLimitExceeded; }
-                    budget.* -= 1;
+                    if budget == 0 { return RegexError.StepLimitExceeded; }
+                    budget -= 1;
                     var index = usize(thread.state)!;
-                    if seen[index] == generation { continue; }
-                    seen[index] = generation;
-                    var state = regex.states[index];
+                    if seen.asSlice()[index] == generation { continue; }
+                    seen.asSlice()[index] = generation;
+                    var state = regex.stateAt(index);
 
                     switch state.op {
                         Op.Split => {
@@ -238,7 +238,7 @@ func buildSearchResult(candidate: ?Thread, endByte: usize, input: str,
                 slots[1] = some(endByte);
                 var head = thread.history;
                 for head >= 0 {
-                    var item = history[usize(head)!];
+                    var item = history.asConstSlice()[usize(head)!];
                     if item.slot < slots.len() && slots[item.slot] == null {
                         slots[item.slot] = some(item.offset);
                     }
@@ -325,7 +325,7 @@ func runNfa(regex: *const Regex, input: str, start: usize, captureOutput: bool) 
             return buildSearchResult(candidate, candidateEnd, input, &history, regex.captureGroupCount(), captureOutput);
         }
 
-        var decoded = unicode.decodeUtf8(input.asBytes()[position..]) catch { return RegexError.InvalidUtf8; };
+        var decoded = unicode.decodeUtf8(input.asBytes()[position..input.asBytes().len()]) catch { return RegexError.InvalidUtf8; };
         var cp = convert.fromChar(decoded.0);
         if active.isEmpty() {
             position += decoded.1;

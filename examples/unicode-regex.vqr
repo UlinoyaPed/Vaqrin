@@ -14,7 +14,7 @@ func main() !void {
     io.println(found.unwrap().asStr())!;
 
     var groups = expression.captures("zabab")!;
-    io.println(groups.unwrap().get(1).unwrap().asStr())!;
+    io.println(move(groups).unwrap().get(1).unwrap().asStr())!;
 
     var emptyExpression = regex.Regex.compile("a*?")!;
     var matches = emptyExpression.findAll("aa");

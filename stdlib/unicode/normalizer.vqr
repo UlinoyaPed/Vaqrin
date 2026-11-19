@@ -37,7 +37,7 @@ private:
         var cls = combiningClass(__vqr_char(cp));
         if cls == 0 { pending.push(cp)!; return; }
         var at = pending.len();
-        while at > 0 {
+        for at > 0 {
             var previous = combiningClass(__vqr_char(pending[at - 1]));
             if previous == 0 || previous <= cls { break; }
             at--;
@@ -65,11 +65,11 @@ private:
             if cp < key { hi = mid; }
             else if cp > key { lo = mid + 1; }
             else {
-                var offset = decompositionIndex[mid * 3 + 1];
+                var offset = __vqr_parse_bits<usize>(u128(decompositionIndex[mid * 3 + 1]));
                 var flags = decompositionIndex[mid * 3 + 2];
                 var compat = (flags & 0x100) != 0;
                 if compat && !compatibility { out.push(cp)!; return; }
-                var count = flags & 0xff;
+                var count = __vqr_parse_bits<usize>(u128(flags & 0xff));
                 for i in usize(0)..count {
                     decomposeScalar(decompositionScalars[offset + i], compatibility, out, depth + 1)!;
                 }

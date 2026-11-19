@@ -31,7 +31,7 @@ func mixSeed(value: u64) u64 {
 pub class Seed {
     pub var low: u64;
     pub var high: u64;
-    func init(a: u64, b: u64) : low(a), high(b) {}
+    pub func init(a: u64, b: u64) : low(a), high(b) {}
     pub static func fromU64(value: u64) Self {
         Seed(mixSeed(value), mixSeed(value ^ 0xd1b54a32d192ed03u64))
     }
@@ -78,7 +78,7 @@ public:
         (value >> rotation) | (value << ((u64(0) -% u64(rotation)) & 63))
     }
 
-    pub func nextU32() u32 { __vqr_parse_bits<u32>(nextU64() >> 32) }
+    pub func nextU32() u32 { __vqr_parse_bits<u32>(u128(nextU64() >> 32)) }
 
     pub func fill(dst: []u8) void {
         var index: usize = 0;
@@ -86,7 +86,7 @@ public:
             var value = nextU64();
             for j in usize(0)..8 {
                 if index >= dst.len() { break; }
-                dst[index] = u8(value & 0xffu64)!;
+                dst[index] = u8(value & 0xffu64) catch { panic("masked byte conversion failed"); };
                 value >>= 8;
                 index++;
             }
@@ -165,7 +165,7 @@ public:
             var value = nextU64();
             for j in usize(0)..8 {
                 if index >= dst.len() { break; }
-                dst[index] = u8(value & 0xffu64)!;
+                dst[index] = u8(value & 0xffu64) catch { panic("masked byte conversion failed"); };
                 value >>= 8;
                 index++;
             }
@@ -208,11 +208,11 @@ private:
 
 pub func newDefault() Pcg64 { Pcg64.seed(0x4d595df4d0f33173u64) }
 func indexFromU64(value: u64) usize {
-    convert.checkedCast<usize, u64>(value)!.unwrap()
+    (__vqr_parse_bits<usize>(u128(value)))
 }
 
 pub func randomU64<R: Rng>(rng: *R) u64 { rng.nextU64() }
-pub func randomU32<R: Rng>(rng: *R) u32 { __vqr_parse_bits<u32>(rng.nextU64() >> 32) }
+pub func randomU32<R: Rng>(rng: *R) u32 { __vqr_parse_bits<u32>(u128(rng.nextU64() >> 32)) }
 pub func randomBool<R: Rng>(rng: *R) bool { (rng.nextU64() & 1) != 0 }
 pub func fill<R: Rng>(rng: *R, dst: []u8) void { rng.fill(dst); }
 

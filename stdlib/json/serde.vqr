@@ -1,5 +1,5 @@
 package json
-import (coll, convert, opt, serde, text)
+import (core, coll, convert, opt, serde, text)
 
 pub error JsonSerdeError { InvalidState, TypeMismatch, UnsupportedNumber, MissingRoot }
 
@@ -45,7 +45,7 @@ public:
         if frames.isEmpty() { return JsonSerdeError.InvalidState; }
         var frame = frames.pop().unwrap();
         if frame.objectMode { return JsonSerdeError.InvalidState; }
-        appendValue(Value.Array(move(frame.array)))
+        appendValue(Value.Array(core.replace<JsonArray>(&frame.array, JsonArray())))
     }
     func beginMap(length: ?usize) !void { frames.push(JsonWriteFrame(true))!; }
     func writeKey(value: str) !void {
@@ -58,11 +58,11 @@ public:
         if frames.isEmpty() { return JsonSerdeError.InvalidState; }
         var frame = frames.pop().unwrap();
         if !frame.objectMode || frame.pendingKey != null { return JsonSerdeError.InvalidState; }
-        appendValue(Value.Object(move(frame.object)))
+        appendValue(Value.Object(core.replace<JsonObject>(&frame.object, JsonObject())))
     }
     func takeValue() !Value {
         if !frames.isEmpty() { return JsonSerdeError.InvalidState; }
-        move(root).unwrap()
+        core.replace<?Value>(&root, null) ?? { return JsonSerdeError.MissingRoot; }
     }
 private:
     func appendValue(value: Value) !void {
@@ -223,14 +223,14 @@ func integerText(value: u64, negative: bool) !string {
     text.fromBytes(output.asConstSlice())
 }
 
-pub func marshal<T>(value: *const T, codec: *const serde.Codec<T>) !string {
+pub func marshal<T>(value: *const T, codec: *serde.Codec<T>) !string {
     var serializer = JsonDomSerializer();
     serde.encode<T>(value, &serializer, codec)!;
     var root = serializer.takeValue()!;
     stringify(&root)
 }
 
-pub func unmarshal<T>(value: str, codec: *const serde.Codec<T>) !T {
+pub func unmarshal<T>(value: str, codec: *serde.Codec<T>) !T {
     var root = parse(value)!;
     var deserializer = JsonDomDeserializer(move(root));
     var result = serde.decode<T>(&deserializer, codec)!;

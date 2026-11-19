@@ -6,20 +6,20 @@ pub enum NormalForm { NFC, NFD, NFKC, NFKD }
 pub enum GraphemeBreak { Other, CR, LF, Control, Extend, ZWJ, RegionalIndicator, Prepend, SpacingMark, L, V, T, LV, LVT }
 pub error UnicodeError { InvalidUtf8, InvalidScalar, OutputTooSmall, AllocationFailed }
 
-const flagAlphabetic: u16 = 1 << 0;
-const flagDigit: u16 = 1 << 1;
-const flagWhitespace: u16 = 1 << 2;
-const flagControl: u16 = 1 << 3;
-const flagUpper: u16 = 1 << 4;
-const flagLower: u16 = 1 << 5;
-const flagTitle: u16 = 1 << 6;
-const flagXidStart: u16 = 1 << 7;
-const flagXidContinue: u16 = 1 << 8;
-const flagEmoji: u16 = 1 << 9;
-const flagCombining: u16 = 1 << 10;
-const flagExtendedPictographic: u16 = 1 << 11;
+const flagAlphabetic: u16 = 1;
+const flagDigit: u16 = 2;
+const flagWhitespace: u16 = 4;
+const flagControl: u16 = 8;
+const flagUpper: u16 = 16;
+const flagLower: u16 = 32;
+const flagTitle: u16 = 64;
+const flagXidStart: u16 = 128;
+const flagXidContinue: u16 = 256;
+const flagEmoji: u16 = 512;
+const flagCombining: u16 = 1024;
+const flagExtendedPictographic: u16 = 2048;
 
-pub record CharInfo {
+pub class CharInfo {
     pub var category: GeneralCategory;
     pub var script: Script;
     pub var combiningClass: u8;
@@ -33,8 +33,8 @@ func packedInfo(ch: char) u64 {
     for lo < hi {
         var mid = lo + (hi - lo) / 2;
         var bounds = unicodePropertyRanges[mid * 2];
-        var first = u32(bounds >> 21)!;
-        var last = u32(bounds & 0x1fffff)!;
+        var first = __vqr_parse_bits<u32>(u128(bounds >> 21));
+        var last = __vqr_parse_bits<u32>(u128(bounds & 0x1fffff));
         if cp < first { hi = mid; }
         else if cp > last { lo = mid + 1; }
         else { return unicodePropertyRanges[mid * 2 + 1]; }
@@ -45,13 +45,13 @@ func packedInfo(ch: char) u64 {
 pub func version() str { "17.0.0" }
 pub func charInfo(ch: char) CharInfo {
     var value = packedInfo(ch);
-    var gc = u8(value & 31)!;
-    var sc = u8((value >> 5) & 255)!;
+    var gc = __vqr_parse_bits<u8>(u128(value & 31));
+    var sc = __vqr_parse_bits<u8>(u128((value >> 5) & 255));
     CharInfo{
         category: categoryFromId(gc),
         script: scriptFromId(sc),
-        combiningClass: u8((value >> 13) & 255)!,
-        flags: u16((value >> 21) & 0x1fff)!
+        combiningClass: __vqr_parse_bits<u8>(u128((value >> 13) & 255)),
+        flags: __vqr_parse_bits<u16>(u128((value >> 21) & 0x1fff))
     }
 }
 func categoryFromId(id: u8) GeneralCategory {
@@ -180,8 +180,8 @@ pub func caseFoldFull(ch: char) !string {
         if cp < key { hi = mid; }
         else if cp > key { lo = mid + 1; }
         else {
-            var offset = caseFoldIndex[mid * 3 + 1];
-            var count = caseFoldIndex[mid * 3 + 2];
+            var offset = usize(caseFoldIndex[mid * 3 + 1]);
+            var count = usize(caseFoldIndex[mid * 3 + 2]);
             var output = coll.Vec<u8>();
             for i in usize(0)..count {
                 appendCaseFoldScalarUtf8(caseFoldScalars[offset + i], &output)!;

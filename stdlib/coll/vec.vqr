@@ -71,11 +71,20 @@ public:
     func shrinkToFit() !void { shrinkTo(length) }
 
 private:
+    func allocationLayout(capacity: usize) !mem.Layout {
+        var layout = mem.Layout.array<T>(capacity)!;
+        // Zero-sized elements still need a unique, releasable allocation token.
+        if layout.size() == 0 {
+            return mem.Layout.fromSizeAlign(1, layout.align());
+        }
+        layout
+    }
+
     func freeBuffer(address: *T, capacity: usize) void {
         switch allocator {
             null => unsafe { __vqr_free<T>(address); },
             some(owner) => {
-                var layout = mem.Layout.array<T>(capacity)!;
+                var layout = allocationLayout(capacity)!;
                 var bytes = unsafe { ptrCast<*u8>(address) };
                 owner.free(bytes, layout);
             },
@@ -97,7 +106,7 @@ private:
         switch allocator {
             null => { next = unsafe { __vqr_alloc<T>(newCapacity)! }; },
             some(owner) => {
-                var layout = mem.Layout.array<T>(newCapacity)!;
+                var layout = allocationLayout(newCapacity)!;
                 var raw = owner.alloc(layout)!;
                 switch raw {
                     null => return mem.AllocationError.OutOfMemory,
@@ -220,7 +229,7 @@ public:
         var kept: usize = 0;
         for i in usize(0)..length {
             var address = data.unwrap().offset(i);
-            if predicate(address) {
+            if predicate(get(i).unwrap()) {
                 if kept != i {
                     unsafe { __vqr_slot_write<T>(data.unwrap().offset(kept), __vqr_slot_take<T>(address)); }
                 }

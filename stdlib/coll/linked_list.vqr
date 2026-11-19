@@ -6,9 +6,10 @@ pub class ListNode<T: Movable> {
     var slot: mem.MaybeUninit<T>;
     var previous: ?*ListNode<T>;
     var following: ?*ListNode<T>;
+    var ownerIndex: usize;
 
     func init(item: T)
-        : slot(mem.MaybeUninit<T>.uninit()), previous(null), following(null) {
+        : slot(mem.MaybeUninit<T>.uninit()), previous(null), following(null), ownerIndex(0) {
         unsafe { slot.write(move(item)); }
     }
 
@@ -84,6 +85,7 @@ pub class LinkedList<T: Movable> {
     var firstNode: ?*ListNode<T>;
     var lastNode: ?*ListNode<T>;
     var length: usize;
+    // Owns each node's Box so custom allocator release context remains attached to it.
     var nodes: Vec<^ListNode<T>>;
     var allocator: ?mem.AllocatorRef;
 public:
@@ -101,69 +103,14 @@ public:
     const func len() usize { length }
     const func isEmpty() bool { length == 0 }
 
-    func pushFront(value: T) !void {
-        var owner = switch allocator {
-            null => new ListNode<T>(move(value))!,
-            some(source) => new(source) ListNode<T>(move(value))!,
-        };
-        var node = owner.asPtr();
-        nodes.insert(0, move(owner))!;
-        node.following = firstNode;
-        switch firstNode {
-            some(oldFirst) => { oldFirst.previous = some(node); },
-            null => { lastNode = some(node); },
-        }
-        firstNode = some(node);
-        length++;
-    }
-
-    func pushBack(value: T) !void {
-        var owner = switch allocator {
-            null => new ListNode<T>(move(value))!,
-            some(source) => new(source) ListNode<T>(move(value))!,
-        };
-        var node = owner.asPtr();
-        nodes.push(move(owner))!;
-        node.previous = lastNode;
-        switch lastNode {
-            some(oldLast) => { oldLast.following = some(node); },
-            null => { firstNode = some(node); },
-        }
-        lastNode = some(node);
-        length++;
-    }
-
-    func insert(index: usize, value: T) !void {
-        if index > length { return CapacityError.IndexOutOfBounds; }
-        if index == 0 { pushFront(move(value))!; return; }
-        if index == length { pushBack(move(value))!; return; }
-
-        var current = nodeAt(index).unwrap();
-        var previous = current.previous.unwrap();
-        var owner = switch allocator {
-            null => new ListNode<T>(move(value))!,
-            some(source) => new(source) ListNode<T>(move(value))!,
-        };
-        var node = owner.asPtr();
-        nodes.insert(index, move(owner))!;
-        node.previous = some(previous);
-        node.following = some(current);
-        previous.following = some(node);
-        current.previous = some(node);
-        length++;
-    }
-
-    func popFront() ?T {
-        if length == 0 { return null; }
-        some(removeNode(firstNode.unwrap()))
-    }
-
-    func popBack() ?T {
-        if length == 0 { return null; }
-        some(removeNode(lastNode.unwrap()))
-    }
-
 private:
+    func newNode(value: T) !^ListNode<T> {
+        switch allocator {
+            null => new ListNode<T>(move(value))!,
+            some(source) => new(source) ListNode<T>(move(value))!,
+        }
+    }
+
     func nodeAt(index: usize) ?*ListNode<T> {
         if index >= length { return null; }
         if index < length / 2 {
@@ -186,18 +133,81 @@ private:
             some(following) => { following.previous = node.previous; },
             null => { lastNode = node.previous; },
         }
+
+        var index = node.ownerIndex;
+        if index >= nodes.len() || nodes.get(index).unwrap().asPtr() != node {
+            panic("LinkedList node ownership index invariant");
+        }
+        var owner = nodes.swapRemove(index).unwrap();
+        if index < nodes.len() {
+            nodes.getMut(index).unwrap().asPtr().ownerIndex = index;
+        }
+
         length--;
         var value = unsafe { node.slot.assumeInit() };
-        for i in usize(0)..nodes.len() {
-            if nodes.get(i).unwrap().asPtr() == node {
-                var owner = nodes.remove(i).unwrap();
-                break;
-            }
-        }
         move(value)
     }
 
 public:
+    func pushFront(value: T) !void {
+        var owner = newNode(move(value))!;
+        var node = owner.asPtr();
+        node.ownerIndex = nodes.len();
+        nodes.push(move(owner))!;
+
+        node.following = firstNode;
+        switch firstNode {
+            some(oldFirst) => { oldFirst.previous = some(node); },
+            null => { lastNode = some(node); },
+        }
+        firstNode = some(node);
+        length++;
+    }
+
+    func pushBack(value: T) !void {
+        var owner = newNode(move(value))!;
+        var node = owner.asPtr();
+        node.ownerIndex = nodes.len();
+        nodes.push(move(owner))!;
+
+        node.previous = lastNode;
+        switch lastNode {
+            some(oldLast) => { oldLast.following = some(node); },
+            null => { firstNode = some(node); },
+        }
+        lastNode = some(node);
+        length++;
+    }
+
+    func insert(index: usize, value: T) !void {
+        if index > length { return CapacityError.IndexOutOfBounds; }
+        if index == 0 { pushFront(move(value))!; return; }
+        if index == length { pushBack(move(value))!; return; }
+
+        var current = nodeAt(index).unwrap();
+        var previous = current.previous.unwrap();
+        var owner = newNode(move(value))!;
+        var node = owner.asPtr();
+        node.ownerIndex = nodes.len();
+        nodes.push(move(owner))!;
+
+        node.previous = some(previous);
+        node.following = some(current);
+        previous.following = some(node);
+        current.previous = some(node);
+        length++;
+    }
+
+    func popFront() ?T {
+        if length == 0 { return null; }
+        some(removeNode(firstNode.unwrap()))
+    }
+
+    func popBack() ?T {
+        if length == 0 { return null; }
+        some(removeNode(lastNode.unwrap()))
+    }
+
     func remove(index: usize) ?T {
         switch nodeAt(index) {
             null => null,
@@ -251,7 +261,12 @@ public:
         if self == other || other.length == 0 { return; }
         if other.length > ~usize(0) - length { return CapacityError.Overflow; }
 
+        var base = nodes.len();
         nodes.append(&other.nodes)!;
+        for i := base; i < nodes.len(); i++ {
+            nodes.getMut(i).unwrap().asPtr().ownerIndex = i;
+        }
+
         switch lastNode {
             some(oldLast) => {
                 oldLast.following = other.firstNode;
@@ -268,31 +283,47 @@ public:
 
     func splitOff(index: usize) !Self {
         if index > length { return CapacityError.IndexOutOfBounds; }
-        var result = LinkedList<T>();
-        result.allocator = allocator;
-        result.nodes = nodes.splitOff(index)!;
-        if index == length { return move(result); }
-
-        if index == 0 {
-            result.firstNode = firstNode;
-            result.lastNode = lastNode;
-            result.length = length;
-            firstNode = null;
-            lastNode = null;
-            length = 0;
-            return move(result);
-        }
+        var count = length - index;
+        var result = switch allocator {
+            null => LinkedList<T>(),
+            some(owner) => LinkedList<T>.withAllocator(owner),
+        };
+        result.nodes.reserve(count)!;
+        if count == 0 { return move(result); }
 
         var split = nodeAt(index).unwrap();
-        var before = split.previous.unwrap();
-        before.following = null;
-        split.previous = null;
+        var previous = split.previous;
+        var oldLast = lastNode;
+        var current: ?*ListNode<T> = some(split);
+        for current != null {
+            var node = current.unwrap();
+            current = node.following;
+            var ownerIndex = node.ownerIndex;
+            var owner = nodes.swapRemove(ownerIndex);
+            if ownerIndex < nodes.len() {
+                nodes.getMut(ownerIndex).unwrap().asPtr().ownerIndex = ownerIndex;
+            }
+            node.ownerIndex = result.nodes.len();
+            result.nodes.push(move(owner.unwrap()))!;
+        }
 
         result.firstNode = some(split);
-        result.lastNode = lastNode;
-        result.length = length - index;
-        lastNode = some(before);
-        length = index;
+        result.lastNode = oldLast;
+        result.length = count;
+
+        switch previous {
+            null => {
+                firstNode = null;
+                lastNode = null;
+                length = 0;
+            },
+            some(before) => {
+                before.following = null;
+                split.previous = null;
+                lastNode = some(before);
+                length = index;
+            },
+        }
         move(result)
     }
 
@@ -308,7 +339,6 @@ public:
         var oldFirst = firstNode;
         firstNode = lastNode;
         lastNode = oldFirst;
-        nodes.reverse();
     }
 
     const func iterRef() ListIterRef<T> {

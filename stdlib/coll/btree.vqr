@@ -1,10 +1,9 @@
 package coll
-import (cmp)
 
 const btreeMinimumDegree: usize = 4;
 const btreeMaximumEntries: usize = 7;
 
-pub class BTreeNode<K: Movable & cmp.TotalOrder<K>, V: Movable> {
+class BTreeNode<K: Movable, V: Movable> {
     #copy: disabled
     var leaf: bool;
     var entries: FixedVec<(K, V), 7>;
@@ -43,14 +42,14 @@ public:
     func removeChild(index: usize) *BTreeNode<K, V> { children.remove(index).unwrap() }
 }
 
-func allocateBTreeNode<K: Movable & cmp.TotalOrder<K>, V: Movable>(
+func allocateBTreeNode<K: Movable, V: Movable>(
     leaf: bool
 ) !*BTreeNode<K, V> {
     var owner = new BTreeNode<K, V>(leaf)!;
     Box.intoRaw(move(owner))
 }
 
-func destroyBTreeNode<K: Movable & cmp.TotalOrder<K>, V: Movable>(
+func destroyBTreeNode<K: Movable, V: Movable>(
     node: *BTreeNode<K, V>
 ) void {
     for node.childCount() > 0 {
@@ -60,18 +59,19 @@ func destroyBTreeNode<K: Movable & cmp.TotalOrder<K>, V: Movable>(
     var owner = unsafe { Box<BTreeNode<K, V>>.fromRaw(node) };
 }
 
-func btreeLowerIndex<K: Movable & cmp.TotalOrder<K>, V: Movable>(
-    node: *BTreeNode<K, V>, key: *const K
+func btreeLowerIndex<K: Movable, V: Movable>(
+    node: *BTreeNode<K, V>, key: *const K,
+    less: func(*const K, *const K) bool
 ) usize {
     var index: usize = 0;
     for index < node.entryCount() {
-        if key.compareTotal(&node.entryAt(index).0) != cmp.Ordering.Greater { return index; }
+        if !less(&node.entryAt(index).0, key) { return index; }
         index++;
     }
     index
 }
 
-func collectBTreePointers<K: Movable & cmp.TotalOrder<K>, V: Movable>(
+func collectBTreePointers<K: Movable, V: Movable>(
     node: *BTreeNode<K, V>, output: *Vec<*const (K, V)>
 ) !void {
     for i in usize(0)..node.entryCount() {
@@ -83,7 +83,7 @@ func collectBTreePointers<K: Movable & cmp.TotalOrder<K>, V: Movable>(
     }
 }
 
-func collectBTreePointersMut<K: Movable & cmp.TotalOrder<K>, V: Movable>(
+func collectBTreePointersMut<K: Movable, V: Movable>(
     node: *BTreeNode<K, V>, output: *Vec<*(K, V)>
 ) !void {
     for i in usize(0)..node.entryCount() {
@@ -95,7 +95,7 @@ func collectBTreePointersMut<K: Movable & cmp.TotalOrder<K>, V: Movable>(
     }
 }
 
-pub class BTreeIterRef<K: Movable & cmp.TotalOrder<K>, V: Movable> {
+pub class BTreeIterRef<K: Movable, V: Movable> {
     var entries: Vec<*const (K, V)>;
     var frontIndex: usize;
     var backIndex: usize;
@@ -105,22 +105,22 @@ public:
 
     func next() ?(*const K, *const V) {
         if frontIndex == backIndex { return null; }
-        var entry = entries.get(frontIndex).unwrap();
+        var entry = *entries.get(frontIndex).unwrap();
         frontIndex++;
-        some((&entry.0, &entry.1))
+        some((&(*entry).0, &(*entry).1))
     }
 
     func nextBack() ?(*const K, *const V) {
         if frontIndex == backIndex { return null; }
         backIndex--;
-        var entry = entries.get(backIndex).unwrap();
-        some((&entry.0, &entry.1))
+        var entry = *entries.get(backIndex).unwrap();
+        some((&(*entry).0, &(*entry).1))
     }
 
     const func remaining() usize { backIndex - frontIndex }
 }
 
-pub class BTreeIterMut<K: Movable & cmp.TotalOrder<K>, V: Movable> {
+pub class BTreeIterMut<K: Movable, V: Movable> {
     var entries: Vec<*(K, V)>;
     var frontIndex: usize;
     var backIndex: usize;
@@ -145,7 +145,7 @@ public:
     const func remaining() usize { backIndex - frontIndex }
 }
 
-pub class BTreeSetIterRef<T: Movable & cmp.TotalOrder<T>> {
+pub class BTreeSetIterRef<T: Movable> {
     var source: BTreeIterRef<T, u8>;
 public:
     func init(source: BTreeIterRef<T, u8>) : source(move(source)) {}
@@ -164,7 +164,7 @@ public:
     const func remaining() usize { source.remaining() }
 }
 
-pub class IntoBTreeIter<K: Movable & cmp.TotalOrder<K>, V: Movable> {
+pub class IntoBTreeIter<K: Movable, V: Movable> {
     var source: BTreeMap<K, V>;
 public:
     func init(value: BTreeMap<K, V>) : source(move(value)) {}
@@ -173,12 +173,18 @@ public:
     const func remaining() usize { source.len() }
 }
 
-pub class BTreeMap<K: Movable & cmp.TotalOrder<K>, V: Movable> {
+pub class BTreeMap<K: Movable, V: Movable> {
     #copy: disabled
     var root: ?*BTreeNode<K, V>;
     var length: usize;
+    var less: func(*const K, *const K) bool;
 public:
-    func init() : root(null), length(0) {}
+    func init(less: func(*const K, *const K) bool)
+        : root(null), length(0), less(less) {}
+
+    static func withComparator(less: func(*const K, *const K) bool) Self {
+        BTreeMap<K, V>(less)
+    }
 
     const func len() usize { length }
     const func isEmpty() bool { length == 0 }
@@ -217,10 +223,12 @@ private:
     func insertNonFull(
         node: *BTreeNode<K, V>, key: K, value: V
     ) !?V {
-        var index = btreeLowerIndex<K, V>(node, &key);
-        if index < node.entryCount() &&
-           key.compareTotal(&node.entryAt(index).0) == cmp.Ordering.Equal {
-            return replaceEntry(node, index, move(key), move(value));
+        var index = btreeLowerIndex<K, V>(node, &key, less);
+        if index < node.entryCount() {
+            var existing = &node.entryAt(index).0;
+            if !less(&key, existing) && !less(existing, &key) {
+                return replaceEntry(node, index, move(key), move(value));
+            }
         }
 
         if node.isLeaf() {
@@ -231,11 +239,11 @@ private:
         var child = node.childAt(index);
         if child.entryCount() == btreeMaximumEntries {
             splitChild(node, index)!;
-            var order = key.compareTotal(&node.entryAt(index).0);
-            if order == cmp.Ordering.Equal {
+            var promoted = &node.entryAt(index).0;
+            if !less(&key, promoted) && !less(promoted, &key) {
                 return replaceEntry(node, index, move(key), move(value));
             }
-            if order == cmp.Ordering.Greater { index++; }
+            if less(promoted, &key) { index++; }
         }
         insertNonFull(node.childAt(index), move(key), move(value))
     }
@@ -323,9 +331,12 @@ private:
     }
 
     func removeFrom(node: *BTreeNode<K, V>, key: *const K) ?(K, V) {
-        var index = btreeLowerIndex<K, V>(node, key);
-        var found = index < node.entryCount() &&
-                    key.compareTotal(&node.entryAt(index).0) == cmp.Ordering.Equal;
+        var index = btreeLowerIndex<K, V>(node, key, less);
+        var found = false;
+        if index < node.entryCount() {
+            var existing = &node.entryAt(index).0;
+            found = !less(key, existing) && !less(existing, key);
+        }
 
         if found {
             if node.isLeaf() { return some(node.removeEntry(index)); }
@@ -432,9 +443,10 @@ public:
         var current = root;
         for current != null {
             var node = current.unwrap();
-            var index = btreeLowerIndex<K, V>(node, key);
+            var index = btreeLowerIndex<K, V>(node, key, less);
             if index < node.entryCount() &&
-               key.compareTotal(&node.entryAt(index).0) == cmp.Ordering.Equal {
+               !less(key, &node.entryAt(index).0) &&
+               !less(&node.entryAt(index).0, key) {
                 return some(&node.entryAt(index).1);
             }
             if node.isLeaf() { return null; }
@@ -447,9 +459,10 @@ public:
         var current = root;
         for current != null {
             var node = current.unwrap();
-            var index = btreeLowerIndex<K, V>(node, key);
+            var index = btreeLowerIndex<K, V>(node, key, less);
             if index < node.entryCount() &&
-               key.compareTotal(&node.entryAt(index).0) == cmp.Ordering.Equal {
+               !less(key, &node.entryAt(index).0) &&
+               !less(&node.entryAt(index).0, key) {
                 return some(&node.entryAtMut(index).1);
             }
             if node.isLeaf() { return null; }
@@ -465,10 +478,8 @@ public:
             null => return null,
             some(node) => {
                 var removed = removeFrom(node, key);
-                if removed != null {
-                    length--;
-                    contractRoot();
-                }
+                if removed != null { length--; }
+                contractRoot();
                 removed
             },
         }
@@ -533,7 +544,7 @@ public:
         var candidate: ?*const K = null;
         for current != null {
             var node = current.unwrap();
-            var index = btreeLowerIndex<K, V>(node, key);
+            var index = btreeLowerIndex<K, V>(node, key, less);
             if index < node.entryCount() {
                 candidate = some(&node.entryAt(index).0);
             }
@@ -548,9 +559,10 @@ public:
         var candidate: ?*const K = null;
         for current != null {
             var node = current.unwrap();
-            var index = btreeLowerIndex<K, V>(node, key);
+            var index = btreeLowerIndex<K, V>(node, key, less);
             if index < node.entryCount() &&
-               key.compareTotal(&node.entryAt(index).0) == cmp.Ordering.Equal {
+               !less(key, &node.entryAt(index).0) &&
+               !less(&node.entryAt(index).0, key) {
                 index++;
             }
             if index < node.entryCount() {
@@ -598,14 +610,15 @@ public:
     func deinit() void { clear(); }
 }
 
-pub class BTreeSet<T: Movable & cmp.TotalOrder<T>> {
+pub class BTreeSet<T: Movable> {
     #copy: disabled
     var values: BTreeMap<T, u8>;
 public:
-    func init() : values(BTreeMap<T, u8>()) {}
-    static func withCapacity(n: usize) !Self {
-        var result = BTreeSet<T>();
-        move(result)
+    func init(less: func(*const T, *const T) bool)
+        : values(BTreeMap<T, u8>(less)) {}
+
+    static func withComparator(less: func(*const T, *const T) bool) Self {
+        BTreeSet<T>(less)
     }
 
     const func len() usize { values.len() }

@@ -1,4 +1,5 @@
 package coll
+import (mem)
 
 pub class Stack<T: Movable> {
     var values: Vec<T>;
@@ -8,6 +9,18 @@ public:
     static func withCapacity(n: usize) !Self {
         var result = Stack<T>();
         result.values = Vec<T>.withCapacity(n)!;
+        move(result)
+    }
+
+    static func withAllocator(allocator: mem.AllocatorRef) Self {
+        var result = Stack<T>();
+        result.values = Vec<T>.withAllocator(allocator);
+        move(result)
+    }
+
+    static func withCapacityAndAllocator(n: usize, allocator: mem.AllocatorRef) !Self {
+        var result = Stack<T>();
+        result.values = Vec<T>.withCapacityAndAllocator(n, allocator)!;
         move(result)
     }
 
@@ -32,6 +45,18 @@ public:
         move(result)
     }
 
+    static func withAllocator(allocator: mem.AllocatorRef) Self {
+        var result = Queue<T>();
+        result.values = VecDeque<T>.withAllocator(allocator);
+        move(result)
+    }
+
+    static func withCapacityAndAllocator(n: usize, allocator: mem.AllocatorRef) !Self {
+        var result = Queue<T>();
+        result.values = VecDeque<T>.withCapacityAndAllocator(n, allocator)!;
+        move(result)
+    }
+
     const func len() usize { values.len() }
     const func isEmpty() bool { values.isEmpty() }
     func enqueue(value: T) !void { values.pushBack(move(value)) }
@@ -44,41 +69,74 @@ public:
 
 pub enum HeapOrder { Min, Max }
 
+func heapDefaultLess<T>(a: *const T, b: *const T) bool { *a < *b }
+
 pub class BinaryHeap<T: Movable> {
     #copy: disabled
     var values: Vec<T>;
+    var less: func(*const T, *const T) bool;
     var order: HeapOrder;
 public:
-    func init() : values(Vec<T>()), order(HeapOrder.Max) {}
+    func init(less: func(*const T, *const T) bool, order: HeapOrder)
+        : values(Vec<T>()), less(less), order(order) {}
 
-    static func withOrder(order: HeapOrder) Self {
-        var result = BinaryHeap<T>();
-        result.order = order;
+    static func withComparator(
+        less: func(*const T, *const T) bool, order: HeapOrder
+    ) Self {
+        BinaryHeap<T>(less, order)
+    }
+
+    static func withMaxComparator(less: func(*const T, *const T) bool) Self {
+        BinaryHeap<T>(less, HeapOrder.Max)
+    }
+
+    static func withMinComparator(less: func(*const T, *const T) bool) Self {
+        BinaryHeap<T>(less, HeapOrder.Min)
+    }
+
+    static func max() Self { BinaryHeap<T>.withMaxComparator(heapDefaultLess<T>) }
+    static func min() Self { BinaryHeap<T>.withMinComparator(heapDefaultLess<T>) }
+
+    static func withAllocator(
+        less: func(*const T, *const T) bool, order: HeapOrder,
+        allocator: mem.AllocatorRef
+    ) Self {
+        var result = BinaryHeap<T>.withComparator(less, order);
+        result.values = Vec<T>.withAllocator(allocator);
         move(result)
     }
 
-    static func withCapacity(n: usize) !Self {
-        var result = BinaryHeap<T>();
+    static func withCapacity(
+        n: usize, less: func(*const T, *const T) bool, order: HeapOrder
+    ) !Self {
+        var result = BinaryHeap<T>.withComparator(less, order);
         result.values = Vec<T>.withCapacity(n)!;
         move(result)
     }
 
-    static func withCapacityAndOrder(n: usize, order: HeapOrder) !Self {
-        var result = BinaryHeap<T>.withOrder(order);
-        result.values = Vec<T>.withCapacity(n)!;
+    static func withCapacityAndAllocator(
+        n: usize, less: func(*const T, *const T) bool,
+        order: HeapOrder, allocator: mem.AllocatorRef
+    ) !Self {
+        var result = BinaryHeap<T>.withAllocator(less, order, allocator);
+        result.values.reserve(n)!;
         move(result)
     }
 
-    static func fromSlice(items: []const T) !Self {
-        var result = BinaryHeap<T>();
+    static func fromSlice(
+        items: []const T, less: func(*const T, *const T) bool, order: HeapOrder
+    ) !Self {
+        var result = BinaryHeap<T>.withComparator(less, order);
         result.values = Vec<T>.fromSlice(items)!;
         result.heapify();
         move(result)
     }
 
-    static func fromSliceWithOrder(items: []const T, order: HeapOrder) !Self {
-        var result = BinaryHeap<T>.withOrder(order);
-        result.values = Vec<T>.fromSlice(items)!;
+    static func fromIter<I: Movable>(
+        items: I, less: func(*const T, *const T) bool, order: HeapOrder
+    ) !Self {
+        var result = BinaryHeap<T>.withComparator(less, order);
+        for item in move(items) { result.values.push(move(item))!; }
         result.heapify();
         move(result)
     }
@@ -125,8 +183,9 @@ public:
 
     func pushPop(value: T) T {
         if values.isEmpty() { return move(value); }
-        if (order == HeapOrder.Max && *values.at(0) > value) ||
-           (order == HeapOrder.Min && *values.at(0) < value) {
+        var root = values.at(0);
+        var replaceRoot = if (order == HeapOrder.Max) less(&value, root) else less(root, &value);
+        if replaceRoot {
             var previous = values.replace(0, move(value)).unwrap();
             siftDown(0);
             move(previous)
@@ -148,8 +207,8 @@ public:
 
 private:
     func higherPriority(a: usize, b: usize) bool {
-        if order == HeapOrder.Max { *values.at(a) > *values.at(b) }
-        else { *values.at(a) < *values.at(b) }
+        if order == HeapOrder.Max { less(values.get(b).unwrap(), values.get(a).unwrap()) }
+        else { less(values.get(a).unwrap(), values.get(b).unwrap()) }
     }
 
     func siftUp(index: usize) void {

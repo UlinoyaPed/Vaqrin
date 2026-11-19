@@ -1,16 +1,17 @@
 # Vaqrin 标准包
 
-可用 `import (core, coll, iter, opt, result, cmp, convert, meta, mem, mmio, bits, algo, atomic, binary, bytes, cell, encoding, simd, text, parse, io, thread, sync, time, channel)` 导入标准包，也可使用 `std/` 前缀。CMake 在构建目录生成 `share/vaqrin/stdlib`，安装时将标准包源码复制到安装前缀下。编译器按使用情况实例化泛型声明。完整的目标接口见[标准包 API 清单](../docs/stdlib/Vaqrin-stdlib-API-complete-draft.md)。
+可用 `import (core, coll, iter, opt, result, cmp, convert, meta, mem, hash, mmio, bits, algo, atomic, binary, bytes, cell, encoding, simd, text, parse, io, thread, sync, time, channel)` 导入标准包，也可使用 `std/` 前缀。CMake 在构建目录生成 `share/vaqrin/stdlib`，安装时将标准包源码复制到安装前缀下。编译器按使用情况实例化泛型声明。完整的目标接口见[标准包 API 清单](../docs/stdlib/Vaqrin-stdlib-API-complete-draft.md)。
 
 | 包 | 当前接口 |
 | --- | --- |
 | `core` | `Box<T>`、可空及错误结果状态检查、`unwrapOr`、`identity`、`drop`、`swap`、`replace`、`unreachable`、`unreachableUnchecked` |
-| `coll` | `Vec<T>`、`FixedVec<T,N>`、`VecDeque<T>`、`FixedDeque<T,N>`、`Stack<T>`、`Queue<T>`、`BinaryHeap<T>` / `PriorityQueue<T>`；链表、哈希和 B 树仍在开发 |
+| `coll` | `Vec<T>`、`FixedVec<T,N>`、`VecDeque<T>`、`FixedDeque<T,N>`、`LinkedList<T>`、`Stack<T>`、`Queue<T>`、`BinaryHeap<T>` / `PriorityQueue<T>`、`HashMap<K,V>` / `HashSet<T>`、`BTreeMap<K,V>` / `BTreeSet<T>` |
 | `iter` | 按值和按指针遍历切片、单项和空游标、映射、过滤、枚举、组合、反向及截取适配器 |
 | `opt` | 可空值的组合、访问、原地替换、容器转换和外层交换 |
 | `result` | 错误结果的组合、恢复、观察、只读载荷访问与收集 |
 | `convert` | 检查转换、整数与浮点舍入、位转换及 Unicode 标量验证 |
 | `cmp` | 标量比较、部分序、浮点总序和上下界助手 |
+| `hash` | Hasher / HashKey 协议、带种子的 FNV-1a 32 位哈希及常用整数哈希/相等回调 |
 | `meta` | 目标布局、类型名称、数组长度、复制、移动、析构、接口实现及线程间移交和共享特性 |
 | `mem` | 布局、字节操作、原始槽、手动析构、作用域守卫、强弱共享所有权和默认或固定缓冲分配器 |
 | `mmio` | 带边界和对齐检查的寄存器、宽度受限的 volatile 访问、编译器屏障及 ARM 指令屏障 |
@@ -45,9 +46,17 @@ func main() !void {
 }
 ```
 
-Vec 按值接收可移动元素。其 `reserve` 先分配，再搬迁已有元素，分配失败时保留原缓冲区和元素。`VecDeque` 使用循环槽数组支持两端操作，`FixedDeque<T,N>` 使用内联固定槽；`Stack` 和 `Queue` 分别复用 Vec 与 VecDeque，`BinaryHeap` / `PriorityQueue` 提供最大堆。当前容器分支的编译验收状态见 [coll 容器实现状态](../docs/stdlib/coll-container-implementation.md)。Vec 还提供下标、`len`、`capacity`、`isEmpty`、`pop`、`replace`、`clear` 和可复制元素的 `clone`。`asSlice` 返回借用视图，扩容后原视图失效。迭代适配器可拥有上游游标及回调。按引用遍历时使用 `iterRef()` 或 `iterMut()`，后者可配合 `for &item in ...` 修改原位置。文本按字节比较，`chars` 按 Unicode 标量遍历。`fromBytes` 验证 UTF-8 后复制成不可变字符串，`StringBuilder.build()` 生成可独立持有的快照。拥有型 `string` 的副本共享不可变存储，`str` 与字节视图遵守来源的生命周期。
+Vec 按值接收可移动元素。其 `reserve` 先分配，再搬迁已有元素，分配失败时保留原缓冲区和元素；`withAllocator` 可绑定自定义分配器，分配器及其上下文必须比容器活得更久。Vec 还提供 `insert`、`remove`、`swapRemove`、`replace`、`retain`、`append`、`splitOff`、容量收缩和显式 `clone`。`pushPreserving` 与 `insertPreserving` 在失败时归还输入值。`asSlice` 返回借用视图，重分配或移动相关元素后原视图失效。
 
-默认堆分配器目前面向 Linux 宿主。裸机可以构造和销毁空 Vec，增长操作会报告缺少分配器。
+`VecDeque` 使用循环缓冲槽数组，支持两端插入、移除和随机访问；`FixedDeque<T,N>` 使用内联固定槽，容量不足时以 `PushResult.Full(value)` 归还元素。两者均提供正反向借用迭代。Stack 以 Vec 尾部实现 LIFO，Queue 以 VecDeque 实现 FIFO。BinaryHeap 通过显式比较回调和 `HeapOrder.Min/Max` 构造最小堆或最大堆，也提供 `min()` / `max()` 使用 `<` 运算符；PriorityQueue 是同一实现的别名。
+
+LinkedList 使用双向节点和独立 Box 所有权表，节点地址在插入、删除其他节点和链表拼接时保持稳定；按索引访问仍为 O(n)。HashMap/HashSet 使用开放寻址和 tombstone 删除标记，构造时必须提供哈希与相等回调；`HashMap.iterRef()` 构建指针索引，返回 `!MapIterRef`，迭代器只借用键和值，容器结构修改后失效；`hash` 包提供 FNV-1a 32 位实现和 i8/u8/i16/u16/i32/u32/i64/u64/bool 的回调。种子由调用方提供，FNV 不适合抵御主动哈希洪泛。BTreeMap/BTreeSet 使用最小度数为 4 的 B 树，构造时必须提供严格弱序比较回调；迭代器创建时会构建指针索引，因此可能分配失败。关联容器的键只能通过只读借用访问，不能原地修改。
+
+按引用遍历时使用 `iterRef()` 或 `iterMut()`，后者可配合 `for &item in ...` 修改原位置。
+
+文本按字节比较，`chars` 按 Unicode 标量遍历。`fromBytes` 验证 UTF-8 后复制成不可变字符串，`StringBuilder.build()` 生成可独立持有的快照。拥有型 `string` 的副本共享不可变存储，`str` 与字节视图遵守来源的生命周期。
+
+默认堆分配器目前面向 Linux 宿主。Vec、VecDeque、LinkedList 和 HashMap 可绑定 `mem.AllocatorRef`；FixedVec / FixedDeque 不需要堆分配。BTree 节点目前使用默认 Box 分配器。裸机无默认堆时，必须为支持自定义分配器的容器提供有效分配器；其余增长操作会报告分配错误。
 
 位流的 `LsbFirst` 从字节低位开始，也先读写结果或参数的低位。`MsbFirst` 从字节高位开始，从读写宽度所覆盖的最高位开始。读不到足够位时，`BitReader` 返回成功的空值并保持位置。超出写入容量时，`BitWriter` 返回错误并保持缓冲区和位置。
 

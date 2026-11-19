@@ -343,10 +343,7 @@ public:
     }
 
     func swap(a: usize, b: usize) void {
-        core.swap<mem.MaybeUninit<T>>(
-            slots.getMut(physical(a)).unwrap(),
-            slots.getMut(physical(b)).unwrap()
-        );
+        core.swap<T>(getMut(a).unwrap(), getMut(b).unwrap());
     }
 
     func reverse() void {
@@ -364,10 +361,15 @@ public:
 
     static func intoIter(value: Self) IntoDequeIter<T> { IntoDequeIter<T>(move(value)) }
 
-    func clear() void {
-        for length > 0 {
+    func truncate(n: usize) void {
+        for length > n {
             var value = popBack().unwrap();
         }
+        if length == 0 { head = 0; }
+    }
+
+    func clear() void {
+        truncate(0);
         head = 0;
     }
 
@@ -513,7 +515,7 @@ public:
     }
 
     func swap(a: usize, b: usize) void {
-        core.swap<mem.MaybeUninit<T>>(address(physical(a)), address(physical(b)));
+        core.swap<T>(getMut(a).unwrap(), getMut(b).unwrap());
     }
 
     func reverse() void {
@@ -535,10 +537,62 @@ public:
         IntoFixedDequeIter<T, N>(move(value))
     }
 
-    func clear() void {
-        for length > 0 {
+    func truncate(n: usize) void {
+        for length > n {
             var value = popBack().unwrap();
         }
+    }
+
+    func extend<I: Movable>(values: I) !void {
+        for item in move(values) {
+            switch pushBack(move(item)) {
+                PushResult.Stored => {},
+                PushResult.Full(_) => return CapacityError.Overflow,
+                PushResult.Failed(reason, _) => return reason,
+            }
+        }
+    }
+
+    func append(other: *Self) !void {
+        if self == other || other.length == 0 { return; }
+        if other.length > N - length { return CapacityError.Overflow; }
+        for other.length > 0 {
+            var item = other.popFront().unwrap();
+            switch pushBack(move(item)) {
+                PushResult.Stored => {},
+                else => panic("FixedDeque append capacity invariant"),
+            }
+        }
+    }
+
+    func splitOff(index: usize) !Self {
+        if index > length { return CapacityError.IndexOutOfBounds; }
+        var result = FixedDeque<T, N>();
+        var count = length - index;
+        for i in usize(0)..count {
+            var item = popBack().unwrap();
+            switch result.pushFront(move(item)) {
+                PushResult.Stored => {},
+                else => panic("FixedDeque split capacity invariant"),
+            }
+        }
+        move(result)
+    }
+
+    // Requires T: Copyable.
+    const func clone() Self {
+        var result = FixedDeque<T, N>();
+        for item in iterRef() {
+            switch result.pushBack(*item) {
+                PushResult.Stored => {},
+                else => panic("FixedDeque clone capacity invariant"),
+            }
+        }
+        move(result)
+    }
+
+    func clear() void {
+        truncate(0);
         head = 0;
     }
 

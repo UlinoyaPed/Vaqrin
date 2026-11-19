@@ -98,10 +98,47 @@ public:
 
     func clear() void { truncate(0); }
 
+    func extend<I: Movable>(values: I) !void {
+        for item in move(values) {
+            switch tryPush(move(item)) {
+                PushResult.Stored => {},
+                PushResult.Full(_) => return CapacityError.Overflow,
+                PushResult.Failed(reason, _) => return reason,
+            }
+        }
+    }
+
+    func append(other: *Self) !void {
+        if self == other || other.length == 0 { return; }
+        if other.length > N - length { return CapacityError.Overflow; }
+        var base = length;
+        for other.length > 0 {
+            var item = other.pop().unwrap();
+            switch insert(base, move(item)) {
+                PushResult.Stored => {},
+                else => panic("FixedVec append capacity invariant"),
+            }
+        }
+    }
+
+    func splitOff(index: usize) !Self {
+        if index > length { return CapacityError.IndexOutOfBounds; }
+        var result = FixedVec<T, N>();
+        var count = length - index;
+        for i in usize(0)..count {
+            var item = remove(index).unwrap();
+            switch result.push(move(item)) {
+                PushResult.Stored => {},
+                else => panic("FixedVec split capacity invariant"),
+            }
+        }
+        move(result)
+    }
+
     func retain<F: Movable>(predicate: F) void {
         var kept: usize = 0;
         for i in usize(0)..length {
-            if predicate(address(i)) {
+            if predicate(get(i).unwrap()) {
                 if kept != i { transfer(i, kept); }
                 kept++;
             } else {

@@ -1,5 +1,5 @@
 package coll
-import (core, hash as hashing, mem)
+import (core, mem)
 
 pub enum InsertResult<K: Movable, V: Movable> {
     Inserted,
@@ -9,7 +9,7 @@ pub enum InsertResult<K: Movable, V: Movable> {
 
 enum BucketState { Empty, Tombstone, Occupied }
 
-pub class HashBucket<K: Movable & hashing.HashKey, V: Movable> {
+class HashBucket<K: Movable, V: Movable> {
     var state: BucketState;
     var key: mem.MaybeUninit<K>;
     var value: mem.MaybeUninit<V>;
@@ -29,8 +29,11 @@ public:
     const func valueRef() *const V { value.asConstPtr() }
     func valueMut() *V { value.asPtr() }
 
-    const func matches(hash: usize, needle: *const K) bool {
-        state == BucketState.Occupied && hashCode == hash && key.asConstPtr().equals(needle)
+    const func matches(
+        hash: usize, needle: *const K,
+        equals: func(*const K, *const K) bool
+    ) bool {
+        state == BucketState.Occupied && hashCode == hash && equals(key.asConstPtr(), needle)
     }
 
     func write(hash: usize, newKey: K, newValue: V) void {
@@ -74,41 +77,29 @@ public:
     func deinit() void { clearEntry(); }
 }
 
-pub class MapIterRef<K: Movable & hashing.HashKey, V: Movable> {
-    var slots: []const HashBucket<K, V>;
+pub class MapIterRef<K: Movable, V: Movable> {
+    var entries: Vec<(*const K, *const V)>;
     var frontIndex: usize;
     var backIndex: usize;
-    var remainingCount: usize;
 public:
-    func init(slots: []const HashBucket<K, V>, count: usize)
-        : slots(slots), frontIndex(0), backIndex(slots.len()), remainingCount(count) {}
+    func init(items: Vec<(*const K, *const V)>, count: usize)
+        : entries(move(items)), frontIndex(0), backIndex(count) {}
 
     func next() ?(*const K, *const V) {
-        for frontIndex < backIndex {
-            var index = frontIndex;
-            frontIndex++;
-            var bucket = &slots[index];
-            if bucket.isOccupied() {
-                remainingCount--;
-                return some((bucket.keyRef(), bucket.valueRef()));
-            }
-        }
-        null
+        if frontIndex == backIndex { return null; }
+        var entry = entries.get(frontIndex).unwrap();
+        frontIndex++;
+        some(((*entry).0, (*entry).1))
     }
 
     func nextBack() ?(*const K, *const V) {
-        for frontIndex < backIndex {
-            backIndex--;
-            var bucket = &slots[backIndex];
-            if bucket.isOccupied() {
-                remainingCount--;
-                return some((bucket.keyRef(), bucket.valueRef()));
-            }
-        }
-        null
+        if frontIndex == backIndex { return null; }
+        backIndex--;
+        var entry = entries.get(backIndex).unwrap();
+        some((entry.0, entry.1))
     }
 
-    const func remaining() usize { remainingCount }
+    const func remaining() usize { backIndex - frontIndex }
 }
 
 func hashTableCapacity(entries: usize) !usize {
@@ -121,50 +112,88 @@ func hashTableCapacity(entries: usize) !usize {
     capacity
 }
 
-pub class HashMap<K: Movable & hashing.HashKey, V: Movable> {
+pub class HashMap<K: Movable, V: Movable> {
     #copy: disabled
     var buckets: Vec<HashBucket<K, V>>;
     var length: usize;
     var tombstones: usize;
     var seed: u32;
     var allocator: ?mem.AllocatorRef;
+    var hashFunction: func(*const K, u32) usize;
+    var equalsFunction: func(*const K, *const K) bool;
 public:
-    func init()
-        : buckets(Vec<HashBucket<K, V>>()), length(0), tombstones(0), seed(0), allocator(null) {}
+    func init(
+        hashFunction: func(*const K, u32) usize,
+        equalsFunction: func(*const K, *const K) bool
+    ) : buckets(Vec<HashBucket<K, V>>()), length(0), tombstones(0), seed(0),
+        allocator(null), hashFunction(hashFunction), equalsFunction(equalsFunction) {}
 
-    static func withAllocator(allocator: mem.AllocatorRef) Self {
-        var result = HashMap<K, V>();
+    static func withHasher(
+        hashFunction: func(*const K, u32) usize,
+        equalsFunction: func(*const K, *const K) bool
+    ) Self {
+        HashMap<K, V>(hashFunction, equalsFunction)
+    }
+
+    static func withSeed(
+        seed: u32,
+        hashFunction: func(*const K, u32) usize,
+        equalsFunction: func(*const K, *const K) bool
+    ) Self {
+        var result = HashMap<K, V>.withHasher(hashFunction, equalsFunction);
+        result.seed = seed;
+        move(result)
+    }
+
+    static func withCapacity(
+        n: usize,
+        hashFunction: func(*const K, u32) usize,
+        equalsFunction: func(*const K, *const K) bool
+    ) !Self {
+        var result = HashMap<K, V>.withHasher(hashFunction, equalsFunction);
+        result.reserve(n)!;
+        move(result)
+    }
+
+    static func withCapacityAndSeed(
+        n: usize, seed: u32,
+        hashFunction: func(*const K, u32) usize,
+        equalsFunction: func(*const K, *const K) bool
+    ) !Self {
+        var result = HashMap<K, V>.withSeed(seed, hashFunction, equalsFunction);
+        result.reserve(n)!;
+        move(result)
+    }
+
+    static func withAllocator(
+        hashFunction: func(*const K, u32) usize,
+        equalsFunction: func(*const K, *const K) bool,
+        allocator: mem.AllocatorRef
+    ) Self {
+        var result = HashMap<K, V>.withHasher(hashFunction, equalsFunction);
         result.allocator = some(allocator);
         result.buckets = Vec<HashBucket<K, V>>.withAllocator(allocator);
         move(result)
     }
 
-    static func withSeedAndAllocator(seed: u32, allocator: mem.AllocatorRef) Self {
-        var result = HashMap<K, V>.withAllocator(allocator);
+    static func withSeedAndAllocator(
+        seed: u32,
+        hashFunction: func(*const K, u32) usize,
+        equalsFunction: func(*const K, *const K) bool,
+        allocator: mem.AllocatorRef
+    ) Self {
+        var result = HashMap<K, V>.withAllocator(hashFunction, equalsFunction, allocator);
         result.seed = seed;
         move(result)
     }
 
-    static func withCapacityAndAllocator(n: usize, allocator: mem.AllocatorRef) !Self {
-        var result = HashMap<K, V>.withAllocator(allocator);
-        result.reserve(n)!;
-        move(result)
-    }
-
-    static func withCapacity(n: usize) !Self {
-        var result = HashMap<K, V>();
-        result.reserve(n)!;
-        move(result)
-    }
-
-    static func withSeed(seed: u32) Self {
-        var result = HashMap<K, V>();
-        result.seed = seed;
-        move(result)
-    }
-
-    static func withCapacityAndSeed(n: usize, seed: u32) !Self {
-        var result = HashMap<K, V>.withSeed(seed);
+    static func withCapacityAndAllocator(
+        n: usize,
+        hashFunction: func(*const K, u32) usize,
+        equalsFunction: func(*const K, *const K) bool,
+        allocator: mem.AllocatorRef
+    ) !Self {
+        var result = HashMap<K, V>.withAllocator(hashFunction, equalsFunction, allocator);
         result.reserve(n)!;
         move(result)
     }
@@ -175,7 +204,7 @@ public:
 
 private:
     const func hashKey(key: *const K) usize {
-        hashing.hashValueSeeded<K>(key, seed)
+        hashFunction(key, seed)
     }
 
     const func findIndex(key: *const K, hash: usize) ?usize {
@@ -186,7 +215,7 @@ private:
         for examined < cap {
             var bucket = buckets.get(index).unwrap();
             if bucket.isEmpty() { return null; }
-            if bucket.matches(hash, key) { return some(index); }
+            if bucket.matches(hash, key, equalsFunction) { return some(index); }
             examined++;
             index++;
             if index == cap { index = 0; }
@@ -381,14 +410,25 @@ public:
         for key, value in move(entries) { insert(move(key), move(value))!; }
     }
 
-    const func iterRef() MapIterRef<K, V> {
-        MapIterRef<K, V>(buckets.asConstSlice(), length)
+    const func iterRef() !MapIterRef<K, V> {
+        var entries = switch allocator {
+            null => Vec<(*const K, *const V)>(),
+            some(owner) => Vec<(*const K, *const V)>.withAllocator(owner),
+        };
+        entries.reserve(length)!;
+        for i in usize(0)..buckets.len() {
+            var bucket = buckets.get(i).unwrap();
+            if bucket.isOccupied() {
+                entries.push((bucket.keyRef(), bucket.valueRef()))!;
+            }
+        }
+        MapIterRef<K, V>(move(entries), length)
     }
 
     func deinit() void { clear(); }
 }
 
-pub class SetIterRef<T: Movable & hashing.HashKey> {
+pub class SetIterRef<T: Movable> {
     var source: MapIterRef<T, u8>;
 public:
     func init(source: MapIterRef<T, u8>) : source(move(source)) {}
@@ -404,37 +444,75 @@ public:
     const func remaining() usize { source.remaining() }
 }
 
-pub class HashSet<T: Movable & hashing.HashKey> {
+pub class HashSet<T: Movable> {
     #copy: disabled
     var values: HashMap<T, u8>;
 public:
-    func init() : values(HashMap<T, u8>()) {}
-    static func withCapacity(n: usize) !Self {
-        var result = HashSet<T>();
-        result.values = HashMap<T, u8>.withCapacity(n)!;
-        move(result)
+    func init(
+        hashFunction: func(*const T, u32) usize,
+        equalsFunction: func(*const T, *const T) bool
+    ) : values(HashMap<T, u8>(hashFunction, equalsFunction)) {}
+
+    static func withHasher(
+        hashFunction: func(*const T, u32) usize,
+        equalsFunction: func(*const T, *const T) bool
+    ) Self {
+        HashSet<T>(hashFunction, equalsFunction)
     }
-    static func withSeed(seed: u32) Self {
-        var result = HashSet<T>();
-        result.values = HashMap<T, u8>.withSeed(seed);
+
+    static func withCapacity(
+        n: usize,
+        hashFunction: func(*const T, u32) usize,
+        equalsFunction: func(*const T, *const T) bool
+    ) !Self {
+        var result = HashSet<T>.withHasher(hashFunction, equalsFunction);
+        result.values.reserve(n)!;
         move(result)
     }
 
-    static func withAllocator(allocator: mem.AllocatorRef) Self {
-        var result = HashSet<T>();
-        result.values = HashMap<T, u8>.withAllocator(allocator);
+    static func withSeed(
+        seed: u32,
+        hashFunction: func(*const T, u32) usize,
+        equalsFunction: func(*const T, *const T) bool
+    ) Self {
+        var result = HashSet<T>.withHasher(hashFunction, equalsFunction);
+        result.values = HashMap<T, u8>.withSeed(seed, hashFunction, equalsFunction);
         move(result)
     }
 
-    static func withCapacityAndAllocator(n: usize, allocator: mem.AllocatorRef) !Self {
-        var result = HashSet<T>();
-        result.values = HashMap<T, u8>.withCapacityAndAllocator(n, allocator)!;
+    static func withAllocator(
+        hashFunction: func(*const T, u32) usize,
+        equalsFunction: func(*const T, *const T) bool,
+        allocator: mem.AllocatorRef
+    ) Self {
+        var result = HashSet<T>.withHasher(hashFunction, equalsFunction);
+        result.values = HashMap<T, u8>.withAllocator(hashFunction, equalsFunction, allocator);
         move(result)
     }
 
-    static func withSeedAndAllocator(seed: u32, allocator: mem.AllocatorRef) Self {
-        var result = HashSet<T>();
-        result.values = HashMap<T, u8>.withSeedAndAllocator(seed, allocator);
+    static func withCapacityAndAllocator(
+        n: usize,
+        hashFunction: func(*const T, u32) usize,
+        equalsFunction: func(*const T, *const T) bool,
+        allocator: mem.AllocatorRef
+    ) !Self {
+        var result = HashSet<T>.withHasher(hashFunction, equalsFunction);
+        result.values = HashMap<T, u8>.withCapacityAndAllocator(
+            n, hashFunction, equalsFunction, allocator
+        )!;
+        move(result)
+    }
+
+    static func withSeedAndAllocator(
+        seed: u32,
+        hashFunction: func(*const T, u32) usize,
+        equalsFunction: func(*const T, *const T) bool,
+        allocator: mem.AllocatorRef
+    ) Self {
+        var result = HashSet<T>.withHasher(hashFunction, equalsFunction);
+        result.values = HashMap<T, u8>.withSeedAndAllocator(
+            seed, hashFunction, equalsFunction, allocator
+        );
         move(result)
     }
 
@@ -469,6 +547,6 @@ public:
     const func contains(value: *const T) bool { values.containsKey(value) }
     func reserve(n: usize) !void { values.reserve(n) }
     func clear() void { values.clear(); }
-    const func iterRef() SetIterRef<T> { SetIterRef<T>(values.iterRef()) }
+    const func iterRef() !SetIterRef<T> { SetIterRef<T>(values.iterRef()!) }
     func deinit() void { values.clear(); }
 }

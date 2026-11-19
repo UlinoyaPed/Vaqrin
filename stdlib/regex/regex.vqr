@@ -67,7 +67,7 @@ pub class Regex {
     pub var flags: u8;
     pub var maxInputBytes: usize;
     pub var maxSteps: usize;
-    pub var captures: usize;
+    pub var captureGroups: usize;
     pub var startState: i32;
 
 public:
@@ -76,14 +76,14 @@ public:
               maxInputBytes: usize, maxSteps: usize, captureCount: usize, startState: i32)
         : states(move(states)), classes(move(classes)), ranges(move(ranges)),
           patternText(move(pattern)), flags(flags), maxInputBytes(maxInputBytes),
-          maxSteps(maxSteps), captures(captureCount), startState(startState) {}
+          maxSteps(maxSteps), captureGroups(captureCount), startState(startState) {}
 
     static func compile(pattern: str) !Self {
         RegexBuilder(pattern).compile()
     }
 
     const func pattern() str { patternText }
-    const func captureCount() usize { captures }
+    const func captureCount() usize { captureGroups }
 
     const func isMatch(value: str) !bool {
         var found = find(value)!;
@@ -104,6 +104,8 @@ public:
             null => null
         }
     }
+
+    const func captures(value: str) !?Captures { capturesAt(value, 0) }
 
     const func capturesAt(value: str, byteOffset: usize) !?Captures {
         if value.byteLen() > maxInputBytes { return RegexError.InputTooLarge; }

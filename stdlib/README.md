@@ -1,6 +1,6 @@
 # Vaqrin 标准包
 
-可用 `import (core, coll, iter, opt, result, cmp, convert, meta, mem, hash, mmio, bits, algo, atomic, binary, bytes, cell, encoding, simd, text, parse, io, path, fs, bufio, fmt, thread, sync, time, channel, task, num, math, random)` 导入标准包，也可使用 `std/` 前缀。CMake 在构建目录生成 `share/vaqrin/stdlib`，安装时将标准包源码复制到安装前缀下。编译器按使用情况实例化泛型声明。完整的目标接口见[标准包 API 清单](../docs/stdlib/Vaqrin-stdlib-API-complete-draft.md)。
+可用 `import (core, coll, iter, opt, result, cmp, convert, meta, mem, hash, mmio, bits, algo, atomic, binary, bytes, cell, encoding, simd, text, parse, io, path, fs, bufio, fmt, thread, sync, time, channel, task, num, math, random, json, csv, toml, serde, unicode, regex, url, log, errors)` 导入标准包，也可使用 `std/` 前缀。CMake 在构建目录生成 `share/vaqrin/stdlib`，安装时将标准包源码复制到安装前缀下。编译器按使用情况实例化泛型声明。完整的目标接口见[标准包 API 清单](../docs/stdlib/Vaqrin-stdlib-API-complete-draft.md)。
 
 | 包 | 当前接口 |
 | --- | --- |
@@ -15,6 +15,15 @@
 | `num` | 定宽整数边界与检查/回绕/饱和运算、BigUint、BigInt、有理数 |
 | `math` | IEEE 754 分类、f32/f64 数学函数、复数与基础区间运算 |
 | `random` | PCG64 XSL-RR 128/64、xoshiro256**、均匀分布、洗牌与抽样 |
+| `json` | JSON DOM、指针、严格数字词法和 Codec |
+| `csv` | 引号、换行、带表头的记录读写 |
+| `toml` | 基本类型、数组、嵌套表和 Codec |
+| `serde` | 显式序列化协议和 Codec |
+| `unicode` | Unicode 17 属性、规范化和字素簇 |
+| `regex` | Thompson NFA、分组与有界执行 |
+| `url` | URI 解析、解析相对引用、百分号编码及重复查询键 |
+| `log` | 级别、结构化属性和同步 Handler |
+| `errors` | 错误报告、上下文和多原因聚合 |
 | `meta` | 目标布局、类型名称、数组长度、复制、移动、析构、接口实现及线程间移交和共享特性 |
 | `mem` | 布局、字节操作、原始槽、手动析构、作用域守卫、强弱共享所有权和默认或固定缓冲分配器 |
 | `mmio` | 带边界和对齐检查的寄存器、宽度受限的 volatile 访问、编译器屏障及 ARM 指令屏障 |

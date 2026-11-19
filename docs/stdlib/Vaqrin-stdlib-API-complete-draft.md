@@ -79,7 +79,7 @@
 
 ## 状态与迁移
 
-旧 `collections` 的容器和迭代入口已分别迁入 `coll`、`iter`。当前集成有 31 个源码包，以下目录仍保留 59 个包的目标合同。已通过验收的代表用例和未齐备的功能以实现矩阵为准。
+旧 `collections` 的容器和迭代入口已分别迁入 `coll`、`iter`。当前集成有 43 个公开源码包和内部 `math_ffi`，以下目录仍保留 59 个包的目标合同。已通过验收的代表用例和未齐备的功能以实现矩阵为准。
 
 | 集成包 | 当前公开形态及与设计合同的差异 |
 | --- | --- |
@@ -90,6 +90,8 @@
 | `path` | `Path(string)` 持有字符串，`Path.fromString(str) !Path` 从视图分配，PathBuf 为别名。当前 `parent() !?Path`，文件名、主干和扩展名返回借用。 |
 | `bufio` | BufferedReader、BufferedWriter 和 ASCII 空白 Scanner。可恢复的短写保留未提交后缀。 |
 | `fmt` | FormatArg 为带数据枚举，`arg(string)` 持有输入。支持顺序与显式索引两种花括号格式。 |
+
+新增数值、数据格式、Unicode 与正则、工具包的逐包状态见实现矩阵。Codec 使用可变接口视图 `*Codec<T>`，允许调用其编码和解码方法。日志的错误属性及 Error 级别入口是 `Attr.errorId` 和 `log.logError`。
 
 公开方法的细节和验证范围见[容器实现文档](coll-container-implementation.md)及[I/O 实现文档](io-stack.md)。
 

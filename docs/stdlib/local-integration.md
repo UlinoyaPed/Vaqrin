@@ -2,6 +2,8 @@
 
 集成分支为 `integration/stdlib`。基准是 `master` 的 `aff143372eed57b35042044bc3770ef46aeb9293`。保留开发分支的原始提交和两次合并历史。
 
+本文记录容器和 I/O 阶段。后续四个标准库开发分支见[第二阶段集成记录](follow-up-integration.md)。
+
 | 开发分支 | 原始 HEAD | 与 master 的共同祖先 | 合并提交 | 冲突文件 |
 | --- | --- | --- | --- | --- |
 | `feature/coll-containers` | `06d7111fd5f3423e1b50bff3b0ff6c561d1c36da` | `aff1433` | `606db8c` | 0 |

@@ -14,20 +14,20 @@
 | `cell` | 8 | 35 | 0 | 0 | 部分实现，已运行代表用例 | 动态借用、惰性和单次初始化，所有映射及错误恢复组合待逐项核验 | `atomic`, `core`, `mem`, `opt` |
 | `bits` | 3 | 11 | 22 | 0 | 部分实现，已运行代表用例 | 位运算及定宽位流，完整位宽与目标矩阵待验 | `meta` |
 | `hash` | 7 | 15 | 8 | 0 | 部分实现，已运行代表用例 | FNV-1a 和显式回调，SipHash、随机进程种子和稳定摘要套件待补 | — |
-| `num` | 6 | 31 | 26 | 0 | 未实现 | 暂无标准包源码 | — |
+| `num` | 6 | 31 | 26 | 0 | 部分实现，已运行代表用例 | 定宽整数检查与 Euclidean 除法、BigUint、BigInt、Rational；完整除法和跨位宽属性测试待补 | `bits`, `cmp`, `coll`, `convert`, `meta`, `text` |
 | `coll` | 65 | 510 | 34 | 26 | 部分实现，已运行代表用例 | 顺序容器、堆、哈希表和 B 树。Entry、Drain/Splice、范围游标及其余专用容器待补 | `core`, `iter`, `mem` |
 | `iter` | 43 | 103 | 63 | 0 | 部分实现，已运行代表用例 | 切片与常用惰性适配器，完整适配器和端点协议待补 | — |
 | `algo` | 0 | 0 | 96 | 0 | 部分实现，已运行代表用例 | 查找、排序和切片操作，完整序列算法待补 | `cmp`, `core` |
 | `bytes` | 5 | 37 | 21 | 0 | 部分实现，已运行代表用例 | 字节查找、切分、模式和缓冲，完整变换与池化待补 | `algo`, `cmp`, `coll`, `core`, `mem` |
 | `text` | 7 | 31 | 50 | 0 | 部分实现，已运行代表用例 | UTF-8 所有权、标量与构建器，字素、全文规范化和完整文本操作待补 | `coll` |
-| `unicode` | 8 | 8 | 28 | 0 | 未实现 | 暂无标准包源码，编译器已有 Unicode 17 标识符属性与 NFC 数据 | — |
+| `unicode` | 8 | 8 | 28 | 0 | 部分实现，已运行代表用例 | Unicode 17 属性、四种规范化和字素簇；完整官方规范化及字素边界测试待跑 | `coll`, `convert`, `core`, `text` |
 | `encoding` | 10 | 23 | 18 | 0 | 部分实现，已运行代表用例 | Hex、Base64、百分号、ASCII、Latin-1、UTF-8、UTF-16，完整流式编码套件待补 | `bytes`, `coll`, `convert`, `core`, `meta`, `text` |
 | `binary` | 3 | 34 | 22 | 0 | 部分实现，已运行代表用例 | 端序游标与 VarUint/ZigZag，其余协议和类型待补 | — |
 | `parse` | 6 | 16 | 18 | 0 | 部分实现，已运行代表用例 | 整数、布尔、标量和扫描，浮点、结构化解析错误和日期解析待补 | `bytes`, `convert`, `core`, `text` |
 | `fmt` | 9 | 14 | 15 | 0 | 部分实现，已运行代表用例 | Writer、字串、整数、浮点、宽度精度及位置参数。通用 Display/Debug 与编译期格式计划待补 | `coll`, `convert`, `io`, `mem`, `text` |
-| `regex` | 7 | 32 | 6 | 0 | 未实现 | 暂无标准包源码 | — |
-| `math` | 4 | 22 | 75 | 0 | 未实现 | 暂无标准包源码 | — |
-| `random` | 12 | 30 | 16 | 0 | 未实现 | 暂无标准包源码 | — |
+| `regex` | 7 | 32 | 6 | 0 | 部分实现，已运行代表用例 | Thompson NFA、分组、分支、重复及资源上限；命名捕获、环视等未实现 | `coll`, `convert`, `core`, `text`, `unicode` |
+| `math` | 4 | 22 | 75 | 0 | 部分实现，已运行代表用例 | IEEE 754 分类、舍入及 C 数学入口；区间向外舍入与其余数学合同待补 | `cmp`, `convert`, `math_ffi`, `meta` |
+| `random` | 12 | 30 | 16 | 0 | 部分实现，已运行代表用例 | 可复现 PCG64、xoshiro256**、基础分布；OS 熵源及各分布统计验收待补 | `coll`, `convert`, `math`, `meta`, `text` |
 | `simd` | 2 | 25 | 14 | 0 | 部分实现，已运行代表用例 | 定宽标量回退，硬件向量加速和多目标验收待补 | `mem` |
 | `linalg` | 8 | 64 | 18 | 0 | 未实现 | 暂无标准包源码 | — |
 | `units` | 5 | 10 | 7 | 0 | 未实现 | 暂无标准包源码 | — |
@@ -40,21 +40,21 @@
 | `process` | 6 | 31 | 10 | 0 | 未实现 | 暂无标准包源码 | — |
 | `net` | 14 | 58 | 14 | 0 | 未实现 | 暂无标准包源码 | — |
 | `http` | 15 | 55 | 12 | 0 | 未实现 | 暂无标准包源码 | — |
-| `json` | 12 | 45 | 13 | 0 | 未实现 | 暂无标准包源码 | — |
-| `log` | 10 | 33 | 10 | 0 | 未实现 | 暂无标准包源码 | — |
+| `json` | 12 | 45 | 13 | 0 | 部分实现，已运行代表用例 | 嵌套 DOM、精确词法数字、代理对、指针及 Codec；完整 RFC 向量与逐符号验收待补 | `coll`, `convert`, `core`, `io`, `iter`, `opt`, `parse`, `serde`, `text` |
+| `log` | 10 | 33 | 10 | 0 | 部分实现，已运行代表用例 | 级别、结构化属性、同步多 Handler；异步、系统和 JSON Handler 待补 | `coll`, `io`, `iter`, `text`, `time` |
 | `atomic` | 5 | 23 | 7 | 0 | 部分实现，已运行代表用例 | 目标受支持位宽上的原子操作，完整硬件目标矩阵待验 | — |
 | `sync` | 19 | 76 | 6 | 0 | 部分实现，已运行代表用例 | 互斥锁、条件变量、等待组、单次初始化，读写锁与信号量等待补 | `atomic`, `cell`, `core`, `opt`, `time` |
 | `thread` | 6 | 24 | 13 | 0 | 部分实现，已运行代表用例 | 原生线程、停止、join 与睡眠，TLS、亲和性和构建器待补 | `atomic`, `opt`, `time` |
 | `task` | 11 | 47 | 15 | 0 | 部分实现，已运行代表用例 | 任务组、结果领取、计时与取消，任务上下文、阻塞适配和完整调度 API 待补 | `opt`, `result`, `time` |
 | `channel` | 12 | 38 | 9 | 0 | 部分实现，已运行代表用例 | MPSC 缓冲及 rendezvous，Broadcast、Watch 和 select 调度待补 | `coll`, `core`, `mem`, `opt`, `sync`, `time` |
 | `parallel` | 3 | 6 | 14 | 0 | 未实现 | 暂无标准包源码 | — |
-| `errors` | 6 | 26 | 10 | 0 | 未实现 | 暂无标准包源码 | — |
+| `errors` | 6 | 26 | 10 | 0 | 部分实现，已运行代表用例 | 错误身份、上下文、原因链与多错误聚合；错误名称反射与序列化待补 | `coll`, `io`, `iter`, `log`, `mem`, `text` |
 | `debug` | 4 | 4 | 18 | 0 | 未实现 | 暂无标准包源码 | — |
 | `testing` | 11 | 38 | 17 | 0 | 未实现 | 暂无标准包源码 | — |
-| `serde` | 6 | 16 | 4 | 0 | 未实现 | 暂无标准包源码 | — |
-| `csv` | 3 | 10 | 4 | 0 | 未实现 | 暂无标准包源码 | — |
-| `toml` | 3 | 5 | 5 | 0 | 未实现 | 暂无标准包源码 | — |
-| `url` | 4 | 27 | 9 | 0 | 未实现 | 暂无标准包源码 | — |
+| `serde` | 6 | 16 | 4 | 0 | 部分实现，已运行代表用例 | 显式序列化协议、Codec 与 JSON/TOML 适配；自动派生及其他后端待补 | `coll`, `convert`, `opt`, `parse`, `text` |
+| `csv` | 3 | 10 | 4 | 0 | 部分实现，已运行代表用例 | 带引号换行、双引号、可选表头及 Reader/Writer；更大方言组合待验 | `coll`, `io`, `text` |
+| `toml` | 3 | 5 | 5 | 0 | 部分实现，已运行代表用例 | 基本值、嵌套表、重复键、日期时间和 Codec；完整 TOML 规范覆盖待补 | `bytes`, `coll`, `convert`, `core`, `io`, `opt`, `parse`, `serde`, `text` |
+| `url` | 4 | 27 | 9 | 0 | 部分实现，已运行代表用例 | URI 组件、百分号、IPv6 和重复查询键；IDNA、IRI、zone identifier 待补 | `coll`, `encoding`, `text` |
 | `compress` | 4 | 8 | 6 | 0 | 未实现 | 暂无标准包源码 | — |
 | `crypto` | 5 | 19 | 8 | 0 | 未实现 | 暂无标准包源码 | — |
 | `tls` | 4 | 9 | 4 | 0 | 未实现 | 暂无标准包源码 | — |
@@ -66,17 +66,17 @@
 
 ## 当前源码的依赖顺序
 
-按直接导入检查，31 个源码包构成无环图。每层名称可并行，后一层只引用前面已出现的包。
+标准库包含 43 个有公开源码的包，以及供 `math` 使用的内部 `math_ffi` 包。内部包声明目标 C ABI 的数学符号。以下依赖图无环。
 
 ```text
-atomic, binary, cmp, convert, core, hash, iter, meta
-algo, bits, mmio, time
+atomic, binary, cmp, convert, core, hash, iter, math_ffi, meta
+algo, bits, math, mmio, time
 mem
 coll, simd
 bytes, opt, result, text
-cell, encoding, io, parse, path, task, thread
-bufio, fmt, fs, sync
-channel
+cell, encoding, io, num, parse, path, random, task, thread, unicode
+bufio, csv, fmt, fs, log, regex, serde, sync, url
+channel, errors, json, toml
 ```
 
 容器和 I/O 的具体入口与验证边界见[容器实现](coll-container-implementation.md)和[I/O 实现](io-stack.md)。[全量 API 设计清单](Vaqrin-stdlib-API-complete-draft.md)及其 CSV/JSON 保留目标合同。

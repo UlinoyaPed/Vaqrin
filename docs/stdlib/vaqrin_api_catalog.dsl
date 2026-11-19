@@ -102,6 +102,7 @@
 #record HashSeed|独立随机种子
 = hash<T>(value: *const T)->u64; hashWith<T,H>(value: *const T,hasher: *H)->u64; hashBytes(bytes: []const u8)->u64; hashText(value: str)->u64; hashCombine(seed: u64,value: u64)->u64; randomSeed()->!HashSeed; stableDigest(bytes: []const u8)->[32]u8; compareDigest(a: []const u8,b: []const u8)->bool
 @num|整数约束、检查运算、宽整数与数学基础
+// 集成实现：定宽整数检查与 Euclidean 除法、BigUint、BigInt、Rational；完整除法和跨位宽属性测试待补。逐项状态见实现矩阵。
 #alias Unsigned<T>|与 T 同位宽的无符号整数类型级映射，需要编译期类型映射支持
 #record IntLimits<T>|整数最小最大、位宽
 #record FloatInfo<T>|浮点精度、指数和 NaN 特性
@@ -368,6 +369,7 @@
 #enum TextBoundary|Byte, Scalar, Grapheme
 = equal(a: str,b: str)->bool; compare(a: str,b: str)->cmp.Ordering; byteLen(value: str)->usize; scalarCount(value: str)->usize; graphemeCount(value: str)->usize; isEmpty(value: str)->bool; chars(value: str)->Scalars; graphemes(value: str)->Graphemes; lines(value: str)->Lines; split(value: str,delimiter: str)->Split; splitOnce(value: str,delimiter: str)->?(str,str); rsplit(value: str,delimiter: str)->Split; words(value: str)->iter.Iterator<str>; find(value: str,pattern: str)->?usize; findLast(value: str,pattern: str)->?usize; matchIndices(value: str,pattern: str)->MatchIndices; contains(value: str,pattern: str)->bool; startsWith(value: str,prefix: str)->bool; endsWith(value: str,suffix: str)->bool; stripPrefix(value: str,prefix: str)->?str; stripSuffix(value: str,suffix: str)->?str; trim(value: str)->str; trimStart(value: str)->str; trimEnd(value: str)->str; trimMatches(value: str,cutset: str)->str; substringBytes(value: str,start: usize,end: usize)->!str; scalarAt(value: str,index: usize)->?char; graphemeAt(value: str,index: usize)->?str; byteOffsetOfScalar(value: str,index: usize)->?usize; fromBytes(value: []const u8)->!string; fromBytesLossy(value: []const u8)->!string; fromChars<I>(chars: I)->!string; toBytes(value: str)->!coll.Vec<u8>; concat(a: str,b: str)->!string; join<I>(parts: I,separator: str)->!string; repeat(value: str,n: usize)->!string; replace(value: str,old: str,new: str)->!string; replaceFirst(value: str,old: str,new: str)->!string; toLower(value: str)->!string; toUpper(value: str)->!string; caseFold(value: str)->!string; normalizeNFC(value: str)->!string; normalizeNFD(value: str)->!string; normalizeNFKC(value: str)->!string; normalizeNFKD(value: str)->!string; isNormalizedNFC(value: str)->bool; trimIndent(value: str)->!string; escape(value: str)->!string; unescape(value: str)->!string; compareIgnoreCase(a: str,b: str)->!cmp.Ordering
 @unicode|Unicode 17.0.0 字符属性、大小写、UTF-8、正规化与 UAX #29 扩展字素簇
+// 集成实现：Unicode 17 属性、四种规范化和字素簇；完整官方规范化及字素边界测试待跑。逐项状态见实现矩阵。
 #enum GeneralCategory|Unicode 17.0 General_Category 完整值域
 #enum Script|Unicode 17.0 Script 完整值域
 #enum GraphemeBreak|Other, CR, LF, Control, Extend, ZWJ, RegionalIndicator, Prepend, SpacingMark, L, V, T, LV, LVT
@@ -431,6 +433,7 @@
 + init(writer: *io.Writer,options: FormatOptions)->Self; write(value: str)->!void; writeChar(value: char)->!void; writeInt<T>(value: T)->!void; writeFloat<T>(value: T)->!void; writeHex(data: []const u8)->!void; pad(value: str)->!void; finish()->!void
 = format<F>(pattern: str,args: F)->!string; formatWithPlan<F>(plan: *const FormatPlan,args: F)->!string; writeTo<W,F>(writer: *W,pattern: str,args: F)->!void; writeValue<T,W>(writer: *W,value: *const T)->!void; writeDebug<T,W>(writer: *W,value: *const T)->!void; formatInt<T>(value: T,radix: u8)->!string; formatFloat<T>(value: T,style: FormatStyle,precision: ?usize)->!string; formatBytes(data: []const u8,style: FormatStyle)->!string; formatDuration(value: time.Duration)->!string; formatDate(value: time.Date,pattern: str)->!string; padLeft(value: str,width: usize,fill: char)->!string; padRight(value: str,width: usize,fill: char)->!string; center(value: str,width: usize,fill: char)->!string; escapeDebug(value: str)->!string; parsePlan(pattern: str)->!FormatPlan
 @regex|Thompson NFA 正则引擎；按 UTF-8 标量推进，使用有序 epsilon-closure 与显式工作预算，不执行递归回溯
+// 集成实现：Thompson NFA、分组、分支、重复及资源上限；命名捕获、环视等未实现。逐项状态见实现矩阵。
 #enum Op|Character, Any, Class, Split, Jump, Save, AssertStart, AssertEnd, Match
 #record State|NFA 指令、主边与备选边
 #record CharRange|闭区间 Unicode scalar 范围
@@ -451,6 +454,7 @@
 + next()->!?str
 = compile(pattern: str)->!Regex; isMatch(pattern: str,value: str)->!bool; find(pattern: str,value: str)->!?Match; findAt(pattern: str,value: str,byteOffset: usize)->!?Match; findAll(pattern: str,value: str)->!coll.Vec<Match>; captures(pattern: str,value: str)->!?Captures; escape(value: str)->!string; replace(pattern: str,value: str,replacement: str)->!string; replaceAll(pattern: str,value: str,replacement: str)->!string; split(pattern: str,value: str)->!coll.Vec<str>
 @math|浮点数学、复数及特殊函数；禁止无声明 fast-math
+// 集成实现：IEEE 754 分类、舍入及 C 数学入口；区间向外舍入与其余数学合同待补。逐项状态见实现矩阵。
 #record Complex<T>|实部/虚部，具可检查缩放的除法
 + new(real: T,imag: T)->Self; real()->T; imag()->T; conjugate()->Self; norm()->T; abs()->T; arg()->T; add(other: Self)->Self; sub(other: Self)->Self; mul(other: Self)->Self; div(other: Self)->Self; sqrt()->Self; exp()->Self; log()->Self; pow(other: Self)->Self
 #record Interval<T>|上下界、闭区间的数值区间
@@ -459,6 +463,7 @@
 #enum MathMode|Accurate, Fast（显式选择且记录目标误差）
 = pi<T>()->T; tau<T>()->T; e<T>()->T; sqrt2<T>()->T; ln2<T>()->T; ln10<T>()->T; inf<T>()->T; nan<T>()->T; abs<T>(x: T)->T; signbit<T>(x: T)->bool; copysign<T>(x: T,y: T)->T; isNan<T>(x: T)->bool; isInfinite<T>(x: T)->bool; isFinite<T>(x: T)->bool; isNormal<T>(x: T)->bool; fpClassify<T>(x: T)->FpClass; nextAfter<T>(x: T,toward: T)->T; ulp<T>(x: T)->T; floor<T>(x: T)->T; ceil<T>(x: T)->T; trunc<T>(x: T)->T; round<T>(x: T)->T; roundEven<T>(x: T)->T; fract<T>(x: T)->T; modf<T>(x: T)->(T,T); fmod<T>(x: T,y: T)->T; remainder<T>(x: T,y: T)->T; remQuo<T>(x: T,y: T)->(T,i32); sqrt<T>(x: T)->T; cbrt<T>(x: T)->T; hypot<T>(x: T,y: T)->T; pow<T>(x: T,y: T)->T; powi<T>(x: T,n: i32)->T; exp<T>(x: T)->T; exp2<T>(x: T)->T; expm1<T>(x: T)->T; log<T>(x: T)->T; log2<T>(x: T)->T; log10<T>(x: T)->T; log1p<T>(x: T)->T; sin<T>(x: T)->T; cos<T>(x: T)->T; tan<T>(x: T)->T; asin<T>(x: T)->T; acos<T>(x: T)->T; atan<T>(x: T)->T; atan2<T>(y: T,x: T)->T; sinCos<T>(x: T)->(T,T); sinh<T>(x: T)->T; cosh<T>(x: T)->T; tanh<T>(x: T)->T; asinh<T>(x: T)->T; acosh<T>(x: T)->T; atanh<T>(x: T)->T; erf<T>(x: T)->T; erfc<T>(x: T)->T; gamma<T>(x: T)->T; logGamma<T>(x: T)->T; beta<T>(x: T,y: T)->T; j0<T>(x: T)->T; j1<T>(x: T)->T; y0<T>(x: T)->T; y1<T>(x: T)->T; fma<T>(a: T,b: T,c: T)->T; maxNum<T>(a: T,b: T)->T; minNum<T>(a: T,b: T)->T; totalMin<T>(a: T,b: T)->T; totalMax<T>(a: T,b: T)->T; clamp<T>(x: T,low: T,high: T)->T; lerp<T>(a: T,b: T,t: T)->T; midpoint<T>(a: T,b: T)->T; degrees<T>(radians: T)->T; radians<T>(degrees: T)->T; distance2D<T>(x1: T,y1: T,x2: T,y2: T)->T; reduceAngle<T>(x: T)->T
 @random|可复现伪随机与密码学熵源分开，不自动降级
+// 集成实现：可复现 PCG64、xoshiro256**、基础分布；OS 熵源及各分布统计验收待补。逐项状态见实现矩阵。
 #interface Rng|nextU64()->u64; fill(dst: []u8)->void
 #interface CryptoRng|fillSecure(dst: []u8)->!void
 #class Pcg64|固定算法版本的可复现 PRNG
@@ -706,6 +711,7 @@
 = parseUrl(value: str)->!Url; encodeQuery(items: []const (str,str))->!string; decodeQuery(query: str)->!coll.Vec<(string,string)>; parseRequest(reader: *io.Reader,limits: HttpLimits)->!Request; parseResponse(reader: *io.Reader,limits: HttpLimits)->!Response; writeRequest(writer: *io.Writer,request: *Request)->!void; writeResponse(writer: *io.Writer,response: *Response)->!void; statusText(code: u16)->?str; parseMethod(value: str)->!Method; get(url: str)->!Response; post(url: str,body: Body)->!Response; serve(address: net.SocketAddr,handler: Handler)->!void
 #record HttpLimits|头部大小、字段数、body 大小、空闲/连接超时
 @json|严格 RFC 8259 的 DOM/流式解析与显式 Codec<T>
+// 集成实现：嵌套 DOM、精确词法数字、代理对、指针及 Codec；完整 RFC 向量与逐符号验收待补。逐项状态见实现矩阵。
 #enum Value|Null, Bool(bool), Number(JsonNumber), String(string), Array(JsonArray), Object(JsonObject)
 + isNull()->bool; asBool()->?bool; asNumber()->?*const JsonNumber; asString()->?str; asArray()->?*const JsonArray; asObject()->?*const JsonObject; clone()->!Self
 #class JsonArray|拥有值序列
@@ -727,6 +733,7 @@
 #interface Codec<T>|encode(value: *const T,out: *Encoder)->!void; decode(reader: *Decoder)->!T
 = parse(value: str)->!Value; parseBytes(value: []const u8)->!Value; parseReader(reader: *io.Reader,options: ParseOptions)->!Value; stringify(value: *const Value)->!string; stringifyPretty(value: *const Value,indent: usize)->!string; write(writer: *io.Writer,value: *const Value,opts: EncodeOptions)->!void; marshal<T>(value: *const T,codec: *Codec<T>)->!string; unmarshal<T>(value: str,codec: *Codec<T>)->!T; validate(value: str)->!void; pointerGet(value: *const Value,pointer: str)->?*const Value; pointerSet(value: *Value,pointer: str,newValue: Value)->!void; escapeString(value: str)->!string; unescapeString(value: str)->!string
 @log|级别、结构化 Attr、同步/异步 Handler 与最小裸机实现
+// 集成实现：级别、结构化属性、同步多 Handler；异步、系统和 JSON Handler 待补。逐项状态见实现矩阵。
 #enum Level|Trace, Debug, Info, Warn, Error, Fatal
 #record Attr|key/value 的结构化属性
 + string(key: str,value: str)->Self; int(key: str,value: i64)->Self; bool(key: str,value: bool)->Self; error(key: str,value: ErrorId)->Self; group(name: str,values: []const Attr)->Self
@@ -858,6 +865,7 @@
 + init(source: I,options: ParallelOptions)->Self; map<U,F>(f: F)->ParallelIterator<I,U>; filter<F>(pred: F)->ParallelIterator<I,T>; collectVec()->!coll.Vec<T>; forEach<F>(f: F)->!void; reduce<F>(identity: T,f: F)->!T
 = parallelFor<F>(start: usize,end: usize,options: ParallelOptions,f: F)->!void; parallelForEach<T,F>(input: []const T,options: ParallelOptions,f: F)->!void; parallelForEachMut<T,F>(input: []T,options: ParallelOptions,f: F)->!void; parallelMap<T,U,F>(input: []const T,options: ParallelOptions,f: F)->!coll.Vec<U>; parallelFilter<T,F>(input: []const T,options: ParallelOptions,pred: F)->!coll.Vec<T>; parallelReduce<T,F>(input: []const T,identity: T,options: ParallelOptions,f: F)->!T; parallelFold<T,A,F,G>(input: []const T,identity: A,options: ParallelOptions,fold: F,combine: G)->!A; parallelScan<T,F>(input: []const T,options: ParallelOptions,f: F)->!coll.Vec<T>; parallelSort<T,F>(input: []T,options: ParallelOptions,less: F)->!void; parallelStableSort<T,F>(input: []T,options: ParallelOptions,less: F)->!void; parallelFind<T,F>(input: []const T,options: ParallelOptions,pred: F)->!?usize; parallelAny<T,F>(input: []const T,options: ParallelOptions,pred: F)->!bool; parallelAll<T,F>(input: []const T,options: ParallelOptions,pred: F)->!bool; chunkCount(length: usize,options: ParallelOptions)->usize
 @errors|错误身份、上下文、多错误报告，与内建 !T 独立
+// 集成实现：错误身份、上下文、原因链与多错误聚合；错误名称反射与序列化待补。逐项状态见实现矩阵。
 #record ErrorId|包名 + error 集合 + 成员组成稳定身份
 + package()->str; name()->str; fullName()->str; equals(other: Self)->bool
 #record Frame|上下文消息、位置、可选关键值
@@ -896,6 +904,7 @@
 + new(name: str)->Self; assertText(value: str)->!void; assertBytes(value: []const u8)->!void
 = test(name: str,callback: func(*T) void)->TestCase; benchmark(name: str,callback: func(*B) void)->TestCase; assert(condition: bool)->void; assertEq<T>(actual: *const T,expected: *const T)->void; assertNe<T>(actual: *const T,unexpected: *const T)->void; assertApprox<T>(actual: T,expected: T,tolerance: T)->void; assertError<U>(value: !U,error: errors.ErrorId)->void; assertNull<T>(value: ?T)->void; assertSome<T>(value: ?T)->T; assertPanics<F>(f: F)->void; fail(message: str)->never; skip(message: str)->never; runAll()->!i32; seed(value: u64)->void; captureOutput<F>(f: F)->!string; tempDir()->!path.PathBuf; tempFile()->!fs.File
 @serde|数据格式无关的显式编码/解码接口；无反射时仍可手写 Codec
+// 集成实现：显式序列化协议、Codec 与 JSON/TOML 适配；自动派生及其他后端待补。逐项状态见实现矩阵。
 #interface Encode<T>|encode(value: *const T,writer: *Serializer)->!void
 #interface Decode<T>|decode(reader: *Deserializer)->!T
 #interface Serializer|beginSeq(len: ?usize)->!void; element<T>(value: *const T)->!void; endSeq()->!void; beginMap(len: ?usize)->!void; key<T>(value: *const T)->!void; value<T>(value: *const T)->!void; endMap()->!void
@@ -904,6 +913,7 @@
 #record DecodeLimits|深度、元素数、字节数
 = encode<T,S>(value: *const T,serializer: *S)->!void; decode<T,D>(deserializer: *D)->!T; encodeToBytes<T,S>(value: *const T,serializer: S)->!coll.Vec<u8>; decodeFromBytes<T,D>(bytes: []const u8,deserializer: D)->!T
 @csv|CSV 行式读写、分隔符和引号策略
+// 集成实现：带引号换行、双引号、可选表头及 Reader/Writer；更大方言组合待验。逐项状态见实现矩阵。
 #record CsvOptions|分隔符、quote、换行、表头与字段上限
 #class CsvReader|流式记录读取
 + init(reader: *io.Reader,options: CsvOptions)->Self; readRecord()->!?coll.Vec<string>; readFields(dst: *coll.Vec<string>)->!bool; headers()->!?coll.Vec<string>; position()->(usize,usize); close()->void
@@ -911,12 +921,14 @@
 + init(writer: *io.Writer,options: CsvOptions)->Self; writeRecord(fields: []const str)->!void; writeAll(rows: []const []const str)->!void; flush()->!void
 = parseRecord(value: str,options: CsvOptions)->!coll.Vec<string>; parse(value: str,options: CsvOptions)->!coll.Vec<coll.Vec<string>>; stringify(records: []const []const str,options: CsvOptions)->!string; escapeField(value: str,options: CsvOptions)->!string
 @toml|配置文件读写，保持 TOML 类型语义和重复键检查
+// 集成实现：基本值、嵌套表、重复键、日期时间和 Codec；完整 TOML 规范覆盖待补。逐项状态见实现矩阵。
 #enum Value|String, Integer, Float, Bool, DateTime, Array, Table
 #class Document|TOML 文档 AST 与词法位置信息
 + parse(value: str)->!Self; get(path: str)->?*const Value; set(path: str,value: Value)->!void; remove(path: str)->bool; stringify()->!string
 #record TomlOptions|最大深度、表大小、日期解析约束
 = parse(value: str)->!Document; parseReader(reader: *io.Reader,limit: usize)->!Document; stringify(document: *const Document)->!string; decode<T>(value: str,codec: *serde.Codec<T>)->!T; encode<T>(value: *const T,codec: *serde.Codec<T>)->!string
 @url|URI/URL、查询参数与百分号编码；HTTP 可复用
+// 集成实现：URI 组件、百分号、IPv6 和重复查询键；IDNA、IRI、zone identifier 待补。逐项状态见实现矩阵。
 #record Url|URI/URL 的唯一拥有者类型；http.Url 仅为别名
 + parse(value: str)->!Self; scheme()->str; host()->?str; port()->?u16; userInfo()->?str; path()->str; query()->?str; fragment()->?str; resolve(reference: str)->!Self; normalize()->!Self; toString()->!string
 #class UrlBuilder|URL 可验证构造器，唯一权威实现（http.UrlBuilder 同类型别名）

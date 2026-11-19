@@ -31,12 +31,12 @@ URI 语法按 ASCII 字节解析。非 ASCII 文本应先按 UTF-8 字节百分�
 公开入口和方法：
 
 - `Level.Trace/Debug/Info/Warn/Error/Fatal`、`parseLevel`、`levelText`。
-- `Attr.string/int/bool/error/group`、`key`、`kind`、`asString/asInt/asBool/asError/asGroup`、`clone`、`formatAttr`。
+- `Attr.string/int/bool/errorId/group`、`key`、`kind`、`asString/asInt/asBool/asError/asGroup`、`clone`、`formatAttr`。
 - `Record.level/timestamp/message/attrs/clone/fromOwned`。
 - `Handler.enabled/handle/flush`。
 - `Logger.new/enabled/setLevel/setClock/log/with/withGroup/flush`。
 - `TextHandler.new/handle/flush`、`BufferHandler.init/handle/records/len/clear/flush`、`MultiHandler.new/enabled/handle/flush`。
-- `trace`、`debug`、`info`、`warn`、`error`、`fatal`、`flush(logger)`。
+- `trace`、`debug`、`info`、`warn`、`logError`、`fatal`、`flush(logger)`。
 
 属性支持字符串、i64、布尔值、ErrorId 和递归 group。字符串消息、属性键和值会进行行安全转义；group 在 TextHandler 中以点分隔的键路径输出。Attr 工厂返回 `!Self`，因为键和值必须复制为拥有型 string。Logger 在同步调用期间组合固定属性和调用属性，Record 接管拥有型快照；Handler 不得保留传入 Record 的借用指针。BufferHandler 对记录进行深复制。
 
@@ -66,6 +66,4 @@ ErrorSink.drain 把内部 Vec 的所有权转移给 ReportDrain，按插入顺�
 
 ## 本地集成
 
-`examples/utilities.vqr` 是待本地执行的综合验收入口，覆盖 URI 解析、相对引用解析、Builder、IPv6、空端口、非法百分号、重复查询参数、加号语义、日志级别过滤、结构化 group、Writer/Buffer Handler、错误链、SourceLocation 和 ErrorSink。
-
-在线开发环境未运行 Vaqrin 编译器，编译与运行结果必须标记为待本地执行。建议合并前优先检查构造器 `!void`、非拥有迭代器生命周期、递归 Vec 类型和接口指针适配；随后运行项目现有 acceptance.py，并补充 RFC 3986 Section 5.4 的 reference resolution vectors。
+`examples/utilities.vqr` 是由 CTest 运行的综合验收入口，覆盖 URI 解析、相对引用解析、Builder、IPv6、空端口、非法百分号、重复查询参数、加号语义、日志级别过滤、结构化 group、Writer/Buffer Handler、错误链、SourceLocation 和 ErrorSink。

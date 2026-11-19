@@ -291,6 +291,7 @@ pub func parseBytes(value: []const u8) !Value {
 pub func parseReader(reader: *io.Reader, options: ParseOptions) !Value {
     var source = io.readToString(reader, options.maxBytes) catch (reason) {
         if reason == io.IoError.LimitExceeded { return JsonError.SizeLimit; }
+        if reason == text.Utf8Error.InvalidUtf8 { return JsonError.InvalidUtf8; }
         return reason;
     };
     parseWithOptions(source, options)

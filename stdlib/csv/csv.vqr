@@ -205,9 +205,10 @@ private:
 pub class CsvWriter {
     var writer: *io.Writer;
     var options: CsvOptions;
+    var recordNumber: usize;
 public:
     func init(writer: *io.Writer, options: CsvOptions)
-        : writer(writer), options(move(options)) { validateOptions(&options)!; }
+        : writer(writer), options(move(options)), recordNumber(0) { validateOptions(&options)!; }
 
     func writeRecord(fields: []const str) !void {
         var encoded = coll.Vec<u8>();
@@ -220,7 +221,9 @@ public:
         if options.lineEnding == LineEnding.CRLF { encoded.push(13)!; }
         encoded.push(10)!;
         if encoded.len() > options.maxRecordBytes { return CsvError.RecordLimit; }
-        io.writeAll(writer, encoded.asConstSlice())
+        if recordNumber >= options.maxRecords { return CsvError.RecordLimit; }
+        io.writeAll(writer, encoded.asConstSlice())!;
+        recordNumber++;
     }
     func writeAll(rows: []const []const str) !void {
         for row in rows { writeRecord(row)!; }
@@ -229,6 +232,11 @@ public:
 }
 
 pub func parseRecord(value: str, options: CsvOptions) !coll.Vec<string> {
+    if value.byteLen() == 0 {
+        var empty = coll.Vec<string>();
+        empty.push(text.fromBytes([]const u8{})!)!;
+        return move(empty);
+    }
     var localOptions = options;
     localOptions.hasHeader = false;
     var memory = io.MemoryReader(value.asBytes());

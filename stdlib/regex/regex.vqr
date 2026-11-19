@@ -153,7 +153,7 @@ private:
                     if matched.endByte > matched.startByte {
                         search = matched.endByte;
                     } else if matched.endByte < value.byteLen() {
-                        var next = unicode.decodeUtf8(value.asBytes()[matched.endByte..])!;
+                        var next = unicode.decodeUtf8(value.asBytes()[matched.endByte..]) catch { return RegexError.InvalidUtf8; };
                         for i in matched.endByte..(matched.endByte + next.1) {
                             output.push(value.asBytes()[i])!;
                         }
@@ -222,7 +222,7 @@ public:
                 if item.endByte > item.startByte {
                     offset = item.endByte;
                 } else if item.endByte < source.byteLen() {
-                    var next = unicode.decodeUtf8(source.asBytes()[item.endByte..])!;
+                    var next = unicode.decodeUtf8(source.asBytes()[item.endByte..]) catch { return RegexError.InvalidUtf8; };
                     offset = item.endByte + next.1;
                 } else {
                     done = true;
@@ -252,7 +252,7 @@ public:
                 if full.endByte > full.startByte {
                     offset = full.endByte;
                 } else if full.endByte < source.byteLen() {
-                    var next = unicode.decodeUtf8(source.asBytes()[full.endByte..])!;
+                    var next = unicode.decodeUtf8(source.asBytes()[full.endByte..]) catch { return RegexError.InvalidUtf8; };
                     offset = full.endByte + next.1;
                 } else {
                     done = true;
@@ -294,7 +294,7 @@ public:
                     search = item.endByte;
                     if search == source.byteLen() { trailingEmpty = true; }
                 } else if item.endByte < source.byteLen() {
-                    var next = unicode.decodeUtf8(source.asBytes()[item.endByte..])!;
+                    var next = unicode.decodeUtf8(source.asBytes()[item.endByte..]) catch { return RegexError.InvalidUtf8; };
                     search = item.endByte + next.1;
                 } else {
                     search = source.byteLen() + 1;

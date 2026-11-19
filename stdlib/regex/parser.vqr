@@ -1,0 +1,508 @@
+package regex
+import (coll, convert, text, unicode)
+
+pub enum NodeKind { Empty, Literal, Any, Class, Concat, Alternate, Repeat, AnchorStart, AnchorEnd, Group }
+
+pub record AstNode {
+    pub var kind: NodeKind;
+    pub var value: u32;
+    pub var left: i32;
+    pub var right: i32;
+    pub var minimum: usize;
+    pub var maximum: usize;
+    pub var greedy: bool;
+}
+
+pub record Escaped {
+    pub var scalar: u32;
+    pub var builtinMask: u8;
+}
+
+pub record ParsedPattern {
+    pub var root: i32;
+    pub var nodes: coll.Vec<AstNode>;
+    pub var classes: coll.Vec<CharacterClass>;
+    pub var ranges: coll.Vec<CharRange>;
+    pub var captureCount: usize;
+}
+
+pub record Patch {
+    pub var state: usize;
+    pub var alternate: bool;
+}
+
+pub record Fragment {
+    pub var start: i32;
+    pub var outs: coll.Vec<Patch>;
+}
+
+pub class RegexParser {
+    var source: str;
+    var position: usize;
+    var nodeLimit: usize;
+    var nodes: coll.Vec<AstNode>;
+    var classes: coll.Vec<CharacterClass>;
+    var ranges: coll.Vec<CharRange>;
+    var captureCount: usize;
+public:
+    func init(pattern: str, maxNodes: usize)
+        : source(pattern), position(0), nodeLimit(maxNodes),
+          nodes(coll.Vec<AstNode>()), classes(coll.Vec<CharacterClass>()),
+          ranges(coll.Vec<CharRange>()), captureCount(0) {}
+
+    func parse() !ParsedPattern {
+        if nodeLimit == 0 { return RegexError.TooManyStates; }
+        var root = parseExpression(0)!;
+        if position != source.byteLen() { return RegexError.UnexpectedToken; }
+        ParsedPattern{
+            root: root,
+            nodes: move(nodes),
+            classes: move(classes),
+            ranges: move(ranges),
+            captureCount: captureCount
+        }
+    }
+
+private:
+    func atEnd() bool { position >= source.byteLen() }
+    func currentByte() u8 { source.asBytes()[position] }
+    func nextByte() u8 { source.asBytes()[position + 1] }
+
+    func consumeByte(value: u8) bool {
+        if atEnd() || currentByte() != value { return false; }
+        position++;
+        true
+    }
+
+    func readScalar() !u32 {
+        if atEnd() { return RegexError.UnexpectedEnd; }
+        var decoded = unicode.decodeUtf8(source.asBytes()[position..])!;
+        position += decoded.1;
+        convert.fromChar(decoded.0)
+    }
+
+    func addNode(kind: NodeKind, value: u32, left: i32, right: i32,
+                 minimum: usize, maximum: usize, greedy: bool) !i32 {
+        if nodes.len() >= nodeLimit { return RegexError.TooManyStates; }
+        nodes.push(AstNode{
+            kind: kind, value: value, left: left, right: right,
+            minimum: minimum, maximum: maximum, greedy: greedy
+        })!;
+        i32(nodes.len() - 1)
+    }
+
+    func simpleNode(kind: NodeKind, value: u32) !i32 {
+        addNode(kind, value, -1, -1, 0, 0, true)
+    }
+
+    func binaryNode(kind: NodeKind, left: i32, right: i32) !i32 {
+        addNode(kind, 0, left, right, 0, 0, true)
+    }
+
+    func atConcatEnd() bool {
+        if atEnd() { return true; }
+        currentByte() == 41 || currentByte() == 124
+    }
+
+    func parseExpression(depth: usize) !i32 {
+        if depth > 256 { return RegexError.TooManyStates; }
+        var left = parseConcat(depth + 1)!;
+        for consumeByte(124) {
+            var right = parseConcat(depth + 1)!;
+            left = binaryNode(NodeKind.Alternate, left, right)!;
+        }
+        left
+    }
+
+    func parseConcat(depth: usize) !i32 {
+        var root: i32 = -1;
+        var hasItem = false;
+        for !atConcatEnd() {
+            var item = parseRepeat(depth + 1)!;
+            if hasItem { root = binaryNode(NodeKind.Concat, root, item)!; }
+            else { root = item; hasItem = true; }
+        }
+        if !hasItem { return simpleNode(NodeKind.Empty, 0); }
+        root
+    }
+
+    func parseRepeat(depth: usize) !i32 {
+        var atom = parseAtom(depth + 1)!;
+        if atEnd() { return atom; }
+        var quantifier = false;
+        var minimum: usize = 0;
+        var maximum: usize = 0;
+        if consumeByte(42) {
+            quantifier = true; minimum = 0; maximum = ~usize(0);
+        } else if consumeByte(43) {
+            quantifier = true; minimum = 1; maximum = ~usize(0);
+        } else if consumeByte(63) {
+            quantifier = true; minimum = 0; maximum = 1;
+        } else if consumeByte(123) {
+            quantifier = true;
+            minimum = parseDecimal()!;
+            if consumeByte(44) {
+                if !atEnd() && currentByte() == 125 { maximum = ~usize(0); }
+                else { maximum = parseDecimal()!; }
+            } else {
+                maximum = minimum;
+            }
+            if !consumeByte(125) { return RegexError.InvalidRepeat; }
+            if maximum != ~usize(0) && maximum < minimum { return RegexError.InvalidRepeat; }
+            if minimum > 1000 || (maximum != ~usize(0) && maximum > 1000) {
+                return RegexError.TooManyStates;
+            }
+        }
+        if !quantifier { return atom; }
+        var greedy = !consumeByte(63);
+        if !atEnd() {
+            var next = currentByte();
+            if next == 42 || next == 43 || next == 63 || next == 123 {
+                return RegexError.InvalidRepeat;
+            }
+        }
+        addNode(NodeKind.Repeat, 0, atom, -1, minimum, maximum, greedy)
+    }
+
+    func parseDecimal() !usize {
+        if atEnd() || currentByte() < 48 || currentByte() > 57 {
+            return RegexError.InvalidRepeat;
+        }
+        var value: usize = 0;
+        for !atEnd() && currentByte() >= 48 && currentByte() <= 57 {
+            var digit = usize(currentByte() - 48);
+            if value > (~usize(0) - digit) / 10 { return RegexError.InvalidRepeat; }
+            value = value * 10 + digit;
+            position++;
+        }
+        value
+    }
+
+    func parseAtom(depth: usize) !i32 {
+        if depth > 256 { return RegexError.TooManyStates; }
+        if atEnd() { return RegexError.UnexpectedEnd; }
+        var byte = currentByte();
+        if byte == 40 {
+            position++;
+            var capturing = true;
+            if consumeByte(63) {
+                if consumeByte(58) { capturing = false; }
+                else { return RegexError.UnsupportedConstruct; }
+            }
+            var groupIndex: usize = 0;
+            if capturing {
+                captureCount++;
+                if captureCount > 32 { return RegexError.CaptureLimit; }
+                groupIndex = captureCount;
+            }
+            var inner = parseExpression(depth + 1)!;
+            if !consumeByte(41) { return RegexError.UnclosedGroup; }
+            if capturing {
+                return addNode(NodeKind.Group, u32(groupIndex), inner, -1, 0, 0, true);
+            }
+            return inner;
+        }
+        if byte == 91 { return parseCharacterClass(); }
+        if byte == 46 { position++; return simpleNode(NodeKind.Any, 0); }
+        if byte == 94 { position++; return simpleNode(NodeKind.AnchorStart, 0); }
+        if byte == 36 { position++; return simpleNode(NodeKind.AnchorEnd, 0); }
+        if byte == 92 {
+            position++;
+            var escaped = parseEscape()!;
+            if escaped.builtinMask != 0 {
+                return addBuiltinClass(escaped.builtinMask, false);
+            }
+            return simpleNode(NodeKind.Literal, escaped.scalar);
+        }
+        if byte == 41 || byte == 124 || byte == 42 || byte == 43 ||
+           byte == 63 || byte == 123 {
+            return RegexError.UnexpectedToken;
+        }
+        simpleNode(NodeKind.Literal, readScalar()!)
+    }
+
+    func addBuiltinClass(mask: u8, negated: bool) !i32 {
+        var classId = classes.len();
+        classes.push(CharacterClass{
+            firstRange: ranges.len(), rangeCount: 0,
+            builtinMask: mask, negated: negated
+        })!;
+        simpleNode(NodeKind.Class, u32(classId))
+    }
+
+    func parseCharacterClass() !i32 {
+        position++;
+        var negated = consumeByte(94);
+        var firstRange = ranges.len();
+        var builtinMask: u8 = 0;
+        var first = true;
+        var itemCount: usize = 0;
+        for {
+            if atEnd() { return RegexError.UnclosedClass; }
+            if currentByte() == 93 && !first {
+                position++;
+                break;
+            }
+            var left = parseClassAtom()!;
+            first = false;
+            itemCount++;
+            if left.builtinMask != 0 {
+                builtinMask |= left.builtinMask;
+            } else if !atEnd() && currentByte() == 45 &&
+                       position + 1 < source.byteLen() && nextByte() != 93 {
+                position++;
+                var right = parseClassAtom()!;
+                if right.builtinMask != 0 { return RegexError.InvalidRange; }
+                if right.scalar < left.scalar { return RegexError.InvalidRange; }
+                ranges.push(CharRange{first: left.scalar, last: right.scalar})!;
+            } else {
+                ranges.push(CharRange{first: left.scalar, last: left.scalar})!;
+            }
+        }
+        if itemCount == 0 { return RegexError.UnclosedClass; }
+        var classId = classes.len();
+        classes.push(CharacterClass{
+            firstRange: firstRange,
+            rangeCount: ranges.len() - firstRange,
+            builtinMask: builtinMask,
+            negated: negated
+        })!;
+        simpleNode(NodeKind.Class, u32(classId))
+    }
+
+    func parseClassAtom() !Escaped {
+        if atEnd() { return RegexError.UnclosedClass; }
+        if consumeByte(92) { return parseEscape(); }
+        Escaped{scalar: readScalar()!, builtinMask: 0}
+    }
+
+    func hexDigit(byte: u8) !u32 {
+        if 48 <= byte && byte <= 57 { return u32(byte - 48); }
+        if 65 <= byte && byte <= 70 { return u32(byte - 55); }
+        if 97 <= byte && byte <= 102 { return u32(byte - 87); }
+        RegexError.InvalidEscape
+    }
+
+    func parseHexFixed(count: usize) !u32 {
+        if source.byteLen() - position < count { return RegexError.InvalidEscape; }
+        var value: u32 = 0;
+        for i in usize(0)..count {
+            value = (value << 4) | hexDigit(source.asBytes()[position])!;
+            position++;
+        }
+        value
+    }
+
+    func parseUnicodeEscape() !u32 {
+        if !consumeByte(123) { return RegexError.InvalidEscape; }
+        var value: u32 = 0;
+        var digits: usize = 0;
+        for !atEnd() && currentByte() != 125 {
+            var digit = hexDigit(currentByte())!;
+            if value > (0x10ffff - digit) / 16 { return RegexError.InvalidEscape; }
+            value = (value << 4) | digit;
+            digits++;
+            position++;
+            if digits > 6 { return RegexError.InvalidEscape; }
+        }
+        if digits == 0 || !consumeByte(125) || value > 0x10ffff ||
+           (0xd800 <= value && value <= 0xdfff) {
+            return RegexError.InvalidEscape;
+        }
+        value
+    }
+
+    func parseEscape() !Escaped {
+        if atEnd() { return RegexError.UnexpectedEnd; }
+        var byte = currentByte();
+        position++;
+        if byte == 100 { return Escaped{scalar: 0, builtinMask: 1}; } // d
+        if byte == 68 { return Escaped{scalar: 0, builtinMask: 2}; } // D
+        if byte == 115 { return Escaped{scalar: 0, builtinMask: 4}; } // s
+        if byte == 83 { return Escaped{scalar: 0, builtinMask: 8}; } // S
+        if byte == 119 { return Escaped{scalar: 0, builtinMask: 16}; } // w
+        if byte == 87 { return Escaped{scalar: 0, builtinMask: 32}; } // W
+        if byte == 110 { return Escaped{scalar: 10, builtinMask: 0}; }
+        if byte == 114 { return Escaped{scalar: 13, builtinMask: 0}; }
+        if byte == 116 { return Escaped{scalar: 9, builtinMask: 0}; }
+        if byte == 102 { return Escaped{scalar: 12, builtinMask: 0}; }
+        if byte == 118 { return Escaped{scalar: 11, builtinMask: 0}; }
+        if byte == 48 { return Escaped{scalar: 0, builtinMask: 0}; }
+        if byte == 120 { return Escaped{scalar: parseHexFixed(2)!, builtinMask: 0}; }
+        if byte == 117 { return Escaped{scalar: parseUnicodeEscape()!, builtinMask: 0}; }
+        if byte == 112 || byte == 80 || byte == 98 || byte == 66 ||
+           byte == 107 || (49 <= byte && byte <= 57) {
+            return RegexError.UnsupportedConstruct;
+        }
+        Escaped{scalar: u32(byte), builtinMask: 0}
+    }
+}
+
+pub class NfaCompiler {
+    var root: i32;
+    var nodes: coll.Vec<AstNode>;
+    var classes: coll.Vec<CharacterClass>;
+    var ranges: coll.Vec<CharRange>;
+    var states: coll.Vec<State>;
+    var stateLimit: usize;
+    var captureCount: usize;
+    var flags: u8;
+    var maxInput: usize;
+    var maxSteps: usize;
+public:
+    func init(parsed: ParsedPattern, maxStates: usize, flags: u8,
+              maxInput: usize, maxSteps: usize)
+        : root(parsed.root), nodes(move(parsed.nodes)), classes(move(parsed.classes)),
+          ranges(move(parsed.ranges)), states(coll.Vec<State>()),
+          stateLimit(maxStates), captureCount(parsed.captureCount), flags(flags),
+          maxInput(maxInput), maxSteps(maxSteps) {}
+
+    func compile(pattern: str) !Regex {
+        var fragment = compileNode(root, 0)!;
+        var matchState = emit(State{op: Op.Match, value: 0, out: -1, alternate: -1})!;
+        patchAll(&fragment.outs, matchState);
+        var ownedPattern = text.fromBytes(pattern.asBytes())!;
+        Regex(move(states), move(classes), move(ranges), move(ownedPattern),
+              flags, maxInput, maxSteps, captureCount)
+    }
+
+private:
+    func emit(state: State) !i32 {
+        if states.len() >= stateLimit { return RegexError.TooManyStates; }
+        var index = i32(states.len());
+        states.push(state)!;
+        index
+    }
+
+    func singlePatch(state: i32, alternate: bool) !coll.Vec<Patch> {
+        var result = coll.Vec<Patch>();
+        result.push(Patch{state: usize(state), alternate: alternate})!;
+        move(result)
+    }
+
+    func patchAll(outs: *coll.Vec<Patch>, target: i32) void {
+        for patch in outs.asSlice() {
+            if patch.alternate { states[patch.state].alternate = target; }
+            else { states[patch.state].out = target; }
+        }
+    }
+
+    func appendPatches(destination: *coll.Vec<Patch>, source: *coll.Vec<Patch>) !void {
+        for patch in source.asSlice() { destination.push(patch)!; }
+    }
+
+    func concatenate(left: Fragment, right: Fragment) !Fragment {
+        patchAll(&left.outs, right.start);
+        Fragment{start: left.start, outs: move(right.outs)}
+    }
+
+    func emptyFragment() !Fragment {
+        var jump = emit(State{op: Op.Jump, value: 0, out: -1, alternate: -1})!;
+        Fragment{start: jump, outs: singlePatch(jump, false)!}
+    }
+
+    func simpleFragment(op: Op, value: u32) !Fragment {
+        var state = emit(State{op: op, value: value, out: -1, alternate: -1})!;
+        Fragment{start: state, outs: singlePatch(state, false)!}
+    }
+
+    func compileStar(child: i32, greedy: bool, depth: usize) !Fragment {
+        var body = compileNode(child, depth + 1)!;
+        var split = emit(State{op: Op.Split, value: 0, out: -1, alternate: -1})!;
+        var exitAlternate = !greedy;
+        if greedy { states[usize(split)].out = body.start; }
+        else { states[usize(split)].alternate = body.start; }
+        patchAll(&body.outs, split);
+        Fragment{start: split, outs: singlePatch(split, exitAlternate)!}
+    }
+
+    func compileOptional(child: i32, greedy: bool, depth: usize) !Fragment {
+        var body = compileNode(child, depth + 1)!;
+        var split = emit(State{op: Op.Split, value: 0, out: -1, alternate: -1})!;
+        var exitAlternate = !greedy;
+        if greedy { states[usize(split)].out = body.start; }
+        else { states[usize(split)].alternate = body.start; }
+        var outs = singlePatch(split, exitAlternate)!;
+        appendPatches(&outs, &body.outs)!;
+        Fragment{start: split, outs: move(outs)}
+    }
+
+    func compileRepeat(node: AstNode, depth: usize) !Fragment {
+        var result = emptyFragment()!;
+        for i in usize(0)..node.minimum {
+            var copy = compileNode(node.left, depth + 1)!;
+            result = concatenate(move(result), move(copy))!;
+        }
+        if node.maximum == ~usize(0) {
+            var tail = compileStar(node.left, node.greedy, depth + 1)!;
+            result = concatenate(move(result), move(tail))!;
+        } else {
+            for i in node.minimum..node.maximum {
+                var optional = compileOptional(node.left, node.greedy, depth + 1)!;
+                result = concatenate(move(result), move(optional))!;
+            }
+        }
+        move(result)
+    }
+
+    func compileNode(index: i32, depth: usize) !Fragment {
+        if depth > 256 || index < 0 || usize(index) >= nodes.len() {
+            return RegexError.TooManyStates;
+        }
+        var node = nodes[usize(index)];
+        switch node.kind {
+            NodeKind.Empty => return emptyFragment(),
+            NodeKind.Literal => return simpleFragment(Op.Character, node.value),
+            NodeKind.Any => return simpleFragment(Op.Any, 0),
+            NodeKind.Class => return simpleFragment(Op.Class, node.value),
+            NodeKind.AnchorStart => return simpleFragment(Op.AssertStart, 0),
+            NodeKind.AnchorEnd => return simpleFragment(Op.AssertEnd, 0),
+            NodeKind.Concat => {
+                var left = compileNode(node.left, depth + 1)!;
+                var right = compileNode(node.right, depth + 1)!;
+                return concatenate(move(left), move(right));
+            },
+            NodeKind.Alternate => {
+                var left = compileNode(node.left, depth + 1)!;
+                var right = compileNode(node.right, depth + 1)!;
+                var split = emit(State{op: Op.Split, value: 0, out: left.start, alternate: right.start})!;
+                var outs = move(left.outs);
+                appendPatches(&outs, &right.outs)!;
+                return Fragment{start: split, outs: move(outs)};
+            },
+            NodeKind.Repeat => return compileRepeat(node, depth + 1),
+            NodeKind.Group => {
+                var begin = emit(State{op: Op.Save, value: node.value * 2, out: -1, alternate: -1})!;
+                var body = compileNode(node.left, depth + 1)!;
+                var finish = emit(State{op: Op.Save, value: node.value * 2 + 1, out: -1, alternate: -1})!;
+                states[usize(begin)].out = body.start;
+                patchAll(&body.outs, finish);
+                return Fragment{start: begin, outs: singlePatch(finish, false)!};
+            }
+        }
+    }
+}
+
+func compilePattern(pattern: str, flags: u8, maxStates: usize,
+                    maxInputBytes: usize, maxSteps: usize) !Regex {
+    if maxStates == 0 { return RegexError.TooManyStates; }
+    if maxSteps == 0 { return RegexError.StepLimitExceeded; }
+    var parser = RegexParser(pattern, maxStates);
+    var parsed = parser.parse()!;
+    var compiler = NfaCompiler(move(parsed), maxStates, flags, maxInputBytes, maxSteps);
+    compiler.compile(pattern)
+}
+
+func escapePattern(value: str) !string {
+    var output = coll.Vec<u8>();
+    var bytes = value.asBytes();
+    for byte in bytes {
+        if byte == 92 || byte == 46 || byte == 42 || byte == 43 || byte == 63 ||
+           byte == 40 || byte == 41 || byte == 91 || byte == 93 || byte == 123 ||
+           byte == 125 || byte == 94 || byte == 36 || byte == 124 {
+            output.push(92)!;
+        }
+        output.push(byte)!;
+    }
+    text.fromBytes(output.asConstSlice())
+}

@@ -180,7 +180,7 @@ File Parser::file() {
 std::vector<Attribute> Parser::attributes() {
   std::vector<Attribute> out;
   while (eat("#")) {
-    auto t = name();
+    auto t = at("move") ? take() : name();
     require(":");
     if (t.text == "implements") {
       Attribute attribute{t.text, t.span, ""};

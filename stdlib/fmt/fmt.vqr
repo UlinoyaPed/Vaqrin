@@ -129,13 +129,13 @@ pub func formatFloat(value: f64, style: FloatStyle, precision: ?usize) !string {
     };
     var digits: i32 = -1;
     switch precision {
-        null => {},
+        null => { if style != FloatStyle.General { digits = 6; } },
         some(value) => {
             if value > 64 { return FormatError.InvalidPrecision; }
             digits = i32(value);
         },
     }
-    var buffer: [128]u8;
+    var buffer: [512]u8;
     var length: usize = 0;
     var errorCode: i32 = 0;
     if unsafe { __vqr_io_format_float(value, styleCode, digits, &buffer[0], buffer.len(), &length, &errorCode) } != 0 {
@@ -232,6 +232,7 @@ func parseSpec(value: str) !FormatOptions {
         index++;
         if index == bytes.len() { return FormatError.InvalidPrecision; }
         var precision: usize = 0;
+        var firstDigit = index;
         while index < bytes.len() && 48 <= bytes[index] && bytes[index] <= 57 {
             var digit = usize(bytes[index] - 48);
             if precision > (64 - digit) / 10 { return FormatError.InvalidPrecision; }

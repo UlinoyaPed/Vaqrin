@@ -56,7 +56,7 @@ int32_t __vqr_io_open(const char *path, uint32_t flags, uint32_t mode, int32_t *
     else native_flags |= O_RDONLY;
     if (flags & 4u) native_flags |= O_APPEND;
     if (flags & 8u) native_flags |= O_CREAT;
-    if (flags & 16u) native_flags |= O_EXCL;
+    if (flags & 16u) native_flags |= O_CREAT | O_EXCL;
     if (flags & 32u) native_flags |= O_TRUNC;
     int descriptor = open(path, native_flags, (mode_t)mode);
     if (descriptor < 0) {
@@ -87,6 +87,44 @@ intptr_t __vqr_io_file_write(int32_t descriptor, const uint8_t *src, size_t leng
         return 0;
     }
     ssize_t count = write(descriptor, src, length);
+    if (count < 0) {
+        set_error(out_error, errno);
+        return -1;
+    }
+    set_error(out_error, 0);
+    return (intptr_t)count;
+}
+
+intptr_t __vqr_io_file_read_at(int32_t descriptor, uint8_t *dst, size_t length,
+                                  uint64_t offset, int32_t *out_error) {
+    if (offset > (uint64_t)INT64_MAX) {
+        set_error(out_error, EOVERFLOW);
+        return -1;
+    }
+    if (length == 0) {
+        set_error(out_error, 0);
+        return 0;
+    }
+    ssize_t count = pread(descriptor, dst, length, (off_t)offset);
+    if (count < 0) {
+        set_error(out_error, errno);
+        return -1;
+    }
+    set_error(out_error, 0);
+    return (intptr_t)count;
+}
+
+intptr_t __vqr_io_file_write_at(int32_t descriptor, const uint8_t *src, size_t length,
+                                 uint64_t offset, int32_t *out_error) {
+    if (offset > (uint64_t)INT64_MAX) {
+        set_error(out_error, EOVERFLOW);
+        return -1;
+    }
+    if (length == 0) {
+        set_error(out_error, 0);
+        return 0;
+    }
+    ssize_t count = pwrite(descriptor, src, length, (off_t)offset);
     if (count < 0) {
         set_error(out_error, errno);
         return -1;

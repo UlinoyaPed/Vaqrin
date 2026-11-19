@@ -7,6 +7,8 @@ pub interface Writer {
     func flush() !void;
 }
 pub interface Seeker { func seek(offset: i64, origin: SeekOrigin) !u64; }
+pub interface ReaderAt { func readAt(offset: u64, dst: []u8) !usize; }
+pub interface WriterAt { func writeAt(offset: u64, src: []const u8) !usize; }
 pub interface Closer { func close() !void; }
 
 pub enum SeekOrigin { Start, Current, End }
@@ -240,3 +242,26 @@ public:
 }
 pub func limit(reader: *Reader, n: u64) LimitedReader { LimitedReader(reader, n) }
 pub func tee(reader: *Reader, writer: *Writer) TeeReader { TeeReader(reader, writer) }
+
+
+pub func readExactAt(reader: *ReaderAt, offset: u64, dst: []u8) !void {
+    var processed: usize = 0;
+    for processed < dst.len() {
+        if u64(processed) > ~u64(0) - offset { return IoError.PositionOutOfRange; }
+        var count = reader.readAt(offset + u64(processed), dst[processed..dst.len()])!;
+        if count > dst.len() - processed { return IoError.InvalidCount; }
+        if count == 0 { return IoError.UnexpectedEof; }
+        processed += count;
+    }
+}
+
+pub func writeAllAt(writer: *WriterAt, offset: u64, src: []const u8) !void {
+    var processed: usize = 0;
+    for processed < src.len() {
+        if u64(processed) > ~u64(0) - offset { return IoError.PositionOutOfRange; }
+        var count = writer.writeAt(offset + u64(processed), src[processed..src.len()])!;
+        if count > src.len() - processed { return IoError.InvalidCount; }
+        if count == 0 { return IoError.NoProgress; }
+        processed += count;
+    }
+}

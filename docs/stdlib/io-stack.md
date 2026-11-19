@@ -13,12 +13,11 @@ that an OS runtime port exists.
 
 ## Packages
 
-- io: Reader, Writer, Seeker, Closer, SeekOrigin, IoError, IoProgress, memory streams,
-  LimitedReader, CountingReader/Writer, MultiReader/Writer, TeeReader, exact reads,
+- io: Reader, Writer, Seeker, Closer, SeekOrigin, IoError, IoProgress, memory streams, positional ReaderAt/WriterAt, LimitedReader, CountingReader/Writer, MultiReader/Writer, TeeReader, exact reads,
   full writes, bounded reads, copying, standard streams and host handles.
 - path: owned UTF-8 Path, PathBuf alias, lexical parent/name/extension/stem,
   component iteration, joining, normalization and extension replacement.
-- fs: File, OpenOptions, FileType, Metadata, Permissions, Directory and DirectoryEntry,
+- fs: File, OpenOptions, FileType, Metadata, Permissions, Directory and DirectoryEntry; File supports seek and positional readAt/writeAt,
   file helpers, metadata, rename/remove, mkdir/rmdir and directory reads.
 - bufio: BufferedReader, BufferedWriter, Token, Scanner, peek/unreadByte,
   readUntil/readString/readLine, flush and finish.

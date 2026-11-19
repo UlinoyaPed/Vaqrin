@@ -74,13 +74,15 @@ public:
 
 pub class File {
     #copy: disabled
-    #implements: io.Reader, io.Writer, io.Seeker, io.Closer
+    #implements: io.Reader, io.Writer, io.Seeker, io.ReaderAt, io.WriterAt, io.Closer
     var handle: io.HostFile;
 public:
     func init(handle: io.HostFile) : handle(move(handle)) {}
     func read(dst: []u8) !usize { handle.read(dst) }
     func write(src: []const u8) !usize { handle.write(src) }
     func seek(offset: i64, origin: io.SeekOrigin) !u64 { handle.seek(offset, origin) }
+    func readAt(offset: u64, dst: []u8) !usize { handle.readAt(offset, dst) }
+    func writeAt(offset: u64, src: []const u8) !usize { handle.writeAt(offset, src) }
     func flush() !void { handle.flush() }
     func close() !void { handle.close() }
     func syncAll() !void { handle.syncAll() }
@@ -176,6 +178,9 @@ pub func lstat(name: path.Path) !Metadata { Metadata(io.hostStat(name.asString()
 pub func lstat(name: str) !Metadata { lstat(path.Path(name)) }
 pub func mkdir(name: path.Path) !void { io.hostMkdir(name.asString().asBytes(), 493) }
 pub func mkdir(name: str) !void { mkdir(path.Path(name)) }
+pub func chmod(name: path.Path, permissions: Permissions) !void {
+    io.hostChmod(name.asString().asBytes(), permissions.mode())
+}
 pub func remove(name: path.Path) !void { io.hostRemove(name.asString().asBytes()) }
 pub func remove(name: str) !void { remove(path.Path(name)) }
 pub func removeDir(name: path.Path) !void { io.hostRemoveDir(name.asString().asBytes()) }

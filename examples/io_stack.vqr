@@ -4,12 +4,17 @@ import (io, fs, path, bufio, fmt)
 func main() !void {
     var target = path.Path("build/io-stack.txt").normalize()!;
     var options = fs.OpenOptions();
+    options.read(true);
     options.write(true);
     options.create(true);
     options.truncate(true);
     var file = fs.open(target, options)!;
 
     io.writeString(&file, "Vaqrin I/O\n")!;
+    var probe: [1]u8;
+    probe[0] = 86;
+    file.writeAt(0, probe[:])!;
+    file.readAt(0, probe[:])!;
     file.seek(0, io.SeekOrigin.Start)!;
 
     var buffered = bufio.BufferedReader(&file, 64)!;
@@ -28,7 +33,8 @@ func main() !void {
     var metadata = file.metadata()!;
     io.println(metadata.len())!;
 
-    var formatted = fmt.format("hex={:x}", [fmt.arg(u64(255))])!;
+    var arguments = [fmt.arg(u64(255))];
+    var formatted = fmt.format("hex={:x}", arguments[:])!;
     io.println(formatted)!;
 
     file.close()!;

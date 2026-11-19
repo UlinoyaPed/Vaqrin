@@ -131,6 +131,7 @@ public:
 pub type PathBuf = Path;
 pub func join(base: Path, child: Path) !Path {
     if child.isAbsolute() { return Path(child.asString()); }
+    if child.asString().byteLen() == 0 { return Path(base.asString()); }
     if base.asString().byteLen() == 0 { return Path(child.asString()); }
     var output = text.StringBuilder();
     output.append(base.asString())!;

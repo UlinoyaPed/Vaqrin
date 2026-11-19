@@ -6,6 +6,8 @@ extern "C" func __vqr_io_error_code(error: ErrorId) i32;
 extern "C" func __vqr_io_open(path: *const u8, flags: u32, mode: u32, error: *i32) i32;
 extern "C" func __vqr_io_file_read(fd: i32, dst: *u8, length: usize, error: *i32) isize;
 extern "C" func __vqr_io_file_write(fd: i32, src: *const u8, length: usize, error: *i32) isize;
+extern "C" func __vqr_io_file_read_at(fd: i32, dst: *u8, length: usize, offset: u64, error: *i32) isize;
+extern "C" func __vqr_io_file_write_at(fd: i32, src: *const u8, length: usize, offset: u64, error: *i32) isize;
 extern "C" func __vqr_io_file_seek(fd: i32, offset: i64, origin: i32, error: *i32) i64;
 extern "C" func __vqr_io_file_close(fd: i32, error: *i32) i32;
 extern "C" func __vqr_io_file_sync(fd: i32, dataOnly: i32, error: *i32) i32;
@@ -27,7 +29,10 @@ extern "C" func __vqr_io_chdir(path: *const u8, error: *i32) i32;
 func cString(value: []const u8) !coll.Vec<u8> {
     if value.len() == ~usize(0) { return IoError.InvalidArgument; }
     var output = coll.Vec<u8>.withCapacity(value.len() + 1)!;
-    for byte in value { output.push(byte)!; }
+    for byte in value {
+        if byte == 0 { return IoError.InvalidArgument; }
+        output.push(byte)!;
+    }
     output.push(0)!;
     move(output)
 }
@@ -68,24 +73,26 @@ public:
 
 pub class HostFile {
     #copy: disabled
-    #implements: Reader, Writer, Seeker, Closer
+    #implements: Reader, Writer, Seeker, ReaderAt, WriterAt, Closer
     var descriptor: i32;
     var owns: bool;
+    var appendMode: bool;
     var closed: bool;
 public:
-    func init(fd: i32, ownsDescriptor: bool) : descriptor(fd), owns(ownsDescriptor), closed(false) {}
+    func init(fd: i32, ownsDescriptor: bool, append: bool)
+        : descriptor(fd), owns(ownsDescriptor), appendMode(append), closed(false) {}
 
     static func open(path: []const u8, flags: u32, mode: u32) !Self {
         var name = cString(path)!;
         var errorCode: i32 = 0;
         var fd = unsafe { __vqr_io_open(&name[0], flags, mode, &errorCode) };
         if fd < 0 { return systemError(errorCode); }
-        HostFile(fd, true)
+        HostFile(fd, true, (flags & 4) != 0)
     }
 
-    static func standardInput() Self { HostFile(0, false) }
-    static func standardOutput() Self { HostFile(1, false) }
-    static func standardError() Self { HostFile(2, false) }
+    static func standardInput() Self { HostFile(0, false, false) }
+    static func standardOutput() Self { HostFile(1, false, false) }
+    static func standardError() Self { HostFile(2, false, false) }
 
     func read(dst: []u8) !usize {
         if closed { return IoError.Closed; }
@@ -102,6 +109,28 @@ public:
         if src.len() == 0 { return 0; }
         var errorCode: i32 = 0;
         var count = unsafe { __vqr_io_file_write(descriptor, &src[0], src.len(), &errorCode) };
+        if count < 0 { return systemError(errorCode); }
+        if u64(count) > u64(src.len()) { return IoError.InvalidCount; }
+        usize(count)
+    }
+
+
+    func readAt(offset: u64, dst: []u8) !usize {
+        if closed { return IoError.Closed; }
+        if dst.len() == 0 { return 0; }
+        var errorCode: i32 = 0;
+        var count = unsafe { __vqr_io_file_read_at(descriptor, &dst[0], dst.len(), offset, &errorCode) };
+        if count < 0 { return systemError(errorCode); }
+        if u64(count) > u64(dst.len()) { return IoError.InvalidCount; }
+        usize(count)
+    }
+
+    func writeAt(offset: u64, src: []const u8) !usize {
+        if closed { return IoError.Closed; }
+        if appendMode { return IoError.Unsupported; }
+        if src.len() == 0 { return 0; }
+        var errorCode: i32 = 0;
+        var count = unsafe { __vqr_io_file_write_at(descriptor, &src[0], src.len(), offset, &errorCode) };
         if count < 0 { return systemError(errorCode); }
         if u64(count) > u64(src.len()) { return IoError.InvalidCount; }
         usize(count)

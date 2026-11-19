@@ -64,17 +64,22 @@ public:
     func peek(count: usize) ![]const u8 {
         if count > capacity { return BufferError.BufferFull; }
         while data.len() - position < count && !eof {
-            var before = data.len();
+            var before = data.len() - position;
             fill()!;
-            if data.len() == before { break; }
+            if data.len() - position == before { break; }
         }
         if count > data.len() - position { return BufferError.BufferFull; }
         data.asConstSlice()[position..position + count]
     }
     func discard(count: usize) !usize {
-        var available = data.len() - position;
-        var skipped = if count < available { count } else { available };
-        position += skipped;
+        var skipped: usize = 0;
+        for skipped < count {
+            var next = readByte()!;
+            switch next {
+                null => { lastByte = null; return skipped; },
+                some(_) => { skipped++; },
+            }
+        }
         lastByte = null;
         skipped
     }

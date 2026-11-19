@@ -1,0 +1,296 @@
+package json
+import (coll, convert, core, opt, serde, text)
+
+pub error JsonSerdeError { InvalidState, TypeMismatch, UnsupportedNumber, MissingRoot }
+
+class JsonWriteFrame {
+    var objectMode: bool;
+    var array: JsonArray;
+    var object: JsonObject;
+    var pendingKey: ?string;
+    func init(isObject: bool)
+        : objectMode(isObject), array(JsonArray()), object(JsonObject()), pendingKey(null) {}
+}
+
+pub class JsonDomSerializer {
+    #implements: serde.Serializer
+    var frames: coll.Vec<JsonWriteFrame>;
+    var root: ?Value;
+public:
+    func init() : frames(coll.Vec<JsonWriteFrame>()), root(null) {}
+
+    func writeNull() !void { appendValue(Value.Null) }
+    func writeBool(value: bool) !void { appendValue(Value.Bool(value)) }
+
+    func writeI64(value: i64) !void {
+        var negative = value < 0;
+        var bits = convert.bitCast<u64>(value);
+        var magnitude = if negative { 0u64 -% bits } else { bits };
+        var raw = integerText(magnitude, negative)!;
+        appendValue(Value.Number(JsonNumber.parse(raw)!))
+    }
+
+    func writeU64(value: u64) !void {
+        var raw = integerText(value, false)!;
+        appendValue(Value.Number(JsonNumber.parse(raw)!))
+    }
+
+    func writeF64(value: f64) !void {
+        return serde.SerdeError.Unsupported;
+    }
+
+    func writeNumber(value: str) !void {
+        var number = JsonNumber.parse(value)!;
+        appendValue(Value.Number(move(number)))
+    }
+
+    func writeString(value: str) !void {
+        var owned = text.fromBytes(value.asBytes())!;
+        appendValue(Value.String(move(owned)))
+    }
+
+    func beginSeq(length: ?usize) !void {
+        var frame = JsonWriteFrame(false);
+        switch length {
+            some(count) => frame.array.values.reserve(count)!,
+            null => {},
+        }
+        frames.push(move(frame))!
+    }
+
+    func endSeq() !void {
+        if frames.isEmpty() { return JsonSerdeError.InvalidState; }
+        var frame = frames.pop().unwrap();
+        if frame.objectMode { return JsonSerdeError.InvalidState; }
+        appendValue(Value.Array(move(frame.array)))
+    }
+
+    func beginMap(length: ?usize) !void {
+        var frame = JsonWriteFrame(true);
+        frames.push(move(frame))!
+    }
+
+    func writeKey(value: str) !void {
+        if frames.isEmpty() { return JsonSerdeError.InvalidState; }
+        var frame = frames.getMut(frames.len() - 1).unwrap();
+        if !frame.objectMode || frame.pendingKey != null {
+            return JsonSerdeError.InvalidState;
+        }
+        frame.pendingKey = some(text.fromBytes(value.asBytes())!);
+    }
+
+    func endMap() !void {
+        if frames.isEmpty() { return JsonSerdeError.InvalidState; }
+        var frame = frames.pop().unwrap();
+        if !frame.objectMode || frame.pendingKey != null {
+            return JsonSerdeError.InvalidState;
+        }
+        appendValue(Value.Object(move(frame.object)))
+    }
+
+    func takeValue() !Value {
+        if !frames.isEmpty() { return JsonSerdeError.InvalidState; }
+        move(root).unwrap()
+    }
+
+private:
+    func appendValue(value: Value) !void {
+        if frames.isEmpty() {
+            if root != null { return JsonSerdeError.InvalidState; }
+            root = some(move(value));
+            return;
+        }
+        var frame = frames.getMut(frames.len() - 1).unwrap();
+        if frame.objectMode {
+            var key = opt.take<string>(&frame.pendingKey) ?? {
+                return JsonSerdeError.InvalidState;
+            };
+            frame.object.insert(move(key), move(value))!;
+        } else {
+            frame.array.push(move(value))!;
+        }
+    }
+}
+
+class JsonReadFrame {
+    var mapMode: bool;
+    var parent: *const Value;
+    var index: usize;
+    func init(isMap: bool, parent: *const Value)
+        : mapMode(isMap), parent(parent), index(0) {}
+}
+
+pub class JsonDomDeserializer {
+    #implements: serde.Deserializer
+    var root: Value;
+    var current: ?*const Value;
+    var frames: coll.Vec<JsonReadFrame>;
+public:
+    func init(value: Value)
+        : root(move(value)), current(null), frames(coll.Vec<JsonReadFrame>()) {
+        current = some(&root);
+    }
+
+    func kind() !serde.DataKind {
+        var value = current ?? { return serde.SerdeError.InvalidState; };
+        switch *value {
+            Value.Null => serde.DataKind.Null,
+            Value.Bool(_) => serde.DataKind.Bool,
+            Value.Number(_) => serde.DataKind.Number,
+            Value.String(_) => serde.DataKind.String,
+            Value.Array(_) => serde.DataKind.Sequence,
+            Value.Object(_) => serde.DataKind.Map,
+        }
+    }
+
+    func readNull() !void {
+        if kind()! != serde.DataKind.Null { return serde.SerdeError.TypeMismatch; }
+    }
+
+    func readBool() !bool {
+        switch *current.unwrap() {
+            Value.Bool(value) => value,
+            _ => serde.SerdeError.TypeMismatch,
+        }
+    }
+
+    func readI64() !i64 {
+        switch *current.unwrap() {
+            Value.Number(&value) => value.asI64(),
+            _ => serde.SerdeError.TypeMismatch,
+        }
+    }
+
+    func readU64() !u64 {
+        switch *current.unwrap() {
+            Value.Number(&value) => value.asU64(),
+            _ => serde.SerdeError.TypeMismatch,
+        }
+    }
+
+    func readF64() !f64 {
+        switch *current.unwrap() {
+            Value.Number(&value) => value.asF64(),
+            _ => serde.SerdeError.TypeMismatch,
+        }
+    }
+
+    func readNumber() !string {
+        switch *current.unwrap() {
+            Value.Number(&value) => text.fromBytes(value.raw.asBytes()),
+            _ => serde.SerdeError.TypeMismatch,
+        }
+    }
+
+    func readString() !string {
+        switch *current.unwrap() {
+            Value.String(value) => text.fromBytes(value.asBytes()),
+            _ => serde.SerdeError.TypeMismatch,
+        }
+    }
+
+    func beginSeq() !?usize {
+        var parent = current ?? { return serde.SerdeError.InvalidState; };
+        switch *parent {
+            Value.Array(&array) => {
+                frames.push(JsonReadFrame(false, parent))!;
+                some(array.len())
+            },
+            _ => serde.SerdeError.TypeMismatch,
+        }
+    }
+
+    func nextElement() !bool {
+        if frames.isEmpty() { return serde.SerdeError.InvalidState; }
+        var frame = frames.getMut(frames.len() - 1).unwrap();
+        if frame.mapMode { return serde.SerdeError.InvalidState; }
+        var array = asArray(frame.parent).unwrap();
+        if frame.index >= array.len() {
+            current = null;
+            return false;
+        }
+        current = array.get(frame.index);
+        frame.index++;
+        true
+    }
+
+    func endSeq() !void {
+        if frames.isEmpty() { return serde.SerdeError.InvalidState; }
+        var frame = frames.pop().unwrap();
+        if frame.mapMode { return serde.SerdeError.InvalidState; }
+        var array = asArray(frame.parent).unwrap();
+        if frame.index != array.len() { return serde.SerdeError.InvalidLength; }
+        current = some(frame.parent);
+    }
+
+    func beginMap() !?usize {
+        var parent = current ?? { return serde.SerdeError.InvalidState; };
+        switch *parent {
+            Value.Object(&object) => {
+                frames.push(JsonReadFrame(true, parent))!;
+                some(object.len())
+            },
+            _ => serde.SerdeError.TypeMismatch,
+        }
+    }
+
+    func nextKey() !?string {
+        if frames.isEmpty() { return serde.SerdeError.InvalidState; }
+        var frame = frames.getMut(frames.len() - 1).unwrap();
+        if !frame.mapMode { return serde.SerdeError.InvalidState; }
+        var object = asObject(frame.parent).unwrap();
+        if frame.index >= object.len() {
+            current = null;
+            return null;
+        }
+        var key = object.keyAt(frame.index).unwrap();
+        current = object.valueAt(frame.index);
+        frame.index++;
+        some(text.fromBytes(key.asBytes())!)
+    }
+
+    func endMap() !void {
+        if frames.isEmpty() { return serde.SerdeError.InvalidState; }
+        var frame = frames.pop().unwrap();
+        if !frame.mapMode { return serde.SerdeError.InvalidState; }
+        var object = asObject(frame.parent).unwrap();
+        if frame.index != object.len() { return serde.SerdeError.InvalidLength; }
+        current = some(frame.parent);
+    }
+
+    func finish() !void {
+        if !frames.isEmpty() { return serde.SerdeError.InvalidState; }
+        if current == null { return serde.SerdeError.InvalidState; }
+    }
+}
+
+func integerText(value: u64, negative: bool) !string {
+    var digits = coll.Vec<u8>();
+    var remaining = value;
+    for {
+        digits.push(u8(48 + (remaining % 10))!)!;
+        remaining = remaining / 10;
+        if remaining == 0 { break; }
+    }
+    if negative { digits.push(45)!; }
+    var output = coll.Vec<u8>();
+    for index := digits.len(); index > 0; index-- {
+        output.push(digits[index - 1])!;
+    }
+    text.fromBytes(output.asConstSlice())
+}
+
+pub func marshal<T>(value: *const T, codec: *const serde.Codec<T>) !string {
+    var serializer = JsonDomSerializer();
+    serde.encode<T>(value, &serializer, codec)!;
+    var root = serializer.takeValue()!;
+    stringify(&root)
+}
+
+pub func unmarshal<T>(value: str, codec: *const serde.Codec<T>) !T {
+    var root = parse(value)!;
+    var deserializer = JsonDomDeserializer(move(root));
+    var result = serde.decode<T>(&deserializer, codec)!;
+    deserializer.finish()!;
+    move(result)
+}

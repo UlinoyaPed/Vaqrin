@@ -1,0 +1,191 @@
+package unicode
+import (coll, convert, text)
+import ("generated/unicode_data.vqr" as data)
+import ("generated/script.vqr" as generated)
+
+pub enum GeneralCategory { Cn, Cc, Cf, Cs, Co, Ll, Lm, Lo, Lt, Lu, Mc, Me, Mn, Nd, Nl, No, Pc, Pd, Pe, Pf, Pi, Po, Ps, Sc, Sk, Sm, So, Zl, Zp, Zs }
+pub enum NormalForm { NFC, NFD, NFKC, NFKD }
+pub error UnicodeError { InvalidUtf8, InvalidScalar, OutputTooSmall, AllocationFailed }
+
+const flagAlphabetic: u16 = 1 << 0;
+const flagDigit: u16 = 1 << 1;
+const flagWhitespace: u16 = 1 << 2;
+const flagControl: u16 = 1 << 3;
+const flagUpper: u16 = 1 << 4;
+const flagLower: u16 = 1 << 5;
+const flagTitle: u16 = 1 << 6;
+const flagXidStart: u16 = 1 << 7;
+const flagXidContinue: u16 = 1 << 8;
+const flagEmoji: u16 = 1 << 9;
+const flagCombining: u16 = 1 << 10;
+const flagExtendedPictographic: u16 = 1 << 11;
+
+pub record CharInfo {
+    pub var category: GeneralCategory;
+    pub var script: Script;
+    pub var combiningClass: u8;
+    pub var flags: u16;
+}
+
+func packedInfo(ch: char) u64 {
+    var cp = convert.fromChar(ch);
+    var lo: usize = 0;
+    var hi: usize = data.unicodePropertyRanges.len() / 2;
+    for lo < hi {
+        var mid = lo + (hi - lo) / 2;
+        var bounds = data.unicodePropertyRanges[mid * 2];
+        var first = u32(bounds >> 21);
+        var last = u32(bounds & 0x1fffff);
+        if cp < first { hi = mid; }
+        else if cp > last { lo = mid + 1; }
+        else { return data.unicodePropertyRanges[mid * 2 + 1]; }
+    }
+    0
+}
+
+pub func version() str { "17.0.0" }
+pub func charInfo(ch: char) CharInfo {
+    var value = packedInfo(ch);
+    var gc = u8(value & 31);
+    var sc = u8((value >> 5) & 255);
+    CharInfo{
+        category: categoryFromId(gc),
+        script: generated.scriptFromId(sc),
+        combiningClass: u8((value >> 13) & 255),
+        flags: u16((value >> 21) & 0x1fff)
+    }
+}
+func categoryFromId(id: u8) GeneralCategory {
+    switch id {
+        0 => GeneralCategory.Cn, 1 => GeneralCategory.Cc, 2 => GeneralCategory.Cf,
+        3 => GeneralCategory.Cs, 4 => GeneralCategory.Co, 5 => GeneralCategory.Ll,
+        6 => GeneralCategory.Lm, 7 => GeneralCategory.Lo, 8 => GeneralCategory.Lt,
+        9 => GeneralCategory.Lu, 10 => GeneralCategory.Mc, 11 => GeneralCategory.Me,
+        12 => GeneralCategory.Mn, 13 => GeneralCategory.Nd, 14 => GeneralCategory.Nl,
+        15 => GeneralCategory.No, 16 => GeneralCategory.Pc, 17 => GeneralCategory.Pd,
+        18 => GeneralCategory.Pe, 19 => GeneralCategory.Pf, 20 => GeneralCategory.Pi,
+        21 => GeneralCategory.Po, 22 => GeneralCategory.Ps, 23 => GeneralCategory.Sc,
+        24 => GeneralCategory.Sk, 25 => GeneralCategory.Sm, 26 => GeneralCategory.So,
+        27 => GeneralCategory.Zl, 28 => GeneralCategory.Zp, 29 => GeneralCategory.Zs,
+        else => GeneralCategory.Cn
+    }
+}
+pub func generalCategory(ch: char) GeneralCategory { charInfo(ch).category }
+pub func script(ch: char) Script { charInfo(ch).script }
+pub func combiningClass(ch: char) u8 { charInfo(ch).combiningClass }
+pub func isAlphabetic(ch: char) bool { (charInfo(ch).flags & flagAlphabetic) != 0 }
+pub func isDigit(ch: char) bool { (charInfo(ch).flags & flagDigit) != 0 }
+pub func isWhitespace(ch: char) bool { (charInfo(ch).flags & flagWhitespace) != 0 }
+pub func isControl(ch: char) bool { (charInfo(ch).flags & flagControl) != 0 }
+pub func isUpper(ch: char) bool { (charInfo(ch).flags & flagUpper) != 0 }
+pub func isLower(ch: char) bool { (charInfo(ch).flags & flagLower) != 0 }
+pub func isTitle(ch: char) bool { (charInfo(ch).flags & flagTitle) != 0 }
+pub func isXidStart(ch: char) bool { (charInfo(ch).flags & flagXidStart) != 0 }
+pub func isXidContinue(ch: char) bool { (charInfo(ch).flags & flagXidContinue) != 0 }
+pub func isEmoji(ch: char) bool { (charInfo(ch).flags & flagEmoji) != 0 }
+pub func isCombiningMark(ch: char) bool { (charInfo(ch).flags & flagCombining) != 0 }
+pub func isExtendedPictographic(ch: char) bool { (charInfo(ch).flags & flagExtendedPictographic) != 0 }
+
+func simpleMapping(ch: char, column: usize) char {
+    var cp = convert.fromChar(ch);
+    var lo: usize = 0;
+    var hi = data.simpleCaseMappings.len() / 4;
+    for lo < hi {
+        var mid = lo + (hi - lo) / 2;
+        var key = data.simpleCaseMappings[mid * 4];
+        if cp < key { hi = mid; }
+        else if cp > key { lo = mid + 1; }
+        else { return __vqr_char(data.simpleCaseMappings[mid * 4 + column]); }
+    }
+    ch
+}
+pub func toLowerSimple(ch: char) char { simpleMapping(ch, 1) }
+pub func toUpperSimple(ch: char) char { simpleMapping(ch, 2) }
+pub func toTitleSimple(ch: char) char { simpleMapping(ch, 3) }
+
+pub func utf8Len(ch: char) usize {
+    var cp = convert.fromChar(ch);
+    if cp < 0x80 { 1 } else if cp < 0x800 { 2 } else if cp < 0x10000 { 3 } else { 4 }
+}
+pub func encodeUtf8(ch: char, dst: []u8) !usize {
+    var cp = convert.fromChar(ch);
+    var width = utf8Len(ch);
+    if dst.len() < width { return UnicodeError.OutputTooSmall; }
+    if width == 1 { dst[0] = u8(cp)!; }
+    else if width == 2 {
+        dst[0] = u8(0xc0 | (cp >> 6))!;
+        dst[1] = u8(0x80 | (cp & 0x3f))!;
+    } else if width == 3 {
+        dst[0] = u8(0xe0 | (cp >> 12))!;
+        dst[1] = u8(0x80 | ((cp >> 6) & 0x3f))!;
+        dst[2] = u8(0x80 | (cp & 0x3f))!;
+    } else {
+        dst[0] = u8(0xf0 | (cp >> 18))!;
+        dst[1] = u8(0x80 | ((cp >> 12) & 0x3f))!;
+        dst[2] = u8(0x80 | ((cp >> 6) & 0x3f))!;
+        dst[3] = u8(0x80 | (cp & 0x3f))!;
+    }
+    width
+}
+pub func decodeUtf8(src: []const u8) !(char, usize) {
+    if src.len() == 0 { return UnicodeError.InvalidUtf8; }
+    var lead = u32(src[0]);
+    if lead < 0x80 { return (__vqr_char(lead), 1); }
+    var count: usize = if lead >= 0xc2 && lead <= 0xdf { 2 }
+        else if lead >= 0xe0 && lead <= 0xef { 3 }
+        else if lead >= 0xf0 && lead <= 0xf4 { 4 } else { return UnicodeError.InvalidUtf8; };
+    if src.len() < count { return UnicodeError.InvalidUtf8; }
+    var value = lead & (u32(0x7f) >> (count - 1));
+    for i in usize(1)..count {
+        var b = u32(src[i]);
+        if b < 0x80 || b > 0xbf { return UnicodeError.InvalidUtf8; }
+        if i == 1 && ((lead == 0xe0 && b < 0xa0) || (lead == 0xed && b > 0x9f) ||
+                      (lead == 0xf0 && b < 0x90) || (lead == 0xf4 && b > 0x8f)) {
+            return UnicodeError.InvalidUtf8;
+        }
+        value = (value << 6) | (b & 0x3f);
+    }
+    (__vqr_char(value), count)
+}
+
+pub func caseFoldFull(ch: char) !string {
+    var cp = convert.fromChar(ch);
+    var lo: usize = 0;
+    var hi = data.caseFoldIndex.len() / 3;
+    for lo < hi {
+        var mid = lo + (hi - lo) / 2;
+        var key = data.caseFoldIndex[mid * 3];
+        if cp < key { hi = mid; }
+        else if cp > key { lo = mid + 1; }
+        else {
+            var offset = data.caseFoldIndex[mid * 3 + 1];
+            var count = data.caseFoldIndex[mid * 3 + 2];
+            var chars = coll.Vec<char>.withCapacity(count)!;
+            for i in usize(0)..count { chars.push(__vqr_char(data.caseFoldScalars[offset + i]))!; }
+            return text.fromChars(chars.intoIter());
+        }
+    }
+    var one = coll.Vec<char>();
+    one.push(ch)!;
+    text.fromChars(one.intoIter())
+}
+
+// Normalization is intentionally kept behind this implementation boundary until
+// recursive decomposition, canonical ordering, Hangul composition and stream limits
+// are implemented together. Never substitute ASCII-only normalization here.
+pub func normalize(value: str, form: NormalForm) !string { normalizeScalars(value, form) }
+pub func isNormalized(value: str, form: NormalForm) bool {
+    var normalized = normalize(value, form) catch { return false; };
+    normalized == value
+}
+func normalizeScalars(value: str, form: NormalForm) !string {
+    var output = coll.Vec<u8>();
+    // Generated mappings are complete. The normalization engine is supplied in
+    // normalizer.vqr; this entry delegates to its scalar pipeline.
+    var engine = Normalizer(form);
+    for ch in text.chars(value) { engine.push(ch)!; }
+    engine.finish()
+}
+pub func graphemeBoundary(previous: char, next: char) bool {
+    GraphemeSegmenter.boundaryBetween(previous, next)
+}

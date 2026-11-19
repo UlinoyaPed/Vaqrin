@@ -33,10 +33,10 @@ pub record Match {
     pub var endByte: usize;
     pub var source: str;
 
-    pub func start() usize { startByte }
-    pub func end() usize { endByte }
-    pub func lenBytes() usize { endByte - startByte }
-    pub func asStr() str {
+    pub const func start() usize { startByte }
+    pub const func end() usize { endByte }
+    pub const func lenBytes() usize { endByte - startByte }
+    pub const func asStr() str {
         unsafe { __vqr_text_borrow_utf8(source.asBytes()[startByte..endByte]) }
     }
 }
@@ -48,15 +48,15 @@ public:
     func init(source: str, groups: coll.Vec<?(usize, usize)>)
         : groups(move(groups)), source(source) {}
 
-    func len() usize { groups.len() }
-    func get(index: usize) ?Match {
+    const func len() usize { groups.len() }
+    const func get(index: usize) ?Match {
         if index >= groups.len() { return null; }
         switch groups[index] {
             some(span) => some(Match{startByte: span.0, endByte: span.1, source: source}),
             null => null
         }
     }
-    func full() Match { get(0).unwrap() }
+    const func full() Match { get(0).unwrap() }
 }
 
 pub class Regex {
@@ -82,17 +82,17 @@ public:
         RegexBuilder(pattern).compile()
     }
 
-    func pattern() str { patternText }
-    func captureCount() usize { captures }
+    const func pattern() str { patternText }
+    const func captureCount() usize { captures }
 
-    func isMatch(value: str) !bool {
+    const func isMatch(value: str) !bool {
         var found = find(value)!;
         found != null
     }
 
-    func find(value: str) !?Match { findAt(value, 0) }
+    const func find(value: str) !?Match { findAt(value, 0) }
 
-    func findAt(value: str, byteOffset: usize) !?Match {
+    const func findAt(value: str, byteOffset: usize) !?Match {
         if value.byteLen() > maxInputBytes { return RegexError.InputTooLarge; }
         if byteOffset > value.byteLen() { return RegexError.InvalidOffset; }
         if byteOffset < value.byteLen() && (value.asBytes()[byteOffset] & 0xc0) == 0x80 {
@@ -105,7 +105,7 @@ public:
         }
     }
 
-    func capturesAt(value: str, byteOffset: usize) !?Captures {
+    const func capturesAt(value: str, byteOffset: usize) !?Captures {
         if value.byteLen() > maxInputBytes { return RegexError.InputTooLarge; }
         if byteOffset > value.byteLen() { return RegexError.InvalidOffset; }
         if byteOffset < value.byteLen() && (value.asBytes()[byteOffset] & 0xc0) == 0x80 {
@@ -118,19 +118,19 @@ public:
         }
     }
 
-    func findAll(value: str) FindIter { FindIter(&self, value) }
-    func capturesAll(value: str) CaptureIter { CaptureIter(&self, value) }
-    func split(value: str) SplitIter { SplitIter(&self, value) }
+    const func findAll(value: str) FindIter { FindIter(&self, value) }
+    const func capturesAll(value: str) CaptureIter { CaptureIter(&self, value) }
+    const func split(value: str) SplitIter { SplitIter(&self, value) }
 
-    func replace(value: str, replacement: str) !string {
+    const func replace(value: str, replacement: str) !string {
         replaceMatches(value, replacement, false)
     }
-    func replaceAll(value: str, replacement: str) !string {
+    const func replaceAll(value: str, replacement: str) !string {
         replaceMatches(value, replacement, true)
     }
 
 private:
-    func replaceMatches(value: str, replacement: str, all: bool) !string {
+    const func replaceMatches(value: str, replacement: str, all: bool) !string {
         if value.byteLen() > maxInputBytes { return RegexError.InputTooLarge; }
         var output = coll.Vec<u8>();
         var cursor: usize = 0;

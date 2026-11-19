@@ -5,6 +5,7 @@ import ("generated/script.vqr" as generated)
 
 pub enum GeneralCategory { Cn, Cc, Cf, Cs, Co, Ll, Lm, Lo, Lt, Lu, Mc, Me, Mn, Nd, Nl, No, Pc, Pd, Pe, Pf, Pi, Po, Ps, Sc, Sk, Sm, So, Zl, Zp, Zs }
 pub enum NormalForm { NFC, NFD, NFKC, NFKD }
+pub enum GraphemeBreak { Other, CR, LF, Control, Extend, ZWJ, RegionalIndicator, Prepend, SpacingMark, L, V, T, LV, LVT }
 pub error UnicodeError { InvalidUtf8, InvalidScalar, OutputTooSmall, AllocationFailed }
 
 const flagAlphabetic: u16 = 1 << 0;
@@ -73,6 +74,11 @@ func categoryFromId(id: u8) GeneralCategory {
 pub func generalCategory(ch: char) GeneralCategory { charInfo(ch).category }
 pub func script(ch: char) Script { charInfo(ch).script }
 pub func combiningClass(ch: char) u8 { charInfo(ch).combiningClass }
+pub func isAscii(ch: char) bool { convert.fromChar(ch) < 0x80 }
+pub func isHexDigit(ch: char) bool {
+    var cp = convert.fromChar(ch);
+    (48 <= cp && cp <= 57) || (65 <= cp && cp <= 70) || (97 <= cp && cp <= 102)
+}
 pub func isAlphabetic(ch: char) bool { (charInfo(ch).flags & flagAlphabetic) != 0 }
 pub func isDigit(ch: char) bool { (charInfo(ch).flags & flagDigit) != 0 }
 pub func isWhitespace(ch: char) bool { (charInfo(ch).flags & flagWhitespace) != 0 }

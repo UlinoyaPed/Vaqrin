@@ -9,6 +9,7 @@ ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::v
   if (key.starts_with("__vqr_atomic_")) return atomicIntrinsic(key.substr(13), n, types);
   if (key.starts_with("__vqr_bits_")) return bitIntrinsic(key.substr(11), n, types);
   if (key.starts_with("__vqr_thread_")) return threadIntrinsic(key.substr(13), n, types);
+  if (key.starts_with("__vqr_task_")) return taskIntrinsic(key.substr(11), n, types);
   if (key.starts_with("__vqr_sync_")) return syncIntrinsic(key.substr(11), n);
   if (key == "__vqr_validate_native_clocks") {
     if (!p.hostedLinux64())

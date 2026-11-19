@@ -1,0 +1,225 @@
+package task
+import (opt, result, time)
+
+pub error TaskError { StartFailed, BadWorkerCount, AlreadyJoined, GroupClosed, JoinInterrupted, SelfJoin, Cancelled }
+
+pub class TaskId {
+    pub var value: usize;
+}
+
+extern "C" func __vqr_rt_group_cancel(group: *u8) void;
+extern "C" func __vqr_rt_group_active(group: *u8) usize;
+extern "C" func __vqr_rt_group_wait(group: *u8) c_int;
+extern "C" func __vqr_rt_group_close(group: *u8) c_int;
+extern "C" func __vqr_rt_task_cancel(handle: *u8) void;
+extern "C" func __vqr_rt_task_release(handle: *u8) void;
+extern "C" func __vqr_rt_task_join(handle: *u8, block: c_int) c_int;
+extern "C" func __vqr_rt_task_finished(handle: *u8) c_int;
+extern "C" func __vqr_rt_task_cancelled() c_int;
+extern "C" func __vqr_rt_yield() void;
+extern "C" func __vqr_rt_sleep_until(sec: i64, nanos: i64) c_int;
+
+func joinError(status: c_int) ErrorId {
+    if status == 2 { return TaskError.AlreadyJoined; }
+    if status == 3 { return TaskError.GroupClosed; }
+    if status == 4 { return TaskError.JoinInterrupted; }
+    if status == 5 { return TaskError.SelfJoin; }
+    TaskError.StartFailed
+}
+
+class Completion<T: Movable & Sendable> {
+    pub var value: ?!T;
+public:
+    func init() : value(null) {}
+}
+
+class Job<T: Movable & Sendable, F: Movable & Sendable> {
+    var callback: ?F;
+    var completion: *Completion<T>;
+public:
+    func init(callback: F, completion: *Completion<T>) : callback(some(move(callback))), completion(completion) {}
+
+    func run() void {
+        var own = unsafe { Box<Job<T, F>>.fromRaw(self) };
+        var ready = opt.take<F>(&callback);
+        var input = move(ready).unwrap();
+        var outcome: !T = move(input)();
+        switch result.errorOf<T>(&outcome) {
+            some(reason) => { __vqr_task_record_error(reason); },
+            null => {},
+        }
+        completion.value = some(move(outcome));
+    }
+
+    static func discard(value: *Completion<T>) void {
+        var owned = unsafe { Box<Completion<T>>.fromRaw(value) };
+    }
+}
+
+pub class Task<T: Movable & Sendable> {
+    #copy: disabled
+    var handle: *u8;
+    var completion: *Completion<T>;
+public:
+    func init(handle: *u8, completion: *Completion<T>) : handle(handle), completion(completion) {}
+    const func id() TaskId { TaskId{value: __vqr_pointer_address(handle)} }
+    const func isFinished() bool { unsafe { __vqr_rt_task_finished(handle) } != 0 }
+    const func cancel() void { unsafe { __vqr_rt_task_cancel(handle); } }
+
+    func join() !T {
+        var status = unsafe { __vqr_rt_task_join(handle, 1) };
+        if status != 0 { return joinError(status); }
+        takeResult()
+    }
+
+    func tryJoin() !?T {
+        var status = unsafe { __vqr_rt_task_join(handle, 0) };
+        if status == 1 { return null; }
+        if status != 0 { return joinError(status); }
+        var item = takeResult()!;
+        some(move(item))
+    }
+
+    func deinit() void { unsafe { __vqr_rt_task_release(handle); } }
+private:
+    func takeResult() !T {
+        var outcome = opt.take<!T>(&completion.value);
+        move(outcome).unwrap()
+    }
+}
+
+pub class TaskGroup {
+    #copy: disabled
+    var runtime: ?*u8;
+    var workers: usize;
+    var cancelled: bool;
+    var closed: bool;
+
+    func init(workers: usize) : runtime(null), workers(workers), cancelled(false), closed(false) {
+        __vqr_task_validate();
+    }
+public:
+    func init() : self(2) {}
+
+    static func withWorkers(workers: usize) !Self {
+        if workers == 0 || workers > 256 { return TaskError.BadWorkerCount; }
+        TaskGroup(workers)
+    }
+
+    func spawn<T: Movable & Sendable, F: Movable & Sendable>(callback: F) !Task<T> {
+        var scheduler = ensure()!;
+        var stored = (new Completion<T>())!;
+        var work = (new Job<T, F>(move(callback), stored.asPtr()))!;
+        var state = Box.intoRaw(move(stored));
+        var data = Box.intoRaw(move(work));
+        var handle = unsafe { __vqr_task_submit<Job<T, F>, Completion<T>>(scheduler, data, state) };
+        switch handle {
+            some(opened) => Task<T>(opened, state),
+            null => {
+                var rejectedJob = unsafe { Box<Job<T, F>>.fromRaw(data) };
+                var rejectedResult = unsafe { Box<Completion<T>>.fromRaw(state) };
+                TaskError.StartFailed
+            },
+        }
+    }
+
+    func cancel() void {
+        cancelled = true;
+        switch runtime {
+            some(group) => unsafe { __vqr_rt_group_cancel(group); },
+            null => {},
+        }
+    }
+
+    const func isCancelled() bool { cancelled }
+    const func activeCount() usize {
+        switch runtime {
+            some(group) => unsafe { __vqr_rt_group_active(group) },
+            null => 0,
+        }
+    }
+
+    func joinAll() !void {
+        if closed { return TaskError.GroupClosed; }
+        switch runtime {
+            some(group) => {
+                var status = unsafe { __vqr_rt_group_wait(group) };
+                if status != 0 { return joinError(status); }
+            },
+            null => {},
+        }
+    }
+
+    func close() !void {
+        switch runtime {
+            some(group) => {
+                var status = unsafe { __vqr_rt_group_close(group) };
+                if status != 0 { return joinError(status); }
+                runtime = null;
+            },
+            null => {},
+        }
+        closed = true;
+        cancelled = true;
+    }
+
+    func deinit() void { close() catch { panic("a task cannot close its own group"); }; }
+private:
+    func ensure() !*u8 {
+        if closed { return TaskError.GroupClosed; }
+        if cancelled { return TaskError.Cancelled; }
+        switch runtime {
+            some(group) => return group,
+            null => {},
+        }
+        runtime = __vqr_task_create(workers);
+        runtime ?? { return TaskError.StartFailed; }
+    }
+}
+
+pub func currentId() ?TaskId {
+    switch __vqr_task_current() {
+        some(handle) => some(TaskId{value: __vqr_pointer_address(handle)}),
+        null => null,
+    }
+}
+
+pub func isCancelled() bool {
+    __vqr_task_validate();
+    unsafe { __vqr_rt_task_cancelled() } != 0
+}
+
+pub func checkCancelled() !void { if isCancelled() { return TaskError.Cancelled; } }
+
+pub func yieldNow() !void {
+    checkCancelled()!;
+    unsafe { __vqr_rt_yield(); }
+    checkCancelled()
+}
+
+pub func sleepUntil(instant: time.Instant) !void {
+    checkCancelled()!;
+    sec, nano := unsafe { instant.monotonicParts() };
+    if sec < 0 || (sec == 0 && nano <= 0) { return; }
+    if unsafe { __vqr_rt_sleep_until(sec, i64(nano)) } == 0 {
+        checkCancelled()!;
+        return time.TimeError.ClockUnavailable;
+    }
+}
+
+pub func sleep(duration: time.Duration) !void {
+    checkCancelled()!;
+    if duration.isNegative() || duration.isZero() { return; }
+    sleepUntil(time.Instant.now()!.checkedAdd(duration)!)
+}
+
+pub func scope<F: Movable>(callback: F) !void {
+    var group = TaskGroup();
+    var outcome: !void = move(callback)(&group);
+    outcome!;
+    group.joinAll()
+}
+
+pub func spawn<T: Movable & Sendable, F: Movable & Sendable>(group: *TaskGroup, callback: F) !Task<T> {
+    group.spawn<T, F>(move(callback))
+}

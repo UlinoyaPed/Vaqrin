@@ -246,6 +246,16 @@ struct Stage {
   }
 };
 
+std::vector<std::string> targetFlags(const Request &r, const llvm::Triple &target, const std::string &driver) {
+  std::vector<std::string> args;
+  if (fs::path(driver).filename().string().find("clang") != std::string::npos)
+    args.push_back("--target=" + r.options.triple);
+  if (!r.options.cpu.empty())
+    args.push_back(std::string(target.isX86() ? "-march=" : "-mcpu=") + r.options.cpu);
+  if (!r.sysroot.empty()) args.push_back("--sysroot=" + fs::absolute(r.sysroot).string());
+  return args;
+}
+
 void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, const Inputs &inputs) {
   auto &target = machine.getTargetTriple();
   auto output = fs::absolute(r.output.empty() ? defaultOutput(r, inputs.rootName, target) : r.output);
@@ -266,19 +276,29 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
     if (intermediates == product) intermediates = stage.path / "intermediate";
     fs::create_directory(intermediates);
     auto object = intermediates / ("package." + std::string(target.isOSWindows() ? "obj" : "o"));
+    auto driver = r.cDriver.empty() ? "clang" : r.cDriver;
+    bool usesTasks = std::ranges::any_of(module, [](const llvm::Function &function) {
+      return function.getName().starts_with("__vqr_rt_") && !function.hasExternalWeakLinkage() &&
+             !function.use_empty();
+    });
     emit(module, machine, object, "obj");
+    auto runtime = intermediates / "vaqrin-task-runtime.o";
+    if (usesTasks) {
+      auto source = inputs.taskRuntimeSource();
+      if (!fs::is_regular_file(source)) fail({}, "the Vaqrin task runtime source is missing", "E302");
+      auto args = targetFlags(r, target, driver);
+      args.insert(args.end(), {"-std=c11", "-O2", "-fPIC", "-fvisibility=hidden", "-pthread", "-c",
+                               source.string(), "-o", runtime.string()});
+      execute(driver, args);
+    }
     if (kind == "staticlib") {
       if (!r.linkInputs.empty())
         fail({}, "use --link-input with executable or shared-library emission", "E302");
-      execute(r.archiver.empty() ? "llvm-ar" : r.archiver, {"rcsD", product.string(), object.string()});
+      std::vector<std::string> args{"rcsD", product.string(), object.string()};
+      if (usesTasks) args.push_back(runtime.string());
+      execute(r.archiver.empty() ? "llvm-ar" : r.archiver, args);
     } else {
-      auto driver = r.cDriver.empty() ? "clang" : r.cDriver;
-      bool clang = fs::path(driver).filename().string().find("clang") != std::string::npos;
-      std::vector<std::string> args;
-      if (clang) args.push_back("--target=" + r.options.triple);
-      if (!r.options.cpu.empty())
-        args.push_back(std::string(target.isX86() ? "-march=" : "-mcpu=") + r.options.cpu);
-      if (!r.sysroot.empty()) args.push_back("--sysroot=" + fs::absolute(r.sysroot).string());
+      auto args = targetFlags(r, target, driver);
       if (kind == "sharedlib") args.push_back(target.isOSDarwin() ? "-dynamiclib" : "-shared");
       if (r.options.profile == "freestanding") {
         if (r.linkerScript.empty())
@@ -292,10 +312,11 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
         }
       }
       args.push_back(object.string());
+      if (usesTasks) args.push_back(runtime.string());
       for (const auto &input : r.linkInputs)
         args.push_back(fs::absolute(input).string());
       if (r.options.profile == "hosted" && target.isOSLinux() &&
-          (module.getFunction("pthread_create") || module.getFunction("pthread_self")))
+          (usesTasks || module.getFunction("pthread_create") || module.getFunction("pthread_self")))
         args.push_back("-pthread");
       if (r.options.profile == "hosted" && target.isOSLinux() &&
           std::ranges::any_of(module, [](const llvm::Function &function) {

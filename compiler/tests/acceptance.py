@@ -595,7 +595,8 @@ class Acceptance(unittest.TestCase):
         self.assertEqual(self.process("./app", good=False).returncode, 3)
 
     def test_unavailable_hosted_packages_have_target_diagnostics(self):
-        packages = {"task": "", "channel": "var ends = channel.bounded<i32>(1) catch { return; };", "net": ""}
+        packages = {"task": "var group = task.TaskGroup();",
+                    "channel": "var ends = channel.bounded<i32>(1) catch { return; };", "net": ""}
         for package, operation in packages.items():
             with self.subTest(package=package):
                 source = self.source("target.vqr", f"import ({package}) func f() void {{ {operation} }}")
@@ -2389,6 +2390,62 @@ class Acceptance(unittest.TestCase):
         self.process(VAQC, source, "--emit=obj", "-O2", "-o", "queue.o")
         self.process("cc", client, "queue.o", "-Wl,--wrap=malloc,--wrap=aligned_alloc", "-o", "allocation")
         self.process("./allocation")
+
+    def test_lightweight_tasks_yield_sleep_cancel_and_join(self):
+        self.hosted('''
+            import (atomic, core, mem, task, time)
+            class Resource {
+                #copy: disabled
+                pub var code: i32;
+                func deinit() void { io.println(code) catch {}; }
+            }
+            func main() !void {
+                var group = task.TaskGroup.withWorkers(1)!;
+                var definite = mem.Shared<atomic.Atomic<u8>>.new(atomic.Atomic<u8>(0))!;
+                var other = definite.clone();
+                var waitForOther = [move(other)]() !i32 => {
+                    var id = task.currentId();
+                    if core.isNone<task.TaskId>(&id) { panic("missing task ID"); }
+                    for other.asPtr().load(atomic.Order.Acquire) < 1 { task.yieldNow()!; }
+                    44
+                };
+                var first = group.spawn<i32>(move(waitForOther))!;
+                var source = [move(definite)]() !void => {
+                    var moved = move(definite);
+                    var atomic = moved.asPtr();
+                    // This fixture has a unique writer and the cell operations are atomic.
+                    unsafe { constCast<*atomic.Atomic<u8>>(atomic).store(1, atomic.Order.Release); }
+                };
+                var signal = group.spawn<void>(move(source))!;
+                io.println(first.join()!)!;
+                signal.join()!;
+                io.println(first.join() catch (reason) {
+                    if reason == task.TaskError.AlreadyJoined { 1 } else { -1 }
+                })!;
+
+                var waiting = () !i32 => { task.sleep(time.Duration.fromSeconds(30))!; 0 };
+                var sleeper = group.spawn<i32>(waiting)!;
+                var available = sleeper.tryJoin()!;
+                io.println(core.isNone<i32>(&available))!;
+                sleeper.cancel();
+                io.println(sleeper.join() catch (reason) {
+                    if reason == task.TaskError.Cancelled { 2 } else { -2 }
+                })!;
+                var timer = () !i32 => { task.sleep(time.Duration.fromMillis(3))!; 8 };
+                var tick = group.spawn<i32>(timer)!;
+                io.println(tick.join()!)!;
+                var carried = Resource{code: 71};
+                var make = [move(carried)]() Resource => move(carried);
+                var unclaimed = group.spawn<Resource>(move(make))!;
+                group.joinAll()!;
+                io.println(group.activeCount())!;
+                group.close()!;
+                var ignored = unclaimed.join() catch (reason) {
+                    if reason == task.TaskError.GroupClosed { io.println(3)!; }
+                    return;
+                };
+            }
+        ''', '44\n1\ntrue\n2\n8\n0\n71\n3\n', '-O2')
 
     def test_build_artifacts(self):
         source = self.source("math.vqr", '''

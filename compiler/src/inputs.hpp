@@ -18,6 +18,7 @@ public:
   std::string qualifier(const File &file, std::string_view alias, Span span);
   std::string scope(const File &file, std::string_view symbol, Span span);
   bool directoryVisible(const File &a, const File &b) const;
+  Path taskRuntimeSource() const { return standardRoot.parent_path() / "runtime/tasks.c"; }
 
   std::deque<File> files;
   std::string rootName;

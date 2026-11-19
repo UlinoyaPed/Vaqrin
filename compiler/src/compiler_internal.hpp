@@ -223,6 +223,7 @@ private:
   ValueAt atomicIntrinsic(std::string_view op, const Ast &n, const std::vector<Ast> &types);
   ValueAt bitIntrinsic(std::string_view op, const Ast &n, const std::vector<Ast> &types);
   ValueAt threadIntrinsic(std::string_view op, const Ast &n, const std::vector<Ast> &types);
+  ValueAt taskIntrinsic(std::string_view op, const Ast &n, const std::vector<Ast> &types);
   ValueAt syncIntrinsic(std::string_view op, const Ast &n);
   ValueAt standardIntrinsic(std::string_view key, const Ast &n, const std::vector<Ast> &types);
   ValueAt builtin(std::string_view key, const Ast &n, const std::vector<Ast> &types, Type *expected);

@@ -63,7 +63,7 @@
 - 按编号捕获组、find/findAt/findAll、captures/capturesAll、split、replace/replaceAll。
 - 替换串支持 `$0`、`$1` 等组编号、`$&` 完整匹配和 `$$` 字面美元符号。
 
-默认资源限制：最多 4,096 个 NFA 状态、输入最多 16 MiB、每次搜索最多 64 Mi 次 VM 工作步骤、最多 32 个捕获组。RegexBuilder 可覆盖状态数、输入大小和工作预算。
+默认资源限制：最多 4,096 个 NFA 状态、输入最多 16 MiB、每次搜索最多 64 Mi 次 VM 工作步骤、最多 32 个捕获组、4,194,304 个捕获历史节点。工作步骤预算按单次搜索计算；RegexBuilder 可覆盖状态数、输入大小和工作预算。
 
 `unicode(false)` 保持 UTF-8 标量边界推进，但将预定义字符类和不区分大小写行为限制为 ASCII；它不是任意字节模式。
 

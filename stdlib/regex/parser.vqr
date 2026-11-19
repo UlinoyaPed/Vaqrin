@@ -248,6 +248,10 @@ private:
             itemCount++;
             if left.builtinMask != 0 {
                 builtinMask |= left.builtinMask;
+                if !atEnd() && currentByte() == 45 &&
+                   position + 1 < source.byteLen() && nextByte() != 93 {
+                    return RegexError.InvalidRange;
+                }
             } else if !atEnd() && currentByte() == 45 &&
                        position + 1 < source.byteLen() && nextByte() != 93 {
                 position++;
@@ -333,6 +337,10 @@ private:
         if byte == 112 || byte == 80 || byte == 98 || byte == 66 ||
            byte == 107 || (49 <= byte && byte <= 57) {
             return RegexError.UnsupportedConstruct;
+        }
+        if byte >= 0x80 {
+            position--;
+            return Escaped{scalar: readScalar()!, builtinMask: 0};
         }
         Escaped{scalar: u32(byte), builtinMask: 0}
     }

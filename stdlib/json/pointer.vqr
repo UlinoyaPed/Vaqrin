@@ -1,0 +1,84 @@
+package json
+import (coll, parse, text)
+
+func parsePointerIndex(value: str) !usize {
+    var data = value.asBytes();
+    if data.len() == 0 { return JsonError.InvalidPointer; }
+    if data.len() > 1 && data[0] == 48 { return JsonError.InvalidPointer; }
+    for byte in data {
+        if byte < 48 || byte > 57 { return JsonError.InvalidPointer; }
+    }
+    parse.parseUint<usize>(value, 10)
+}
+
+pub func pointerGet(value: *const Value, pointer: str) ?*const Value {
+    if pointer.byteLen() == 0 { return value; }
+    var bytes = pointer.asBytes();
+    if bytes[0] != 47 { return null; }
+    var current = value;
+    var start: usize = 1;
+    for index := usize(1); index <= bytes.len(); index++ {
+        if index != bytes.len() && bytes[index] != 47 { continue; }
+        var token = decodePointerToken(bytes[start..index]) catch { return null; };
+        switch *current {
+            Value.Object(&object) => { current = object.get(token) ?? { return null; }; },
+            Value.Array(&array) => {
+                var item = parsePointerIndex(token) catch { return null; };
+                current = array.get(item) ?? { return null; };
+            },
+            _ => return null,
+        }
+        start = index + 1;
+    }
+    current
+}
+
+func decodePointerToken(value: []const u8) !string {
+    var output = coll.Vec<u8>();
+    for index := usize(0); index < value.len(); index++ {
+        if value[index] != 126 { output.push(value[index])!; continue; }
+        if index + 1 >= value.len() { return JsonError.InvalidPointer; }
+        index++;
+        if value[index] == 48 { output.push(126)!; }
+        else if value[index] == 49 { output.push(47)!; }
+        else { return JsonError.InvalidPointer; }
+    }
+    text.fromBytes(output.asConstSlice())
+}
+
+pub func pointerSet(value: *Value, pointer: str, newValue: Value) !void {
+    if pointer.byteLen() == 0 { *value = move(newValue); return; }
+    var bytes = pointer.asBytes();
+    if bytes[0] != 47 { return JsonError.InvalidPointer; }
+    var current = value;
+    var start: usize = 1;
+    for index := usize(1); index <= bytes.len(); index++ {
+        if index != bytes.len() && bytes[index] != 47 { continue; }
+        var token = decodePointerToken(bytes[start..index])!;
+        if index == bytes.len() {
+            switch *current {
+                Value.Object(&object) => {
+                    var owned = text.fromBytes(token.asBytes())!;
+                    var previous = object.insert(move(owned), move(newValue))!;
+                    return;
+                },
+                Value.Array(&array) => {
+                    var item = parsePointerIndex(token)!;
+                    if item >= array.len() { return JsonError.IndexOutOfRange; }
+                    array.replace(item, move(newValue)) ?? { return JsonError.IndexOutOfRange; };
+                    return;
+                },
+                _ => return JsonError.TypeMismatch,
+            }
+        }
+        current = switch *current {
+            Value.Object(&object) => object.getMut(token) ?? { return JsonError.InvalidPointer; },
+            Value.Array(&array) => {
+                var item = parsePointerIndex(token)!;
+                array.getMut(item) ?? { return JsonError.IndexOutOfRange; }
+            },
+            _ => return JsonError.TypeMismatch,
+        };
+        start = index + 1;
+    }
+}

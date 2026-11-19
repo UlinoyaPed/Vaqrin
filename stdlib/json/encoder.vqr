@@ -1,0 +1,121 @@
+package json
+import (coll, io, parse, text)
+
+pub func escapeString(value: str) !string {
+    var output = coll.Vec<u8>();
+    output.push(34)!;
+    for byte in value.asBytes() {
+        switch byte {
+            34 => { output.push(92)!; output.push(34)!; },
+            92 => { output.push(92)!; output.push(92)!; },
+            8 => { output.push(92)!; output.push(98)!; },
+            9 => { output.push(92)!; output.push(116)!; },
+            10 => { output.push(92)!; output.push(110)!; },
+            12 => { output.push(92)!; output.push(102)!; },
+            13 => { output.push(92)!; output.push(114)!; },
+            _ => {
+                if byte < 0x20 {
+                    var digits = "0123456789abcdef".asBytes();
+                    output.push(92)!; output.push(117)!; output.push(48)!; output.push(48)!;
+                    output.push(digits[usize(byte >> 4)])!;
+                    output.push(digits[usize(byte & 15)])!;
+                } else { output.push(byte)!; }
+            },
+        }
+    }
+    output.push(34)!;
+    text.fromBytes(output.asConstSlice())
+}
+
+pub func unescapeString(value: str) !string {
+    var source = coll.Vec<u8>();
+    source.push(34)!;
+    for byte in value.asBytes() { source.push(byte)!; }
+    source.push(34)!;
+    var encoded = text.fromBytes(source.asConstSlice())!;
+    var parsed = parse(encoded)!;
+    switch move(parsed) {
+        Value.String(item) => move(item),
+        _ => JsonError.InvalidEscape,
+    }
+}
+
+pub class Encoder {
+    var writer: *io.Writer;
+    var options: EncodeOptions;
+    var depth: usize;
+public:
+    func init(writer: *io.Writer, options: EncodeOptions)
+        : writer(writer), options(move(options)), depth(0) {}
+    func encodeValue(value: *const Value) !void { writeValue(value) }
+    func flush() !void { writer.flush() }
+private:
+    func writeIndent() !void {
+        if depth != 0 && options.indent > ~usize(0) / depth { return JsonError.SizeLimit; }
+        var count = depth * options.indent;
+        for i in usize(0)..count { io.writeAll(writer, " ".asBytes())!; }
+    }
+    func writeValue(value: *const Value) !void {
+        switch *value {
+            Value.Null => io.writeString(writer, "null"),
+            Value.Bool(item) => io.writeString(writer, if item { "true" } else { "false" }),
+            Value.Number(&item) => io.writeString(writer, item.text()),
+            Value.String(item) => {
+                var encoded = escapeString(item)!;
+                io.writeString(writer, encoded)
+            },
+            Value.Array(&items) => {
+                if depth >= options.maxDepth { return JsonError.DepthLimit; }
+                io.writeString(writer, "[")!;
+                depth++;
+                for index in usize(0)..items.len() {
+                    if index != 0 { io.writeString(writer, ",")!; }
+                    if options.indent != 0 { io.writeString(writer, "\n")!; writeIndent()!; }
+                    writeValue(items.get(index).unwrap())!;
+                }
+                depth--;
+                if items.len() != 0 && options.indent != 0 { io.writeString(writer, "\n")!; writeIndent()!; }
+                io.writeString(writer, "]")
+            },
+            Value.Object(&items) => {
+                if depth >= options.maxDepth { return JsonError.DepthLimit; }
+                io.writeString(writer, "{")!;
+                depth++;
+                for index in usize(0)..items.len() {
+                    if index != 0 { io.writeString(writer, ",")!; }
+                    if options.indent != 0 { io.writeString(writer, "\n")!; writeIndent()!; }
+                    var encoded = escapeString(items.keyAt(index).unwrap())!;
+                    io.writeString(writer, encoded)!;
+                    io.writeString(writer, if options.indent == 0 { ":" } else { ": " })!;
+                    writeValue(items.valueAt(index).unwrap())!;
+                }
+                depth--;
+                if items.len() != 0 && options.indent != 0 { io.writeString(writer, "\n")!; writeIndent()!; }
+                io.writeString(writer, "}")
+            },
+        }
+    }
+}
+
+pub func write(writer: *io.Writer, value: *const Value, options: EncodeOptions) !void {
+    if options.escapeNonAscii || options.sortKeys { return JsonError.UnsupportedOption; }
+    var encoder = Encoder(writer, options);
+    encoder.encodeValue(value)!;
+    encoder.flush()
+}
+
+pub func stringify(value: *const Value) !string {
+    var writer = io.MemoryWriter();
+    write(&writer, value, EncodeOptions())!;
+    var data = io.MemoryWriter.intoBytes(move(writer));
+    text.fromBytes(data.asConstSlice())
+}
+
+pub func stringifyPretty(value: *const Value, indent: usize) !string {
+    var options = EncodeOptions();
+    options.indent = indent;
+    var writer = io.MemoryWriter();
+    write(&writer, value, options)!;
+    var data = io.MemoryWriter.intoBytes(move(writer));
+    text.fromBytes(data.asConstSlice())
+}

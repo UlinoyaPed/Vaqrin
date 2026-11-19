@@ -1,0 +1,292 @@
+package csv
+import (coll, io, text)
+
+pub error CsvError {
+    InvalidOptions, InvalidQuote, UnexpectedAfterQuote, UnterminatedQuote,
+    FieldLimit, RecordLimit, InputLimit, InvalidUtf8, IoFailure,
+}
+pub enum LineEnding { LF, CRLF }
+
+pub class CsvOptions {
+    pub var delimiter: u8;
+    pub var quote: u8;
+    pub var lineEnding: LineEnding;
+    pub var hasHeader: bool;
+    pub var maxFieldBytes: usize;
+    pub var maxRecordBytes: usize;
+    pub var maxInputBytes: usize;
+    pub var maxRecords: usize;
+public:
+    func init()
+        : delimiter(44), quote(34), lineEnding(LineEnding.CRLF), hasHeader(false),
+          maxFieldBytes(1024 * 1024), maxRecordBytes(8 * 1024 * 1024),
+          maxInputBytes(64 * 1024 * 1024), maxRecords(1_000_000) {}
+}
+
+pub func validateOptions(options: *const CsvOptions) !void {
+    if options.delimiter == 0 || options.quote == 0 ||
+       options.delimiter >= 128 || options.quote >= 128 ||
+       options.delimiter == options.quote || options.delimiter == 10 ||
+       options.delimiter == 13 || options.quote == 10 || options.quote == 13 {
+        return CsvError.InvalidOptions;
+    }
+}
+
+pub class CsvReader {
+    var reader: *io.Reader;
+    var options: CsvOptions;
+    var pendingByte: ?u8;
+    var eof: bool;
+    var recordNumber: usize;
+    var byteOffset: usize;
+    var headerValues: ?coll.Vec<string>;
+public:
+    func init(reader: *io.Reader, options: CsvOptions)
+        : reader(reader), options(move(options)), pendingByte(null), eof(false),
+          recordNumber(0), byteOffset(0), headerValues(null) {
+        validateOptions(&options)!;
+    }
+
+    func readRecord() !?coll.Vec<string> {
+        for {
+            var row = readRawRecord()!;
+            switch move(row) {
+                null => return null,
+                some(fields) => {
+                    if options.hasHeader && headerValues == null {
+                        headerValues = some(move(fields));
+                        continue;
+                    }
+                    return some(move(fields));
+                },
+            }
+        }
+    }
+
+    func readFields(dst: *coll.Vec<string>) !bool {
+        dst.clear();
+        var row = readRecord()!;
+        switch move(row) {
+            null => false,
+            some(fields) => {
+                for field in fields.asConstSlice() { dst.push(field)!; }
+                true
+            },
+        }
+    }
+
+    const func headers() ?*const coll.Vec<string> {
+        switch headerValues { null => null, some(&value) => some(&value) }
+    }
+    const func position() (usize, usize) { (recordNumber, byteOffset) }
+    func close() void {}
+
+private:
+    func nextByte() !?u8 {
+        switch pendingByte {
+            some(value) => { pendingByte = null; return some(value); },
+            null => {},
+        }
+        if eof { return null; }
+        if byteOffset >= options.maxInputBytes {
+            var probe: [1]u8;
+            var probeCount = io.read(reader, probe[:])!;
+            if probeCount == 0 { eof = true; return null; }
+            return CsvError.InputLimit;
+        }
+        var buffer: [1]u8;
+        var count = io.read(reader, buffer[:])!;
+        if count == 0 { eof = true; return null; }
+        byteOffset++;
+        some(buffer[0])
+    }
+
+    func finishField(fields: *coll.Vec<string>, field: *coll.Vec<u8>) !void {
+        var value = text.fromBytes(field.asConstSlice()) catch { return CsvError.InvalidUtf8; };
+        fields.push(move(value))!;
+        field.clear();
+    }
+
+    func countRecordByte(recordBytes: *usize) !void {
+        if *recordBytes == ~usize(0) { return CsvError.InputLimit; }
+        *recordBytes += 1;
+        if *recordBytes > options.maxRecordBytes { return CsvError.RecordLimit; }
+    }
+
+    func readRawRecord() !?coll.Vec<string> {
+        var fields = coll.Vec<string>();
+        var field = coll.Vec<u8>();
+        var inQuotes = false;
+        var afterQuote = false;
+        var sawInput = false;
+        var recordBytes: usize = 0;
+        for {
+            var next = nextByte()!;
+            switch move(next) {
+                null => {
+                    if inQuotes { return CsvError.UnterminatedQuote; }
+                    if !sawInput { return null; }
+                    finishField(&fields, &field)!;
+                    break;
+                },
+                some(byte) => {
+                    sawInput = true;
+                    countRecordByte(&recordBytes)!;
+                    if inQuotes {
+                        if byte == options.quote {
+                            var lookahead = nextByte()!;
+                            switch move(lookahead) {
+                                some(other) => {
+                                    if other == options.quote {
+                                        countRecordByte(&recordBytes)!;
+                                        field.push(options.quote)!;
+                                    } else {
+                                        inQuotes = false;
+                                        afterQuote = true;
+                                        pendingByte = some(other);
+                                    }
+                                },
+                                null => { inQuotes = false; afterQuote = true; },
+                            }
+                        } else {
+                            field.push(byte)!;
+                        }
+                    } else if afterQuote {
+                        if byte == options.delimiter {
+                            finishField(&fields, &field)!;
+                            afterQuote = false;
+                        } else if byte == 10 {
+                            finishField(&fields, &field)!;
+                            break;
+                        } else if byte == 13 {
+                            var lookahead = nextByte()!;
+                            switch move(lookahead) {
+                                some(other) => {
+                                    if other == 10 { countRecordByte(&recordBytes)!; }
+                                    else { pendingByte = some(other); }
+                                },
+                                null => {},
+                            }
+                            finishField(&fields, &field)!;
+                            break;
+                        } else {
+                            return CsvError.UnexpectedAfterQuote;
+                        }
+                    } else if byte == options.quote {
+                        if field.len() != 0 { return CsvError.InvalidQuote; }
+                        inQuotes = true;
+                    } else if byte == options.delimiter {
+                        finishField(&fields, &field)!;
+                    } else if byte == 10 {
+                        finishField(&fields, &field)!;
+                        break;
+                    } else if byte == 13 {
+                        var lookahead = nextByte()!;
+                        switch move(lookahead) {
+                            some(other) => {
+                                if other == 10 { countRecordByte(&recordBytes)!; }
+                                else { pendingByte = some(other); }
+                            },
+                            null => {},
+                        }
+                        finishField(&fields, &field)!;
+                        break;
+                    } else {
+                        field.push(byte)!;
+                    }
+                    if field.len() > options.maxFieldBytes { return CsvError.FieldLimit; }
+                },
+            }
+        }
+        if recordNumber >= options.maxRecords { return CsvError.RecordLimit; }
+        recordNumber++;
+        some(move(fields))
+    }
+}
+
+pub class CsvWriter {
+    var writer: *io.Writer;
+    var options: CsvOptions;
+    var recordNumber: usize;
+public:
+    func init(writer: *io.Writer, options: CsvOptions)
+        : writer(writer), options(move(options)), recordNumber(0) { validateOptions(&options)!; }
+
+    func writeRecord(fields: []const str) !void {
+        var encoded = coll.Vec<u8>();
+        for index in usize(0)..fields.len() {
+            if index != 0 { encoded.push(options.delimiter)!; }
+            var escaped = escapeField(fields[index], options)!;
+            for byte in escaped.asBytes() { encoded.push(byte)!; }
+            if encoded.len() > options.maxRecordBytes { return CsvError.RecordLimit; }
+        }
+        if options.lineEnding == LineEnding.CRLF { encoded.push(13)!; }
+        encoded.push(10)!;
+        if encoded.len() > options.maxRecordBytes { return CsvError.RecordLimit; }
+        if recordNumber >= options.maxRecords { return CsvError.RecordLimit; }
+        io.writeAll(writer, encoded.asConstSlice())!;
+        recordNumber++;
+    }
+    func writeAll(rows: []const []const str) !void {
+        for row in rows { writeRecord(row)!; }
+    }
+    func flush() !void { writer.flush() }
+}
+
+pub func parseRecord(value: str, options: CsvOptions) !coll.Vec<string> {
+    if value.byteLen() == 0 {
+        var empty = coll.Vec<string>();
+        empty.push(text.fromBytes(value.asBytes())!)!;
+        return move(empty);
+    }
+    var localOptions = options;
+    localOptions.hasHeader = false;
+    var memory = io.MemoryReader(value.asBytes());
+    var reader = CsvReader(&memory, localOptions);
+    var fields = reader.readRecord()! ?? { return coll.Vec<string>(); };
+    if reader.readRecord()! != null { return CsvError.RecordLimit; }
+    move(fields)
+}
+
+pub func parse(value: str, options: CsvOptions) !coll.Vec<coll.Vec<string>> {
+    if value.byteLen() > options.maxInputBytes { return CsvError.InputLimit; }
+    var memory = io.MemoryReader(value.asBytes());
+    var reader = CsvReader(&memory, options);
+    var rows = coll.Vec<coll.Vec<string>>();
+    for {
+        var row = reader.readRecord()!;
+        switch move(row) {
+            null => break,
+            some(fields) => rows.push(move(fields))!,
+        }
+    }
+    move(rows)
+}
+
+pub func escapeField(value: str, options: CsvOptions) !string {
+    validateOptions(&options)!;
+    var needsQuote = false;
+    for byte in value.asBytes() {
+        if byte == options.delimiter || byte == options.quote || byte == 10 || byte == 13 {
+            needsQuote = true;
+        }
+    }
+    if !needsQuote { return text.fromBytes(value.asBytes()); }
+    var output = coll.Vec<u8>();
+    output.push(options.quote)!;
+    for byte in value.asBytes() {
+        output.push(byte)!;
+        if byte == options.quote { output.push(byte)!; }
+    }
+    output.push(options.quote)!;
+    text.fromBytes(output.asConstSlice())
+}
+
+pub func stringify(records: []const []const str, options: CsvOptions) !string {
+    var writer = io.MemoryWriter();
+    var csvWriter = CsvWriter(&writer, options);
+    csvWriter.writeAll(records)!;
+    var data = io.MemoryWriter.intoBytes(move(writer));
+    if data.len() > options.maxInputBytes { return CsvError.InputLimit; }
+    text.fromBytes(data.asConstSlice())
+}

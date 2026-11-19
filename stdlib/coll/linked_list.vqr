@@ -1,0 +1,307 @@
+package coll
+import (mem)
+
+pub class ListNode<T: Movable> {
+    #copy: disabled
+    var slot: mem.MaybeUninit<T>;
+    var previous: ?*ListNode<T>;
+    var following: ?*ListNode<T>;
+
+    func init(item: T)
+        : slot(mem.MaybeUninit<T>.uninit()), previous(null), following(null) {
+        unsafe { slot.write(move(item)); }
+    }
+
+    const func valueRef() *const T { slot.asConstPtr() }
+    func valueMut() *T { slot.asPtr() }
+}
+
+func allocateListNode<T: Movable>(value: T) !*ListNode<T> {
+    var owner = new ListNode<T>(move(value))!;
+    Box.intoRaw(move(owner))
+}
+
+func releaseListNode<T: Movable>(node: *ListNode<T>) void {
+    var owner = unsafe { Box<ListNode<T>>.fromRaw(node) };
+}
+
+pub class ListIterRef<T: Movable> {
+    var front: ?*ListNode<T>;
+    var back: ?*ListNode<T>;
+    var remainingCount: usize;
+public:
+    func init(front: ?*ListNode<T>, back: ?*ListNode<T>, count: usize)
+        : front(front), back(back), remainingCount(count) {}
+
+    func next() ?*const T {
+        if remainingCount == 0 { return null; }
+        var node = front.unwrap();
+        front = node.following;
+        remainingCount--;
+        some(node.valueRef())
+    }
+
+    func nextBack() ?*const T {
+        if remainingCount == 0 { return null; }
+        var node = back.unwrap();
+        back = node.previous;
+        remainingCount--;
+        some(node.valueRef())
+    }
+
+    const func remaining() usize { remainingCount }
+}
+
+pub class ListIterMut<T: Movable> {
+    var front: ?*ListNode<T>;
+    var back: ?*ListNode<T>;
+    var remainingCount: usize;
+public:
+    func init(front: ?*ListNode<T>, back: ?*ListNode<T>, count: usize)
+        : front(front), back(back), remainingCount(count) {}
+
+    func next() ?*T {
+        if remainingCount == 0 { return null; }
+        var node = front.unwrap();
+        front = node.following;
+        remainingCount--;
+        some(node.valueMut())
+    }
+
+    func nextBack() ?*T {
+        if remainingCount == 0 { return null; }
+        var node = back.unwrap();
+        back = node.previous;
+        remainingCount--;
+        some(node.valueMut())
+    }
+
+    const func remaining() usize { remainingCount }
+}
+
+pub class IntoListIter<T: Movable> {
+    var source: LinkedList<T>;
+public:
+    func init(value: LinkedList<T>) : source(move(value)) {}
+    func next() ?T { source.popFront() }
+    func nextBack() ?T { source.popBack() }
+    const func remaining() usize { source.len() }
+}
+
+pub class LinkedList<T: Movable> {
+    #copy: disabled
+    var firstNode: ?*ListNode<T>;
+    var lastNode: ?*ListNode<T>;
+    var length: usize;
+public:
+    func init() : firstNode(null), lastNode(null), length(0) {}
+
+    const func len() usize { length }
+    const func isEmpty() bool { length == 0 }
+
+    func pushFront(value: T) !void {
+        var node = allocateListNode<T>(move(value))!;
+        node.following = firstNode;
+        switch firstNode {
+            some(oldFirst) => { oldFirst.previous = some(node); },
+            null => { lastNode = some(node); },
+        }
+        firstNode = some(node);
+        length++;
+    }
+
+    func pushBack(value: T) !void {
+        var node = allocateListNode<T>(move(value))!;
+        node.previous = lastNode;
+        switch lastNode {
+            some(oldLast) => { oldLast.following = some(node); },
+            null => { firstNode = some(node); },
+        }
+        lastNode = some(node);
+        length++;
+    }
+
+    func insert(index: usize, value: T) !void {
+        if index > length { return CapacityError.IndexOutOfBounds; }
+        if index == 0 { pushFront(move(value))!; return; }
+        if index == length { pushBack(move(value))!; return; }
+
+        var current = nodeAt(index).unwrap();
+        var previous = current.previous.unwrap();
+        var node = allocateListNode<T>(move(value))!;
+        node.previous = some(previous);
+        node.following = some(current);
+        previous.following = some(node);
+        current.previous = some(node);
+        length++;
+    }
+
+    func popFront() ?T {
+        if length == 0 { return null; }
+        some(removeNode(firstNode.unwrap()))
+    }
+
+    func popBack() ?T {
+        if length == 0 { return null; }
+        some(removeNode(lastNode.unwrap()))
+    }
+
+private:
+    func nodeAt(index: usize) ?*ListNode<T> {
+        if index >= length { return null; }
+        if index < length / 2 {
+            var current = firstNode.unwrap();
+            for i := usize(0); i < index; i++ { current = current.following.unwrap(); }
+            some(current)
+        } else {
+            var current = lastNode.unwrap();
+            for i := length - 1; i > index; i-- { current = current.previous.unwrap(); }
+            some(current)
+        }
+    }
+
+    func removeNode(node: *ListNode<T>) T {
+        switch node.previous {
+            some(previous) => { previous.following = node.following; },
+            null => { firstNode = node.following; },
+        }
+        switch node.following {
+            some(following) => { following.previous = node.previous; },
+            null => { lastNode = node.previous; },
+        }
+        length--;
+        var value = unsafe { node.slot.assumeInit() };
+        releaseListNode<T>(node);
+        move(value)
+    }
+
+public:
+    func remove(index: usize) ?T {
+        switch nodeAt(index) {
+            null => null,
+            some(node) => some(removeNode(node)),
+        }
+    }
+
+    func get(index: usize) ?*const T {
+        switch nodeAt(index) {
+            null => null,
+            some(node) => some(node.valueRef()),
+        }
+    }
+
+    func getMut(index: usize) ?*T {
+        switch nodeAt(index) {
+            null => null,
+            some(node) => some(node.valueMut()),
+        }
+    }
+
+    const func front() ?*const T {
+        switch firstNode {
+            null => null,
+            some(node) => some(node.valueRef()),
+        }
+    }
+
+    func frontMut() ?*T {
+        switch firstNode {
+            null => null,
+            some(node) => some(node.valueMut()),
+        }
+    }
+
+    const func back() ?*const T {
+        switch lastNode {
+            null => null,
+            some(node) => some(node.valueRef()),
+        }
+    }
+
+    func backMut() ?*T {
+        switch lastNode {
+            null => null,
+            some(node) => some(node.valueMut()),
+        }
+    }
+
+    func append(other: *Self) !void {
+        if self == other || other.length == 0 { return; }
+        if other.length > ~usize(0) - length { return CapacityError.Overflow; }
+
+        switch lastNode {
+            some(oldLast) => {
+                oldLast.following = other.firstNode;
+                other.firstNode.unwrap().previous = some(oldLast);
+            },
+            null => { firstNode = other.firstNode; },
+        }
+        lastNode = other.lastNode;
+        length += other.length;
+        other.firstNode = null;
+        other.lastNode = null;
+        other.length = 0;
+    }
+
+    func splitOff(index: usize) !Self {
+        if index > length { return CapacityError.IndexOutOfBounds; }
+        var result = LinkedList<T>();
+        if index == length { return move(result); }
+
+        if index == 0 {
+            result.firstNode = firstNode;
+            result.lastNode = lastNode;
+            result.length = length;
+            firstNode = null;
+            lastNode = null;
+            length = 0;
+            return move(result);
+        }
+
+        var split = nodeAt(index).unwrap();
+        var before = split.previous.unwrap();
+        before.following = null;
+        split.previous = null;
+
+        result.firstNode = some(split);
+        result.lastNode = lastNode;
+        result.length = length - index;
+        lastNode = some(before);
+        length = index;
+        move(result)
+    }
+
+    func reverse() void {
+        var current = firstNode;
+        for current != null {
+            var node = current.unwrap();
+            current = node.following;
+            var oldPrevious = node.previous;
+            node.previous = node.following;
+            node.following = oldPrevious;
+        }
+        var oldFirst = firstNode;
+        firstNode = lastNode;
+        lastNode = oldFirst;
+    }
+
+    const func iterRef() ListIterRef<T> {
+        ListIterRef<T>(firstNode, lastNode, length)
+    }
+
+    func iterMut() ListIterMut<T> {
+        ListIterMut<T>(firstNode, lastNode, length)
+    }
+
+    static func intoIter(value: Self) IntoListIter<T> {
+        IntoListIter<T>(move(value))
+    }
+
+    func clear() void {
+        for length > 0 {
+            var value = popFront().unwrap();
+        }
+    }
+
+    func deinit() void { clear(); }
+}

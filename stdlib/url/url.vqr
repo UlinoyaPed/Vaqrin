@@ -1,8 +1,8 @@
 package url
-import (coll, core, encoding, text)
+import (coll, encoding, text)
 
 pub error UrlError {
-    InvalidScheme, InvalidAuthority, InvalidHost, InvalidPort, InvalidIpv6,
+    InvalidScheme, InvalidAuthority, InvalidHost, InvalidPort, InvalidIpv4, InvalidIpv6,
     InvalidCharacter, InvalidPercentEncoding, InvalidPath, InvalidBase,
     InvalidUtf8, Overflow,
 }
@@ -36,7 +36,7 @@ func findByte(data: []const u8, needle: u8) ?usize {
     null
 }
 func containsByte(data: []const u8, needle: u8) bool {
-    core.isSome<usize>(&findByte(data, needle))
+    findByte(data, needle) != null
 }
 func startsWithAt(data: []const u8, offset: usize, prefix: str) bool {
     var bytes = prefix.asBytes();
@@ -84,12 +84,14 @@ func validateIpv4(value: []const u8) !void {
     var digits: usize = 0;
     for i := usize(0); i <= value.len(); i++ {
         if i == value.len() || value[i] == 46 {
-            if digits == 0 || number > 255 { return UrlError.InvalidIpv6; }
+            if digits == 0 || number > 255 || (digits > 1 && value[i - digits] == 48) {
+                return UrlError.InvalidIpv4;
+            }
             octets++;
             number = 0;
             digits = 0;
         } else {
-            if !isDigit(value[i]) || digits >= 3 { return UrlError.InvalidIpv6; }
+            if !isDigit(value[i]) || digits >= 3 { return UrlError.InvalidIpv4; }
             number = number * 10 + u32(value[i] - 48);
             digits++;
         }
@@ -268,6 +270,7 @@ pub class Url {
     var hostValue: string;
     var hostLiteral: bool;
     var hasPort: bool;
+    var portEmpty: bool;
     var portValue: u16;
     var pathValue: string;
     var hasQuery: bool;
@@ -278,7 +281,7 @@ pub class Url {
     func init()
         : hasScheme(false), schemeValue(""), hasAuthority(false),
           hasUserInfo(false), userInfoValue(""), hasHost(false), hostValue(""),
-          hostLiteral(false), hasPort(false), portValue(0), pathValue(""),
+          hostLiteral(false), hasPort(false), portEmpty(false), portValue(0), pathValue(""),
           hasQuery(false), queryValue(""), hasFragment(false), fragmentValue("") {}
 
 public:
@@ -345,7 +348,7 @@ public:
                 some(position) => { firstEnd = position; },
                 null => {},
             }
-            if core.isSome<usize>(&findByte(pathBytes[0..firstEnd], 58)) {
+            if findByte(pathBytes[0..firstEnd], 58) != null {
                 return UrlError.InvalidPath;
             }
         }
@@ -359,7 +362,7 @@ public:
         if hasHost { some(hostValue) } else { null }
     }
     const func port() ?u16 {
-        if hasPort { some(portValue) } else { null }
+        if hasPort && !portEmpty { some(portValue) } else { null }
     }
     const func userInfo() ?str {
         if hasUserInfo { some(userInfoValue) } else { null }
@@ -389,7 +392,15 @@ public:
             target.hasQuery = ref.hasQuery;
             target.queryValue = ref.queryValue;
         } else {
-            target.copyAuthority(*this);
+            target.hasAuthority = hasAuthority;
+            target.hasUserInfo = hasUserInfo;
+            target.userInfoValue = userInfoValue;
+            target.hasHost = hasHost;
+            target.hostValue = hostValue;
+            target.hostLiteral = hostLiteral;
+            target.hasPort = hasPort;
+            target.portEmpty = portEmpty;
+            target.portValue = portValue;
             if ref.pathValue.byteLen() == 0 {
                 target.pathValue = pathValue;
                 if ref.hasQuery {
@@ -412,11 +423,29 @@ public:
     }
 
     const func normalize() !Self {
-        var result = *this;
+        var result = Url();
+        result.hasScheme = hasScheme;
+        result.schemeValue = schemeValue;
+        result.hasAuthority = hasAuthority;
+        result.hasUserInfo = hasUserInfo;
+        result.userInfoValue = userInfoValue;
+        result.hasHost = hasHost;
+        result.hostValue = hostValue;
+        result.hostLiteral = hostLiteral;
+        result.hasPort = hasPort;
+        result.portEmpty = portEmpty;
+        result.portValue = portValue;
+        result.pathValue = pathValue;
+        result.hasQuery = hasQuery;
+        result.queryValue = queryValue;
+        result.hasFragment = hasFragment;
+        result.fragmentValue = fragmentValue;
         if result.hasScheme { result.schemeValue = lowerAscii(result.schemeValue)!; }
-        if result.hasHost { result.hostValue = lowerAscii(result.hostValue)!; }
         if result.hasUserInfo { result.userInfoValue = normalizePercent(result.userInfoValue)!; }
-        if result.hasHost { result.hostValue = normalizePercent(result.hostValue)!; }
+        if result.hasHost {
+            result.hostValue = normalizePercent(result.hostValue)!;
+            result.hostValue = lowerAscii(result.hostValue)!;
+        }
         result.pathValue = removeDotSegments(normalizePercent(result.pathValue)!)!;
         if result.hasQuery { result.queryValue = normalizePercent(result.queryValue)!; }
         if result.hasFragment { result.fragmentValue = normalizePercent(result.fragmentValue)!; }
@@ -442,7 +471,7 @@ public:
             }
             if hasPort {
                 output.append(":")!;
-                appendU16(&output, portValue)!;
+                if !portEmpty { appendU16(&output, portValue)!; }
             }
         }
         output.append(pathValue)!;
@@ -462,7 +491,7 @@ private:
         var at = findByte(value, 64);
         switch at {
             some(position) => {
-                if core.isSome<usize>(&findByte(value[position + 1..value.len()], 64)) {
+                if findByte(value[position + 1..value.len()], 64) != null {
                     return UrlError.InvalidAuthority;
                 }
                 validateComponent(value[0..position], 1)!;
@@ -486,7 +515,8 @@ private:
             if close + 1 < value.len() {
                 if value[close + 1] != 58 { return UrlError.InvalidAuthority; }
                 hasPort = true;
-                portValue = parsePort(value[close + 2..value.len()])!;
+                if close + 2 == value.len() { portEmpty = true; }
+                else { portValue = parsePort(value[close + 2..value.len()])!; }
             }
             return;
         }
@@ -494,12 +524,13 @@ private:
         switch colon {
             some(position) => {
                 var actual = position + hostStart;
-                if core.isSome<usize>(&findByte(value[actual + 1..value.len()], 58)) {
+                if findByte(value[actual + 1..value.len()], 58) != null {
                     return UrlError.InvalidHost;
                 }
                 hostEnd = actual;
                 hasPort = true;
-                portValue = parsePort(value[actual + 1..value.len()])!;
+                if actual + 1 == value.len() { portEmpty = true; }
+                else { portValue = parsePort(value[actual + 1..value.len()])!; }
             },
             null => {},
         }
@@ -516,6 +547,7 @@ private:
         hostValue = other.hostValue;
         hostLiteral = other.hostLiteral;
         hasPort = other.hasPort;
+        portEmpty = other.portEmpty;
         portValue = other.portValue;
     }
 }
@@ -557,53 +589,46 @@ pub class UrlBuilder {
           pathValue(""), queryValue(""), hasQuery(false), fragmentValue(""),
           hasFragment(false) {}
 public:
-    func scheme(value: str) !Self {
-        schemeValue = text.fromBytes(value.asBytes())!;
-        hasScheme = true;
-        UrlBuilder(schemeValue, hasScheme, userInfoValue, hasUserInfo, hostValue,
-            hasHost, hasPort, portValue, pathValue, queryValue, hasQuery,
-            fragmentValue, hasFragment)
+    const func scheme(value: str) !Self {
+        var result = clone();
+        result.schemeValue = text.fromBytes(value.asBytes())!;
+        result.hasScheme = true;
+        move(result)
     }
-    func userInfo(value: str) !Self {
-        userInfoValue = text.fromBytes(value.asBytes())!;
-        hasUserInfo = true;
-        UrlBuilder(schemeValue, hasScheme, userInfoValue, hasUserInfo, hostValue,
-            hasHost, hasPort, portValue, pathValue, queryValue, hasQuery,
-            fragmentValue, hasFragment)
+    const func userInfo(value: str) !Self {
+        var result = clone();
+        result.userInfoValue = text.fromBytes(value.asBytes())!;
+        result.hasUserInfo = true;
+        move(result)
     }
-    func host(value: str) !Self {
-        hostValue = text.fromBytes(value.asBytes())!;
-        hasHost = true;
-        UrlBuilder(schemeValue, hasScheme, userInfoValue, hasUserInfo, hostValue,
-            hasHost, hasPort, portValue, pathValue, queryValue, hasQuery,
-            fragmentValue, hasFragment)
+    const func host(value: str) !Self {
+        var result = clone();
+        result.hostValue = text.fromBytes(value.asBytes())!;
+        result.hasHost = true;
+        move(result)
     }
-    func port(value: u16) Self {
-        hasPort = true;
-        portValue = value;
-        UrlBuilder(schemeValue, hasScheme, userInfoValue, hasUserInfo, hostValue,
-            hasHost, hasPort, portValue, pathValue, queryValue, hasQuery,
-            fragmentValue, hasFragment)
+    const func port(value: u16) Self {
+        var result = clone();
+        result.hasPort = true;
+        result.portValue = value;
+        move(result)
     }
-    func path(value: str) !Self {
-        pathValue = text.fromBytes(value.asBytes())!;
-        UrlBuilder(schemeValue, hasScheme, userInfoValue, hasUserInfo, hostValue,
-            hasHost, hasPort, portValue, pathValue, queryValue, hasQuery,
-            fragmentValue, hasFragment)
+    const func path(value: str) !Self {
+        var result = clone();
+        result.pathValue = text.fromBytes(value.asBytes())!;
+        move(result)
     }
-    func query(value: str) !Self {
-        queryValue = text.fromBytes(value.asBytes())!;
-        hasQuery = true;
-        UrlBuilder(schemeValue, hasScheme, userInfoValue, hasUserInfo, hostValue,
-            hasHost, hasPort, portValue, pathValue, queryValue, hasQuery,
-            fragmentValue, hasFragment)
+    const func query(value: str) !Self {
+        var result = clone();
+        result.queryValue = text.fromBytes(value.asBytes())!;
+        result.hasQuery = true;
+        move(result)
     }
-    func fragment(value: str) !Self {
-        fragmentValue = text.fromBytes(value.asBytes())!;
-        hasFragment = true;
-        UrlBuilder(schemeValue, hasScheme, userInfoValue, hasUserInfo, hostValue,
-            hasHost, hasPort, portValue, pathValue, queryValue, hasQuery,
-            fragmentValue, hasFragment)
+    const func fragment(value: str) !Self {
+        var result = clone();
+        result.fragmentValue = text.fromBytes(value.asBytes())!;
+        result.hasFragment = true;
+        move(result)
     }
     func build() !Url {
         var output = text.StringBuilder();
@@ -628,6 +653,11 @@ public:
     }
 
 private:
+    const func clone() Self {
+        UrlBuilder(schemeValue, hasScheme, userInfoValue, hasUserInfo, hostValue,
+            hasHost, hasPort, portValue, pathValue, queryValue, hasQuery,
+            fragmentValue, hasFragment)
+    }
     func init(
         schemeValue: string, hasScheme: bool, userInfoValue: string, hasUserInfo: bool,
         hostValue: string, hasHost: bool, hasPort: bool, portValue: u16,

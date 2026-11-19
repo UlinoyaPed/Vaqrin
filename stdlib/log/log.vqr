@@ -14,19 +14,44 @@ pub func levelText(value: Level) str {
     }
 }
 
+func equalAsciiIgnoreCase(a: str, b: str) bool {
+    var left = a.asBytes();
+    var right = b.asBytes();
+    if left.len() != right.len() { return false; }
+    for i := usize(0); i < left.len(); i++ {
+        var x = left[i];
+        var y = right[i];
+        if 65 <= x && x <= 90 { x += 32; }
+        if 65 <= y && y <= 90 { y += 32; }
+        if x != y { return false; }
+    }
+    true
+}
+
+func levelRank(value: Level) u8 {
+    switch value {
+        Level.Trace => 0,
+        Level.Debug => 1,
+        Level.Info => 2,
+        Level.Warn => 3,
+        Level.Error => 4,
+        Level.Fatal => 5,
+    }
+}
+
 pub func parseLevel(value: str) !Level {
-    if value == "trace" || value == "TRACE" { return Level.Trace; }
-    if value == "debug" || value == "DEBUG" { return Level.Debug; }
-    if value == "info" || value == "INFO" { return Level.Info; }
-    if value == "warn" || value == "WARN" || value == "warning" { return Level.Warn; }
-    if value == "error" || value == "ERROR" { return Level.Error; }
-    if value == "fatal" || value == "FATAL" { return Level.Fatal; }
+    if equalAsciiIgnoreCase(value, "trace") { return Level.Trace; }
+    if equalAsciiIgnoreCase(value, "debug") { return Level.Debug; }
+    if equalAsciiIgnoreCase(value, "info") { return Level.Info; }
+    if equalAsciiIgnoreCase(value, "warn") || equalAsciiIgnoreCase(value, "warning") { return Level.Warn; }
+    if equalAsciiIgnoreCase(value, "error") { return Level.Error; }
+    if equalAsciiIgnoreCase(value, "fatal") { return Level.Fatal; }
     LogError.InvalidLevel
 }
 
-pub error LogError { InvalidLevel, InvalidAttribute, Closed, FormatFailed }
+pub error LogError { InvalidLevel, InvalidAttribute, Closed, FormatFailed, Overflow }
 
-pub enum AttrKind { String, Int, Bool, Error }
+pub enum AttrKind { String, Int, Bool, Error, Group }
 
 pub class Attr {
     var keyValue: string;
@@ -35,23 +60,30 @@ pub class Attr {
     var intValue: i64;
     var boolValue: bool;
     var errorValue: ?ErrorId;
-    func init(key: str, kind: AttrKind, stringValue: string, intValue: i64,
-        boolValue: bool, errorValue: ?ErrorId)
+    var children: coll.Vec<Attr>;
+
+    func init(key: str, kind: AttrKind, stringValue: str, intValue: i64,
+        boolValue: bool, errorValue: ?ErrorId, values: []const Attr) !void
         : keyValue(text.fromBytes(key.asBytes())!), kindValue(kind),
           stringValue(text.fromBytes(stringValue.asBytes())!), intValue(intValue),
-          boolValue(boolValue), errorValue(errorValue) {}
+          boolValue(boolValue), errorValue(errorValue), children(coll.Vec<Attr>()) {
+        for &attr in values { children.push(attr.clone()!)!; }
+    }
 public:
     static func string(key: str, value: str) !Self {
-        Attr(key, AttrKind.String, text.fromBytes(value.asBytes())!, 0, false, null)
+        Attr(key, AttrKind.String, value, 0, false, null, [_]Attr{}[:])!
     }
-    static func int(key: str, value: i64) Self {
-        Attr(key, AttrKind.Int, "", value, false, null)
+    static func int(key: str, value: i64) !Self {
+        Attr(key, AttrKind.Int, "", value, false, null, [_]Attr{}[:])!
     }
-    static func bool(key: str, value: bool) Self {
-        Attr(key, AttrKind.Bool, "", 0, value, null)
+    static func bool(key: str, value: bool) !Self {
+        Attr(key, AttrKind.Bool, "", 0, value, null, [_]Attr{}[:])!
     }
-    static func error(key: str, value: ErrorId) Self {
-        Attr(key, AttrKind.Error, "", 0, false, some(value))
+    static func error(key: str, value: ErrorId) !Self {
+        Attr(key, AttrKind.Error, "", 0, false, some(value), [_]Attr{}[:])!
+    }
+    static func group(name: str, values: []const Attr) !Self {
+        Attr(name, AttrKind.Group, "", 0, false, null, values)!
     }
     const func key() str { keyValue }
     const func kind() AttrKind { kindValue }
@@ -67,8 +99,10 @@ public:
     const func asError() ?ErrorId {
         if kindValue == AttrKind.Error { errorValue } else { null }
     }
+    const func asGroup() []const Attr { children.asConstSlice() }
     const func clone() !Self {
-        Attr(keyValue, kindValue, stringValue, intValue, boolValue, errorValue)
+        Attr(keyValue, kindValue, stringValue, intValue, boolValue, errorValue,
+            children.asConstSlice())!
     }
 }
 
@@ -77,18 +111,23 @@ pub class Record {
     var timestampValue: ?time.Instant;
     var messageValue: string;
     var attrsValue: coll.Vec<Attr>;
-    func init(level: Level, message: str, attrs: []const Attr) !Self {
-        levelValue = level;
-        timestampValue = null;
-        messageValue = text.fromBytes(message.asBytes())!;
-        attrsValue = coll.Vec<Attr>();
-        for attr in attrs { attrsValue.push(attr.clone()!)!; }
+    func init(level: Level, message: str, attrs: []const Attr) !void
+        : levelValue(level), timestampValue(null),
+          messageValue(text.fromBytes(message.asBytes())!),
+          attrsValue(coll.Vec<Attr>()) {
+        for &attr in attrs { attrsValue.push(attr.clone()!)!; }
     }
 public:
     const func level() Level { levelValue }
     const func timestamp() ?time.Instant { timestampValue }
     const func message() str { messageValue }
     const func attrs() []const Attr { attrsValue.asConstSlice() }
+    static func fromOwned(level: Level, message: str, attrs: coll.Vec<Attr>) !Self {
+        var record = Record(level, message, [_]Attr{}[:])!;
+        record.attrsValue = move(attrs);
+        move(record)
+    }
+    func setTimestamp(value: ?time.Instant) void { timestampValue = move(value); }
     const func clone() !Self {
         var result = Record(levelValue, messageValue, attrsValue.asConstSlice())!;
         result.timestampValue = timestampValue;
@@ -102,36 +141,130 @@ pub interface Handler {
     func flush() !void;
 }
 
+func emitRecord(handler: *Handler, level: Level, message: str,
+    attrs: coll.Vec<Attr>, clock: ?*time.Clock) !void {
+    var record = Record.fromOwned(level, message, move(attrs))!;
+    switch clock {
+        some(source) => record.setTimestamp(source.monotonicNow() catch null),
+        null => {},
+    }
+    handler.handle(&record)
+}
+
 pub class Logger {
     var target: *Handler;
     var minimum: Level;
     var fixed: coll.Vec<Attr>;
-    func init(handler: *Handler, level: Level, attrs: []const Attr) !Self
-        : target(handler), minimum(level), fixed(coll.Vec<Attr>()) {
-        for attr in attrs { fixed.push(attr.clone()!)!; }
+    var groupValue: string;
+    var clock: ?*time.Clock;
+    func init(handler: *Handler, level: Level, attrs: []const Attr, group: str,
+        clock: ?*time.Clock) !void
+        : target(handler), minimum(level), fixed(coll.Vec<Attr>()),
+          groupValue(text.fromBytes(group.asBytes())!), clock(clock) {
+        for &attr in attrs { fixed.push(attr.clone()!)!; }
     }
 public:
-    static func new(handler: *Handler) !Self { Logger(handler, Level.Trace, [_]Attr{}[:]) }
+    static func new(handler: *Handler) !Self {
+        Logger(handler, Level.Trace, [_]Attr{}[:], "", null)!
+    }
     const func enabled(level: Level) bool {
-        level >= minimum && target.enabled(level)
+        levelRank(level) >= levelRank(minimum) && target.enabled(level)
     }
     func setLevel(level: Level) void { minimum = level; }
+    func setClock(value: ?*time.Clock) void { clock = value; }
     func log(level: Level, message: str, attrs: []const Attr) !void {
         if !enabled(level) { return; }
+        if attrs.len() > ~usize(0) - fixed.len() { return LogError.Overflow; }
         var all = coll.Vec<Attr>.withCapacity(fixed.len() + attrs.len())!;
-        for item in fixed.asConstSlice() { all.push(item.clone()!)!; }
-        for item in attrs { all.push(item.clone()!)!; }
-        var record = Record(level, message, all.asConstSlice())!;
-        record.timestampValue = null;
-        target.handle(&record)
+        for &item in fixed.asConstSlice() { all.push(item.clone()!)!; }
+        for &item in attrs { all.push(item.clone()!)!; }
+        if groupValue.byteLen() == 0 {
+            emitRecord(target, level, message, move(all), clock)
+        } else {
+            var grouped = Attr.group(groupValue, all.asConstSlice())!;
+            var output = coll.Vec<Attr>();
+            output.push(move(grouped))!;
+            emitRecord(target, level, message, move(output), clock)
+        }
     }
     func with(attrs: []const Attr) !Self {
+        if attrs.len() > ~usize(0) - fixed.len() { return LogError.Overflow; }
         var all = coll.Vec<Attr>.withCapacity(fixed.len() + attrs.len())!;
-        for item in fixed.asConstSlice() { all.push(item.clone()!)!; }
-        for item in attrs { all.push(item.clone()!)!; }
-        Logger(target, minimum, all.asConstSlice())
+        for &item in fixed.asConstSlice() { all.push(item.clone()!)!; }
+        for &item in attrs { all.push(item.clone()!)!; }
+        Logger(target, minimum, all.asConstSlice(), groupValue, clock)!
+    }
+    func withGroup(name: str) !Self {
+        var builder = text.StringBuilder();
+        if groupValue.byteLen() != 0 {
+            builder.append(groupValue)!;
+            builder.append(".")!;
+        }
+        builder.append(name)!;
+        var group = builder.build()!;
+        Logger(target, minimum, fixed.asConstSlice(), group, clock)!
     }
     func flush() !void { target.flush() }
+}
+
+func writeHexByte(writer: *io.Writer, value: u8) !void {
+    var digits = "0123456789ABCDEF".asBytes();
+    io.writeString(writer, "\\x")!;
+    io.writeAll(writer, digits[usize(value >> 4)..usize(value >> 4) + 1])!;
+    io.writeAll(writer, digits[usize(value & 15)..usize(value & 15) + 1])!;
+}
+
+func writeQuoted(writer: *io.Writer, value: str) !void {
+    var data = value.asBytes();
+    io.writeString(writer, "\"")!;
+    for i := usize(0); i < data.len(); i++ {
+        var byte = data[i];
+        switch byte {
+            34 => io.writeString(writer, "\\\"")!,
+            92 => io.writeString(writer, "\\\\")!,
+            10 => io.writeString(writer, "\\n")!,
+            13 => io.writeString(writer, "\\r")!,
+            9 => io.writeString(writer, "\\t")!,
+            else => {
+                if byte < 32 || byte == 127 { writeHexByte(writer, byte)!; }
+                else { io.writeAll(writer, data[i..i + 1])!; }
+            },
+        }
+    }
+    io.writeString(writer, "\"")
+}
+
+func writeAttribute(writer: *io.Writer, attr: *const Attr, prefix: str) !void {
+    var builder = text.StringBuilder();
+    if prefix.byteLen() != 0 {
+        builder.append(prefix)!;
+        builder.append(".")!;
+    }
+    builder.append(attr.key())!;
+    var name = builder.build()!;
+    if attr.kind() == AttrKind.Group {
+        for &child in attr.asGroup() { writeAttribute(writer, &child, name)!; }
+        return;
+    }
+    io.writeString(writer, " ")!;
+    writeQuoted(writer, name)!;
+    io.writeString(writer, "=")!;
+    switch attr.kind() {
+        AttrKind.String => writeQuoted(writer, attr.asString().unwrap())!,
+        AttrKind.Int => io.writeString(writer, formatInt(attr.asInt().unwrap())!)!,
+        AttrKind.Bool => io.writeString(writer, if attr.asBool().unwrap() { "true" } else { "false" })!,
+        AttrKind.Error => io.writeString(writer, "ErrorId")!,
+        AttrKind.Group => {},
+    }
+}
+
+pub func formatAttr(value: *const Attr) !string {
+    var writer = io.MemoryWriter();
+    writeAttribute(&writer, value, "")!;
+    var bytes = io.MemoryWriter.intoBytes(move(writer));
+    var data = bytes.asConstSlice();
+    if data.len() == 0 { return text.fromBytes(data); }
+    text.fromBytes(data[1..data.len()])
 }
 
 pub class TextHandler {
@@ -143,26 +276,8 @@ public:
     func handle(record: *const Record) !void {
         io.writeString(writer, levelText(record.level()))!;
         io.writeString(writer, " ")!;
-        io.writeString(writer, record.message())!;
-        for attr in record.attrs() {
-            io.writeString(writer, " ")!;
-            io.writeString(writer, attr.key())!;
-            io.writeString(writer, "=")!;
-            switch attr.kind() {
-                AttrKind.String => {
-                    io.writeString(writer, attr.asString().unwrap())!;
-                },
-                AttrKind.Int => {
-                    io.writeString(writer, formatInt(attr.asInt().unwrap())!)!;
-                },
-                AttrKind.Bool => {
-                    io.writeString(writer, if attr.asBool().unwrap() { "true" } else { "false" })!;
-                },
-                AttrKind.Error => {
-                    io.writeString(writer, "ErrorId")!;
-                },
-            }
-        }
+        writeQuoted(writer, record.message())!;
+        for &attr in record.attrs() { writeAttribute(writer, &attr, "")!; }
         io.writeString(writer, "\n")
     }
     func flush() !void { writer.flush() }
@@ -198,9 +313,9 @@ public:
     func flush() !void { for handler in handlers { handler.flush()!; } }
 }
 
-func formatU32(value: u32) !string {
+func formatU64(value: u64) !string {
     var builder = text.StringBuilder();
-    var digits = [10]u8{0,0,0,0,0,0,0,0,0,0};
+    var digits = [20]u8{0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
     var count: usize = 0;
     var number = value;
     for number > 0 {
@@ -209,23 +324,20 @@ func formatU32(value: u32) !string {
         number /= 10;
     }
     if count == 0 { builder.append("0")!; }
-    for count > 0 { count--; builder.append(text.fromBytes(digits[count..count + 1])!)!; }
+    for count > 0 {
+        count--;
+        var one = [1]u8{digits[count]};
+        builder.append(text.fromBytes(one[:])!)!;
+    }
     builder.build()
 }
+
 func formatInt(value: i64) !string {
-    if value >= 0 { return formatU32(u32(value) catch { return LogError.FormatFailed; }); }
+    if value >= 0 { return formatU64(u64(value)); }
     var magnitude = u64(0) -% bitCast<u64>(value);
     var builder = text.StringBuilder();
     builder.append("-")!;
-    var digits = [20]u8{0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
-    var count: usize = 0;
-    for magnitude > 0 {
-        digits[count] = u8(48 + magnitude % 10)!;
-        count++;
-        magnitude /= 10;
-    }
-    if count == 0 { builder.append("0")!; }
-    for count > 0 { count--; builder.append(text.fromBytes(digits[count..count + 1])!)!; }
+    builder.append(formatU64(magnitude)!)!;
     builder.build()
 }
 
@@ -236,3 +348,5 @@ pub func info(logger: *Logger, message: str, attrs: []const Attr) !void { logger
 pub func warn(logger: *Logger, message: str, attrs: []const Attr) !void { logger.log(Level.Warn, message, attrs) }
 pub func error(logger: *Logger, message: str, attrs: []const Attr) !void { logger.log(Level.Error, message, attrs) }
 pub func fatal(logger: *Logger, message: str, attrs: []const Attr) !void { logger.log(Level.Fatal, message, attrs) }
+
+pub func flush(logger: *Logger) !void { logger.flush() }

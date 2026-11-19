@@ -1,5 +1,5 @@
 package url
-import (coll, encoding, text, iter)
+import (coll, encoding, text)
 
 pub class QueryParam {
     var keyValue: string;
@@ -20,7 +20,7 @@ public:
         for index < entries.len() {
             var current = index;
             index++;
-            if entries[current].keyValue == keyValue { return some(entries[current].dataValue); }
+            if entries[current].key() == keyValue { return some(entries[current].value()); }
         }
         null
     }
@@ -35,6 +35,7 @@ public:
     static func parse(value: str) !Self {
         var result = QueryParams();
         var source = value.asBytes();
+        if findByte(source, 35) != null { return UrlError.InvalidCharacter; }
         var start: usize = 0;
         if source.len() > 0 && source[0] == 63 { start = 1; }
         var fieldStart = start;
@@ -52,10 +53,8 @@ public:
                         },
                         null => {},
                     }
-                    var keyData = encoding.percentDecode(text.fromBytes(keyBytes)!)!;
-                    var valueData = encoding.percentDecode(text.fromBytes(valueBytes)!)!;
-                    var key = text.fromBytes(keyData.asConstSlice())!;
-                    var item = text.fromBytes(valueData.asConstSlice())!;
+                    var key = decodeQueryComponent(keyBytes)!;
+                    var item = decodeQueryComponent(valueBytes)!;
                     result.append(key, item)!;
                 }
                 fieldStart = i + 1;
@@ -71,18 +70,26 @@ public:
     }
 
     func set(key: str, value: str) !void {
+        var found = false;
         var index: usize = 0;
         for index < entries.len() {
-            if entries[index].keyValue == key {
-                var removed = entries.remove(index);
+            if entries[index].key() == key {
+                if !found {
+                    var replacement = QueryParam(text.fromBytes(key.asBytes())!, text.fromBytes(value.asBytes())!);
+                    var previous = entries.replace(index, move(replacement));
+                    found = true;
+                    index++;
+                } else {
+                    var removed = entries.remove(index);
+                }
             } else { index++; }
         }
-        append(key, value)!
+        if !found { append(key, value)!; }
     }
 
     const func get(key: str) ?str {
         for &entry in entries.asConstSlice() {
-            if entry.keyValue == key { return some(entry.dataValue); }
+            if entry.key() == key { return some(entry.value()); }
         }
         null
     }
@@ -96,7 +103,7 @@ public:
         var removed: usize = 0;
         var index: usize = 0;
         for index < entries.len() {
-            if entries[index].keyValue == key {
+            if entries[index].key() == key {
                 var item = entries.remove(index);
                 removed++;
             } else { index++; }
@@ -106,17 +113,27 @@ public:
 
     const func len() usize { entries.len() }
     const func isEmpty() bool { entries.isEmpty() }
+    const func items() []const QueryParam { entries.asConstSlice() }
 
     const func encode() !string {
         var output = text.StringBuilder();
         for i := usize(0); i < entries.len(); i++ {
             if i != 0 { output.append("&")!; }
-            output.append(queryEscape(entries[i].keyValue)!)!;
+            output.append(queryEscape(entries[i].key())!)!;
             output.append("=")!;
-            output.append(queryEscape(entries[i].dataValue)!)!;
+            output.append(queryEscape(entries[i].value())!)!;
         }
         output.build()
     }
+}
+
+func decodeQueryComponent(value: []const u8) !string {
+    for byte in value {
+        if byte > 127 { return UrlError.InvalidCharacter; }
+    }
+    var raw = text.fromBytes(value)!;
+    var decoded = encoding.percentDecode(raw) catch { return UrlError.InvalidPercentEncoding; };
+    text.fromBytes(decoded.asConstSlice()) catch { return UrlError.InvalidUtf8; }
 }
 
 func findByte(data: []const u8, needle: u8) ?usize {
@@ -128,15 +145,15 @@ pub func queryEscape(value: str) !string {
     encoding.percentEncode(value.asBytes(), "".asBytes())
 }
 pub func queryUnescape(value: str) !string {
-    var decoded = encoding.percentDecode(value)!;
-    text.fromBytes(decoded.asConstSlice())
+    var decoded = encoding.percentDecode(value) catch { return UrlError.InvalidPercentEncoding; };
+    text.fromBytes(decoded.asConstSlice()) catch { return UrlError.InvalidUtf8; }
 }
 pub func pathEscape(value: str) !string {
     encoding.percentEncode(value.asBytes(), "!$&'()*+,;=:@".asBytes())
 }
 pub func pathUnescape(value: str) !string {
-    var decoded = encoding.percentDecode(value)!;
-    text.fromBytes(decoded.asConstSlice())
+    var decoded = encoding.percentDecode(value) catch { return UrlError.InvalidPercentEncoding; };
+    text.fromBytes(decoded.asConstSlice()) catch { return UrlError.InvalidUtf8; }
 }
 pub func parseQuery(value: str) !QueryParams { QueryParams.parse(value) }
 pub func encodeQuery(items: []const (str, str)) !string {

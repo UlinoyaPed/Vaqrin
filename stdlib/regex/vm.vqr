@@ -42,12 +42,12 @@ func isLineTerminatorBefore(input: str, position: usize) bool {
 }
 
 func assertStart(regex: *const Regex, input: str, position: usize) bool {
-    position == 0 || ((regex.flags & 2) != 0 && isLineTerminatorBefore(input, position))
+    position == 0 || ((regex.flagsValue() & 2) != 0 && isLineTerminatorBefore(input, position))
 }
 
 func assertEnd(regex: *const Regex, input: str, position: usize) bool {
     position == input.byteLen() ||
-        ((regex.flags & 2) != 0 && isLineTerminatorAt(input, position) &&
+        ((regex.flagsValue() & 2) != 0 && isLineTerminatorAt(input, position) &&
          !(position > 0 && input.asBytes()[position] == 10 && input.asBytes()[position - 1] == 13))
 }
 
@@ -71,7 +71,7 @@ func epsilonClosure(regex: *const Regex, seeds: []const Thread,
             switch popped {
                 null => { draining = false; },
                 some(thread) => {
-                    if thread.state < 0 || usize(thread.state)! >= regex.states.len() {
+                    if thread.state < 0 || usize(thread.state)! >= regex.stateCount() {
                         return RegexError.InvalidCapture;
                     }
                     if budget.* == 0 { return RegexError.StepLimitExceeded; }
@@ -101,7 +101,7 @@ func epsilonClosure(regex: *const Regex, seeds: []const Thread,
                         },
                         Op.Save => {
                             if captureOutput {
-                                if state.value >= u32(regex.captureGroups + 1)! * 2 {
+                                if state.value >= u32(regex.captureGroupCount() + 1)! * 2 {
                                     return RegexError.InvalidCapture;
                                 }
                                 thread.history = appendHistory(history, thread.history,
@@ -133,18 +133,18 @@ func epsilonClosure(regex: *const Regex, seeds: []const Thread,
 }
 
 func regexDigit(regex: *const Regex, cp: u32) bool {
-    if (regex.flags & 8) != 0 { unicode.isDigit(__vqr_char(cp)) }
+    if (regex.flagsValue() & 8) != 0 { unicode.isDigit(__vqr_char(cp)) }
     else { 48 <= cp && cp <= 57 }
 }
 
 func regexWhitespace(regex: *const Regex, cp: u32) bool {
-    if (regex.flags & 8) != 0 { unicode.isWhitespace(__vqr_char(cp)) }
+    if (regex.flagsValue() & 8) != 0 { unicode.isWhitespace(__vqr_char(cp)) }
     else { cp == 32 || (9 <= cp && cp <= 13) }
 }
 
 func regexWord(regex: *const Regex, cp: u32) bool {
     if (cp == 95) { return true; }
-    if (regex.flags & 8) != 0 { unicode.isXidContinue(__vqr_char(cp)) }
+    if (regex.flagsValue() & 8) != 0 { unicode.isXidContinue(__vqr_char(cp)) }
     else {
         (65 <= cp && cp <= 90) || (97 <= cp && cp <= 122) ||
         (48 <= cp && cp <= 57)
@@ -152,11 +152,11 @@ func regexWord(regex: *const Regex, cp: u32) bool {
 }
 
 func rawClassContains(regex: *const Regex, classId: usize, cp: u32) bool {
-    if classId >= regex.classes.len() { return false; }
-    var descriptor = regex.classes[classId];
+    if classId >= regex.classCount() { return false; }
+    var descriptor = regex.classAt(classId);
     var found = false;
     for i in descriptor.firstRange..(descriptor.firstRange + descriptor.rangeCount) {
-        var range = regex.ranges[i];
+        var range = regex.rangeAt(i);
         if range.first <= cp && cp <= range.last { found = true; break; }
     }
     var mask = descriptor.builtinMask;
@@ -173,12 +173,12 @@ func rawClassContains(regex: *const Regex, classId: usize, cp: u32) bool {
 }
 
 func classContains(regex: *const Regex, classId: usize, cp: u32) bool {
-    if classId >= regex.classes.len() { return false; }
+    if classId >= regex.classCount() { return false; }
     var found = rawClassContains(regex, classId, cp);
-    if (regex.flags & 1) != 0 {
+    if (regex.flagsValue() & 1) != 0 {
         var lower = convert.fromChar(unicode.toLowerSimple(__vqr_char(cp)));
         var upper = convert.fromChar(unicode.toUpperSimple(__vqr_char(cp)));
-        if (regex.flags & 8) == 0 {
+        if (regex.flagsValue() & 8) == 0 {
             if 65 <= cp && cp <= 90 { lower = cp + 32; }
             if 97 <= cp && cp <= 122 { upper = cp - 32; }
         }
@@ -186,12 +186,12 @@ func classContains(regex: *const Regex, classId: usize, cp: u32) bool {
             found = true;
         }
     }
-    if regex.classes[classId].negated { !found } else { found }
+    if regex.classAt(classId).negated { !found } else { found }
 }
 
 func simpleCaseEqual(regex: *const Regex, a: u32, b: u32) bool {
     if a == b { return true; }
-    if (regex.flags & 8) == 0 {
+    if (regex.flagsValue() & 8) == 0 {
         var left = a;
         var right = b;
         if 65 <= left && left <= 90 { left += 32; }
@@ -207,11 +207,11 @@ func simpleCaseEqual(regex: *const Regex, a: u32, b: u32) bool {
 func accepts(regex: *const Regex, state: State, cp: u32) bool {
     switch state.op {
         Op.Character => {
-            if (regex.flags & 1) != 0 { simpleCaseEqual(regex, state.value, cp) }
+            if (regex.flagsValue() & 1) != 0 { simpleCaseEqual(regex, state.value, cp) }
             else { state.value == cp }
         },
         Op.Any => {
-            (regex.flags & 4) != 0 ||
+            (regex.flagsValue() & 4) != 0 ||
             (cp != 10 && cp != 13 && cp != 0x2028 && cp != 0x2029)
         },
         Op.Class => classContains(regex, usize(state.value), cp),
@@ -264,7 +264,7 @@ func buildSearchResult(candidate: ?Thread, endByte: usize, input: str,
 }
 
 func runNfa(regex: *const Regex, input: str, start: usize, captureOutput: bool) !?SearchResult {
-    if input.byteLen() > regex.maxInputBytes { return RegexError.InputTooLarge; }
+    if input.byteLen() > regex.inputLimit() { return RegexError.InputTooLarge; }
     if start > input.byteLen() { return RegexError.InvalidOffset; }
     if start < input.byteLen() && (input.asBytes()[start] & 0xc0) == 0x80 {
         return RegexError.InvalidOffset;
@@ -276,20 +276,20 @@ func runNfa(regex: *const Regex, input: str, start: usize, captureOutput: bool) 
     var nextSeeds = coll.Vec<Thread>();
     var history = coll.Vec<CaptureHistory>();
     var seen = coll.Vec<usize>();
-    for i in usize(0)..regex.states.len() { seen.push(0)!; }
+    for i in usize(0)..regex.stateCount() { seen.push(0)!; }
     var generation: usize = 0;
     var stack = coll.Vec<Thread>();
     var candidate: ?Thread = null;
     var candidateEnd: usize = 0;
     var position = start;
-    var budget = regex.maxSteps;
+    var budget = regex.workLimit();
 
     for position <= input.byteLen() {
         seeds.clear();
         for thread in current.asSlice() { seeds.push(thread)!; }
 
         if candidate == null {
-            seeds.push(Thread{state: regex.startState, startByte: position, history: -1})!;
+            seeds.push(Thread{state: regex.entryState(), startByte: position, history: -1})!;
         }
 
         active.clear();
@@ -299,7 +299,7 @@ func runNfa(regex: *const Regex, input: str, start: usize, captureOutput: bool) 
 
         var matchIndex: ?usize = null;
         for i in usize(0)..active.len() {
-            if regex.states[usize(active[i].state)!].op == Op.Match {
+            if regex.stateAt(usize(active[i].state)!).op == Op.Match {
                 matchIndex = some(i);
                 break;
             }
@@ -315,11 +315,11 @@ func runNfa(regex: *const Regex, input: str, start: usize, captureOutput: bool) 
 
         if active.isEmpty() {
             if candidate != null || position == input.byteLen() {
-                return buildSearchResult(candidate, candidateEnd, input, &history, regex.captureGroups, captureOutput);
+                return buildSearchResult(candidate, candidateEnd, input, &history, regex.captureGroupCount(), captureOutput);
             }
         }
         if position == input.byteLen() {
-            return buildSearchResult(candidate, candidateEnd, input, &history, regex.captureGroups, captureOutput);
+            return buildSearchResult(candidate, candidateEnd, input, &history, regex.captureGroupCount(), captureOutput);
         }
 
         var decoded = unicode.decodeUtf8(input.asBytes()[position..]) catch { return RegexError.InvalidUtf8; };
@@ -331,7 +331,7 @@ func runNfa(regex: *const Regex, input: str, start: usize, captureOutput: bool) 
         }
         nextSeeds.clear();
         for thread in active.asSlice() {
-            var state = regex.states[usize(thread.state)!];
+            var state = regex.stateAt(usize(thread.state)!);
             if accepts(regex, state, cp) {
                 if state.out < 0 { return RegexError.InvalidCapture; }
                 nextSeeds.push(Thread{
@@ -343,7 +343,7 @@ func runNfa(regex: *const Regex, input: str, start: usize, captureOutput: bool) 
         }
         if nextSeeds.isEmpty() {
             if candidate != null {
-                return buildSearchResult(candidate, candidateEnd, input, &history, regex.captureGroups, captureOutput);
+                return buildSearchResult(candidate, candidateEnd, input, &history, regex.captureGroupCount(), captureOutput);
             }
             position += decoded.1;
             current.clear();
@@ -354,5 +354,5 @@ func runNfa(regex: *const Regex, input: str, start: usize, captureOutput: bool) 
         for thread in nextSeeds.asSlice() { current.push(thread)!; }
         position += decoded.1;
     }
-    buildSearchResult(candidate, candidateEnd, input, &history, regex.captureGroups, captureOutput)
+    buildSearchResult(candidate, candidateEnd, input, &history, regex.captureGroupCount(), captureOutput)
 }

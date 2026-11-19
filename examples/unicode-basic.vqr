@@ -1,0 +1,8 @@
+package unicode_demo
+import (io, unicode, text)
+
+func main() !void {
+    var composed = unicode.normalize("e\u{301}", unicode.NormalForm.NFC)!;
+    io.println(composed)!;
+    io.println(unicode.version())!;
+}

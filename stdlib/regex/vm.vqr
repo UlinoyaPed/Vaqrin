@@ -102,7 +102,7 @@ func epsilonClosure(regex: *const Regex, seeds: []const Thread,
                             }
                         },
                         Op.Save => {
-                            if state.value >= u32(regex.captures + 1) * 2 {
+                            if state.value >= u32(regex.captureGroups + 1) * 2 {
                                 return RegexError.InvalidCapture;
                             }
                             thread.history = appendHistory(history, thread.history,

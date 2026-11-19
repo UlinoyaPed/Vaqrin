@@ -1,3 +1,4 @@
+// 当前实现状态及真实导入见 Vaqrin-stdlib-package-matrix.md。以下记录包含规划签名，逐符号 CSV/JSON 为原设计快照。
 @core|最小预定义类型的辅助函数；不复制内建类型体系
 #alias Box<T>|^T 的兼容别名；拥有型指针
 #alias Vec<T>|coll.Vec<T> 的迁移期门面，最终是否保留以包策略为准
@@ -88,6 +89,7 @@
 + init(dest: []u8,order: BitOrder)->Self; writeBits(value: u64,count: usize)->!void; alignByte(fillBit: bool)->!void; position()->usize; writtenBytes()->usize
 = countOnes<T>(value: T)->usize; countZeros<T>(value: T)->usize; leadingZeros<T>(value: T)->usize; trailingZeros<T>(value: T)->usize; reverseBits<T>(value: T)->T; reverseBytes<T>(value: T)->T; byteSwap<T>(value: T)->T; rotateLeft<T>(value: T,n: usize)->T; rotateRight<T>(value: T,n: usize)->T; firstSet<T>(value: T)->?usize; lastSet<T>(value: T)->?usize; testBit<T>(value: T,index: usize)->bool; setBit<T>(value: T,index: usize)->T; clearBit<T>(value: T,index: usize)->T; toggleBit<T>(value: T,index: usize)->T; maskLow<T>(count: usize)->T; extractBits<T>(value: T,start: usize,count: usize)->T; insertBits<T>(value: T,field: T,start: usize,count: usize)->T; isPowerOfTwo<T>(value: T)->bool; nextPowerOfTwo<T>(value: T)->!T; alignUp(value: usize,alignment: usize)->!usize; alignDown(value: usize,alignment: usize)->usize
 @hash|Hash/Eq 一致性、进程内防碰撞种子与版本化稳定摘要
+// 当前实现：当前 FNV-1a、Hasher/HashKey 和整数回调已接入。seed 为 u32；其余哈希实现仍为目标。
 #interface Hash<T>|hash(state: *Hasher)->void
 #interface Hasher|write(bytes: []const u8)->void; finish()->u64
 #interface BuildHasher|build()->Hasher
@@ -111,6 +113,7 @@
 + new(num: T,den: T)->!Self; numerator()->T; denominator()->T; add(other: *const Self)->!Self; sub(other: *const Self)->!Self; mul(other: *const Self)->!Self; div(other: *const Self)->!Self; compare(other: *const Self)->cmp.Ordering
 = minValue<T>()->T; maxValue<T>()->T; checkedAdd<T>(a: T,b: T)->!T; checkedSub<T>(a: T,b: T)->!T; checkedMul<T>(a: T,b: T)->!T; checkedDiv<T>(a: T,b: T)->!T; checkedNeg<T>(value: T)->!T; wrappingAdd<T>(a: T,b: T)->T; wrappingSub<T>(a: T,b: T)->T; wrappingMul<T>(a: T,b: T)->T; saturatingAdd<T>(a: T,b: T)->T; saturatingSub<T>(a: T,b: T)->T; saturatingMul<T>(a: T,b: T)->T; abs<T>(value: T)->!T; absDiff<T>(a: T,b: T)->Unsigned<T>; signum<T>(value: T)->T; divEuclid<T>(a: T,b: T)->T; remEuclid<T>(a: T,b: T)->T; divMod<T>(a: T,b: T)->(T,T); gcd<T>(a: T,b: T)->T; lcm<T>(a: T,b: T)->!T; powInt<T>(base: T,exp: usize)->!T; midpoint<T>(a: T,b: T)->T; average<T>(values: []const T)->!?T; sum<T>(values: []const T)->!T; product<T>(values: []const T)->!T
 @coll|拥有型容器和收集；所有可失败增长返回 !T，集合键不可原地修改
+// 当前实现：已有并验收 Vec、FixedVec、双端队列、链表、堆、集合和映射的代表操作。HashMap 用显式哈希、相等回调；BTreeMap 用比较回调。迭代指针索引可分配失败。
 #class Vec<T>|连续动态数组，尾插摊还 O(1)
 + init()->Self; withCapacity(n: usize)->!Self; withAllocator(allocator: mem.AllocatorRef)->Self; fromSlice(values: []const T)->!Self; fromIter<I>(items: I)->!Self; len()->usize; capacity()->usize; isEmpty()->bool; asSlice()->[]T; asConstSlice()->[]const T; asPtr()->?*T; asConstPtr()->?*const T; get(index: usize)->?*const T; getMut(index: usize)->?*T; at(index: usize)->*const T; atMut(index: usize)->*T; first()->?*const T; firstMut()->?*T; last()->?*const T; lastMut()->?*T; push(value: T)->!void; pushPreserving(value: T)->PushResult<T>; pop()->?T; insert(index: usize,value: T)->!void; insertSlice(index: usize,values: []const T)->!void; remove(index: usize)->?T; swapRemove(index: usize)->?T; replace(index: usize,value: T)->?T; reserve(minCapacity: usize)->!void; reserveAdditional(extra: usize)->!void; shrinkToFit()->!void; shrinkTo(minCapacity: usize)->!void; resize(newLen: usize,value: T)->!void; resizeWith<F>(newLen: usize,f: F)->!void; extend<I>(values: I)->!void; append(other: *Vec<T>)->!void; clear()->void; truncate(n: usize)->void; retain<F>(predicate: F)->void; dedupAdjacent<F>(eq: F)->void; reverse()->void; rotateLeft(n: usize)->void; rotateRight(n: usize)->void; swap(a: usize,b: usize)->void; splitOff(index: usize)->!Self; drain(start: usize,end: usize)->Drain<T>; splice(start: usize,end: usize,replaceWith: []const T)->!void; sort()->void; sortBy<F>(less: F)->void; stableSortBy<F>(less: F)->!void; binarySearch(value: *const T)->?usize; clone()->!Self; iter()->iter.SliceIter<T>; iterRef()->iter.SliceIterRef<T>; iterMut()->iter.SliceIterMut<T>; intoIter()->coll.IntoVecIter<T>; intoBoxedSlice()->!mem.BoxedSlice<T>
 #class FixedVec<T,comptime N: usize>|内联 N 槽，零堆分配
@@ -413,6 +416,7 @@
 #record Token|文本片段、类别与字节位置
 = parseInt<T>(value: str,radix: u8)->!T; parseUint<T>(value: str,radix: u8)->!T; parseIntPrefix<T>(value: str,radix: u8)->!Parsed<T>; parseFloat<T>(value: str)->!T; parseFloatPrefix<T>(value: str)->!Parsed<T>; parseBool(value: str)->!bool; parseChar(value: str)->!char; parseHex<T>(value: str)->!T; parseBinary<T>(value: str)->!T; parseOctal<T>(value: str)->!T; parseWith<T,F>(value: str,parser: F)->!T; parseDuration(value: str)->!time.Duration; parseDate(value: str)->!time.Date; parseTime(value: str)->!time.TimeOfDay; parseNumberWithInfo<T>(value: str)->(?!T,?ParseErrorInfo); isInt(value: str,radix: u8)->bool; isFloat(value: str)->bool; splitFields(value: str)->iter.Iterator<str>
 @fmt|可检查格式串、动态计划与 Writer 流式格式化
+// 当前实现：当前 FormatArg 是带数据枚举，arg(string) 持有字符串；支持顺序或显式位置参数，其余接口仍为目标。
 #enum Alignment|Left, Right, Center
 #enum SignMode|Default, Always, Space
 #enum FormatStyle|Display, Debug, Binary, Octal, Hex, Scientific, Fixed, General
@@ -506,6 +510,7 @@
 #enum Prefix|Nano, Micro, Milli, Centi, Deci, Kilo, Mega, Giga
 = convert<T,From,To>(value: Quantity<T,From>)->!Quantity<T,To>; convertRounded<T,From,To>(value: Quantity<T,From>,rounding: convert.Rounding)->!Quantity<T,To>; ratioMul<A,B>()->Ratio; ratioDiv<A,B>()->Ratio; dimensionOf<U>()->Dimension; compatible<A,B>()->bool; formatQuantity<T,U>(value: Quantity<T,U>)->!string
 @io|最小读写协议 read/write，短读短写、EOF、WouldBlock 与关闭错误区分
+// 当前实现：当前支持 ReaderAt/WriterAt、POSIX HostFile 与标准流；系统 errno 通过 systemErrorCode 查询。
 #interface Reader|对非空 dst 返回 0 表永久 EOF
 + read(dst: []u8)->!usize
 #interface Writer|非空 src 返回 0 属 NoProgress
@@ -544,6 +549,7 @@
 + write(data: []const u8)->!usize; close()->!void
 = read(reader: *Reader,dst: []u8)->!usize; readExact(reader: *Reader,dst: []u8)->!void; readExactProgress(reader: *Reader,dst: []u8)->!IoProgress; readAtLeast(reader: *Reader,dst: []u8,min: usize)->!usize; readToEnd(reader: *Reader,limit: usize)->!coll.Vec<u8>; readToString(reader: *Reader,limit: usize)->!string; write(writer: *Writer,src: []const u8)->!usize; writeAll(writer: *Writer,src: []const u8)->!void; writeAllProgress(writer: *Writer,src: []const u8)->!IoProgress; writeString(writer: *Writer,value: str)->!void; copy(reader: *Reader,writer: *Writer,scratch: []u8)->!u64; copyN(reader: *Reader,writer: *Writer,n: u64,scratch: []u8)->!u64; copyAll(reader: *Reader,writer: *Writer)->!u64; discard(reader: *Reader,n: u64,scratch: []u8)->!u64; pipe(capacity: usize)->!(PipeReader,PipeWriter); limit(reader: *Reader,n: u64)->LimitedReader; tee(reader: *Reader,writer: *Writer)->TeeReader; stdin()->!Reader; stdout()->!Writer; stderr()->!Writer; print<T>(value: T)->!void; println<T>(value: T)->!void; eprint<T>(value: T)->!void; eprintln<T>(value: T)->!void; printf<F>(pattern: str,args: F)->!void; flushStdout()->!void
 @bufio|缓冲 Reader/Writer、按行和 Token 扫描，短写后保留未提交后缀
+// 当前实现：当前基本 Scanner、BufferedReader/Writer 与短写恢复已验收；Token 的文本借用 Token。其余扫描策略仍为目标。
 #class BufferedReader|持久字节缓冲、peek 视图会被下一次修改失效
 + init(reader: *io.Reader,capacity: usize)->!Self; read(dst: []u8)->!usize; readByte()->!?u8; unreadByte(value: u8)->!void; peek(n: usize)->![]const u8; discard(n: usize)->!usize; readUntil(delim: u8,max: usize)->!coll.Vec<u8>; readLine(max: usize)->!?string; readString(delim: u8,max: usize)->!string; bufferLen()->usize; reset(reader: *io.Reader)->void
 #class BufferedWriter|可明确 flush/finish 错误
@@ -558,6 +564,7 @@
 + init(reader: *io.Reader,maxBytes: usize)->!Self; next()->!?str; nextOwned()->!?string
 = newReader(reader: *io.Reader,capacity: usize)->!BufferedReader; newWriter(writer: *io.Writer,capacity: usize)->!BufferedWriter; newScanner(reader: *io.Reader,maxToken: usize)->!Scanner; scanLines(data: []const u8,atEof: bool)->!SplitResult; scanWords(data: []const u8,atEof: bool)->!SplitResult; scanBytes(data: []const u8,atEof: bool)->!SplitResult; readLine(reader: *io.Reader,maxBytes: usize)->!?string
 @path|区分原生路径字节/宽字符与展示 UTF-8，词法运算不访盘
+// 当前实现：当前 Path 拥有 UTF-8，PathBuf 为其别名；Path.fromString 可失败，parent()->!?Path，filename/stem/extension 借用 Path。
 #record Path|只读原生路径视图
 + isAbsolute()->bool; isRelative()->bool; hasRoot()->bool; fileName()->?str; fileStem()->?str; extension()->?str; parent()->?Path; components()->PathComponents; asNativeBytes()->[]const u8; toDisplayString()->!string; startsWith(other: Path)->bool; endsWith(other: Path)->bool; join(other: Path)->!PathBuf; normalizeLexical()->!PathBuf
 #class PathBuf|拥有路径，在 Windows 可保存 UTF-16 原值
@@ -568,6 +575,7 @@
 #enum PrefixKind|Drive, UNC, Device, Verbatim
 = join(a: Path,b: Path)->!PathBuf; resolve(base: Path,child: Path)->!PathBuf; normalizeLexical(path: Path)->!PathBuf; clean(path: Path)->!PathBuf; isAbsolute(path: Path)->bool; isRelative(path: Path)->bool; base(path: Path)->?str; dir(path: Path)->?Path; extension(path: Path)->?str; stem(path: Path)->?str; split(path: Path)->(?Path,?str); splitExtension(path: Path)->(Path,?str); relative(base: Path,target: Path)->!PathBuf; commonPrefix(a: Path,b: Path)->!PathBuf; fromString(value: str)->!PathBuf; toString(path: Path)->!string; separator()->char; listSeparator()->char
 @fs|宿主文件系统接口及 MemFS；路径下真实操作可失败
+// 当前实现：当前 Directory 和 DirectoryEntry 提供单层目录操作；MemFS 和递归遍历仍为目标。
 #interface FileSystem|open(path: path.Path,options: OpenOptions)->!File
 #interface ReadDirFs|readDir(path: path.Path)->!ReadDir
 #interface StatFs|stat(path: path.Path)->!Metadata

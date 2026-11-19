@@ -4,7 +4,7 @@
 
 ## 构建和运行
 
-在仓库根目录执行。使用 CMake 3.24+、Ninja、C++20 编译器和 LLVM 开发包。本机验证使用 LLVM 22.1.8。选择文档的 LLVM 20.1.8 基线时，将 `LLVM_DIR` 指向对应 SDK，并可添加 `-DVAQRIN_REQUIRE_BASELINE=ON` 强制精确版本。
+在仓库根目录执行。使用 CMake 3.24+、Ninja、C++20 编译器和 LLVM 开发包。已验证 LLVM 20.1.8 和 22.1.8。选择 LLVM 20.1.8 基线时，将 `LLVM_DIR` 指向对应 SDK，并添加 `-DVAQRIN_REQUIRE_BASELINE=ON` 强制精确版本。CMake 优先链接 SDK 导出的完整 LLVM 共享库，也可通过 `-DVAQRIN_USE_LLVM_DYLIB=OFF` 使用显式组件列表。
 
 ```bash
 cmake -S compiler -B build/host -G Ninja \

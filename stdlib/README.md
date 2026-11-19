@@ -61,7 +61,7 @@ LinkedList 使用双向节点和独立 Box 所有权表，节点地址在插入�
 
 文本按字节比较，`chars` 按 Unicode 标量遍历。`fromBytes` 验证 UTF-8 后复制成不可变字符串，`StringBuilder.build()` 生成可独立持有的快照。拥有型 `string` 的副本共享不可变存储，`str` 与字节视图遵守来源的生命周期。
 
-默认堆分配器目前面向 Linux 宿主。Vec、VecDeque、LinkedList 和 HashMap 可绑定 `mem.AllocatorRef`；FixedVec / FixedDeque 不需要堆分配。BTree 节点目前使用默认 Box 分配器。裸机无默认堆时，必须为支持自定义分配器的容器提供有效分配器；其余增长操作会报告分配错误。
+默认堆分配器目前面向 Linux 宿主。Vec、VecDeque、LinkedList 和 HashMap 可绑定 `mem.AllocatorRef`；FixedVec / FixedDeque 不需要堆分配。BTree 节点目前使用默认 Box 分配器。裸机上的 Vec、VecDeque、LinkedList 和 HashMap 可以用显式分配器增长。缺少默认堆且未指定分配器时，支持两种分配方式的容器返回 `AllocatorUnavailable`。Vec 可能持有借用的分配器，因而类型能力检查禁止将其跨线程移交。
 
 位流的 `LsbFirst` 从字节低位开始，也先读写结果或参数的低位。`MsbFirst` 从字节高位开始，从读写宽度所覆盖的最高位开始。读不到足够位时，`BitReader` 返回成功的空值并保持位置。超出写入容量时，`BitWriter` 返回错误并保持缓冲区和位置。
 
@@ -84,3 +84,5 @@ LinkedList 使用双向节点和独立 Box 所有权表，节点地址在插入�
 `new(allocator) T(...)` 借用一个实现 `mem.Allocator` 的可变位置。分配器及其缓冲区必须比所有借用它的 Box 活得更久。拆出自定义分配的 Box 时使用 `Box.intoRawParts`，恢复时传回原释放上下文。由于同一个 `^T` 类型可保存借用的分配器，当前线程能力检查保守地拒绝跨线程移交或共享 Box。
 
 `Shared<T>` 的复制增加强引用计数，`Weak<T>` 仅延长计数块的寿命。最后一个强引用释放载荷，最后一个弱引用释放计数块。`getMut` 要求唯一强引用且没有显式弱引用，`tryUnwrap` 消费强引用，并在其唯一时移出载荷。只有可安全共享的 T 才允许将这两类拥有者跨线程移交。
+
+当前实现范围、实际直接导入与未覆盖接口见[标准包实现矩阵](../docs/stdlib/Vaqrin-stdlib-package-matrix.md)。容器及 I/O 的接口细节见[容器实现](../docs/stdlib/coll-container-implementation.md)与[I/O 实现](../docs/stdlib/io-stack.md)。

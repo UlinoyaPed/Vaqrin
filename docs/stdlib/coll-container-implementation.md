@@ -1,26 +1,26 @@
 # coll / hash 容器实现状态与公开 API
 
-本文件记录 `feature/coll-containers` 分支的源码现状。状态“已写入”表示源码已进入分支；本分支没有在本次环境中运行 vaqc/LLVM 编译，因此不表示编译或运行验收通过。
+本文件记录集成分支上的容器接口。宿主测试覆盖各主要类型的代表用法，类型矩阵的「已运行」指代表用例通过。全量设计合同和未覆盖包见[标准包实现矩阵](Vaqrin-stdlib-package-matrix.md)。
 
 ## 1. 类型矩阵
 
 | 类型 | 数据结构 | 源码状态 | 编译验收 |
 |---|---|---|---|
-| `Vec<T>` | 连续动态数组 | 已写入并扩展 | 未运行 |
-| `FixedVec<T,N>` | 内联固定容量数组 | 已写入并扩展 | 未运行 |
-| `VecDeque<T>` | 循环缓冲动态双端队列 | 已写入 | 未运行 |
-| `FixedDeque<T,N>` | 内联固定容量循环双端队列 | 已写入 | 未运行 |
-| `LinkedList<T>` | 双向链表 | 已写入 | 未运行 |
-| `Stack<T>` | Vec 尾部 LIFO 适配器 | 已写入 | 未运行 |
-| `Queue<T>` | VecDeque FIFO 适配器 | 已写入 | 未运行 |
-| `BinaryHeap<T>` | 二叉堆，比较器回调 | 已写入 | 未运行 |
-| `PriorityQueue<T>` | BinaryHeap 类型别名 | 已写入 | 未运行 |
-| `HashMap<K,V>` | 开放寻址哈希表 | 已写入 | 未运行 |
-| `HashSet<T>` | 基于 HashMap 的集合 | 已写入 | 未运行 |
-| `BTreeMap<K,V>` | 最小度数 4 的 B 树 | 已写入 | 未运行 |
-| `BTreeSet<T>` | 基于 BTreeMap 的集合 | 已写入 | 未运行 |
+| `Vec<T>` | 连续动态数组 | 已写入并扩展 | 代表用例已运行 |
+| `FixedVec<T,N>` | 内联固定容量数组 | 已写入并扩展 | 代表用例已运行 |
+| `VecDeque<T>` | 循环缓冲动态双端队列 | 已写入 | 代表用例已运行 |
+| `FixedDeque<T,N>` | 内联固定容量循环双端队列 | 已写入 | 代表用例已运行 |
+| `LinkedList<T>` | 双向链表 | 已写入 | 代表用例已运行 |
+| `Stack<T>` | Vec 尾部 LIFO 适配器 | 已写入 | 代表用例已运行 |
+| `Queue<T>` | VecDeque FIFO 适配器 | 已写入 | 代表用例已运行 |
+| `BinaryHeap<T>` | 二叉堆，比较器回调 | 已写入 | 代表用例已运行 |
+| `PriorityQueue<T>` | BinaryHeap 类型别名 | 已写入 | 代表用例已运行 |
+| `HashMap<K,V>` | 开放寻址哈希表 | 已写入 | 代表用例已运行 |
+| `HashSet<T>` | 基于 HashMap 的集合 | 已写入 | 代表用例已运行 |
+| `BTreeMap<K,V>` | 最小度数 4 的 B 树 | 已写入 | 代表用例已运行 |
+| `BTreeSet<T>` | 基于 BTreeMap 的集合 | 已写入 | 代表用例已运行 |
 
-本分支不再把 API 草案中的 `SmallVec`、`RingBuffer`、`ForwardList`、`StableVec`、`OrderedHashMap`、`FlatMap`、`MultiMap`、`SlotMap` 等符号视为已经实现。
+API 草案中的 `SmallVec`、`RingBuffer`、`ForwardList`、`StableVec`、`OrderedHashMap`、`FlatMap`、`MultiMap`、`SlotMap` 等容器仍待实现。
 
 ## 2. 源码文件
 
@@ -182,7 +182,7 @@ BinaryHeap 构造时需要比较回调 `func(*const T,*const T) bool`，也提�
 
 - `Hasher` 接口：`write(bytes: []const u8) -> void`、`finish() -> usize`
 - `HashKey` 接口：`hash(state: *Hasher) -> void`、`equals(other: *const Self) -> bool`
-- `FnvHasher`：`init`、`initSeeded`、`writeByte`、`write`、`finish`、`reset`、`resetSeeded`
+- `FnvHasher`：`init`、`init(seed)`、`writeByte`、`write`、`finish`、`reset`、`resetSeeded`
 - 函数：`hashValue`、`hashValueSeeded`、`hashBytes`、`hashBytesSeeded`、`hashCombine`、`hashKey`、`equalKey`
 - 标量回调：i8/u8/i16/u16/i32/u32/i64/u64/bool 对应的 `hashX` 与 `eqX`
 
@@ -234,7 +234,7 @@ BTreeMap 构造必须提供严格弱序回调 `less: func(*const K,*const K) boo
 
 BTreeSet 提供 `init(less)`、`withComparator(less)`、`len/isEmpty/contains/insert/remove/take/first/last/popFirst/popLast/lowerBound/upperBound/iterRef/clear/deinit`。
 
-树节点最多 7 个键、8 个子节点，最小度数为 4。插入采用 top-down split；删除实现借兄弟、合并子节点和根收缩。比较等价定义为 `!less(a,b) && !less(b,a)`。迭代器创建时分配一个有序指针索引，失败会返回分配错误；迭代期间不得修改树。当前 BTree 节点使用默认 Box 分配器，尚无自定义分配器入口。remove 的 key 参数应来自树外部稳定存储；不要把本树迭代器借出的键指针作为同一次删除的查询参数。
+树节点最多 7 个键、8 个子节点，最小度数为 4。插入在降层前分裂满子节点。删除先定位键，再自底向上借用兄弟节点、合并节点或收缩根。比较等价定义为 `!less(a,b) && !less(b,a)`。`remove` 和 `removeEntry` 可使用同一棵树借出的键作为查询，比较在任何修改之前完成。删除成功后应重新获取借用。迭代器创建时分配有序指针索引，失败会返回分配错误。当前 BTree 节点使用默认 Box 分配器，自定义分配器入口仍待实现。
 
 ## 6. 内存、所有权和迭代器合同
 
@@ -262,10 +262,10 @@ BTreeSet 提供 `init(less)`、`withComparator(less)`、`len/isEmpty/contains/in
 | `coll/btree.vqr` | FixedVec、Vec、Box |
 | `hash/hash.vqr` | 语言内建数值、接口和 FNV 运算 |
 
-没有修改编译器前端、LLVM 后端、运行时、共享验收脚本、CMake 配置、io/fs/path/bufio/fmt/bytes。
+集成时补齐了元组位置字段、可空值与 null 比较、类型别名的关联函数，以及裸机自定义分配器路径。容器借用的分配器必须覆盖容器寿命。缺少默认堆时，显式分配器仍可使用，默认分配返回 AllocationError.AllocatorUnavailable。Vec 由于可能持有借用分配器，类型能力检查禁止将其跨线程移交。
 
 ## 8. 尚未实现或尚未验证
 
 尚未实现：ListCursor、链表 splice、Vec Drain/Splice、Map Entry API、keys/values/valuesMut 投影、IntoMapIter、HashSet union/intersection/difference、BTree range/cursor、BTreeMap/Set 自定义分配器、SipHash/系统随机种子、OrderedHashMap、FlatMap、MultiMap、SmallVec、RingBuffer、ForwardList、StableVec、SlotMap。
 
-当前仅完成源码写入和静态审查；没有在本次环境运行 vaqc、LLVM、ASan/UBSan 或独立运行验收。下一步应在仓库工作区运行独立 coll 验收，重点覆盖 move-only、析构计数、OOM、deque 回绕、hash 碰撞/扩容/tombstone、B-tree 插入删除分裂合并及迭代器正反向遍历。
+宿主运行验收覆盖不可复制元素、析构计数、错误时保留输入、哈希碰撞与 tombstone、双端回绕、链表节点地址稳定、B 树分裂、合并、根收缩和使用借出键删除。Cortex-M3 已验证固定容量及自定义分配器路径生成对象且无未定义符号。ASan/UBSan 和全部重载仍待专项验收。

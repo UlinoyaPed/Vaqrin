@@ -1,13 +1,13 @@
 # Vaqrin 标准包 API 全量设计清单（2026-11-19 草案）
 
-本清单以 `language-spec-v0.1.2.md`、`Vaqrin.zip`、`Vaqrin-stdlib-design.md` 和尚未合入的补丁为基线，同时纳入 11 月 19 日关于 `&name` 指针绑定的最新待批准方案。它定义**本轮拟覆盖范围内的每一项公开类型、方法、函数**，包含可选宿主设施与后期扩展，但不意味着全部 API 已编译、实现或验收。
+本清单保留 Vaqrin v0.1.3 标准包的目标合同和历史符号。当前源码的包状态、直接导入和主要缺口见[标准包实现矩阵](Vaqrin-stdlib-package-matrix.md)。逐符号 CSV/JSON 随原设计归档，字段状态用于追溯。
 
 清单总计 **59 个包、511 个类型/接口/枚举/别名记录、2063 个成员方法或构造器签名、1022 个包级函数签名**（函数/方法重载按签名计数），合计 **3596 条**。其中 **3569 条作为目标公开 API，27 条仅为旧实现/补丁溯源，目标不保留**。另提供逐符号 CSV/JSON，可按 `target` 字段筛选。
 
 ## 记法、规范性与边界
 
 - `name(args) -> R` 是**设计合同记法**，为了让每一项可以被独立检索，**不声称这些签名是当前 `vaqc` 能解析的完整源码**。最终 Vaqrin 书写将使用 `func name(args) R`；其中 `Self`、`T`、`I`、`F`、`K/V` 等由泛型约束实例化，接口和回调的泛型语法须编译器接线。`?T` 表示缺失；`!T` 表示可恢复错误；`!?T` 仅拆最外层 `!`。
-- `*T` 是可变非拥有指针，`*const T` 是只读非拥有指针；一般借用由调用者保证存活期。`&name: *T` 拟作为**指针绑定模式**，绑定后 `name` 是指向目标位置的 `T` 左值，形参 ABI 仍为 `*T`；详见整合语言设计文件。普通参数不自动取地址。
+- `*T` 是可变非拥有指针，`*const T` 是只读非拥有指针；一般借用由调用者保证存活期。`&name: *T` 采用**指针绑定模式**，绑定后 `name` 是指向目标位置的 `T` 左值，形参 ABI 仍为 `*T`；详见整合语言设计文件。普通参数不自动取地址。
 - `init()` 为构造入口合同；若返回 `Self`，在语言里按 `T(...)` 构造；可失败初始化按 `!Self`，与 `func init(...) !void` 的当前规范衔接。类成员没有填写接收者时按现有 const/var 规则补全；命名中 `getMut`/`atMut` 规定可写，`get`/`at`/`peek` 规定只读。
 - 分配失败、输入解析失败和系统操作失败使用 `!`，不默认静默成功。会让可移动实参在失败后被消耗的接口可另提供 `Preserving` 形式。每个 `?T` 包装层次都保留，`opt.map` 与 `iter.filterMap` 不能混淆。
 - 规划阶段不为每一个函数制造 C++ 式同名 `tryX`，短名优先；平台不支持的包通过**目标能力检查**静态拒绝具体调用，未使用的包不能拖入宿主依赖。`ffi`/`mmio` 的危险入口必须位于 `unsafe` 环境。
@@ -79,9 +79,19 @@
 
 ## 状态与迁移
 
-源码快照中的 `collections` **尚未重命名**。上次补丁把它**直接改为** `coll`，增加 `opt`、`coll.filterMap`、可空包装以及容量越界保护。补丁在恢复的源码快照上 `git apply --check` 通过，但尚未产生经过完整 LLVM 编译的实测结果。当前 GitHub 的 `master` 只有初始提交，不能代替本地快照。清单中“已有”仅表示原始源码可见，不意味着按新合同完成行为验收。
+旧 `collections` 的容器和迭代入口已分别迁入 `coll`、`iter`。当前集成有 31 个源码包，以下目录仍保留 59 个包的目标合同。已通过验收的代表用例和未齐备的功能以实现矩阵为准。
 
-原快照实际存在的标准包：`core`（Box/Vec 别名、isSome/isOk/unwrapOr）、`collections`（Vec、SliceIter、Enumerate、Zip、Map、Filter 和迭代辅助）、`text`（UTF-8 验证、Scalars、StringBuilder）与 `io.println`。其他大部分 API 为明确的**待实现合同**。
+| 集成包 | 当前公开形态及与设计合同的差异 |
+| --- | --- |
+| `coll` | Vec、FixedVec、双端队列、链表、堆、哈希表和 B 树已接入。关联容器用显式回调，引用迭代器可能返回分配错误，键仅供只读借用。 |
+| `hash` | FNV-1a 32 位、Hasher/HashKey 与整数回调。带种子的入口接收 `u32`。 |
+| `io` | ReaderAt/WriterAt 与普通流协议、标准描述符、Posix HostFile、内存流及常用适配器。原生 errno 经 `systemErrorCode` 解码。 |
+| `fs` | 文件与单层目录入口为 File、OpenOptions、Directory 与 DirectoryEntry。 |
+| `path` | `Path(string)` 持有字符串，`Path.fromString(str) !Path` 从视图分配，PathBuf 为别名。当前 `parent() !?Path`，文件名、主干和扩展名返回借用。 |
+| `bufio` | BufferedReader、BufferedWriter 和 ASCII 空白 Scanner。可恢复的短写保留未提交后缀。 |
+| `fmt` | FormatArg 为带数据枚举，`arg(string)` 持有输入。支持顺序与显式索引两种花括号格式。 |
+
+公开方法的细节和验证范围见[容器实现文档](coll-container-implementation.md)及[I/O 实现文档](io-stack.md)。
 
 ## 完整符号目录
 

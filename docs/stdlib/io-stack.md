@@ -7,9 +7,9 @@ The native implementation is isolated in compiler/runtime/io_posix.cpp and expos
 only fixed-width scalars, size_t, byte pointers, and opaque directory handles through
 a C ABI. POSIX descriptors and structs do not appear in public Vaqrin signatures.
 
-Windows, macOS, non-Linux targets, and freestanding profiles are rejected when an
-object references the host I/O runtime. LLVM target support alone does not imply
-that an OS runtime port exists.
+Calls that require the native runtime are checked against the hosted GNU/Linux
+LP64 target contract during type checking. Portable stream adapters and memory
+streams can be used separately from the POSIX runtime.
 
 ## Packages
 
@@ -31,8 +31,9 @@ error number in bits 0..29. This avoids collisions with the compiler's reserved
 high-valued error IDs for allocation, numeric conversion and legacy output errors. Use io.isSystemError and
 io.systemErrorCode to inspect it. This encoding is process-local and must not be
 serialized as a stable error number. Linux EINTR and EAGAIN are recognized by the
-progress helpers; interrupted synchronous operations are retried, while WouldBlock
-is returned to the caller. Other errno values are preserved unchanged.
+progress helpers. The POSIX open/read/write boundary retries EINTR. Abstract
+stream adapters report interruptions and would-block without an indefinite retry.
+Other errno values retain their original number.
 
 ## Ownership and buffering
 
@@ -75,17 +76,17 @@ IoProgress(processed, status), IoError(WriteFailed, UnexpectedEof, NoProgress,
 WouldBlock, Interrupted, InvalidCount, PositionOutOfRange, LimitExceeded, Closed,
 InvalidArgument, Unsupported), MemoryReader, MemoryWriter, FixedWriter, LimitedReader,
 CountingReader, CountingWriter, MultiReader, MultiWriter, HostFile,
-HostMetadata, HostDirEntry, HostDirectory.
+HostMetadata, HostDirEntry, HostDirectory, TeeReader.
 
 Functions:
 - read(reader, dst), write(writer, src)
 - readExact(reader, dst), readExactProgress(reader, dst), readAtLeast(reader, dst, min)
-- readExactAt(reader, offset, dst), writeAllAt(writer, offset, src)
+- readAt(reader, offset, dst), writeAt(writer, offset, src), readExactAt(reader, offset, dst), writeAllAt(writer, offset, src)
 - writeAll(writer, src), writeAllProgress(writer, src), writeString(writer, value)
-- readToEnd(reader, limit), readToEnd(reader), readToString(reader, limit)
+- readToEnd(reader, limit), readToEnd(reader), readToString(reader, limit), readToString(reader)
 - copy(reader, writer), copy(reader, writer, scratch), copyN(reader, writer, n, scratch),
   copyAll(reader, writer), discard(reader, n, scratch)
-- limit(reader, n)
+- limit(reader, n), tee(reader, writer)
 - stdin(), stdout(), stderr(), print(str), println<T>(value), eprint(str), eprintln(str),
   flushStdout()
 - systemError(errno), systemErrorCode(error), isSystemError(error),
@@ -104,12 +105,14 @@ shared file cursor; writeAt rejects append-mode handles.
 Types: Path, PathBuf (alias of Path), PathComponents, Component(Root, Current, Parent,
 Normal(str)), PathError(Empty, InvalidComponent, Capacity).
 
-Path methods: asString, isAbsolute, isRelative, filename, parent, extension, stem,
-components, normalize, withExtension.
+Construct with `Path(string)` or `Path.fromString(str) !Path`. Path methods include
+asString, isAbsolute, isRelative, filename, parent, extension, stem, components,
+normalize and withExtension. The `parent() !?Path` method can allocate. Filename,
+stem and extension return borrowed text. Components hold a shared owning string.
 
-Functions: join(base, child), normalize(path), filename(path), parent(path),
-extension(path), stem(path), isAbsolute(path), isRelative(path), components(path),
-withExtension(path, extension).
+Package functions include fromString, join, normalize, isAbsolute, isRelative,
+components and withExtension. The filename, parent, extension and stem wrappers
+take a pointer to the path owner.
 
 ### fs
 
@@ -149,7 +152,7 @@ readLine(reader, maxBytes).
 
 Types: Alignment(Left, Right, Center), FloatStyle(General, Fixed, Scientific),
 FormatOptions(radix, width, precision, fill, alignment, uppercase, showSign, floatStyle),
-FormatArg(Text, Signed, Unsigned, Float, Boolean, Character), FormatError(InvalidRadix,
+FormatArg(Text, OwnedText, Signed, Unsigned, Float, Boolean, Character), FormatError(InvalidRadix,
 InvalidPrecision, WidthTooLarge, UnsupportedType, InvalidFormat).
 
 Functions: formatInt(i8/i16/i32/i64/i128, radix), formatUint(u8/u16/u32/u64/u128,
@@ -158,6 +161,16 @@ options), writeBool, writeChar, writeFloat, writeSigned, writeUnsigned, writeInt
 writeUint, writeHex, writeTo(writer, value), writeTo(writer, pattern, args),
 format(value), format(pattern, args), print, println, eprint, eprintln.
 
-The brace formatter supports automatic positional placeholders, escaped braces, integer
-radices b/o/d/x/X, float styles f/e/g, optional sign, width, alignment and precision.
+The brace formatter supports automatic or explicitly indexed positional placeholders,
+escaped braces, integer radices b/o/d/x/X, float styles f/e/g, sign, width, alignment
+and precision. A format uses one indexing mode throughout. OwnedText holds the
+string until the argument is destroyed. Float conversion uses the C numeric locale.
 The FormatOptions value can also specify an arbitrary Unicode fill character.
+
+
+## Local acceptance
+
+The host suite executes binaries for standard streams, positional file I/O, directory
+operations, short progress, path ownership and formatting. It also links an I/O
+static archive from C to count descriptor closures and links both bundled runtimes
+in one executable. x86-64 is the executed host target in this integration.

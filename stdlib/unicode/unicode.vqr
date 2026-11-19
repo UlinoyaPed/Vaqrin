@@ -1,7 +1,5 @@
 package unicode
 import (coll, convert, text)
-import ("generated/unicode_data.vqr" as data)
-import ("generated/script.vqr" as generated)
 
 pub enum GeneralCategory { Cn, Cc, Cf, Cs, Co, Ll, Lm, Lo, Lt, Lu, Mc, Me, Mn, Nd, Nl, No, Pc, Pd, Pe, Pf, Pi, Po, Ps, Sc, Sk, Sm, So, Zl, Zp, Zs }
 pub enum NormalForm { NFC, NFD, NFKC, NFKD }
@@ -31,15 +29,15 @@ pub record CharInfo {
 func packedInfo(ch: char) u64 {
     var cp = convert.fromChar(ch);
     var lo: usize = 0;
-    var hi: usize = data.unicodePropertyRanges.len() / 2;
+    var hi: usize = unicodePropertyRanges.len() / 2;
     for lo < hi {
         var mid = lo + (hi - lo) / 2;
-        var bounds = data.unicodePropertyRanges[mid * 2];
+        var bounds = unicodePropertyRanges[mid * 2];
         var first = u32(bounds >> 21)!;
         var last = u32(bounds & 0x1fffff)!;
         if cp < first { hi = mid; }
         else if cp > last { lo = mid + 1; }
-        else { return data.unicodePropertyRanges[mid * 2 + 1]; }
+        else { return unicodePropertyRanges[mid * 2 + 1]; }
     }
     0
 }
@@ -51,7 +49,7 @@ pub func charInfo(ch: char) CharInfo {
     var sc = u8((value >> 5) & 255)!;
     CharInfo{
         category: categoryFromId(gc),
-        script: generated.scriptFromId(sc),
+        script: scriptFromId(sc),
         combiningClass: u8((value >> 13) & 255)!,
         flags: u16((value >> 21) & 0x1fff)!
     }
@@ -95,13 +93,13 @@ pub func isExtendedPictographic(ch: char) bool { (charInfo(ch).flags & flagExten
 func simpleMapping(ch: char, column: usize) char {
     var cp = convert.fromChar(ch);
     var lo: usize = 0;
-    var hi = data.simpleCaseMappings.len() / 4;
+    var hi = simpleCaseMappings.len() / 4;
     for lo < hi {
         var mid = lo + (hi - lo) / 2;
-        var key = data.simpleCaseMappings[mid * 4];
+        var key = simpleCaseMappings[mid * 4];
         if cp < key { hi = mid; }
         else if cp > key { lo = mid + 1; }
-        else { return __vqr_char(data.simpleCaseMappings[mid * 4 + column]); }
+        else { return __vqr_char(simpleCaseMappings[mid * 4 + column]); }
     }
     ch
 }
@@ -175,18 +173,18 @@ func appendCaseFoldScalarUtf8(cp: u32, output: *coll.Vec<u8>) !void {
 pub func caseFoldFull(ch: char) !string {
     var cp = convert.fromChar(ch);
     var lo: usize = 0;
-    var hi = data.caseFoldIndex.len() / 3;
+    var hi = caseFoldIndex.len() / 3;
     for lo < hi {
         var mid = lo + (hi - lo) / 2;
-        var key = data.caseFoldIndex[mid * 3];
+        var key = caseFoldIndex[mid * 3];
         if cp < key { hi = mid; }
         else if cp > key { lo = mid + 1; }
         else {
-            var offset = data.caseFoldIndex[mid * 3 + 1];
-            var count = data.caseFoldIndex[mid * 3 + 2];
+            var offset = caseFoldIndex[mid * 3 + 1];
+            var count = caseFoldIndex[mid * 3 + 2];
             var output = coll.Vec<u8>();
             for i in usize(0)..count {
-                appendUtf8Scalar(data.caseFoldScalars[offset + i], &output)!;
+                appendUtf8Scalar(caseFoldScalars[offset + i], &output)!;
             }
             return text.fromBytes(output.asConstSlice());
         }
@@ -205,7 +203,7 @@ pub func caseFold(value: str) !string {
     text.fromBytes(output.asConstSlice())
 }
 
-// Normalization uses the generated Unicode 17 decomposition and composition data.
+// Normalization uses the generated Unicode 17 decomposition and composition 
 pub func normalize(value: str, form: NormalForm) !string { normalizeScalars(value, form) }
 pub func isNormalized(value: str, form: NormalForm) bool {
     var normalized = normalize(value, form) catch { return false; };

@@ -1,0 +1,166 @@
+package errors
+import (coll, io, text, iter, log)
+
+pub enum ErrorSeverity { Info, Warning, Error, Fatal }
+
+pub class SourceLocation {
+    var fileValue: string;
+    var startLineValue: u32;
+    var startColumnValue: u32;
+    var endLineValue: u32;
+    var endColumnValue: u32;
+    var functionValue: string;
+    func init(file: str, startLine: u32, startColumn: u32,
+        endLine: u32, endColumn: u32, function: str) !Self
+        : fileValue(text.fromBytes(file.asBytes())!), startLineValue(startLine),
+          startColumnValue(startColumn), endLineValue(endLine), endColumnValue(endColumn),
+          functionValue(text.fromBytes(function.asBytes())!) {}
+public:
+    const func file() str { fileValue }
+    const func startLine() u32 { startLineValue }
+    const func startColumn() u32 { startColumnValue }
+    const func endLine() u32 { endLineValue }
+    const func endColumn() u32 { endColumnValue }
+    const func function() str { functionValue }
+}
+
+pub class Frame {
+    var messageValue: string;
+    var locationValue: ?SourceLocation;
+    var attrsValue: coll.Vec<log.Attr>;
+    func init(message: str, location: ?SourceLocation, attrs: []const log.Attr) !Self
+        : messageValue(text.fromBytes(message.asBytes())!), locationValue(move(location)),
+          attrsValue(coll.Vec<log.Attr>()) {
+        for attr in attrs { attrsValue.push(attr.clone()!)!; }
+    }
+public:
+    const func message() str { messageValue }
+    const func location() ?SourceLocation { locationValue }
+    const func attrs() []const log.Attr { attrsValue.asConstSlice() }
+    const func clone() !Self { Frame(messageValue, locationValue, attrsValue.asConstSlice()) }
+}
+
+pub class Report {
+    #copy: disabled
+    var errorValue: ?ErrorId;
+    var messageValue: string;
+    var severityValue: ErrorSeverity;
+    var frames: coll.Vec<Frame>;
+    var children: coll.Vec<Report>;
+    func init(message: str, error: ?ErrorId) !Self
+        : errorValue(error), messageValue(text.fromBytes(message.asBytes())!),
+          severityValue(ErrorSeverity.Error), frames(coll.Vec<Frame>()),
+          children(coll.Vec<Report>()) {}
+public:
+    static func fromError(error: ErrorId) !Self {
+        Report("error", some(error))
+    }
+    static func new(message: str) !Self { Report(message, null) }
+    const func message() str { messageValue }
+    const func severity() ErrorSeverity { severityValue }
+    func setSeverity(value: ErrorSeverity) void { severityValue = value; }
+    const func rootError() ?ErrorId { errorValue }
+    const func frameCount() usize { frames.len() }
+    const func causeCount() usize { children.len() }
+
+    func addContext(message: str) !void {
+        frames.push(Frame(message, null, [_]log.Attr{}[:])!)!
+    }
+    func addContextAt(message: str, location: SourceLocation, attrs: []const log.Attr) !void {
+        frames.push(Frame(message, some(move(location)), attrs)!)!
+    }
+    func withContext(message: str) !Self {
+        var result = clone()!;
+        result.addContext(message)!;
+        move(result)
+    }
+    func addCause(report: Report) !void { children.push(move(report))!; }
+    func join(other: Report) !Self {
+        var result = clone()!;
+        result.addCause(move(other))!;
+        move(result)
+    }
+    const func matches(error: ErrorId) bool {
+        if errorValue == some(error) { return true; }
+        for child in children.asConstSlice() { if child.matches(error) { return true; } }
+        false
+    }
+    const func causes() []const Report { children.asConstSlice() }
+    const func clone() !Self {
+        var result = Report(messageValue, errorValue)!;
+        result.severityValue = severityValue;
+        for frame in frames.asConstSlice() { result.frames.push(frame.clone()!)!; }
+        for child in children.asConstSlice() { result.children.push(child.clone()!)!; }
+        move(result)
+    }
+    func format(writer: *io.Writer) !void { formatReport(this, writer, 0) }
+    const func formatString() !string {
+        var writer = io.MemoryWriter();
+        formatReport(this, &writer, 0)!;
+        var bytes = io.MemoryWriter.intoBytes(move(writer));
+        text.fromBytes(bytes.asConstSlice())
+    }
+
+private:
+}
+
+pub error ReportError { Cycle, Empty, FormatFailed, TooManyCauses }
+
+func indent(writer: *io.Writer, depth: usize) !void {
+    for i := usize(0); i < depth; i++ { io.writeString(writer, "  ")!; }
+}
+func formatReport(report: *const Report, writer: *io.Writer, depth: usize) !void {
+    indent(writer, depth)!;
+    io.writeString(writer, report.message())!;
+    switch report.rootError() {
+        some(errorId) => {
+            io.writeString(writer, " [")!;
+            io.writeString(writer, errorId.toString())!;
+            io.writeString(writer, "]")!;
+        },
+        null => {},
+    }
+    io.writeString(writer, "\n")!;
+    for frame in report.frames.asConstSlice() {
+        indent(writer, depth + 1)!;
+        io.writeString(writer, "context: ")!;
+        io.writeString(writer, frame.message())!;
+        io.writeString(writer, "\n")!;
+    }
+    for child in report.causes() { formatReport(&child, writer, depth + 1)!; }
+}
+
+pub class ErrorSink {
+    var reports: coll.Vec<Report>;
+public:
+    func init() : reports(coll.Vec<Report>()) {}
+    func push(report: Report) !void { reports.push(move(report))!; }
+    const func len() usize { reports.len() }
+    const func isEmpty() bool { reports.isEmpty() }
+    func clear() void { reports.clear(); }
+    func toReport() !Report {
+        if reports.isEmpty() { return ReportError.Empty; }
+        if reports.len() == 1 { return reports.pop().unwrap(); }
+        var result = Report("multiple errors", null)!;
+        for i := usize(0); i < reports.len(); i++ {
+            var item = reports.remove(0).unwrap();
+            result.addCause(move(item))!;
+        }
+        move(result)
+    }
+}
+
+pub func fromError(error: ErrorId) !Report { Report.fromError(error) }
+pub func addContext(report: *Report, message: str) !void { report.addContext(message) }
+pub func withContext(error: ErrorId, message: str) !Report {
+    var report = Report.fromError(error)!;
+    report.addContext(message)!;
+    move(report)
+}
+pub func addCause(report: *Report, cause: Report) !void { report.addCause(move(cause)) }
+pub func join(a: Report, b: Report) !Report { a.join(move(b)) }
+pub func rootError(report: *const Report) ?ErrorId { report.rootError() }
+pub func causes(report: *const Report) []const Report { report.causes() }
+pub func matches(report: *const Report, error: ErrorId) bool { report.matches(error) }
+pub func format(report: *const Report) !string { report.formatString() }
+pub func reportTo(writer: *io.Writer, report: *const Report) !void { formatReport(report, writer, 0) }

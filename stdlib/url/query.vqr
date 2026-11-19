@@ -1,0 +1,153 @@
+package url
+import (coll, encoding, text, iter)
+
+pub class QueryParam {
+    var keyValue: string;
+    var dataValue: string;
+    func init(key: string, value: string) : keyValue(key), dataValue(value) {}
+public:
+    const func key() str { keyValue }
+    const func value() str { dataValue }
+}
+
+pub class QueryValueIter {
+    var entries: []const QueryParam;
+    var keyValue: string;
+    var index: usize;
+public:
+    func init(entries: []const QueryParam, key: string) : entries(entries), keyValue(key), index(0) {}
+    func next() ?str {
+        for index < entries.len() {
+            var current = index;
+            index++;
+            if entries[current].keyValue == keyValue { return some(entries[current].dataValue); }
+        }
+        null
+    }
+}
+
+pub class QueryParams {
+    #copy: disabled
+    var entries: coll.Vec<QueryParam>;
+public:
+    func init() : entries(coll.Vec<QueryParam>()) {}
+
+    static func parse(value: str) !Self {
+        var result = QueryParams();
+        var source = value.asBytes();
+        var start: usize = 0;
+        if source.len() > 0 && source[0] == 63 { start = 1; }
+        var fieldStart = start;
+        for i := start; i <= source.len(); i++ {
+            if i == source.len() || source[i] == 38 {
+                if i > fieldStart {
+                    var field = source[fieldStart..i];
+                    var equal = findByte(field, 61);
+                    var keyBytes = field;
+                    var valueBytes: []const u8 = field[0..0];
+                    switch equal {
+                        some(position) => {
+                            keyBytes = field[0..position];
+                            valueBytes = field[position + 1..field.len()];
+                        },
+                        null => {},
+                    }
+                    var keyData = encoding.percentDecode(text.fromBytes(keyBytes)!)!;
+                    var valueData = encoding.percentDecode(text.fromBytes(valueBytes)!)!;
+                    var key = text.fromBytes(keyData.asConstSlice())!;
+                    var item = text.fromBytes(valueData.asConstSlice())!;
+                    result.append(key, item)!;
+                }
+                fieldStart = i + 1;
+            }
+        }
+        move(result)
+    }
+
+    func append(key: str, value: str) !void {
+        var ownedKey = text.fromBytes(key.asBytes())!;
+        var ownedValue = text.fromBytes(value.asBytes())!;
+        entries.push(QueryParam(move(ownedKey), move(ownedValue)))!
+    }
+
+    func set(key: str, value: str) !void {
+        var index: usize = 0;
+        for index < entries.len() {
+            if entries[index].keyValue == key {
+                var removed = entries.remove(index);
+            } else { index++; }
+        }
+        append(key, value)!
+    }
+
+    const func get(key: str) ?str {
+        for &entry in entries.asConstSlice() {
+            if entry.keyValue == key { return some(entry.dataValue); }
+        }
+        null
+    }
+
+    const func getAll(key: str) !QueryValueIter {
+        var owned = text.fromBytes(key.asBytes())!;
+        QueryValueIter(entries.asConstSlice(), move(owned))
+    }
+
+    func remove(key: str) usize {
+        var removed: usize = 0;
+        var index: usize = 0;
+        for index < entries.len() {
+            if entries[index].keyValue == key {
+                var item = entries.remove(index);
+                removed++;
+            } else { index++; }
+        }
+        removed
+    }
+
+    const func len() usize { entries.len() }
+    const func isEmpty() bool { entries.isEmpty() }
+
+    const func encode() !string {
+        var output = text.StringBuilder();
+        for i := usize(0); i < entries.len(); i++ {
+            if i != 0 { output.append("&")!; }
+            output.append(queryEscape(entries[i].keyValue)!)!;
+            output.append("=")!;
+            output.append(queryEscape(entries[i].dataValue)!)!;
+        }
+        output.build()
+    }
+}
+
+func findByte(data: []const u8, needle: u8) ?usize {
+    for i := usize(0); i < data.len(); i++ { if data[i] == needle { return some(i); } }
+    null
+}
+
+pub func queryEscape(value: str) !string {
+    encoding.percentEncode(value.asBytes(), "".asBytes())
+}
+pub func queryUnescape(value: str) !string {
+    var decoded = encoding.percentDecode(value)!;
+    text.fromBytes(decoded.asConstSlice())
+}
+pub func pathEscape(value: str) !string {
+    encoding.percentEncode(value.asBytes(), "!$&'()*+,;=:@".asBytes())
+}
+pub func pathUnescape(value: str) !string {
+    var decoded = encoding.percentDecode(value)!;
+    text.fromBytes(decoded.asConstSlice())
+}
+pub func parseQuery(value: str) !QueryParams { QueryParams.parse(value) }
+pub func encodeQuery(items: []const (str, str)) !string {
+    var output = text.StringBuilder();
+    var first = true;
+    for key, value in items {
+        if !first { output.append("&")!; }
+        first = false;
+        output.append(queryEscape(key)!)!;
+        output.append("=")!;
+        output.append(queryEscape(value)!)!;
+    }
+    output.build()
+}

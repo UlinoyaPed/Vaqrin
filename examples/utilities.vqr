@@ -1,0 +1,36 @@
+package utilities_example
+import (url, log, errors, io)
+
+error NetworkError { Refused }
+
+func main() !void {
+    var address = url.parse("https://example.com:443/a/../b?tag=one&tag=two#top")!;
+    var normalized = address.normalize()!;
+    io.println(normalized.toString()!)!;
+
+    var params = url.parseQuery("tag=one&tag=two&plus=a+b")!;
+    io.println(params.len())!;
+
+    var bad = url.parse("https://example.com/%Q0");
+    io.println(core.isErr(&bad))!;
+
+    var memory = io.MemoryWriter();
+    var textHandler = log.TextHandler(&memory);
+    var logger = log.newLogger(&textHandler)!;
+    logger.setLevel(log.Level.Info);
+    var attributes = [_]log.Attr{
+        log.Attr.string("component", "worker")!,
+        log.Attr.int("attempt", 2),
+    };
+    log.debug(&logger, "filtered", attributes[:])!;
+    log.info(&logger, "connected", attributes[:])!;
+    logger.flush()!;
+    io.println(memory.asSlice())!;
+
+    var report = errors.fromError(NetworkError.Refused)!;
+    report.addContext("connecting to upstream")!;
+    var cause = errors.fromError(NetworkError.Refused)!;
+    cause.addContext("connection was rejected")!;
+    report.addCause(move(cause))!;
+    io.println(errors.format(&report)!)!;
+}

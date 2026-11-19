@@ -1,0 +1,238 @@
+package log
+import (coll, io, text, time)
+
+pub enum Level { Trace, Debug, Info, Warn, Error, Fatal }
+
+pub func levelText(value: Level) str {
+    switch value {
+        Level.Trace => "TRACE",
+        Level.Debug => "DEBUG",
+        Level.Info => "INFO",
+        Level.Warn => "WARN",
+        Level.Error => "ERROR",
+        Level.Fatal => "FATAL",
+    }
+}
+
+pub func parseLevel(value: str) !Level {
+    if value == "trace" || value == "TRACE" { return Level.Trace; }
+    if value == "debug" || value == "DEBUG" { return Level.Debug; }
+    if value == "info" || value == "INFO" { return Level.Info; }
+    if value == "warn" || value == "WARN" || value == "warning" { return Level.Warn; }
+    if value == "error" || value == "ERROR" { return Level.Error; }
+    if value == "fatal" || value == "FATAL" { return Level.Fatal; }
+    LogError.InvalidLevel
+}
+
+pub error LogError { InvalidLevel, InvalidAttribute, Closed, FormatFailed }
+
+pub enum AttrKind { String, Int, Bool, Error }
+
+pub class Attr {
+    var keyValue: string;
+    var kindValue: AttrKind;
+    var stringValue: string;
+    var intValue: i64;
+    var boolValue: bool;
+    var errorValue: ?ErrorId;
+    func init(key: str, kind: AttrKind, stringValue: string, intValue: i64,
+        boolValue: bool, errorValue: ?ErrorId)
+        : keyValue(text.fromBytes(key.asBytes())!), kindValue(kind),
+          stringValue(text.fromBytes(stringValue.asBytes())!), intValue(intValue),
+          boolValue(boolValue), errorValue(errorValue) {}
+public:
+    static func string(key: str, value: str) !Self {
+        Attr(key, AttrKind.String, text.fromBytes(value.asBytes())!, 0, false, null)
+    }
+    static func int(key: str, value: i64) Self {
+        Attr(key, AttrKind.Int, "", value, false, null)
+    }
+    static func bool(key: str, value: bool) Self {
+        Attr(key, AttrKind.Bool, "", 0, value, null)
+    }
+    static func error(key: str, value: ErrorId) Self {
+        Attr(key, AttrKind.Error, "", 0, false, some(value))
+    }
+    const func key() str { keyValue }
+    const func kind() AttrKind { kindValue }
+    const func asString() ?str {
+        if kindValue == AttrKind.String { some(stringValue) } else { null }
+    }
+    const func asInt() ?i64 {
+        if kindValue == AttrKind.Int { some(intValue) } else { null }
+    }
+    const func asBool() ?bool {
+        if kindValue == AttrKind.Bool { some(boolValue) } else { null }
+    }
+    const func asError() ?ErrorId {
+        if kindValue == AttrKind.Error { errorValue } else { null }
+    }
+    const func clone() !Self {
+        Attr(keyValue, kindValue, stringValue, intValue, boolValue, errorValue)
+    }
+}
+
+pub class Record {
+    var levelValue: Level;
+    var timestampValue: ?time.Instant;
+    var messageValue: string;
+    var attrsValue: coll.Vec<Attr>;
+    func init(level: Level, message: str, attrs: []const Attr) !Self {
+        levelValue = level;
+        timestampValue = null;
+        messageValue = text.fromBytes(message.asBytes())!;
+        attrsValue = coll.Vec<Attr>();
+        for attr in attrs { attrsValue.push(attr.clone()!)!; }
+    }
+public:
+    const func level() Level { levelValue }
+    const func timestamp() ?time.Instant { timestampValue }
+    const func message() str { messageValue }
+    const func attrs() []const Attr { attrsValue.asConstSlice() }
+    const func clone() !Self {
+        var result = Record(levelValue, messageValue, attrsValue.asConstSlice())!;
+        result.timestampValue = timestampValue;
+        move(result)
+    }
+}
+
+pub interface Handler {
+    const func enabled(level: Level) bool;
+    func handle(record: *const Record) !void;
+    func flush() !void;
+}
+
+pub class Logger {
+    var target: *Handler;
+    var minimum: Level;
+    var fixed: coll.Vec<Attr>;
+    func init(handler: *Handler, level: Level, attrs: []const Attr) !Self
+        : target(handler), minimum(level), fixed(coll.Vec<Attr>()) {
+        for attr in attrs { fixed.push(attr.clone()!)!; }
+    }
+public:
+    static func new(handler: *Handler) !Self { Logger(handler, Level.Trace, [_]Attr{}[:]) }
+    const func enabled(level: Level) bool {
+        level >= minimum && target.enabled(level)
+    }
+    func setLevel(level: Level) void { minimum = level; }
+    func log(level: Level, message: str, attrs: []const Attr) !void {
+        if !enabled(level) { return; }
+        var all = coll.Vec<Attr>.withCapacity(fixed.len() + attrs.len())!;
+        for item in fixed.asConstSlice() { all.push(item.clone()!)!; }
+        for item in attrs { all.push(item.clone()!)!; }
+        var record = Record(level, message, all.asConstSlice())!;
+        record.timestampValue = null;
+        target.handle(&record)
+    }
+    func with(attrs: []const Attr) !Self {
+        var all = coll.Vec<Attr>.withCapacity(fixed.len() + attrs.len())!;
+        for item in fixed.asConstSlice() { all.push(item.clone()!)!; }
+        for item in attrs { all.push(item.clone()!)!; }
+        Logger(target, minimum, all.asConstSlice())
+    }
+    func flush() !void { target.flush() }
+}
+
+pub class TextHandler {
+    #implements: Handler
+    var writer: *io.Writer;
+    func init(writer: *io.Writer) : writer(writer) {}
+public:
+    const func enabled(level: Level) bool { true }
+    func handle(record: *const Record) !void {
+        io.writeString(writer, levelText(record.level()))!;
+        io.writeString(writer, " ")!;
+        io.writeString(writer, record.message())!;
+        for attr in record.attrs() {
+            io.writeString(writer, " ")!;
+            io.writeString(writer, attr.key())!;
+            io.writeString(writer, "=")!;
+            switch attr.kind() {
+                AttrKind.String => {
+                    io.writeString(writer, attr.asString().unwrap())!;
+                },
+                AttrKind.Int => {
+                    io.writeString(writer, formatInt(attr.asInt().unwrap())!)!;
+                },
+                AttrKind.Bool => {
+                    io.writeString(writer, if attr.asBool().unwrap() { "true" } else { "false" })!;
+                },
+                AttrKind.Error => {
+                    io.writeString(writer, "ErrorId")!;
+                },
+            }
+        }
+        io.writeString(writer, "\n")
+    }
+    func flush() !void { writer.flush() }
+}
+
+pub class BufferHandler {
+    #implements: Handler
+    var stored: coll.Vec<Record>;
+    func init() : stored(coll.Vec<Record>()) {}
+public:
+    const func enabled(level: Level) bool { true }
+    func handle(record: *const Record) !void { stored.push(record.clone()!) }
+    func flush() !void {}
+    const func len() usize { stored.len() }
+    const func records() []const Record { stored.asConstSlice() }
+    func clear() void { stored.clear(); }
+}
+
+pub class MultiHandler {
+    #implements: Handler
+    var handlers: []const *Handler;
+    func init(handlers: []const *Handler) : handlers(handlers) {}
+public:
+    const func enabled(level: Level) bool {
+        for handler in handlers { if handler.enabled(level) { return true; } }
+        false
+    }
+    func handle(record: *const Record) !void {
+        for handler in handlers {
+            if handler.enabled(record.level()) { handler.handle(record)!; }
+        }
+    }
+    func flush() !void { for handler in handlers { handler.flush()!; } }
+}
+
+func formatU32(value: u32) !string {
+    var builder = text.StringBuilder();
+    var digits = [10]u8{0,0,0,0,0,0,0,0,0,0};
+    var count: usize = 0;
+    var number = value;
+    for number > 0 {
+        digits[count] = u8(48 + number % 10)!;
+        count++;
+        number /= 10;
+    }
+    if count == 0 { builder.append("0")!; }
+    for count > 0 { count--; builder.append(text.fromBytes(digits[count..count + 1])!)!; }
+    builder.build()
+}
+func formatInt(value: i64) !string {
+    if value >= 0 { return formatU32(u32(value) catch { return LogError.FormatFailed; }); }
+    var magnitude = u64(0) -% bitCast<u64>(value);
+    var builder = text.StringBuilder();
+    builder.append("-")!;
+    var digits = [20]u8{0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+    var count: usize = 0;
+    for magnitude > 0 {
+        digits[count] = u8(48 + magnitude % 10)!;
+        count++;
+        magnitude /= 10;
+    }
+    if count == 0 { builder.append("0")!; }
+    for count > 0 { count--; builder.append(text.fromBytes(digits[count..count + 1])!)!; }
+    builder.build()
+}
+
+pub func newLogger(handler: *Handler) !Logger { Logger.new(handler) }
+pub func trace(logger: *Logger, message: str, attrs: []const Attr) !void { logger.log(Level.Trace, message, attrs) }
+pub func debug(logger: *Logger, message: str, attrs: []const Attr) !void { logger.log(Level.Debug, message, attrs) }
+pub func info(logger: *Logger, message: str, attrs: []const Attr) !void { logger.log(Level.Info, message, attrs) }
+pub func warn(logger: *Logger, message: str, attrs: []const Attr) !void { logger.log(Level.Warn, message, attrs) }
+pub func error(logger: *Logger, message: str, attrs: []const Attr) !void { logger.log(Level.Error, message, attrs) }
+pub func fatal(logger: *Logger, message: str, attrs: []const Attr) !void { logger.log(Level.Fatal, message, attrs) }

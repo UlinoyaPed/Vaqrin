@@ -1,0 +1,649 @@
+package url
+import (coll, core, encoding, text)
+
+pub error UrlError {
+    InvalidScheme, InvalidAuthority, InvalidHost, InvalidPort, InvalidIpv6,
+    InvalidCharacter, InvalidPercentEncoding, InvalidPath, InvalidBase,
+    InvalidUtf8, Overflow,
+}
+
+func isAlpha(value: u8) bool {
+    (65 <= value && value <= 90) || (97 <= value && value <= 122)
+}
+func isDigit(value: u8) bool { 48 <= value && value <= 57 }
+func isHex(value: u8) bool {
+    isDigit(value) || (65 <= value && value <= 70) || (97 <= value && value <= 102)
+}
+func hexValue(value: u8) u8 {
+    if isDigit(value) { value - 48 }
+    else if value <= 70 { value - 55 }
+    else { value - 87 }
+}
+func hexDigit(value: u8) u8 {
+    if value < 10 { 48 + value } else { 55 + value }
+}
+func isUnreserved(value: u8) bool {
+    isAlpha(value) || isDigit(value) || value == 45 || value == 46 || value == 95 || value == 126
+}
+func isSubDelimiter(value: u8) bool {
+    value == 33 || value == 36 || value == 38 || value == 39 || value == 40 ||
+    value == 41 || value == 42 || value == 43 || value == 44 || value == 59 || value == 61
+}
+func findByte(data: []const u8, needle: u8) ?usize {
+    for i := usize(0); i < data.len(); i++ {
+        if data[i] == needle { return some(i); }
+    }
+    null
+}
+func containsByte(data: []const u8, needle: u8) bool {
+    core.isSome<usize>(&findByte(data, needle))
+}
+func startsWithAt(data: []const u8, offset: usize, prefix: str) bool {
+    var bytes = prefix.asBytes();
+    if offset > data.len() || bytes.len() > data.len() - offset { return false; }
+    for i := usize(0); i < bytes.len(); i++ {
+        if data[offset + i] != bytes[i] { return false; }
+    }
+    true
+}
+func appendAscii(builder: *text.StringBuilder, value: u8) !void {
+    var byte = [1]u8{value};
+    var textValue = text.fromBytes(byte[:])!;
+    builder.append(textValue)!
+}
+func validateScheme(value: []const u8) !void {
+    if value.len() == 0 || !isAlpha(value[0]) { return UrlError.InvalidScheme; }
+    for i := usize(1); i < value.len(); i++ {
+        var byte = value[i];
+        if !isAlpha(byte) && !isDigit(byte) && byte != 43 && byte != 45 && byte != 46 {
+            return UrlError.InvalidScheme;
+        }
+    }
+}
+func validateComponent(value: []const u8, component: u8) !void {
+    for i := usize(0); i < value.len(); i++ {
+        var byte = value[i];
+        if byte == 37 {
+            if value.len() - i < 3 || !isHex(value[i + 1]) || !isHex(value[i + 2]) {
+                return UrlError.InvalidPercentEncoding;
+            }
+            i += 2;
+            continue;
+        }
+        var allowed = isUnreserved(byte) || isSubDelimiter(byte);
+        if component == 1 { allowed = allowed || byte == 58; } // user-info
+        if component == 2 { allowed = allowed || byte == 58 || byte == 64; } // reg-name extension
+        if component == 3 { allowed = allowed || byte == 58 || byte == 64 || byte == 47; } // path
+        if component == 4 { allowed = allowed || byte == 58 || byte == 64 || byte == 47 || byte == 63; } // query / fragment
+        if !allowed || byte > 127 { return UrlError.InvalidCharacter; }
+    }
+}
+func validateIpv4(value: []const u8) !void {
+    var octets: usize = 0;
+    var number: u32 = 0;
+    var digits: usize = 0;
+    for i := usize(0); i <= value.len(); i++ {
+        if i == value.len() || value[i] == 46 {
+            if digits == 0 || number > 255 { return UrlError.InvalidIpv6; }
+            octets++;
+            number = 0;
+            digits = 0;
+        } else {
+            if !isDigit(value[i]) || digits >= 3 { return UrlError.InvalidIpv6; }
+            number = number * 10 + u32(value[i] - 48);
+            digits++;
+        }
+    }
+    if octets != 4 { return UrlError.InvalidIpv6; }
+}
+func validateIpv6(value: []const u8) !void {
+    if value.len() == 0 { return UrlError.InvalidIpv6; }
+    var groups: usize = 0;
+    var compressed = false;
+    var i: usize = 0;
+    if value[0] == 58 {
+        if value.len() < 2 || value[1] != 58 { return UrlError.InvalidIpv6; }
+        compressed = true;
+        i = 2;
+    }
+    for i < value.len() {
+        var start = i;
+        for i < value.len() && value[i] != 58 { i++; }
+        if start == i { return UrlError.InvalidIpv6; }
+        var hasDot = false;
+        for j := start; j < i; j++ { if value[j] == 46 { hasDot = true; } }
+        if hasDot {
+            if i != value.len() { return UrlError.InvalidIpv6; }
+            validateIpv4(value[start..i])!;
+            groups += 2;
+        } else {
+            if i - start > 4 { return UrlError.InvalidIpv6; }
+            for j := start; j < i; j++ { if !isHex(value[j]) { return UrlError.InvalidIpv6; } }
+            groups++;
+        }
+        if i < value.len() {
+            i++;
+            if i < value.len() && value[i] == 58 {
+                if compressed { return UrlError.InvalidIpv6; }
+                compressed = true;
+                i++;
+                if i == value.len() { break; }
+            } else if i == value.len() {
+                return UrlError.InvalidIpv6;
+            }
+        }
+    }
+    if compressed {
+        if groups >= 8 { return UrlError.InvalidIpv6; }
+    } else if groups != 8 {
+        return UrlError.InvalidIpv6;
+    }
+}
+func validateIpLiteral(value: []const u8) !void {
+    if value.len() == 0 { return UrlError.InvalidHost; }
+    if value[0] == 118 || value[0] == 86 {
+        if value.len() < 4 { return UrlError.InvalidHost; }
+        var dot: ?usize = null;
+        for i := usize(1); i < value.len(); i++ {
+            if value[i] == 46 { dot = some(i); break; }
+            if !isHex(value[i]) { return UrlError.InvalidHost; }
+        }
+        var position = dot ?? { return UrlError.InvalidHost; };
+        if position == 1 || position + 1 == value.len() { return UrlError.InvalidHost; }
+        for i := position + 1; i < value.len(); i++ {
+            var byte = value[i];
+            if !isUnreserved(byte) && !isSubDelimiter(byte) && byte != 58 {
+                return UrlError.InvalidHost;
+            }
+        }
+        return;
+    }
+    validateIpv6(value)!
+}
+func parsePort(value: []const u8) !u16 {
+    if value.len() == 0 { return UrlError.InvalidPort; }
+    var number: u32 = 0;
+    for byte in value {
+        if !isDigit(byte) { return UrlError.InvalidPort; }
+        number = number * 10 + u32(byte - 48);
+        if number > 65535 { return UrlError.InvalidPort; }
+    }
+    u16(number)!
+}
+func lowerAscii(value: str) !string {
+    var data = value.asBytes();
+    var out = coll.Vec<u8>.withCapacity(data.len())!;
+    for byte in data {
+        if 65 <= byte && byte <= 90 { out.push(byte + 32)!; }
+        else { out.push(byte)!; }
+    }
+    text.fromBytes(out.asConstSlice())
+}
+func normalizePercent(value: str) !string {
+    var data = value.asBytes();
+    var out = text.StringBuilder();
+    for i := usize(0); i < data.len(); i++ {
+        if data[i] != 37 {
+            appendAscii(&out, data[i])!;
+        } else {
+            var decoded = u8((hexValue(data[i + 1]) << 4) | hexValue(data[i + 2]))!;
+            if isUnreserved(decoded) {
+                appendAscii(&out, decoded)!;
+            } else {
+                appendAscii(&out, 37)!;
+                appendAscii(&out, hexDigit(hexValue(data[i + 1])))!;
+                appendAscii(&out, hexDigit(hexValue(data[i + 2])))!;
+            }
+            i += 2;
+        }
+    }
+    out.build()
+}
+func removeLastSegment(output: *coll.Vec<u8>) void {
+    for output.len() > 0 {
+        if output.asSlice()[output.len() - 1] == 47 { break; }
+        var ignored = output.pop();
+    }
+    if output.len() > 1 && output.asSlice()[output.len() - 1] == 47 {
+        var ignored = output.pop();
+    }
+}
+func removeDotSegments(path: str) !string {
+    var input = path.asBytes();
+    var output = coll.Vec<u8>();
+    var i: usize = 0;
+    for i < input.len() {
+        if startsWithAt(input, i, "../") { i += 3; continue; }
+        if startsWithAt(input, i, "./") { i += 2; continue; }
+        if startsWithAt(input, i, "/./") { i += 2; continue; }
+        if i + 2 == input.len() && startsWithAt(input, i, "/.") {
+            output.push(47)!;
+            i = input.len();
+            continue;
+        }
+        if startsWithAt(input, i, "/../") {
+            i += 3;
+            removeLastSegment(&output);
+            continue;
+        }
+        if i + 3 == input.len() && startsWithAt(input, i, "/..") {
+            i = input.len();
+            removeLastSegment(&output);
+            output.push(47)!;
+            continue;
+        }
+        if startsWithAt(input, i, ".") && i + 1 == input.len() { i++; continue; }
+        if startsWithAt(input, i, "..") && i + 2 == input.len() { i += 2; continue; }
+        var start = i;
+        if input[i] == 47 { i++; }
+        for i < input.len() && input[i] != 47 { i++; }
+        for j := start; j < i; j++ { output.push(input[j])!; }
+    }
+    text.fromBytes(output.asConstSlice())
+}
+func mergePaths(basePath: str, relative: str, hasAuthority: bool) !string {
+    var builder = text.StringBuilder();
+    if hasAuthority && basePath.byteLen() == 0 {
+        builder.append("/")!;
+    } else {
+        var data = basePath.asBytes();
+        var slash: ?usize = null;
+        for i := usize(0); i < data.len(); i++ { if data[i] == 47 { slash = some(i); } }
+        switch slash {
+            some(position) => { builder.append(text.fromBytes(data[0..position + 1])!)!; },
+            null => {},
+        }
+    }
+    builder.append(relative)!;
+    builder.build()
+}
+
+pub class Url {
+    var hasScheme: bool;
+    var schemeValue: string;
+    var hasAuthority: bool;
+    var hasUserInfo: bool;
+    var userInfoValue: string;
+    var hasHost: bool;
+    var hostValue: string;
+    var hostLiteral: bool;
+    var hasPort: bool;
+    var portValue: u16;
+    var pathValue: string;
+    var hasQuery: bool;
+    var queryValue: string;
+    var hasFragment: bool;
+    var fragmentValue: string;
+
+    func init()
+        : hasScheme(false), schemeValue(""), hasAuthority(false),
+          hasUserInfo(false), userInfoValue(""), hasHost(false), hostValue(""),
+          hostLiteral(false), hasPort(false), portValue(0), pathValue(""),
+          hasQuery(false), queryValue(""), hasFragment(false), fragmentValue("") {}
+
+public:
+    static func parse(value: str) !Self {
+        var source = value.asBytes();
+        var result = Url();
+        var end = source.len();
+        switch findByte(source, 35) {
+            some(position) => {
+                result.hasFragment = true;
+                result.fragmentValue = text.fromBytes(source[position + 1..end])!;
+                validateComponent(source[position + 1..end], 4)!;
+                end = position;
+            },
+            null => {},
+        }
+        switch findByte(source[0..end], 63) {
+            some(position) => {
+                result.hasQuery = true;
+                result.queryValue = text.fromBytes(source[position + 1..end])!;
+                validateComponent(source[position + 1..end], 4)!;
+                end = position;
+            },
+            null => {},
+        }
+        var main = source[0..end];
+        var colon = findByte(main, 58);
+        var slash = findByte(main, 47);
+        switch colon {
+            some(position) => {
+                var beforeSlash = switch slash {
+                    some(slashPosition) => position < slashPosition,
+                    null => true,
+                };
+                if beforeSlash {
+                    validateScheme(main[0..position])!;
+                    result.hasScheme = true;
+                    result.schemeValue = text.fromBytes(main[0..position])!;
+                    main = main[position + 1..main.len()];
+                }
+            },
+            null => {},
+        }
+        var pathBytes = main;
+        if main.len() >= 2 && main[0] == 47 && main[1] == 47 {
+            var authorityEnd: usize = main.len();
+            switch findByte(main[2..main.len()], 47) {
+                some(position) => { authorityEnd = position + 2; },
+                null => {},
+            }
+            result.hasAuthority = true;
+            result.parseAuthority(main[2..authorityEnd])!;
+            pathBytes = main[authorityEnd..main.len()];
+        }
+        if result.hasAuthority && pathBytes.len() != 0 && pathBytes[0] != 47 {
+            return UrlError.InvalidPath;
+        }
+        if !result.hasAuthority && pathBytes.len() >= 2 && pathBytes[0] == 47 && pathBytes[1] == 47 {
+            return UrlError.InvalidPath;
+        }
+        if !result.hasScheme && !result.hasAuthority && pathBytes.len() != 0 && pathBytes[0] != 47 {
+            var firstEnd = pathBytes.len();
+            switch findByte(pathBytes, 47) {
+                some(position) => { firstEnd = position; },
+                null => {},
+            }
+            if core.isSome<usize>(&findByte(pathBytes[0..firstEnd], 58)) {
+                return UrlError.InvalidPath;
+            }
+        }
+        validateComponent(pathBytes, 3)!;
+        result.pathValue = text.fromBytes(pathBytes)!;
+        move(result)
+    }
+
+    const func scheme() str { schemeValue }
+    const func host() ?str {
+        if hasHost { some(hostValue) } else { null }
+    }
+    const func port() ?u16 {
+        if hasPort { some(portValue) } else { null }
+    }
+    const func userInfo() ?str {
+        if hasUserInfo { some(userInfoValue) } else { null }
+    }
+    const func path() str { pathValue }
+    const func query() ?str {
+        if hasQuery { some(queryValue) } else { null }
+    }
+    const func fragment() ?str {
+        if hasFragment { some(fragmentValue) } else { null }
+    }
+    const func hasAuthorityComponent() bool { hasAuthority }
+    const func isAbsolute() bool { hasScheme }
+
+    func resolve(reference: str) !Self {
+        var ref = Url.parse(reference)!;
+        if ref.hasScheme { return ref.normalize(); }
+        if !hasScheme { return UrlError.InvalidBase; }
+        var target = Url();
+        target.hasScheme = true;
+        target.schemeValue = schemeValue;
+        target.hasFragment = ref.hasFragment;
+        target.fragmentValue = ref.fragmentValue;
+        if ref.hasAuthority {
+            target.copyAuthority(ref);
+            target.pathValue = removeDotSegments(ref.pathValue)!;
+            target.hasQuery = ref.hasQuery;
+            target.queryValue = ref.queryValue;
+        } else {
+            target.copyAuthority(*this);
+            if ref.pathValue.byteLen() == 0 {
+                target.pathValue = pathValue;
+                if ref.hasQuery {
+                    target.hasQuery = true;
+                    target.queryValue = ref.queryValue;
+                } else {
+                    target.hasQuery = hasQuery;
+                    target.queryValue = queryValue;
+                }
+            } else {
+                var merged = if ref.pathValue.asBytes()[0] == 47
+                    { ref.pathValue }
+                    else { mergePaths(pathValue, ref.pathValue, hasAuthority)! };
+                target.pathValue = removeDotSegments(merged)!;
+                target.hasQuery = ref.hasQuery;
+                target.queryValue = ref.queryValue;
+            }
+        }
+        move(target)
+    }
+
+    const func normalize() !Self {
+        var result = *this;
+        if result.hasScheme { result.schemeValue = lowerAscii(result.schemeValue)!; }
+        if result.hasHost { result.hostValue = lowerAscii(result.hostValue)!; }
+        if result.hasUserInfo { result.userInfoValue = normalizePercent(result.userInfoValue)!; }
+        if result.hasHost { result.hostValue = normalizePercent(result.hostValue)!; }
+        result.pathValue = removeDotSegments(normalizePercent(result.pathValue)!)!;
+        if result.hasQuery { result.queryValue = normalizePercent(result.queryValue)!; }
+        if result.hasFragment { result.fragmentValue = normalizePercent(result.fragmentValue)!; }
+        move(result)
+    }
+
+    const func toString() !string {
+        var output = text.StringBuilder();
+        if hasScheme {
+            output.append(schemeValue)!;
+            output.append(":")!;
+        }
+        if hasAuthority {
+            output.append("//")!;
+            if hasUserInfo {
+                output.append(userInfoValue)!;
+                output.append("@")!;
+            }
+            if hasHost {
+                if hostLiteral { output.append("[")!; }
+                output.append(hostValue)!;
+                if hostLiteral { output.append("]")!; }
+            }
+            if hasPort {
+                output.append(":")!;
+                appendU16(&output, portValue)!;
+            }
+        }
+        output.append(pathValue)!;
+        if hasQuery {
+            output.append("?")!;
+            output.append(queryValue)!;
+        }
+        if hasFragment {
+            output.append("#")!;
+            output.append(fragmentValue)!;
+        }
+        output.build()
+    }
+
+private:
+    func parseAuthority(value: []const u8) !void {
+        var at = findByte(value, 64);
+        switch at {
+            some(position) => {
+                if core.isSome<usize>(&findByte(value[position + 1..value.len()], 64)) {
+                    return UrlError.InvalidAuthority;
+                }
+                validateComponent(value[0..position], 1)!;
+                hasUserInfo = true;
+                userInfoValue = text.fromBytes(value[0..position])!;
+            },
+            null => {},
+        }
+        var hostStart = switch at { some(position) => position + 1, null => usize(0) };
+        var hostEnd = value.len();
+        if hostStart < value.len() && value[hostStart] == 91 {
+            var closing: ?usize = null;
+            for i := hostStart + 1; i < value.len(); i++ {
+                if value[i] == 93 { closing = some(i); break; }
+            }
+            var close = closing ?? { return UrlError.InvalidHost; };
+            validateIpLiteral(value[hostStart + 1..close])!;
+            hasHost = true;
+            hostLiteral = true;
+            hostValue = text.fromBytes(value[hostStart + 1..close])!;
+            if close + 1 < value.len() {
+                if value[close + 1] != 58 { return UrlError.InvalidAuthority; }
+                hasPort = true;
+                portValue = parsePort(value[close + 2..value.len()])!;
+            }
+            return;
+        }
+        var colon = findByte(value[hostStart..value.len()], 58);
+        switch colon {
+            some(position) => {
+                var actual = position + hostStart;
+                if core.isSome<usize>(&findByte(value[actual + 1..value.len()], 58)) {
+                    return UrlError.InvalidHost;
+                }
+                hostEnd = actual;
+                hasPort = true;
+                portValue = parsePort(value[actual + 1..value.len()])!;
+            },
+            null => {},
+        }
+        validateComponent(value[hostStart..hostEnd], 2)!;
+        hasHost = true;
+        hostValue = text.fromBytes(value[hostStart..hostEnd])!;
+    }
+
+    func copyAuthority(other: Self) void {
+        hasAuthority = other.hasAuthority;
+        hasUserInfo = other.hasUserInfo;
+        userInfoValue = other.userInfoValue;
+        hasHost = other.hasHost;
+        hostValue = other.hostValue;
+        hostLiteral = other.hostLiteral;
+        hasPort = other.hasPort;
+        portValue = other.portValue;
+    }
+}
+
+func appendU16(builder: *text.StringBuilder, value: u16) !void {
+    var digits = [5]u8{0, 0, 0, 0, 0};
+    var count: usize = 0;
+    var number = u32(value);
+    for number > 0 {
+        digits[count] = u8(48 + number % 10)!;
+        number /= 10;
+        count++;
+    }
+    if count == 0 { appendAscii(builder, 48)!; return; }
+    for count > 0 {
+        count--;
+        appendAscii(builder, digits[count])!;
+    }
+}
+
+pub class UrlBuilder {
+    var schemeValue: string;
+    var hasScheme: bool;
+    var userInfoValue: string;
+    var hasUserInfo: bool;
+    var hostValue: string;
+    var hasHost: bool;
+    var hasPort: bool;
+    var portValue: u16;
+    var pathValue: string;
+    var queryValue: string;
+    var hasQuery: bool;
+    var fragmentValue: string;
+    var hasFragment: bool;
+
+    func init()
+        : schemeValue(""), hasScheme(false), userInfoValue(""), hasUserInfo(false),
+          hostValue(""), hasHost(false), hasPort(false), portValue(0),
+          pathValue(""), queryValue(""), hasQuery(false), fragmentValue(""),
+          hasFragment(false) {}
+public:
+    func scheme(value: str) !Self {
+        schemeValue = text.fromBytes(value.asBytes())!;
+        hasScheme = true;
+        UrlBuilder(schemeValue, hasScheme, userInfoValue, hasUserInfo, hostValue,
+            hasHost, hasPort, portValue, pathValue, queryValue, hasQuery,
+            fragmentValue, hasFragment)
+    }
+    func userInfo(value: str) !Self {
+        userInfoValue = text.fromBytes(value.asBytes())!;
+        hasUserInfo = true;
+        UrlBuilder(schemeValue, hasScheme, userInfoValue, hasUserInfo, hostValue,
+            hasHost, hasPort, portValue, pathValue, queryValue, hasQuery,
+            fragmentValue, hasFragment)
+    }
+    func host(value: str) !Self {
+        hostValue = text.fromBytes(value.asBytes())!;
+        hasHost = true;
+        UrlBuilder(schemeValue, hasScheme, userInfoValue, hasUserInfo, hostValue,
+            hasHost, hasPort, portValue, pathValue, queryValue, hasQuery,
+            fragmentValue, hasFragment)
+    }
+    func port(value: u16) Self {
+        hasPort = true;
+        portValue = value;
+        UrlBuilder(schemeValue, hasScheme, userInfoValue, hasUserInfo, hostValue,
+            hasHost, hasPort, portValue, pathValue, queryValue, hasQuery,
+            fragmentValue, hasFragment)
+    }
+    func path(value: str) !Self {
+        pathValue = text.fromBytes(value.asBytes())!;
+        UrlBuilder(schemeValue, hasScheme, userInfoValue, hasUserInfo, hostValue,
+            hasHost, hasPort, portValue, pathValue, queryValue, hasQuery,
+            fragmentValue, hasFragment)
+    }
+    func query(value: str) !Self {
+        queryValue = text.fromBytes(value.asBytes())!;
+        hasQuery = true;
+        UrlBuilder(schemeValue, hasScheme, userInfoValue, hasUserInfo, hostValue,
+            hasHost, hasPort, portValue, pathValue, queryValue, hasQuery,
+            fragmentValue, hasFragment)
+    }
+    func fragment(value: str) !Self {
+        fragmentValue = text.fromBytes(value.asBytes())!;
+        hasFragment = true;
+        UrlBuilder(schemeValue, hasScheme, userInfoValue, hasUserInfo, hostValue,
+            hasHost, hasPort, portValue, pathValue, queryValue, hasQuery,
+            fragmentValue, hasFragment)
+    }
+    func build() !Url {
+        var output = text.StringBuilder();
+        if hasScheme { output.append(schemeValue)!; output.append(":")!; }
+        if hasHost || hasUserInfo || hasPort {
+            output.append("//")!;
+            if hasUserInfo { output.append(userInfoValue)!; output.append("@")!; }
+            if hasHost {
+                if containsByte(hostValue.asBytes(), 58) &&
+                    (hostValue.byteLen() == 0 || hostValue.asBytes()[0] != 91) {
+                    output.append("[")!;
+                    output.append(hostValue)!;
+                    output.append("]")!;
+                } else { output.append(hostValue)!; }
+            }
+            if hasPort { output.append(":")!; appendU16(&output, portValue)!; }
+        }
+        output.append(pathValue)!;
+        if hasQuery { output.append("?")!; output.append(queryValue)!; }
+        if hasFragment { output.append("#")!; output.append(fragmentValue)!; }
+        Url.parse(output.build()!)
+    }
+
+private:
+    func init(
+        schemeValue: string, hasScheme: bool, userInfoValue: string, hasUserInfo: bool,
+        hostValue: string, hasHost: bool, hasPort: bool, portValue: u16,
+        pathValue: string, queryValue: string, hasQuery: bool,
+        fragmentValue: string, hasFragment: bool
+    ) : schemeValue(schemeValue), hasScheme(hasScheme), userInfoValue(userInfoValue),
+        hasUserInfo(hasUserInfo), hostValue(hostValue), hasHost(hasHost),
+        hasPort(hasPort), portValue(portValue), pathValue(pathValue),
+        queryValue(queryValue), hasQuery(hasQuery), fragmentValue(fragmentValue),
+        hasFragment(hasFragment) {}
+}
+
+pub func parse(value: str) !Url { Url.parse(value) }
+pub func resolve(base: Url, reference: str) !Url { base.resolve(reference) }
+pub func normalize(value: Url) !Url { value.normalize() }
+pub func isAbsolute(value: str) bool {
+    var parsed = Url.parse(value) catch { return false; };
+    parsed.isAbsolute()
+}

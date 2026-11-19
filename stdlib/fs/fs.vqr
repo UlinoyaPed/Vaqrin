@@ -77,7 +77,10 @@ pub func writeFile(name: str, data: []const u8) !void {
     io.writeAll(&file, data)!;
     file.flush()!;
 }
-pub func exists(name: str) bool { io.hostStat(name.asBytes(), true) != null }
+pub func exists(name: str) bool {
+    var result = io.hostStat(name.asBytes(), true) catch { return false; };
+    true
+}
 pub func stat(name: str) !Metadata { Metadata(io.hostStat(name.asBytes(), true)!) }
 pub func lstat(name: str) !Metadata { Metadata(io.hostStat(name.asBytes(), false)!) }
 pub func mkdir(name: str) !void { io.hostMkdir(name.asBytes(), 493) }

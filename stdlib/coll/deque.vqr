@@ -150,7 +150,7 @@ private:
             var value = unsafe { slots.getMut(source).unwrap().assumeInit() };
             unsafe { next.getMut(i).unwrap().write(move(value)); }
         }
-        slots = move(next);
+        core.swap<Vec<mem.MaybeUninit<T>>>(&slots, &next);
         head = 0;
     }
 

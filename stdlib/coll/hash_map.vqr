@@ -51,13 +51,24 @@ public:
         (move(oldKey), move(oldValue))
     }
 
-    func clearEntry() void {
+    func tombstoneEntry() void {
         if state != BucketState.Occupied { return; }
         state = BucketState.Tombstone;
         unsafe {
             key.assumeInitDrop();
             value.assumeInitDrop();
         }
+    }
+
+    func clearEntry() void {
+        if state == BucketState.Occupied {
+            unsafe {
+                key.assumeInitDrop();
+                value.assumeInitDrop();
+            }
+        }
+        state = BucketState.Empty;
+        hashCode = 0;
     }
 
     func deinit() void { clearEntry(); }
@@ -321,7 +332,7 @@ public:
         for i in usize(0)..buckets.len() {
             var bucket = buckets.getMut(i).unwrap();
             if bucket.isOccupied() && !predicate(bucket.keyRef(), bucket.valueRef()) {
-                bucket.clearEntry();
+                bucket.tombstoneEntry();
                 length--;
                 tombstones++;
             }

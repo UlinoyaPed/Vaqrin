@@ -164,7 +164,8 @@ public:
         total
     }
     func writeByte(byte: u8) !void {
-        var one: [1]u8{byte};
+        var one: [1]u8;
+        one[0] = byte;
         var count = write(one[:])!;
         if count != 1 { return io.IoError.NoProgress; }
     }

@@ -33,7 +33,7 @@ func main() !void {
     var metadata = file.metadata()!;
     io.println(metadata.len())!;
 
-    var arguments = [fmt.arg(u64(255))];
+    var arguments = [1]fmt.FormatArg{fmt.arg(u64(255))};
     var formatted = fmt.format("hex={:x}", arguments[:])!;
     io.println(formatted)!;
 

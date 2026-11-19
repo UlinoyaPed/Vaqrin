@@ -176,9 +176,12 @@ func classContains(regex: *const Regex, classId: usize, cp: u32) bool {
     if classId >= regex.classCount() { return false; }
     var found = rawClassContains(regex, classId, cp);
     if (regex.flagsValue() & 1) != 0 {
-        var lower = convert.fromChar(unicode.toLowerSimple(__vqr_char(cp)));
-        var upper = convert.fromChar(unicode.toUpperSimple(__vqr_char(cp)));
-        if (regex.flagsValue() & 8) == 0 {
+        var lower = cp;
+        var upper = cp;
+        if (regex.flagsValue() & 8) != 0 {
+            lower = convert.fromChar(unicode.toLowerSimple(__vqr_char(cp)));
+            upper = convert.fromChar(unicode.toUpperSimple(__vqr_char(cp)));
+        } else {
             if 65 <= cp && cp <= 90 { lower = cp + 32; }
             if 97 <= cp && cp <= 122 { upper = cp - 32; }
         }

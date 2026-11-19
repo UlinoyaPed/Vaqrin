@@ -21,7 +21,7 @@ public:
         var compose = form == NormalForm.NFC || form == NormalForm.NFKC;
         var scalars = if compose { composePending()! } else { pending.clone()! };
         var output = coll.Vec<u8>();
-        for cp in scalars.asSlice() { appendUtf8Scalar(cp, &output)!; }
+        for cp in scalars.asSlice() { appendNormalizedScalarUtf8(cp, &output)!; }
         text.fromBytes(output.asConstSlice())
     }
 

@@ -1,18 +1,9 @@
 #include "compiler_internal.hpp"
 
 namespace vqr::detail {
-namespace {
-
-bool nativeThreadTarget(const Program &p) {
-  auto target = p.targetTriple();
-  return p.options.profile == "hosted" && target.isOSLinux() && target.isGNUEnvironment() &&
-         (target.getArch() == Triple::x86_64 || target.getArch() == Triple::aarch64) && p.pointerBits() == 64;
-}
-
-} // namespace
 
 ValueAt Body::threadIntrinsic(std::string_view op, const Ast &n, const std::vector<Ast> &types) {
-  if (!nativeThreadTarget(p))
+  if (!p.hostedLinux64())
     fail(n->span, "native threads require a hosted GNU/Linux x86-64 or AArch64 target", "E290");
 
   auto arity = [&](unsigned count, unsigned typeCount = 0) {
@@ -109,7 +100,7 @@ ValueAt Body::threadIntrinsic(std::string_view op, const Ast &n, const std::vect
 }
 
 ValueAt Body::syncIntrinsic(std::string_view op, const Ast &n) {
-  if (!nativeThreadTarget(p))
+  if (!p.hostedLinux64())
     fail(n->span, "blocking synchronization requires a hosted GNU/Linux x86-64 or AArch64 target", "E290");
   if ((op != "wait" && op != "wake") || n->children.size() != 3)
     fail(n->span, "invalid futex operation");

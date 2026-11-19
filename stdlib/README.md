@@ -1,6 +1,6 @@
 # Vaqrin 标准包
 
-可用 `import (core, coll, iter, opt, result, cmp, convert, meta, mem, mmio, bits, algo, atomic, binary, bytes, cell, encoding, simd, text, parse, io, thread, sync)` 导入标准包，也可使用 `std/` 前缀。CMake 在构建目录生成 `share/vaqrin/stdlib`，安装时将标准包源码复制到安装前缀下。编译器按使用情况实例化泛型声明。完整的目标接口见[标准包 API 清单](../docs/stdlib/Vaqrin-stdlib-API-complete-draft.md)。
+可用 `import (core, coll, iter, opt, result, cmp, convert, meta, mem, mmio, bits, algo, atomic, binary, bytes, cell, encoding, simd, text, parse, io, thread, sync, time)` 导入标准包，也可使用 `std/` 前缀。CMake 在构建目录生成 `share/vaqrin/stdlib`，安装时将标准包源码复制到安装前缀下。编译器按使用情况实例化泛型声明。完整的目标接口见[标准包 API 清单](../docs/stdlib/Vaqrin-stdlib-API-complete-draft.md)。
 
 | 包 | 当前接口 |
 | --- | --- |
@@ -27,6 +27,7 @@
 | `io` | 读写与定位接口、内存流、限制与计数适配器、短读短写进度及宿主 `println` |
 | `thread` | GNU/Linux 原生线程、一次性领取结果、分离、协作停止、当前线程 ID 及 CPU 数 |
 | `sync` | 互斥锁、可投影的 RAII 守卫、条件变量、等待组及单次初始化 |
+| `time` | 纳秒时长、单调时钟和定时器、公历日期、日内时间及 UTC 墙钟 |
 
 ```cpp
 package main
@@ -60,6 +61,8 @@ Vec 按值接收可移动元素。其 `reserve` 先分配，再搬迁已有元�
 `thread.Thread<T>.spawn` 要求闭包及成功载荷可跨线程移交。回调返回 `T` 或 `!T`，`join` 一次性领取 `!T`。线程句柄析构时分离仍持有的线程，分离后由工作线程与句柄共同负责回收结果和运行状态。`requestStop` 设置协作标志，线程回调可由 `stopRequested` 查询。原生线程当前支持 GNU/Linux x86-64 和 AArch64。
 
 `Mutex`、`CondVar` 和 `WaitGroup` 通过 GNU/Linux futex 阻塞调用线程。`CondVar.wait` 允许虚假唤醒，`waitUntil` 会重新检查谓词。等待开始前须为 `WaitGroup` 登记本轮工作，计数上限为 `u32` 最大值。在所有守卫释放且等待结束前，应保持锁和条件变量的位置有效。守卫释放后，其 `get()` 返回的借用视图也到期。
+
+`Duration` 将亚秒部分归一化到与整数秒一致的方向，整数换算向零截断。可失败的算术操作报告溢出，`fromMinutes`、`fromHours` 和 `fromDays` 在超出表示范围时饱和。`Date.toOrdinal` 以 1970 年 1 月 1 日为第 0 天，公历规则向前后延伸到整个 `i32` 年份范围。`Instant`、`Deadline`、`Timer` 和 `Ticker` 以 Linux 单调时钟为准，睡眠阻塞调用线程，周期定时按前一次计划的到期点推进。
 
 `new(allocator) T(...)` 借用一个实现 `mem.Allocator` 的可变位置。分配器及其缓冲区必须比所有借用它的 Box 活得更久。拆出自定义分配的 Box 时使用 `Box.intoRawParts`，恢复时传回原释放上下文。由于同一个 `^T` 类型可保存借用的分配器，当前线程能力检查保守地拒绝跨线程移交或共享 Box。
 

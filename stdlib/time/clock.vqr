@@ -1,0 +1,122 @@
+package time
+import (cmp)
+
+class Timespec {
+    #repr: C
+    pub var seconds: i64;
+    pub var nanoseconds: i64;
+}
+
+const monotonicClock: c_int = 1;
+const realtimeClock: c_int = 0;
+const absoluteSleep: c_int = 1;
+const interrupted: c_int = 4;
+
+extern "C" func clock_gettime(clock: c_int, value: *Timespec) c_int;
+extern "C" func clock_nanosleep(clock: c_int, flags: c_int, value: *const Timespec, remaining: *Timespec) c_int;
+
+func readClock(clock: c_int) !Timespec {
+    __vqr_validate_native_clocks();
+    var value = Timespec{seconds: 0, nanoseconds: 0};
+    if unsafe { clock_gettime(clock, &value) } != 0 { return TimeError.ClockUnavailable; }
+    value
+}
+
+pub class Instant {
+    var offset: Duration;
+    func init(offset: Duration) : offset(offset) {}
+public:
+    static func now() !Self {
+        var time = readClock(monotonicClock)!;
+        var nanos = i32(time.nanoseconds) catch { return TimeError.ClockUnavailable; };
+        Instant(Duration.fromParts(time.seconds, nanos)!)
+    }
+
+    const func compare(other: Self) cmp.Ordering { offset.compare(other.offset) }
+    const func elapsed() !Duration { Instant.now()!.durationSince(Instant(offset)) }
+    const func durationSince(earlier: Instant) !Duration { offset.sub(earlier.offset) }
+
+    const func checkedAdd(value: Duration) !Self { Instant(offset.add(value)!) }
+    const func checkedSub(value: Duration) !Self { Instant(offset.sub(value)!) }
+
+    const func waitUntil() !void {
+        __vqr_validate_native_clocks();
+        if offset.isNegative() || offset.isZero() { return; }
+        var absolute = Timespec{seconds: offset.seconds(), nanoseconds: i64(offset.nanosPart())};
+        var leftover = Timespec{seconds: 0, nanoseconds: 0};
+        for {
+            var outcome = unsafe { clock_nanosleep(monotonicClock, absoluteSleep, &absolute, &leftover) };
+            if outcome == 0 { return; }
+            if outcome != interrupted { return TimeError.ClockUnavailable; }
+        }
+    }
+}
+
+pub func monotonicNow() !Instant { Instant.now() }
+pub func sleepUntil(instant: Instant) !void { instant.waitUntil() }
+pub func sleep(duration: Duration) !void {
+    if duration.isNegative() || duration.isZero() { return; }
+    var deadline = Instant.now()!.checkedAdd(duration)!;
+    sleepUntil(deadline)
+}
+
+pub interface Clock {
+    const func monotonicNow() !Instant;
+    const func utcNow() !UtcDateTime;
+}
+
+pub class Deadline {
+    var target: Instant;
+    func init(target: Instant) : target(target) {}
+public:
+    static func at(instant: Instant) Self { Deadline(instant) }
+    static func after(delay: Duration) !Self { Deadline(Instant.now()!.checkedAdd(delay)!) }
+
+    const func expired() !bool {
+        var now = Instant.now()!;
+        now.compare(target) != cmp.Ordering.Less
+    }
+
+    const func remaining() !Duration {
+        var now = Instant.now()!;
+        if now.compare(target) != cmp.Ordering.Less { return Duration.zero(); }
+        target.durationSince(now)
+    }
+}
+
+pub class Timer {
+    #copy: disabled
+    var target: ?Instant;
+    func init(target: Instant) : target(some(target)) {}
+public:
+    static func at(deadline: Instant) !Self { Timer(deadline) }
+    static func after(delay: Duration) !Self { Timer(Instant.now()!.checkedAdd(delay)!) }
+
+    func wait() !void {
+        var deadline = target ?? { return TimeError.TimerCancelled; };
+        sleepUntil(deadline)
+    }
+    func cancel() void { target = null; }
+    func reset(delay: Duration) !void { target = some(Instant.now()!.checkedAdd(delay)!); }
+}
+
+pub class Ticker {
+    #copy: disabled
+    var due: ?Instant;
+    var period: Duration;
+    func init(due: Instant, period: Duration) : due(some(due)), period(period) {}
+public:
+    static func every(period: Duration) !Self {
+        if period.isNegative() || period.isZero() { return TimeError.InvalidTime; }
+        Ticker(Instant.now()!.checkedAdd(period)!, period)
+    }
+
+    func next() !Instant {
+        var tick = due ?? { return TimeError.TimerCancelled; };
+        var following = tick.checkedAdd(period)!;
+        sleepUntil(tick)!;
+        due = some(following);
+        tick
+    }
+    func stop() void { due = null; }
+}

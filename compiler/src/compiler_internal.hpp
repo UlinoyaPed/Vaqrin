@@ -335,6 +335,11 @@ public:
   Triple targetTriple() const { return Triple(module->getTargetTriple()); }
   bool scalarCAbi() const;
   bool extendCNarrowInteger() const;
+  bool hostedLinux64() const {
+    auto target = targetTriple();
+    return options.profile == "hosted" && target.isOSLinux() && target.isGNUEnvironment() &&
+           (target.getArch() == Triple::x86_64 || target.getArch() == Triple::aarch64) && pointerBits() == 64;
+  }
   bool heapAvailable() const { return options.profile == "hosted" && targetTriple().isOSLinux(); }
   unsigned pointerBits() const { return module->getDataLayout().getPointerSizeInBits(); }
   std::string key(Definition d) const {

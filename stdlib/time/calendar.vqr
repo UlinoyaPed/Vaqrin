@@ -1,0 +1,188 @@
+package time
+
+pub enum Weekday { Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday }
+pub enum Month { January, February, March, April, May, June, July, August, September, October, November, December }
+pub enum MonthPolicy { Clamp, Reject, Carry }
+
+const epochOrdinal: i64 = 719528;
+const firstYear: i64 = -2147483648i64;
+const pastLastYear: i64 = 2147483648i64;
+const secondsPerDay: i64 = 86400;
+
+func floorDiv(dividend: i64, divisor: i64) i64 {
+    var quotient = dividend / divisor;
+    if dividend % divisor < 0 { return quotient - 1; }
+    quotient
+}
+
+func beforeYear(year: i64) i64 {
+    365i64 * year + floorDiv(year + 3, 4) - floorDiv(year + 99, 100) + floorDiv(year + 399, 400)
+}
+
+func leapYear(year: i32) bool { year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) }
+pub func isLeapYear(year: i32) bool { leapYear(year) }
+
+pub func daysInMonth(year: i32, month: u8) !u8 {
+    if month < 1 || month > 12 { return TimeError.InvalidDate; }
+    if month == 2 { return if leapYear(year) { 29 } else { 28 }; }
+    if month == 4 || month == 6 || month == 9 || month == 11 { return 30; }
+    31
+}
+
+pub class Date {
+    var y: i32;
+    var m: u8;
+    var d: u8;
+    func init(year: i32, month: u8, day: u8) : y(year), m(month), d(day) {}
+public:
+    static func new(year: i32, month: u8, day: u8) !Self {
+        var limit = daysInMonth(year, month)!;
+        if day < 1 || day > limit { return TimeError.InvalidDate; }
+        Date(year, month, day)
+    }
+
+    const func year() i32 { y }
+    const func month() u8 { m }
+    const func day() u8 { d }
+    const func isLeapYear() bool { leapYear(y) }
+
+    const func dayOfYear() u16 {
+        var total = u16(d);
+        for month in u8(1)..m {
+            total += u16(daysInMonth(y, month) catch { panic("invalid date month"); });
+        }
+        total
+    }
+
+    const func dayOfWeek() Weekday {
+        var day = (toOrdinal() + 3) % 7;
+        if day < 0 { day += 7; }
+        Weekday.fromInt(day).unwrap()
+    }
+
+    const func toOrdinal() i64 { beforeYear(i64(y)) - epochOrdinal + i64(dayOfYear()) - 1 }
+
+    static func fromOrdinal(ordinal: i64) !Self {
+        if ordinal < beforeYear(firstYear) - epochOrdinal ||
+           ordinal >= beforeYear(pastLastYear) - epochOrdinal { return TimeError.Overflow; }
+        var day = ordinal + epochOrdinal;
+        var low = firstYear;
+        var high = pastLastYear;
+        for high - low > 1 {
+            var middle = low + (high - low) / 2;
+            if beforeYear(middle) <= day { low = middle; } else { high = middle; }
+        }
+        var year = i32(low) catch { return TimeError.Overflow; };
+        day -= beforeYear(low);
+        for month in u8(1)..=u8(12) {
+            var count = i64(daysInMonth(year, month)!);
+            if day < count {
+                return Date(year, month, u8(day + 1) catch { return TimeError.InvalidDate; });
+            }
+            day -= count;
+        }
+        TimeError.InvalidDate
+    }
+
+    const func addDays(amount: i64) !Self {
+        var ordinal = toOrdinal();
+        if amount < beforeYear(firstYear) - epochOrdinal - ordinal ||
+           amount >= beforeYear(pastLastYear) - epochOrdinal - ordinal { return TimeError.Overflow; }
+        Date.fromOrdinal(ordinal + amount)
+    }
+
+    const func addMonths(amount: i32, policy: MonthPolicy) !Self {
+        var index = 12i64 * i64(y) + i64(m) - 1 + i64(amount);
+        var quotient = floorDiv(index, 12);
+        var year = i32(quotient) catch { return TimeError.Overflow; };
+        var month = u8(index - quotient * 12 + 1) catch { return TimeError.InvalidDate; };
+        var lastDay = daysInMonth(year, month)!;
+        if d <= lastDay { return Date(year, month, d); }
+        switch policy {
+            MonthPolicy.Clamp => Date(year, month, lastDay),
+            MonthPolicy.Reject => TimeError.InvalidDate,
+            MonthPolicy.Carry => Date(year, month, lastDay).addDays(i64(d) - i64(lastDay))!,
+        }
+    }
+}
+
+pub func daysBetween(a, b: Date) i64 { b.toOrdinal() - a.toOrdinal() }
+
+pub class TimeOfDay {
+    var h: u8;
+    var min: u8;
+    var sec: u8;
+    var nano: u32;
+    func init(hour, minute, second: u8, nanosecond: u32) : h(hour), min(minute), sec(second), nano(nanosecond) {}
+public:
+    static func new(hour, minute, second: u8, nano: u32) !Self {
+        if hour > 23 || minute > 59 || second > 59 || nano >= 1000000000 { return TimeError.InvalidTime; }
+        TimeOfDay(hour, minute, second, nano)
+    }
+    const func hour() u8 { h }
+    const func minute() u8 { min }
+    const func second() u8 { sec }
+    const func nanosecond() u32 { nano }
+    const func secondsSinceMidnight() u32 { u32(h) * 3600 + u32(min) * 60 + u32(sec) }
+}
+
+pub class UtcDateTime {
+    var timestamp: i64;
+    var fraction: u32;
+    func init(seconds: i64, nanos: u32) : timestamp(seconds), fraction(nanos) {}
+public:
+    static func fromUnixSeconds(seconds: i64, nanos: u32) !Self {
+        if nanos >= 1000000000 { return TimeError.InvalidTime; }
+        var ordinal = floorDiv(seconds, secondsPerDay);
+        if ordinal < beforeYear(firstYear) - epochOrdinal ||
+           ordinal >= beforeYear(pastLastYear) - epochOrdinal { return TimeError.Overflow; }
+        UtcDateTime(seconds, nanos)
+    }
+
+    const func unixSeconds() i64 { timestamp }
+    const func nanosecond() u32 { fraction }
+    const func date() Date {
+        Date.fromOrdinal(floorDiv(timestamp, secondsPerDay)) catch { panic("invalid UTC date"); }
+    }
+    const func time() TimeOfDay {
+        var seconds = timestamp - floorDiv(timestamp, secondsPerDay) * secondsPerDay;
+        var hour = u8(seconds / 3600) catch { panic("invalid UTC hour"); };
+        var minute = u8((seconds / 60) % 60) catch { panic("invalid UTC minute"); };
+        var second = u8(seconds % 60) catch { panic("invalid UTC second"); };
+        TimeOfDay.new(hour, minute, second, fraction) catch { panic("invalid UTC time"); }
+    }
+
+    const func add(amount: Duration) !Self {
+        var nanos = i32(fraction) catch { return TimeError.InvalidTime; };
+        var value = Duration.fromParts(timestamp, nanos)!.add(amount)!;
+        var whole = value.seconds();
+        nanos = value.nanosPart();
+        if nanos < 0 {
+            if whole == smallestSecond { return TimeError.Overflow; }
+            whole--;
+            nanos += 1000000000;
+        }
+        UtcDateTime.fromUnixSeconds(whole, u32(nanos)!)
+    }
+}
+
+pub class LocalDateTime {
+    var datePart: Date;
+    var timePart: TimeOfDay;
+    func init(date: Date, time: TimeOfDay) : datePart(date), timePart(time) {}
+public:
+    static func new(date: Date, time: TimeOfDay) Self { LocalDateTime(date, time) }
+    const func date() Date { datePart }
+    const func time() TimeOfDay { timePart }
+    const func add(value: Duration) !Self {
+        var seconds = datePart.toOrdinal() * secondsPerDay + i64(timePart.secondsSinceMidnight());
+        var adjusted = UtcDateTime.fromUnixSeconds(seconds, timePart.nanosecond())!.add(value)!;
+        LocalDateTime(adjusted.date(), adjusted.time())
+    }
+}
+
+pub func now() !UtcDateTime {
+    var raw = readClock(realtimeClock)!;
+    var nanos = u32(raw.nanoseconds) catch { return TimeError.ClockUnavailable; };
+    UtcDateTime.fromUnixSeconds(raw.seconds, nanos)
+}

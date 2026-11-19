@@ -2109,6 +2109,80 @@ class Acceptance(unittest.TestCase):
             }
         ''', 'true\ntrue\ntrue\n2\n2\n3\ntrue\n7\ntrue\n1\n107\n14\n14\n1\n0\ntrue\nfalse\n')
 
+    def test_duration_calendar_and_monotonic_deadlines(self):
+        self.hosted('''
+            import (cmp, core, time)
+            func main() !void {
+                var negative = time.Duration.fromMillis(-1501);
+                io.println(negative.seconds())!;
+                io.println(negative.nanosPart())!;
+                io.println(negative.isNegative())!;
+                io.println(negative.abs()!.toMillis()!)!;
+                io.println(negative.mul(-3)!.div(2)!.toNanos()!)!;
+                var large = time.Duration.fromSeconds(9223372036854775807i64);
+                var overflow = large.mul(2);
+                io.println(core.isErr<time.Duration>(&overflow))!;
+                var underflow = time.Duration.fromSeconds(-9223372036854775807i64 - 1).abs();
+                io.println(core.isErr<time.Duration>(&underflow))!;
+                io.println(time.Duration.fromDays(9223372036854775807i64).seconds())!;
+
+                var epoch = time.Date.new(1970, 1, 1)!;
+                io.println(epoch.toOrdinal())!;
+                io.println(epoch.dayOfWeek() == time.Weekday.Thursday)!;
+                var before = time.Date.fromOrdinal(-1)!;
+                io.println(before.year())!;
+                io.println(before.month())!;
+                io.println(before.day())!;
+                var leap = time.Date.new(2000, 2, 29)!;
+                io.println(leap.dayOfYear())!;
+                io.println(leap.isLeapYear())!;
+                var skippedLeap = time.Date.new(1900, 2, 29);
+                io.println(core.isErr<time.Date>(&skippedLeap))!;
+                var early = time.Date.new(-400, 2, 29)!;
+                io.println(time.Date.fromOrdinal(early.toOrdinal())!.year())!;
+                var extreme = time.Date.new(2147483647, 12, 31)!;
+                var impossible = extreme.addDays(1);
+                io.println(core.isErr<time.Date>(&impossible))!;
+                var end = time.Date.new(2023, 1, 31)!;
+                io.println(end.addMonths(1, time.MonthPolicy.Clamp)!.day())!;
+                io.println(end.addMonths(1, time.MonthPolicy.Carry)!.month())!;
+                io.println(end.addMonths(1, time.MonthPolicy.Carry)!.day())!;
+
+                var old = time.UtcDateTime.fromUnixSeconds(-1, 999000000)!;
+                io.println(old.time().hour())!;
+                io.println(old.time().minute())!;
+                io.println(old.time().second())!;
+                io.println(old.date().toOrdinal())!;
+                var next = old.add(time.Duration.fromMillis(1))!;
+                io.println(next.unixSeconds())!;
+                io.println(next.nanosecond())!;
+                var local = time.LocalDateTime.new(epoch, time.TimeOfDay.new(0, 0, 0, 0)!);
+                io.println(local.add(time.Duration.fromNanos(-1))!.time().nanosecond())!;
+                io.println(time.now()!.date().year() >= 1970)!;
+
+                var beginning = time.Instant.now()!;
+                var span = time.Duration.fromMillis(4);
+                var endpoint = beginning.checkedAdd(span)!;
+                var limit = time.Deadline.at(endpoint);
+                time.sleepUntil(endpoint)!;
+                io.println(beginning.elapsed()!.compare(span) != cmp.Ordering.Less)!;
+                io.println(limit.expired()!)!;
+                io.println(limit.remaining()!.isZero())!;
+                var timer = time.Timer.after(time.Duration.zero())!;
+                timer.cancel();
+                var cancelled = timer.wait();
+                io.println(core.isErr<void>(&cancelled))!;
+                timer.reset(time.Duration.zero())!;
+                timer.wait()!;
+                var ticker = time.Ticker.every(time.Duration.fromMillis(1))!;
+                var first = ticker.next()!;
+                var second = ticker.next()!;
+                io.println(second.durationSince(first)!.toNanos()!)!;
+            }
+        ''', '-1\n-501000000\ntrue\n1501\n2251500000\ntrue\ntrue\n9223372036854775807\n0\ntrue\n'
+             '1969\n12\n31\n60\ntrue\ntrue\n-400\ntrue\n28\n3\n3\n23\n59\n59\n-1\n0\n0\n999999999\n'
+             'true\ntrue\ntrue\ntrue\ntrue\n1000000\n')
+
     def test_build_artifacts(self):
         source = self.source("math.vqr", '''
             package math

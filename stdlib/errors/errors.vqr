@@ -115,7 +115,7 @@ func formatReport(report: *const Report, writer: *io.Writer, depth: usize) !void
     switch report.rootError() {
         some(errorId) => {
             io.writeString(writer, " [")!;
-            io.writeString(writer, errorId.toString())!;
+            io.writeString(writer, "ErrorId")!;
             io.writeString(writer, "]")!;
         },
         null => {},

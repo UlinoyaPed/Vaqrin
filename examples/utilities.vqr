@@ -1,5 +1,5 @@
 package utilities_example
-import (url, log, errors, io)
+import (url, log, errors, io, core)
 
 error NetworkError { Refused }
 

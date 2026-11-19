@@ -5,7 +5,7 @@
 | 包 | 当前接口 |
 | --- | --- |
 | `core` | `Box<T>`、可空及错误结果状态检查、`unwrapOr`、`identity`、`drop`、`swap`、`replace`、`unreachable`、`unreachableUnchecked` |
-| `coll` | `Vec<T>`、零堆分配的 `FixedVec<T, N>`、容量调整、位置插入和移除、借用访问和可变迭代 |
+| `coll` | `Vec<T>`、`FixedVec<T,N>`、`VecDeque<T>`、`FixedDeque<T,N>`、`Stack<T>`、`Queue<T>`、`BinaryHeap<T>` / `PriorityQueue<T>`；链表、哈希和 B 树仍在开发 |
 | `iter` | 按值和按指针遍历切片、单项和空游标、映射、过滤、枚举、组合、反向及截取适配器 |
 | `opt` | 可空值的组合、访问、原地替换、容器转换和外层交换 |
 | `result` | 错误结果的组合、恢复、观察、只读载荷访问与收集 |
@@ -45,7 +45,7 @@ func main() !void {
 }
 ```
 
-Vec 按值接收可移动元素。其 `reserve` 先分配，再搬迁已有元素，分配失败时保留原缓冲区和元素。Vec 还提供下标、`len`、`capacity`、`isEmpty`、`pop`、`replace`、`clear` 和可复制元素的 `clone`。`asSlice` 返回借用视图，扩容后原视图失效。迭代适配器可拥有上游游标及回调。按引用遍历时使用 `iterRef()` 或 `iterMut()`，后者可配合 `for &item in ...` 修改原位置。文本按字节比较，`chars` 按 Unicode 标量遍历。`fromBytes` 验证 UTF-8 后复制成不可变字符串，`StringBuilder.build()` 生成可独立持有的快照。拥有型 `string` 的副本共享不可变存储，`str` 与字节视图遵守来源的生命周期。
+Vec 按值接收可移动元素。其 `reserve` 先分配，再搬迁已有元素，分配失败时保留原缓冲区和元素。`VecDeque` 使用循环槽数组支持两端操作，`FixedDeque<T,N>` 使用内联固定槽；`Stack` 和 `Queue` 分别复用 Vec 与 VecDeque，`BinaryHeap` / `PriorityQueue` 提供最大堆。当前容器分支的编译验收状态见 [coll 容器实现状态](../docs/stdlib/coll-container-implementation.md)。Vec 还提供下标、`len`、`capacity`、`isEmpty`、`pop`、`replace`、`clear` 和可复制元素的 `clone`。`asSlice` 返回借用视图，扩容后原视图失效。迭代适配器可拥有上游游标及回调。按引用遍历时使用 `iterRef()` 或 `iterMut()`，后者可配合 `for &item in ...` 修改原位置。文本按字节比较，`chars` 按 Unicode 标量遍历。`fromBytes` 验证 UTF-8 后复制成不可变字符串，`StringBuilder.build()` 生成可独立持有的快照。拥有型 `string` 的副本共享不可变存储，`str` 与字节视图遵守来源的生命周期。
 
 默认堆分配器目前面向 Linux 宿主。裸机可以构造和销毁空 Vec，增长操作会报告缺少分配器。
 

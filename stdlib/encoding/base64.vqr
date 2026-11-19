@@ -1,0 +1,112 @@
+package encoding
+import (coll, text)
+
+pub enum Base64Alphabet { Standard, UrlSafe }
+
+pub class Base64Options {
+    pub var alphabet: Base64Alphabet;
+    pub var padding: bool;
+    pub var lineWidth: usize;
+    pub var ignoreWhitespace: bool;
+}
+
+pub func base64EncodedLen(n: usize) !usize {
+    var groups = n / 3;
+    if n % 3 != 0 { groups++; }
+    if groups > ~usize(0) / 4 { return EncodingError.Overflow; }
+    groups * 4
+}
+
+func alphabet(options: Base64Options) str {
+    if options.alphabet == Base64Alphabet.UrlSafe {
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    } else {
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    }
+}
+
+func emit(byte: u8, width: usize, column: *usize, dst: *coll.Vec<u8>) !void {
+    if width != 0 {
+        &position := column;
+        if position == width {
+            dst.push(10)!;
+            position = 0;
+        }
+        position++;
+    }
+    dst.push(byte)
+}
+
+pub func base64Encode(data: []const u8, opts: Base64Options) !string {
+    var result = coll.Vec<u8>.withCapacity(base64EncodedLen(data.len())!)!;
+    var digits = alphabet(opts).asBytes();
+    var line: usize = 0;
+    for i := usize(0); i < data.len(); {
+        var a = usize(data[i]);
+        var count = data.len() - i;
+        var b = if (count > 1) usize(data[i + 1]) else usize(0);
+        var c = if (count > 2) usize(data[i + 2]) else usize(0);
+        emit(digits[a >> 2], opts.lineWidth, &line, &result)!;
+        emit(digits[((a & 3) << 4) | (b >> 4)], opts.lineWidth, &line, &result)!;
+        if count > 1 {
+            emit(digits[((b & 15) << 2) | (c >> 6)], opts.lineWidth, &line, &result)!;
+        } else if opts.padding {
+            emit(61, opts.lineWidth, &line, &result)!;
+        }
+        if count > 2 {
+            emit(digits[c & 63], opts.lineWidth, &line, &result)!;
+            i += 3;
+        } else {
+            if opts.padding { emit(61, opts.lineWidth, &line, &result)!; }
+            i += count;
+        }
+    }
+    text.fromBytes(result.asConstSlice())
+}
+
+func sextet(value: u8, url: bool) !u32 {
+    var num = u32(value);
+    if 65 <= num && num <= 90 { return num - 65; }
+    if 97 <= num && num <= 122 { return num - 71; }
+    if 48 <= num && num <= 57 { return num + 4; }
+    if (url && value == 45) || (!url && value == 43) { return 62; }
+    if (url && value == 95) || (!url && value == 47) { return 63; }
+    EncodingError.InvalidByte
+}
+
+pub func base64Decode(value: str, opts: Base64Options) !coll.Vec<u8> {
+    var out = coll.Vec<u8>();
+    var url = opts.alphabet == Base64Alphabet.UrlSafe;
+    var group: u32 = 0;
+    var entered: usize = 0;
+    var padding: usize = 0;
+    for byte in value.asBytes() {
+        if opts.ignoreWhitespace && (byte == 9 || byte == 10 || byte == 13 || byte == 32) { continue; }
+        if byte == 61 {
+            if !opts.padding || entered < 2 || padding == 2 { return EncodingError.InvalidLength; }
+            padding++;
+            continue;
+        }
+        if padding != 0 { return EncodingError.InvalidLength; }
+        group = (group << 6) | sextet(byte, url)!;
+        entered++;
+        if entered == 4 {
+            out.push(u8(group >> 16)!)!;
+            out.push(u8((group >> 8) & 255)!)!;
+            out.push(u8(group & 255)!)!;
+            entered = 0;
+            group = 0;
+        }
+    }
+    if entered == 1 { return EncodingError.InvalidLength; }
+    if opts.padding && entered != 0 && entered + padding != 4 { return EncodingError.InvalidLength; }
+    if entered == 2 {
+        if (group & 15) != 0 { return EncodingError.InvalidByte; }
+        out.push(u8(group >> 4)!)!;
+    } else if entered == 3 {
+        if (group & 3) != 0 { return EncodingError.InvalidByte; }
+        out.push(u8(group >> 10)!)!;
+        out.push(u8((group >> 2) & 255)!)!;
+    }
+    move(out)
+}

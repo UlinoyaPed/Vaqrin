@@ -38,7 +38,7 @@ pub func chars(value: str) Scalars { Scalars(value) }
 
 pub error Utf8Error { InvalidUtf8 }
 
-pub func fromBytes(values: []const u8) !string {
+pub func validateUtf8(values: []const u8) !void {
     var position: usize = 0;
     for position < values.len() {
         var lead = u32(values[position]);
@@ -59,6 +59,10 @@ pub func fromBytes(values: []const u8) !string {
             return Utf8Error.InvalidUtf8;
         }
     }
+}
+
+pub func fromBytes(values: []const u8) !string {
+    validateUtf8(values)!;
     unsafe { __vqr_text_from_utf8(values) }
 }
 

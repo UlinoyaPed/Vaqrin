@@ -1,0 +1,162 @@
+package bytes
+import (coll, cmp, core, mem)
+
+pub error BytesError { EmptyDelimiter, OutOfRange }
+
+pub func equal(a: []const u8, b: []const u8) bool {
+    if a.len() != b.len() { return false; }
+    for i in usize(0)..a.len() {
+        if a[i] != b[i] { return false; }
+    }
+    true
+}
+
+pub func compare(a: []const u8, b: []const u8) cmp.Ordering { mem.compareBytes(a, b) }
+
+pub func compareConstantTime(a: []const u8, b: []const u8) bool {
+    if a.len() != b.len() { return false; }
+    var mask: i32 = 0;
+    unsafe {
+        for i in usize(0)..a.len() {
+            mask |= volatileLoad(&a[i]) ^ volatileLoad(&b[i]);
+        }
+    }
+    mask == 0
+}
+
+pub func find(data: []const u8, needle: u8) ?usize {
+    for i in usize(0)..data.len() {
+        if data[i] == needle { return i; }
+    }
+    null
+}
+
+pub func findLast(data: []const u8, needle: u8) ?usize {
+    for i := data.len(); i != 0; i-- {
+        if data[i - 1] == needle { return i - 1; }
+    }
+    null
+}
+
+pub func count(data: []const u8, needle: u8) usize {
+    var matches: usize = 0;
+    for byte in data {
+        if byte == needle { matches++; }
+    }
+    matches
+}
+
+pub func findSubslice(data: []const u8, pattern: []const u8) ?usize {
+    if pattern.len() == 0 { return 0; }
+    if pattern.len() > data.len() { return null; }
+    for i in usize(0)..=data.len() - pattern.len() {
+        if equal(pattern, data[i..i + pattern.len()]) { return i; }
+    }
+    null
+}
+
+pub func contains(data: []const u8, pattern: []const u8) bool {
+    var position = findSubslice(data, pattern);
+    core.isSome(&position)
+}
+
+pub func startsWith(data: []const u8, prefix: []const u8) bool {
+    prefix.len() <= data.len() && equal(data[0..prefix.len()], prefix)
+}
+
+pub func endsWith(data: []const u8, suffix: []const u8) bool {
+    suffix.len() <= data.len() && equal(data[data.len() - suffix.len()..data.len()], suffix)
+}
+
+func isIn(byte: u8, set: []const u8) bool {
+    var found = find(set, byte);
+    core.isSome(&found)
+}
+
+pub func trimStart(data: []const u8, cutset: []const u8) []const u8 {
+    var start: usize = 0;
+    for start < data.len() && isIn(data[start], cutset) { start++; }
+    data[start..data.len()]
+}
+
+pub func trimEnd(data: []const u8, cutset: []const u8) []const u8 {
+    var end = data.len();
+    for end > 0 && isIn(data[end - 1], cutset) { end--; }
+    data[0..end]
+}
+
+pub func trim(data: []const u8, cutset: []const u8) []const u8 {
+    trimEnd(trimStart(data, cutset), cutset)
+}
+
+pub func isAscii(data: []const u8) bool {
+    for byte in data {
+        if byte >= 128 { return false; }
+    }
+    true
+}
+
+pub class ByteSplitIter {
+    var tail: []const u8;
+    var separator: []const u8;
+    var finished: bool;
+public:
+    func init(data: []const u8, separator: []const u8) !void
+        : tail(data), separator(separator), finished(false) {
+        if separator.len() == 0 { return BytesError.EmptyDelimiter; }
+    }
+
+    func next() ?[]const u8 {
+        if finished { return null; }
+        var part = tail;
+        switch findSubslice(part, separator) {
+            null => { finished = true; some(part) },
+            some(index) => {
+                tail = part[index + separator.len()..part.len()];
+                some(part[0..index])
+            },
+        }
+    }
+}
+
+pub func split(data: []const u8, delimiter: []const u8) !ByteSplitIter {
+    ByteSplitIter(data, delimiter)
+}
+
+pub func splitOnce(data: []const u8, delimiter: []const u8) ?([]const u8, []const u8) {
+    if delimiter.len() == 0 { return null; }
+    switch findSubslice(data, delimiter) {
+        null => null,
+        some(index) => some((data[0..index], data[index + delimiter.len()..data.len()])),
+    }
+}
+
+pub class BytePattern {
+    var needle: coll.Vec<u8>;
+    var prefixes: coll.Vec<usize>;
+    func init(pattern: coll.Vec<u8>, table: coll.Vec<usize>) : needle(move(pattern)), prefixes(move(table)) {}
+public:
+    static func compile(pattern: []const u8) !Self {
+        var needle = coll.Vec<u8>.fromSlice(pattern)!;
+        var prefixes = coll.Vec<usize>.withCapacity(pattern.len())!;
+        if pattern.len() != 0 { prefixes.push(0)!; }
+        var matched: usize = 0;
+        for index in usize(1)..pattern.len() {
+            for matched > 0 && pattern[index] != pattern[matched] { matched = prefixes[matched - 1]; }
+            if pattern[index] == pattern[matched] { matched++; }
+            prefixes.push(matched)!;
+        }
+        BytePattern(move(needle), move(prefixes))
+    }
+
+    const func find(haystack: []const u8) ?usize {
+        if needle.isEmpty() { return 0; }
+        var matched: usize = 0;
+        for index in usize(0)..haystack.len() {
+            for matched > 0 && haystack[index] != needle[matched] { matched = prefixes[matched - 1]; }
+            if haystack[index] == needle[matched] { matched++; }
+            if matched == needle.len() { return index + 1 - matched; }
+        }
+        null
+    }
+}

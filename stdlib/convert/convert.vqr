@@ -1,0 +1,37 @@
+package convert
+
+pub enum Rounding { TowardZero, Floor, Ceil, NearestEven, AwayFromZero }
+pub enum OverflowMode { Checked, Wrap, Saturate }
+pub error NumericError { OutOfRange, InvalidScalar, InvalidBoolean }
+
+pub func narrow<T, U>(value: U) !T { T(value) }
+pub func widen<T, U>(value: U) T { T(value) }
+
+pub func truncToInt<T, F>(value: F) !T { __vqr_convert_trunc<T>(value) }
+pub func floorToInt<T, F>(value: F) !T { __vqr_convert_floor<T>(value) }
+pub func ceilToInt<T, F>(value: F) !T { __vqr_convert_ceil<T>(value) }
+pub func roundToInt<T, F>(value: F) !T { __vqr_convert_round<T>(value) }
+
+pub func toFloat<T, U>(value: U) T { __vqr_convert_float<T>(value) }
+pub func bitCast<T, U>(value: U) T { __vqr_convert_bit_cast<T>(value) }
+
+pub func checkedCast<T, U>(value: U) !?T {
+    var converted: !T = T(value);
+    var out = move(converted) catch (reason) {
+        if reason == NumericError.OutOfRange { return null; }
+        return reason;
+    };
+    some(move(out))
+}
+
+pub func toChar(value: u32) !char {
+    if value > 0x10ffff || (0xd800 <= value && value <= 0xdfff) { return NumericError.InvalidScalar; }
+    __vqr_char(value)
+}
+
+pub func fromChar(value: char) u32 { __vqr_char_code(value) }
+
+pub func toBool(value: u8) !bool {
+    if value > 1 { return NumericError.InvalidBoolean; }
+    value != 0
+}

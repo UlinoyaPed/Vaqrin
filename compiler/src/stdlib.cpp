@@ -58,6 +58,28 @@ ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::v
     ir.CreateCall(Intrinsic::getOrInsertDeclaration(p.module.get(), id), {ir.getInt32(15)});
     return voidValue();
   }
+  if (key.starts_with("__vqr_convert_")) {
+    auto op = key.substr(14);
+    if (op == "float") {
+      arity(1);
+      if (types.size() != 1) fail(n->span, "toFloat requires one target type");
+      auto *to = parseType(types[0]);
+      if (to->kind != Kind::Float) fail(n->span, "toFloat requires a floating-point type");
+      return castNumber(to, n->children[1], n->span);
+    }
+    if (op == "trunc") return builtin("truncToInt", n, types, nullptr);
+    if (op == "floor") return builtin("floorToInt", n, types, nullptr);
+    if (op == "ceil") return builtin("ceilToInt", n, types, nullptr);
+    if (op == "round") return builtin("roundToInt", n, types, nullptr);
+    if (op == "bit_cast") return builtin("bitCast", n, types, nullptr);
+    fail(n->span, "unknown conversion operation");
+  }
+  if (key == "__vqr_char_code") {
+    arity(1);
+    auto value = expression(n->children[1], p.charTy);
+    if (!live()) return neverValue();
+    return {p.integer(32, false), read(value, n->span)};
+  }
   if (key == "__vqr_optional_present" || key == "__vqr_result_ok") {
     arity(1);
     auto pointer = expression(n->children[1]);

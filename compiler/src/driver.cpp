@@ -3,6 +3,7 @@
 
 #include <llvm/Bitcode/BitcodeWriter.h>
 #include <llvm/Config/llvm-config.h>
+#include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
@@ -293,6 +294,13 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
       args.push_back(object.string());
       for (const auto &input : r.linkInputs)
         args.push_back(fs::absolute(input).string());
+      if (r.options.profile == "hosted" && target.isOSLinux() &&
+          std::ranges::any_of(module, [](const llvm::Function &function) {
+            auto intrinsic = function.getIntrinsicID();
+            return intrinsic == llvm::Intrinsic::floor || intrinsic == llvm::Intrinsic::ceil ||
+                   intrinsic == llvm::Intrinsic::trunc || intrinsic == llvm::Intrinsic::roundeven;
+          }))
+        args.push_back("-lm");
       args.insert(args.end(), {"-o", product.string()});
       execute(driver, args);
     }

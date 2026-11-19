@@ -826,6 +826,9 @@ std::uint32_t Program::errorCode(Definition def, std::string_view member) {
   if (def.file->standard && def.file->package == "io" && def.decl->name == "IoError" &&
       member == "WriteFailed")
     return 0xfffffffd;
+  if (def.file->standard && def.file->package == "convert" && def.decl->name == "NumericError" &&
+      member == "OutOfRange")
+    return 0xfffffffe;
   if (!std::ranges::any_of(def.decl->members, [&](const auto &m) { return m.name == member; }))
     fail(def.decl->span, "unknown error member '" + std::string(member) + "'");
   std::uint32_t n = 1;

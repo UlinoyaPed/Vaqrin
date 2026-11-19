@@ -1,0 +1,94 @@
+package encoding
+import (coll, core, meta, text)
+
+pub class Utf8Decoder {
+    var code: u32;
+    var minimum: u32;
+    var required: usize;
+    var consumed: usize;
+public:
+    func init() : code(0), minimum(0), required(0), consumed(0) {}
+
+    func push(bytes: []const u8) !void {
+        for byte in bytes {
+            if consumed == ~usize(0) { return EncodingError.Overflow; }
+            var value = u32(byte);
+            if required == 0 {
+                if value >= 0x80 {
+                    if value < 0xc2 || value > 0xf4 { return text.Utf8Error.InvalidUtf8; }
+                    required = if value < 0xe0 { 1 } else if value < 0xf0 { 2 } else { 3 };
+                    code = value & (u32(0x7f) >> (required + 1));
+                    minimum = if required == 1 { 0x80 } else if required == 2 { 0x800 } else { 0x10000 };
+                }
+            } else {
+                if value < 0x80 || value > 0xbf { return text.Utf8Error.InvalidUtf8; }
+                var next = (code << 6) | (value & 0x3f);
+                if required == 1 && (next < minimum || next > 0x10ffff ||
+                    (0xd800 <= next && next <= 0xdfff)) { return text.Utf8Error.InvalidUtf8; }
+                code = next;
+                required--;
+            }
+            consumed++;
+        }
+    }
+
+    const func finish() !void {
+        if required != 0 { return text.Utf8Error.InvalidUtf8; }
+    }
+
+    const func offset() usize { consumed }
+
+    func reset() void { required = 0; consumed = 0; }
+}
+
+pub class Utf16Decoder {
+    var little: bool;
+    var first: ?u8;
+    var high: ?u32;
+    var output: coll.Vec<u8>;
+    var finished: bool;
+public:
+    func init(endian: meta.Endian)
+        : little(endian == meta.Endian.Little), first(null), high(null),
+          output(coll.Vec<u8>()), finished(false) {}
+
+    func feed(bytes: []const u8) !void {
+        if finished { return EncodingError.InvalidLength; }
+        for byte in bytes {
+            switch first {
+                null => { first = some(byte); },
+                some(initial) => {
+                    var a = u32(initial); var b = u32(byte);
+                    var unit = if (little) a | (b << 8) else (a << 8) | b;
+                    accept(unit)!;
+                    first = null;
+                },
+            }
+        }
+    }
+
+    func finish() !string {
+        if core.isSome<u8>(&first) { return EncodingError.InvalidLength; }
+        if core.isSome<u32>(&high) { return EncodingError.InvalidUtf16; }
+        var text = text.fromBytes(output.asConstSlice())!;
+        finished = true;
+        move(text)
+    }
+
+private:
+    func accept(unit: u32) !void {
+        switch high {
+            null => {
+                if 0xd800 <= unit && unit <= 0xdbff { high = some(unit); }
+                else if 0xdc00 <= unit && unit <= 0xdfff { return EncodingError.InvalidUtf16; }
+                else { appendUtf8(unit, &output)!; }
+            },
+            some(lead) => {
+                if unit < 0xdc00 || unit > 0xdfff { return EncodingError.InvalidUtf16; }
+                var scalar = 0x10000 + ((lead - 0xd800) << 10) + (unit - 0xdc00);
+                appendUtf8(scalar, &output)!;
+                high = null;
+            },
+        };
+    }
+}

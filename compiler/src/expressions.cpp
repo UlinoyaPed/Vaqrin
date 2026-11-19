@@ -44,6 +44,44 @@ Type *Body::hint(const Ast &n) {
     }
     return n->text == "&" ? nullptr : t;
   }
+  case NodeKind::Compare:
+    return p.boolTy;
+  case NodeKind::Binary: {
+    auto operation = std::string_view(n->text);
+    if (operation == "&&" || operation == "||" || operation == "==" || operation == "!=")
+      return p.boolTy;
+    auto *left = hint(n->children[0]);
+    if (operation == "catch" || operation == "??")
+      return left && left->kind == (operation == "catch" ? Kind::Result : Kind::Optional)
+                 ? left->parts[0] : nullptr;
+    if (operation == ".." || operation == "..=") return nullptr;
+    auto *right = hint(n->children[1]);
+    bool fixedWidth = operation == "+%" || operation == "-%" || operation == "*%" ||
+                      operation == "<<%" || operation == "+|" || operation == "-|" ||
+                      operation == "*|" || operation == "<<|";
+    auto arithmetic = [&](Type *type, const Ast &other) -> Type * {
+      if (!type) return nullptr;
+      if (type->kind == Kind::Int && mathInteger(other)) {
+        if (type->bits < 32 && !fixedWidth)
+          return p.integer(32, true);
+        return type;
+      }
+      if (type->kind == Kind::Float && other->kind == NodeKind::Number &&
+          parseNumber(other->text).floating)
+        return type;
+      return nullptr;
+    };
+    if (!left || !right) return left ? arithmetic(left, n->children[1]) : arithmetic(right, n->children[0]);
+    if (left == right && left->kind == Kind::Float) return left;
+    if (left->kind == Kind::Int && right->kind == Kind::Int) {
+      if (!fixedWidth) {
+        if (left->bits < 32) left = p.integer(32, true);
+        if (right->bits < 32) right = p.integer(32, true);
+      }
+      if (left == right || operation.starts_with("<<") || operation == ">>") return left;
+    }
+    return nullptr;
+  }
   case NodeKind::Index:
   case NodeKind::Slice: {
     auto *base = hint(n->children[0]);
@@ -751,7 +789,7 @@ ValueAt Body::builtin(std::string_view key, const Ast &n, const std::vector<Ast>
     ir.CreateStore(read(v, n->span), ptr, true);
     return voidValue();
   }
-  if (key == "truncToInt" || key == "roundToInt") {
+  if (key == "truncToInt" || key == "roundToInt" || key == "floorToInt" || key == "ceilToInt") {
     arity(1);
     auto *to = evaluationType();
     auto v = expression(n->children[1]);
@@ -759,7 +797,8 @@ ValueAt Body::builtin(std::string_view key, const Ast &n, const std::vector<Ast>
     if (to->kind != Kind::Int || v.type->kind != Kind::Float)
       fail(n->span, "expected a float and integer target type");
     auto *raw = read(v, n->span);
-    auto intr = key == "truncToInt" ? Intrinsic::trunc : Intrinsic::roundeven;
+    auto intr = key == "truncToInt" ? Intrinsic::trunc : key == "floorToInt" ? Intrinsic::floor :
+                key == "ceilToInt" ? Intrinsic::ceil : Intrinsic::roundeven;
     auto *rounded =
         ir.CreateCall(Intrinsic::getOrInsertDeclaration(p.module.get(), intr, {v.type->ir}), {raw});
     auto bounds = [&](bool lower) -> Constant * {
@@ -912,8 +951,11 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
           infer(infer, parameter, t);
         } else if (mathInteger(node)) {
           untyped.emplace_back(parameter, p.integer(32, true));
-        } else if (node->kind == NodeKind::Number && parseNumber(node->text).floating) {
-          untyped.emplace_back(parameter, p.canonical.at("f64"));
+        } else {
+          auto literal = node;
+          while (literal->kind == NodeKind::Unary && literal->text == "-") literal = literal->children[0];
+          if (literal->kind == NodeKind::Number && parseNumber(literal->text).floating)
+            untyped.emplace_back(parameter, p.canonical.at("f64"));
         }
       }
       for (const auto &[parameter, t] : untyped)

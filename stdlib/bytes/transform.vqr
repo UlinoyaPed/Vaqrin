@@ -1,0 +1,49 @@
+package bytes
+import (algo, coll)
+
+func append(out: *coll.Vec<u8>, values: []const u8) !void {
+    out.reserveAdditional(values.len())!;
+    for byte in values { out.push(byte)!; }
+}
+
+pub func clone(data: []const u8) !coll.Vec<u8> { coll.Vec<u8>.fromSlice(data) }
+
+pub func reverse(data: []u8) void { algo.reverse(data); }
+
+pub func join(parts: []const []const u8, separator: []const u8) !coll.Vec<u8> {
+    var result = coll.Vec<u8>();
+    for index in usize(0)..parts.len() {
+        if index != 0 { append(&result, separator)!; }
+        append(&result, parts[index])!;
+    }
+    move(result)
+}
+
+pub func repeat(data: []const u8, n: usize) !coll.Vec<u8> {
+    if data.len() != 0 && n > ~usize(0) / data.len() { return coll.CapacityError.Overflow; }
+    var result = coll.Vec<u8>.withCapacity(data.len() * n)!;
+    if data.len() != 0 {
+        for index in usize(0)..n { append(&result, data)!; }
+    }
+    move(result)
+}
+
+pub func replace(data: []const u8, old: []const u8, newValue: []const u8) !coll.Vec<u8> {
+    if old.len() == 0 { return BytesError.EmptyDelimiter; }
+    var result = coll.Vec<u8>();
+    var tail = data;
+    for tail.len() != 0 {
+        switch findSubslice(tail, old) {
+            null => {
+                append(&result, tail)!;
+                return move(result);
+            },
+            some(index) => {
+                append(&result, tail[0..index])!;
+                append(&result, newValue)!;
+                tail = tail[index + old.len()..tail.len()];
+            },
+        }
+    }
+    move(result)
+}

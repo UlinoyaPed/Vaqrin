@@ -1,0 +1,184 @@
+package encoding
+import (bytes, coll, convert, core, meta, text)
+
+pub error EncodingError { InvalidByte, InvalidLength, InvalidUtf16, Overflow }
+
+func hexDigit(value: u8) !u8 {
+    if 48 <= value && value <= 57 { var out = value; out -= 48; return out; }
+    if 65 <= value && value <= 70 { var out = value; out -= 55; return out; }
+    if 97 <= value && value <= 102 { var out = value; out -= 87; return out; }
+    EncodingError.InvalidByte
+}
+
+pub func hexEncodedLen(n: usize) !usize {
+    if n > ~usize(0) / 2 { return EncodingError.Overflow; }
+    n * 2
+}
+
+pub func hexDecodedLen(n: usize) !usize {
+    if n % 2 != 0 { return EncodingError.InvalidLength; }
+    n / 2
+}
+
+func hexByte(byte: u8, digits: []const u8, dst: *coll.Vec<u8>) !void {
+    var raw = usize(byte);
+    dst.push(digits[raw / 16])!;
+    dst.push(digits[raw % 16])!;
+}
+
+pub func hexEncode(data: []const u8) !string {
+    var out = coll.Vec<u8>.withCapacity(hexEncodedLen(data.len())!)!;
+    var digits = "0123456789abcdef".asBytes();
+    for byte in data { hexByte(byte, digits, &out)!; }
+    text.fromBytes(out.asConstSlice())
+}
+
+pub func hexDecode(value: str) !coll.Vec<u8> {
+    var src = value.asBytes();
+    var out = coll.Vec<u8>.withCapacity(hexDecodedLen(src.len())!)!;
+    for i := usize(0); i < src.len(); i += 2 {
+        var high = hexDigit(src[i])!;
+        var low = hexDigit(src[i + 1])!;
+        out.push(u8((high << 4) | low)!)!;
+    }
+    move(out)
+}
+
+pub func percentEncode(data: []const u8, safe: []const u8) !string {
+    var out = coll.Vec<u8>();
+    var digits = "0123456789ABCDEF".asBytes();
+    for byte in data {
+        var unreserved = (65 <= byte && byte <= 90) || (97 <= byte && byte <= 122) ||
+                         (48 <= byte && byte <= 57) || byte == 45 || byte == 46 ||
+                         byte == 95 || byte == 126;
+        var allowed = bytes.find(safe, byte);
+        if unreserved || (byte >= 32 && byte < 127 && byte != 37 && core.isSome(&allowed)) {
+            out.push(byte)!;
+        } else {
+            out.push(37)!;
+            hexByte(byte, digits, &out)!;
+        }
+    }
+    text.fromBytes(out.asConstSlice())
+}
+
+pub func percentDecode(value: str) !coll.Vec<u8> {
+    var data = value.asBytes();
+    var result = coll.Vec<u8>();
+    for i := usize(0); i < data.len(); i++ {
+        if data[i] != 37 {
+            result.push(data[i])!;
+        } else {
+            if data.len() - i < 3 { return EncodingError.InvalidLength; }
+            var high = hexDigit(data[i + 1])!;
+            var low = hexDigit(data[i + 2])!;
+            result.push(u8((high << 4) | low)!)!;
+            i += 2;
+        }
+    }
+    move(result)
+}
+
+pub func utf8Validate(data: []const u8) !void { text.validateUtf8(data) }
+pub func utf8Decode(data: []const u8) !string { text.fromBytes(data) }
+pub func utf8Encode(value: str) !coll.Vec<u8> { bytes.clone(value.asBytes()) }
+
+pub func asciiDecode(data: []const u8) !string {
+    if !bytes.isAscii(data) { return EncodingError.InvalidByte; }
+    text.fromBytes(data)
+}
+
+pub func asciiEncode(value: str) !coll.Vec<u8> {
+    var data = value.asBytes();
+    if !bytes.isAscii(data) { return EncodingError.InvalidByte; }
+    bytes.clone(data)
+}
+
+func appendUtf8(value: u32, dst: *coll.Vec<u8>) !void {
+    var width: usize = if value < 0x80 { 1 } else if value < 0x800 { 2 }
+                       else if value < 0x10000 { 3 } else { 4 };
+    dst.reserveAdditional(width)!;
+    if value < 0x80 {
+        dst.push(u8(value)!)!;
+    } else if value < 0x800 {
+        dst.push(u8(0xc0 | (value >> 6))!)!;
+        dst.push(u8(0x80 | (value & 0x3f))!)!;
+    } else if value < 0x10000 {
+        dst.push(u8(0xe0 | (value >> 12))!)!;
+        dst.push(u8(0x80 | ((value >> 6) & 0x3f))!)!;
+        dst.push(u8(0x80 | (value & 0x3f))!)!;
+    } else {
+        dst.push(u8(0xf0 | (value >> 18))!)!;
+        dst.push(u8(0x80 | ((value >> 12) & 0x3f))!)!;
+        dst.push(u8(0x80 | ((value >> 6) & 0x3f))!)!;
+        dst.push(u8(0x80 | (value & 0x3f))!)!;
+    }
+}
+
+pub func latin1Decode(data: []const u8) !string {
+    var out = coll.Vec<u8>();
+    for byte in data { appendUtf8(u32(byte), &out)!; }
+    text.fromBytes(out.asConstSlice())
+}
+
+pub func latin1Encode(value: str) !coll.Vec<u8> {
+    var out = coll.Vec<u8>();
+    for scalar in text.chars(value) {
+        var code = convert.fromChar(scalar);
+        if code > 255 { return EncodingError.InvalidByte; }
+        out.push(u8(code)!)!;
+    }
+    move(out)
+}
+
+func readUnit(data: []const u8, i: usize, little: bool) u32 {
+    var first = u32(data[i]);
+    var next = u32(data[i + 1]);
+    if (little) first | (next << 8) else (first << 8) | next
+}
+
+pub func utf16Decode(data: []const u8, endian: meta.Endian) !string {
+    if data.len() % 2 != 0 { return EncodingError.InvalidLength; }
+    var out = coll.Vec<u8>();
+    var little = endian == meta.Endian.Little;
+    for i := usize(0); i < data.len(); i += 2 {
+        var value = readUnit(data, i, little);
+        if 0xd800 <= value && value <= 0xdbff {
+            if data.len() - i < 4 { return EncodingError.InvalidUtf16; }
+            var low = readUnit(data, i + 2, little);
+            if low < 0xdc00 || low > 0xdfff { return EncodingError.InvalidUtf16; }
+            value = 0x10000 + ((value - 0xd800) << 10) + (low - 0xdc00);
+            i += 2;
+        } else if 0xdc00 <= value && value <= 0xdfff {
+            return EncodingError.InvalidUtf16;
+        }
+        appendUtf8(value, &out)!;
+    }
+    text.fromBytes(out.asConstSlice())
+}
+
+func appendUnit(value: u32, little: bool, out: *coll.Vec<u8>) !void {
+    var low = u8(value & 0xff)!;
+    var high = u8(value >> 8)!;
+    if little {
+        out.push(low)!; out.push(high)!;
+    } else {
+        out.push(high)!; out.push(low)!;
+    }
+}
+
+pub func utf16Encode(value: str, endian: meta.Endian) !coll.Vec<u8> {
+    var out = coll.Vec<u8>();
+    var little = endian == meta.Endian.Little;
+    for char in text.chars(value) {
+        var scalar = convert.fromChar(char);
+        if scalar < 0x10000 {
+            appendUnit(scalar, little, &out)!;
+        } else {
+            var data = scalar - 0x10000;
+            appendUnit(0xd800 + (data >> 10), little, &out)!;
+            appendUnit(0xdc00 + (data & 0x3ff), little, &out)!;
+        }
+    }
+    move(out)
+}

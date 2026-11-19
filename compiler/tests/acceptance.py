@@ -1483,6 +1483,166 @@ class Acceptance(unittest.TestCase):
             }
         """, "2\n2\ntrue\n9\n3\n3\n0\n0\n2\ntrue\n4\n2\ntrue\n3\ntrue\n4\n4\n8\n9\ntrue\n中文\n")
 
+    def test_numeric_conversion_facade(self):
+        self.hosted("""
+            import (convert, core)
+            comptime const floor = convert.floorToInt<i32>(-5.75) catch 0;
+            comptime const ceil = convert.ceilToInt<i32>(-5.75) catch 0;
+            func main() !void {
+                io.println(floor)!;
+                io.println(ceil)!;
+                var x = 5.75f32;
+                io.println(convert.truncToInt<i32>(x)!)!;
+                io.println(convert.floorToInt<i32>(-x)!)!;
+                io.println(convert.ceilToInt<i32>(x)!)!;
+                var half = 2.5f64;
+                io.println(convert.roundToInt<i32>(half)!)!;
+                io.println(convert.roundToInt<i32>(half + 1.0)!)!;
+                var nan = convert.bitCast<f64>(0x7ff8000000000001u64);
+                var rejected = convert.floorToInt<i32>(nan);
+                io.println(core.isErr(&rejected))!;
+                var max = 255u32;
+                io.println(convert.narrow<u8>(max)!)!;
+                io.println(convert.widen<u32>(17u8))!;
+                var missing = convert.checkedCast<u8>(max + 1)!;
+                io.println(core.isNone(&missing))!;
+                io.println(convert.toFloat<f64>(max) == 255.0)!;
+                io.println(convert.fromChar('中'))!;
+                io.println(convert.toChar(20013)! == '中')!;
+                var surrogate = convert.toChar(0xd800);
+                io.println(core.isErr(&surrogate))!;
+                io.println(convert.toBool(1)!)!;
+                var invalidBool = convert.toBool(2);
+                io.println(core.isErr(&invalidBool))!;
+            }
+        """, "-6\n-5\n5\n-6\n6\n2\n4\ntrue\n255\n17\ntrue\ntrue\n20013\ntrue\ntrue\ntrue\ntrue\n")
+
+    def test_byte_slices_patterns_and_buffer(self):
+        self.hosted("""
+            import (bytes, cmp, core, text)
+            func main() !void {
+                var source = "  aa,b,cc,  ".asBytes();
+                var spaces = " ".asBytes();
+                var cut = bytes.trim(source, spaces);
+                io.println(bytes.startsWith(cut, "aa".asBytes()))!;
+                io.println(bytes.endsWith(cut, ",".asBytes()))!;
+                io.println(bytes.equal(cut, "aa,b,cc,".asBytes()))!;
+                io.println(bytes.compare(cut, "z".asBytes()) == cmp.Ordering.Less)!;
+                io.println(bytes.compareConstantTime(cut, "aa,b,cc,".asBytes()))!;
+                io.println(bytes.compareConstantTime(cut, "ba,b,cc,".asBytes()))!;
+                io.println(bytes.count(cut, 44))!;
+                io.println(bytes.find(cut, 44).unwrap())!;
+                io.println(bytes.findLast(cut, 44).unwrap())!;
+                var pattern = bytes.BytePattern.compile("aba".asBytes())!;
+                io.println(pattern.find("abbaba".asBytes()).unwrap())!;
+                var fields = bytes.split(cut, ",".asBytes())!;
+                for field in fields { io.println(field.len())!; }
+                var split = bytes.splitOnce(cut, ",".asBytes()).unwrap();
+                io.println(bytes.contains(cut, "cc".asBytes()))!;
+                var repeated = bytes.repeat("hi".asBytes(), 2)!;
+                var replaced = bytes.replace(repeated.asConstSlice(), "i".asBytes(), "o".asBytes())!;
+                io.println(text.fromBytes(replaced.asConstSlice())!)!;
+                var buffer = bytes.Buffer.withCapacity(2)!;
+                buffer.write("AB".asBytes())!;
+                buffer.write(buffer.asSlice())!;
+                io.println(buffer.readByte().unwrap())!;
+                io.println(buffer.discard(1))!;
+                buffer.compact();
+                io.println(buffer.len())!;
+                io.println(text.fromBytes(buffer.asSlice())!)!;
+                buffer.writeByte(67)!;
+                var first = buffer.peek(2);
+                io.println(first[1])!;
+                var copy = bytes.Buffer.intoVec(move(buffer));
+                var read = bytes.ByteReader(copy.asConstSlice());
+                io.println(read.readByte().unwrap())!;
+                var short = [_]u8{0, 0};
+                var out = bytes.ByteWriter(short[:]);
+                io.println(out.write(read.peek(5)))!;
+                io.println(out.writeByte(90))!;
+                out.reset();
+                io.println(out.writeByte(92))!;
+                io.println(out.written()[0])!;
+                io.println(bytes.isAscii("é".asBytes()))!;
+            }
+        """, "true\ntrue\ntrue\ntrue\ntrue\nfalse\n3\n2\n7\n3\n2\n1\n2\n0\ntrue\nhoho\n65\n1\n2\nAB\n66\n65\n2\nfalse\ntrue\n92\nfalse\n", "-O2")
+
+    def test_standard_byte_encodings(self):
+        self.hosted("""
+            import (core, encoding, meta, text)
+            func main() !void {
+                var bytes = [_]u8{0, 31, 255};
+                io.println(encoding.hexEncode(bytes[:])!)!;
+                var decoded = encoding.hexDecode("00Ffff")!;
+                io.println(decoded[1])!;
+                var odd = encoding.hexDecode("aba");
+                io.println(core.isErr(&odd))!;
+                var malformed = encoding.hexDecode("0g");
+                io.println(core.isErr(&malformed))!;
+                io.println(encoding.percentEncode("a+/ 😀".asBytes(), "/".asBytes())!)!;
+                var unescaped = encoding.percentDecode("%E4%B8%AD+%2F")!;
+                io.println(text.fromBytes(unescaped.asConstSlice())!)!;
+                var high = [_]u8{0xe9};
+                io.println(encoding.latin1Decode(high[:])!)!;
+                var wrongAscii = encoding.asciiDecode(high[:]);
+                io.println(core.isErr(&wrongAscii))!;
+                var latin = encoding.latin1Encode("é")!;
+                io.println(latin[0])!;
+                var utf16 = encoding.utf16Encode("中😀", meta.Endian.Little)!;
+                io.println(utf16.len())!;
+                io.println(utf16[0])!;
+                io.println(encoding.utf16Decode(utf16.asConstSlice(), meta.Endian.Little)!)!;
+                var big = encoding.utf16Encode("😀", meta.Endian.Big)!;
+                io.println(big[0])!;
+                io.println(encoding.utf16Decode(big.asConstSlice(), meta.Endian.Big)!)!;
+                var broken = [_]u8{0xd8, 0x00};
+                var rejected = encoding.utf16Decode(broken[:], meta.Endian.Big);
+                io.println(core.isErr(&rejected))!;
+                var overlong = [_]u8{0xc0, 0x80};
+                var invalid = encoding.utf8Validate(overlong[:]);
+                io.println(core.isErr(&invalid))!;
+                var opts = encoding.Base64Options{alphabet: encoding.Base64Alphabet.Standard,
+                    padding: true, lineWidth: 0, ignoreWhitespace: false};
+                io.println(encoding.base64EncodedLen(4)!)!;
+                io.println(encoding.base64Encode("f".asBytes(), opts)!)!;
+                io.println(encoding.base64Encode("fo".asBytes(), opts)!)!;
+                io.println(encoding.base64Encode("foo".asBytes(), opts)!)!;
+                var base = encoding.base64Decode("Zm9v", opts)!;
+                io.println(text.fromBytes(base.asConstSlice())!)!;
+                var noncanonical = encoding.base64Decode("Zh==", opts);
+                io.println(core.isErr(&noncanonical))!;
+                opts.alphabet = encoding.Base64Alphabet.UrlSafe;
+                opts.padding = false;
+                opts.lineWidth = 0;
+                var sample = [_]u8{255};
+                io.println(encoding.base64Encode(sample[:], opts)!)!;
+                var url = encoding.base64Decode("_w", opts)!;
+                io.println(url[0])!;
+                var streaming = encoding.Utf8Decoder();
+                var leading = [_]u8{0xe4};
+                var suffix = [_]u8{0xb8, 0xad};
+                streaming.push(leading[:])!;
+                var unfinished = streaming.finish();
+                io.println(core.isErr(&unfinished))!;
+                streaming.push(suffix[:])!;
+                streaming.finish()!;
+                io.println(streaming.offset())!;
+                streaming.reset();
+                io.println(streaming.offset())!;
+                var decoder = encoding.Utf16Decoder(meta.Endian.Little);
+                for i in usize(0)..utf16.len() {
+                    decoder.feed(utf16.asConstSlice()[i..i+1])!;
+                }
+                io.println(decoder.finish()!)!;
+                opts.alphabet = encoding.Base64Alphabet.Standard;
+                opts.padding = true; opts.lineWidth = 4; opts.ignoreWhitespace = true;
+                var wrapped = encoding.base64Encode("foobar".asBytes(), opts)!;
+                io.println(wrapped)!;
+                var recovered = encoding.base64Decode(wrapped, opts)!;
+                io.println(text.fromBytes(recovered.asConstSlice())!)!;
+            }
+        """, "001fff\n255\ntrue\ntrue\na%2B/%20%F0%9F%98%80\n中+/\né\ntrue\n233\n6\n45\n中😀\n216\n😀\ntrue\ntrue\n8\nZg==\nZm8=\nZm9v\nfoo\ntrue\n_w\n255\ntrue\n3\n0\n中😀\nZm9v\nYmFy\nfoobar\n")
+
     def test_build_artifacts(self):
         source = self.source("math.vqr", '''
             package math

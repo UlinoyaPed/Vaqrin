@@ -180,10 +180,13 @@ Data Interpreter::call(Function &fn, ArrayRef<Data> args, unsigned depth) {
         for (auto &a : i->args())
           callArgs.push_back(get(a.get()));
         auto intrinsic = callee->getIntrinsicID();
-        if (intrinsic == Intrinsic::trunc || intrinsic == Intrinsic::roundeven) {
+        if (intrinsic == Intrinsic::trunc || intrinsic == Intrinsic::roundeven ||
+            intrinsic == Intrinsic::floor || intrinsic == Intrinsic::ceil) {
           auto value = cast<ConstantFP>(constant(callArgs[0]))->getValueAPF();
-          value.roundToIntegral(intrinsic == Intrinsic::trunc ? APFloat::rmTowardZero
-                                                              : APFloat::rmNearestTiesToEven);
+          auto rounding = intrinsic == Intrinsic::trunc ? APFloat::rmTowardZero :
+                          intrinsic == Intrinsic::floor ? APFloat::rmTowardNegative :
+                          intrinsic == Intrinsic::ceil ? APFloat::rmTowardPositive : APFloat::rmNearestTiesToEven;
+          value.roundToIntegral(rounding);
           values[i] = ConstantFP::get(fn.getContext(), value);
         } else if (intrinsic == Intrinsic::ctpop || intrinsic == Intrinsic::ctlz ||
                    intrinsic == Intrinsic::cttz || intrinsic == Intrinsic::bitreverse ||

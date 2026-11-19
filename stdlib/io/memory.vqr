@@ -1,5 +1,5 @@
 package io
-import (coll, mem)
+import (bytes, coll, mem)
 
 pub class MemoryReader {
     #implements: Reader, Seeker
@@ -40,33 +40,16 @@ public:
 
 pub class MemoryWriter {
     #implements: Writer
-    var buffer: coll.Vec<u8>;
+    var buffer: bytes.Buffer;
 public:
-    func init() : buffer(coll.Vec<u8>()) {}
+    func init() : buffer(bytes.Buffer()) {}
 
-    func write(data: []const u8) !usize {
-        var count = data.len();
-        if count == 0 { return 0; }
-        var original = buffer.len();
-        var offset: ?usize = null;
-        if original != 0 {
-            var current = buffer.asConstSlice();
-            var base = __vqr_pointer_address(&current[0]);
-            var address = __vqr_pointer_address(&data[0]);
-            if address >= base && address - base < original { offset = address - base; }
-        }
-        buffer.reserveAdditional(count)!;
-        switch offset {
-            null => {},
-            some(index) => { data = buffer.asConstSlice()[index..index + count]; },
-        }
-        for byte in data { buffer.push(byte)!; }
-        count
-    }
-
+    func write(data: []const u8) !usize { buffer.write(data) }
     func flush() !void {}
-    const func asSlice() []const u8 { buffer.asConstSlice() }
-    static func intoBytes(value: Self) coll.Vec<u8> { mem.replace<coll.Vec<u8>>(&value.buffer, coll.Vec<u8>()) }
+    const func asSlice() []const u8 { buffer.asSlice() }
+    static func intoBytes(value: Self) coll.Vec<u8> {
+        bytes.Buffer.intoVec(mem.replace<bytes.Buffer>(&value.buffer, bytes.Buffer()))
+    }
 }
 
 pub class FixedWriter {

@@ -1,7 +1,11 @@
 id = "vaqrin"
 name = "Vaqrin"
-description = "Vaqrin syntax highlighting"
-version = "0.1.0"
+description = "Vaqrin highlighting, completion, diagnostics, type hints and code navigation"
+version = "0.2.0"
 schema_version = 1
 authors = ["Vaqrin contributors"]
 repository = "https://github.com/UlinoyaPed/Vaqrin"
+
+[language_servers.vaqrin-lsp]
+name = "Vaqrin Language Server"
+languages = ["Vaqrin"]

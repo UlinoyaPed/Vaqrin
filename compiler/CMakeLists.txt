@@ -69,4 +69,7 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/coll_static_audit.py)
     add_test(NAME vaqc-stdlib-acceptance COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/stdlib_acceptance.py $<TARGET_FILE:vaqc>)
+    add_test(NAME vaqc-editor-acceptance COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/editor_acceptance.py $<TARGET_FILE:vaqc>)
+    set_tests_properties(vaqc-editor-acceptance PROPERTIES TIMEOUT 40)
 endif()

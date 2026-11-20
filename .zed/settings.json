@@ -1,0 +1,11 @@
+{
+  "show_signature_help_after_edits": true,
+  "languages": {
+    "Vaqrin": {
+      "inlay_hints": {
+        "enabled": true,
+        "edit_debounce_ms": 100
+      }
+    }
+  }
+}

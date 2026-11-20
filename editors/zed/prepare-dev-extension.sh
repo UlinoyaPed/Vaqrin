@@ -8,6 +8,10 @@ grammar="$output/grammar"
 
 mkdir -p "$grammar" "$output/languages"
 cp -R "$source_dir/grammar/." "$grammar/"
+mkdir -p "$output/src"
+cp "$source_dir/Cargo.toml" "$output/"
+if [[ -f "$source_dir/Cargo.lock" ]]; then cp "$source_dir/Cargo.lock" "$output/"; fi
+cp "$source_dir/src/lib.rs" "$source_dir/src/server.py" "$output/src/"
 cp -R "$source_dir/languages/." "$output/languages/"
 git -C "$grammar" init --quiet
 git -C "$grammar" add -- grammar.js tree-sitter.json src

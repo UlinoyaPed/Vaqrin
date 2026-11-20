@@ -26,3 +26,6 @@
 (source_file (keyword ["class" "interface" "enum" "type" "error"]) . (identifier) @type)
 ((source_file (identifier) @type.builtin)
  (#match? @type.builtin "^([iu][1-9][0-9]*|isize|usize|f16|f32|f64|bool|char|str|string|void|never|ErrorId|Self|c_int|c_char)$"))
+
+((source_file [(bracket "(") (delimiter ",")] . (identifier) @keyword . (identifier) . [(bracket ")") (delimiter ",")])
+ (#eq? @keyword "ref"))

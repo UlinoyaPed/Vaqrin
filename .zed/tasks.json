@@ -2,15 +2,44 @@
   {
     "label": "build vaqc",
     "command": "bash",
-    "args": [".zed/build.sh"],
+    "args": [
+      ".zed/build.sh"
+    ],
     "cwd": "$ZED_WORKTREE_ROOT",
     "save": "all",
     "show_command": false
   },
   {
     "label": "run code",
+    "command": "python3",
+    "args": [
+      ".zed/run.py",
+      "run",
+      "${ZED_FILE:.}"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "save": "all",
+    "show_command": false
+  },
+  {
+    "label": "build vaqc and run",
     "command": "bash",
-    "args": [".zed/build.sh", "${ZED_FILE:.}"],
+    "args": [
+      ".zed/build.sh",
+      "${ZED_FILE:.}"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "save": "all",
+    "show_command": false
+  },
+  {
+    "label": "rerun last successful executable",
+    "command": "python3",
+    "args": [
+      ".zed/run.py",
+      "rerun",
+      "${ZED_FILE:.}"
+    ],
     "cwd": "$ZED_WORKTREE_ROOT",
     "save": "all",
     "show_command": false

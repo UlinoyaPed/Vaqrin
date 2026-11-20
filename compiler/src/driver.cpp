@@ -1,6 +1,7 @@
 #include "codegen.hpp"
 #include "inputs.hpp"
 
+#include <llvm/ADT/StringExtras.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
 #include <llvm/Config/llvm-config.h>
 #include <llvm/IR/Intrinsics.h>
@@ -10,6 +11,9 @@
 #include <llvm/MC/TargetRegistry.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/FileSystem.h>
+#include <llvm/Support/JSON.h>
+#include <llvm/Support/MemoryBuffer.h>
+#include <llvm/Support/SHA256.h>
 #include <llvm/Support/Program.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/raw_ostream.h>
@@ -17,6 +21,8 @@
 #include <llvm/Transforms/IPO/GlobalDCE.h>
 
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
 #include <deque>
 #include <filesystem>
 #include <fstream>
@@ -66,7 +72,9 @@ namespace fs = std::filesystem;
 struct Request {
   Options options;
   std::vector<fs::path> inputs, linkInputs, packagePaths;
-  fs::path output, sysroot, linkerScript, entry;
+  fs::path output, sysroot, linkerScript, entry, overlay, dependencies;
+  bool timings = false;
+  bool editorHints = false;
   std::string cDriver, archiver;
 };
 
@@ -83,6 +91,10 @@ void help() {
                "  --features FEATURES     Target feature string\n"
                "  --profile PROFILE       hosted or freestanding\n"
                "  --entry FILE            Select a file-local main\n"
+               "  --overlay FILE          Read replacement contents for one .vqr in check mode\n"
+               "  --editor-hints         Report inferred binding types as JSON in check mode\n"
+               "  --dependencies FILE     List source inputs and directory probes for one .vqr\n"
+               "  --timings              Report build stage durations on stderr\n"
                "  --package-path DIR      Search additional local package roots\n"
                "  --cc PROGRAM            C driver for linking\n"
                "  --ar PROGRAM            Archiver for static libraries\n"
@@ -100,6 +112,8 @@ Request arguments(int argc, char **argv) {
       r.options.check = a == "check";
       continue;
     }
+    if (a == "--timings") { r.timings = true; continue; }
+    if (a == "--editor-hints") { r.editorHints = true; continue; }
     if (a == "--check") {
       r.options.check = true;
       continue;
@@ -137,6 +151,10 @@ Request arguments(int argc, char **argv) {
       r.options.profile = value();
     else if (flag == "--entry")
       r.entry = value();
+    else if (flag == "--overlay")
+      r.overlay = value();
+    else if (flag == "--dependencies")
+      r.dependencies = value();
     else if (flag == "--package-path")
       r.packagePaths.emplace_back(value());
     else if (flag == "--cc")
@@ -153,6 +171,13 @@ Request arguments(int argc, char **argv) {
       fail({}, "unknown option '" + std::string(a) + "'", "E300");
   }
   if (r.inputs.empty()) fail({}, "no input files; see vaqc --help", "E300");
+  if ((!r.overlay.empty() || !r.dependencies.empty()) &&
+      (r.inputs.size() != 1 || r.inputs.front().extension() != ".vqr" || fs::is_directory(r.inputs.front())))
+    fail({}, "--overlay and --dependencies require exactly one .vqr input", "E300");
+  if (!r.overlay.empty() && !r.options.check) fail({}, "--overlay requires check mode", "E300");
+  if (r.editorHints && (!r.options.check || r.options.emit == "ast" || r.inputs.size() != 1 ||
+                        r.inputs.front().extension() != ".vqr" || fs::is_directory(r.inputs.front())))
+    fail({}, "--editor-hints requires check mode and one .vqr input", "E300");
   if (r.options.profile != "hosted" && r.options.profile != "freestanding")
     fail({}, "unknown target profile '" + r.options.profile + "'", "E300");
   const std::set<std::string> emits{"exe", "obj", "llvm-ir", "bc", "asm", "staticlib", "sharedlib", "ast"};
@@ -176,6 +201,105 @@ void execute(const std::string &program, const std::vector<std::string> &args) {
   if (result != 0)
     fail({}, program + " failed (" + std::to_string(result) + ")" + (message.empty() ? "" : ": " + message),
          "E302");
+}
+
+std::optional<std::string> fileDigest(const fs::path &file) {
+  auto bytes = llvm::MemoryBuffer::getFile(file.string());
+  if (!bytes) return {};
+  llvm::SHA256 digest;
+  digest.update((*bytes)->getBuffer());
+  return llvm::toHex(digest.final(), true);
+}
+
+fs::path runtimeCache() {
+  if (auto *cache = std::getenv("XDG_CACHE_HOME"); cache && fs::path(cache).is_absolute())
+    return fs::path(cache) / "vaqrin/runtime";
+  if (auto *home = std::getenv("HOME"); home && fs::path(home).is_absolute())
+    return fs::path(home) / ".cache/vaqrin/runtime";
+  return {};
+}
+
+void compileRuntime(const std::string &driver, std::vector<std::string> args, const fs::path &source,
+                    const fs::path &object, bool cacheable, bool timings) {
+  const auto started = std::chrono::steady_clock::now();
+  const auto report = [&](std::string_view status) {
+    if (timings)
+      std::cerr << "vaqc: runtime " << source.filename().string() << ' ' << status << ' '
+                << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count()
+                << " ms\n";
+  };
+  auto cache = cacheable ? runtimeCache() : fs::path{};
+  auto tool = cache.empty() ? llvm::ErrorOr<std::string>(std::make_error_code(std::errc::no_such_file_or_directory))
+                            : llvm::sys::findProgramByName(driver);
+  auto identity = tool ? fileDigest(*tool) : std::nullopt;
+  std::error_code error;
+  if (!identity || (fs::create_directories(cache, error), error)) {
+    args.insert(args.end(), {"-c", source.string(), "-o", object.string()});
+    execute(driver, args);
+    report("uncached");
+    return;
+  }
+
+  const bool cpp = source.extension() == ".cpp";
+  auto rendered = object;
+  rendered.replace_extension(cpp ? ".ii" : ".i");
+  auto preprocessing = args;
+  preprocessing.insert(preprocessing.end(), {"-E", source.string(), "-o", rendered.string()});
+  execute(driver, preprocessing);
+  auto contents = fileDigest(rendered);
+  if (!contents) fail({}, "cannot read preprocessed runtime source", "E302");
+  llvm::SHA256 hash;
+  const auto add = [&](llvm::StringRef field) {
+    hash.update(field);
+    hash.update(llvm::StringRef("\0", 1));
+  };
+  add("vaqrin-runtime-v1");
+  add(*tool);
+  add(*identity);
+  add(*contents);
+  for (const auto &arg : args) add(arg);
+  for (const char *name : {"PATH", "CPATH", "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH", "COMPILER_PATH",
+                           "GCC_EXEC_PREFIX", "SDKROOT", "CLANG_CONFIG_FILE", "SOURCE_DATE_EPOCH"}) {
+    add(name);
+    if (auto *value = std::getenv(name)) add(value);
+  }
+  auto entry = cache / llvm::toHex(hash.final(), true);
+  const auto cachedObject = entry / "runtime.o";
+  const auto cachedDigest = entry / "sha256";
+  if (auto stored = fileDigest(cachedObject)) {
+    std::ifstream expected(cachedDigest);
+    std::string checksum;
+    if (expected >> checksum && checksum == *stored &&
+        fs::copy_file(cachedObject, object, fs::copy_options::overwrite_existing, error)) {
+      report("cache hit");
+      return;
+    }
+  }
+
+  if (cpp) {
+    args.push_back("-x");
+    args.push_back("c++-cpp-output");
+  }
+  args.insert(args.end(), {"-c", rendered.string(), "-o", object.string()});
+  execute(driver, args);
+  report("cache miss");
+  auto checksum = fileDigest(object);
+  llvm::SmallString<256> temporary;
+  if (!checksum || llvm::sys::fs::createUniqueDirectory((cache / "publish").string(), temporary)) return;
+  fs::path stage(temporary.str().str());
+  if (fs::copy_file(object, stage / "runtime.o", error)) {
+    std::ofstream out(stage / "sha256");
+    out << *checksum << '\n';
+    out.close();
+    if (out) {
+      // Rename individual files into a shared entry. Readers validate the checksum
+      // before reuse, including during a concurrent publication.
+      fs::create_directories(entry, error);
+      fs::rename(stage / "runtime.o", cachedObject, error);
+      if (!error) fs::rename(stage / "sha256", cachedDigest, error);
+    }
+  }
+  fs::remove_all(stage, error);
 }
 
 void optimize(llvm::Module &module, llvm::TargetMachine &machine, const Options &options) {
@@ -290,15 +414,19 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
          module.getDataLayout().getPointerSizeInBits() != 64 ||
          (target.getArch() != llvm::Triple::x86_64 && target.getArch() != llvm::Triple::aarch64)))
       fail({}, "host I/O currently requires hosted GNU/Linux x86-64 or AArch64", "E290");
+    const auto codegen = std::chrono::steady_clock::now();
     emit(module, machine, object, "obj");
+    if (r.timings)
+      std::cerr << "vaqc: codegen "
+                << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - codegen).count()
+                << " ms\n";
     auto runtime = intermediates / "vaqrin-task-runtime.o";
     if (usesTasks) {
       auto source = inputs.taskRuntimeSource();
       if (!fs::is_regular_file(source)) fail({}, "the Vaqrin task runtime source is missing", "E302");
       auto args = targetFlags(r, target, driver);
-      args.insert(args.end(), {"-std=c11", "-O2", "-fPIC", "-fvisibility=hidden", "-pthread", "-c",
-                               source.string(), "-o", runtime.string()});
-      execute(driver, args);
+      args.insert(args.end(), {"-std=c11", "-O2", "-fPIC", "-fvisibility=hidden", "-pthread"});
+      compileRuntime(driver, std::move(args), source, runtime, target.isOSLinux(), r.timings);
     }
     auto ioRuntime = intermediates / "vaqrin-io-runtime.o";
     if (usesIoRuntime) {
@@ -306,9 +434,8 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
       if (!fs::is_regular_file(source)) fail({}, "the Vaqrin host I/O runtime source is missing", "E302");
       auto args = targetFlags(r, target, driver);
       args.insert(args.end(), {"-x", "c++", "-std=c++20", "-O2", "-fPIC", "-fvisibility=hidden",
-                               "-fno-exceptions", "-fno-rtti", "-c", source.string(), "-o",
-                               ioRuntime.string()});
-      execute(driver, args);
+                               "-fno-exceptions", "-fno-rtti"});
+      compileRuntime(driver, std::move(args), source, ioRuntime, target.isOSLinux(), r.timings);
     }
     if (kind == "staticlib") {
       if (!r.linkInputs.empty())
@@ -355,6 +482,21 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
   fs::rename(product, output, error);
   if (error) fail({}, "cannot publish output '" + output.string() + "': " + error.message(), "E302");
 }
+void printEditorHints(const EditorHints &hints) {
+  llvm::json::Array bindings;
+  for (const auto &binding : hints.bindings) {
+    const char *kind = "local";
+    switch (binding.kind) {
+    case EditorHints::BindingKind::Local: break;
+    case EditorHints::BindingKind::Short: kind = "short"; break;
+    case EditorHints::BindingKind::Loop: kind = "loop"; break;
+    case EditorHints::BindingKind::Pattern: kind = "pattern"; break;
+    }
+    bindings.emplace_back(llvm::json::Object{{"begin", binding.begin}, {"end", binding.end},
+                                            {"type", binding.type}, {"kind", kind}});
+  }
+  llvm::outs() << llvm::json::Value(std::move(bindings)) << '\n';
+}
 } // namespace
 
 int main(int argc, char **argv) {
@@ -367,11 +509,21 @@ int main(int argc, char **argv) {
     return 0;
   }
   std::unique_ptr<Inputs> inputs;
+  EditorHints hints;
   try {
     auto request = arguments(argc, argv);
     static int executableAnchor;
     auto executable = llvm::sys::fs::getMainExecutable(argv[0], &executableAnchor);
-    inputs = std::make_unique<Inputs>(executable);
+    auto start = std::chrono::steady_clock::now();
+    auto stage = [&](std::string_view label) {
+      auto now = std::chrono::steady_clock::now();
+      if (request.timings)
+        std::cerr << "vaqc: " << label << ' ' << std::chrono::duration<double, std::milli>(now - start).count()
+                  << " ms\n";
+      start = now;
+    };
+    auto overlayPath = request.overlay.empty() ? fs::path{} : fs::weakly_canonical(request.inputs.front());
+    inputs = std::make_unique<Inputs>(executable, overlayPath, request.overlay);
     inputs->load(request.inputs, request.packagePaths, request.entry, !request.options.check &&
                  request.options.emit == "exe" && request.options.profile == "hosted");
     if (request.options.emit == "ast") {
@@ -379,15 +531,44 @@ int main(int argc, char **argv) {
         printAst(f);
       return 0;
     }
+    stage("inputs");
     auto machine = makeTarget(request.options);
+    stage("target");
+    if (request.editorHints) {
+      hints.source = fs::weakly_canonical(request.inputs.front()).string();
+      request.options.editorHints = &hints;
+    }
     llvm::LLVMContext context;
     auto module = compile(context, *machine, request.options, *inputs);
+    stage("compile");
     if (!request.options.check) {
       optimize(*module, *machine, request.options);
+      stage("optimize");
       produce(request, *module, *machine, *inputs);
+      stage("emit and link");
     }
+    if (!request.dependencies.empty()) {
+      llvm::json::Array files, directories;
+      for (const auto &path : inputs->dependencyFiles()) files.push_back(path.string());
+      for (const auto &path : inputs->dependencyDirectories()) directories.push_back(path.string());
+      llvm::json::Object manifest{{"files", std::move(files)}, {"directories", std::move(directories)}};
+      const auto destination = fs::weakly_canonical(request.dependencies);
+      if (inputs->dependencyFiles().contains(destination) ||
+          (!request.output.empty() && fs::weakly_canonical(request.output) == destination) ||
+          destination.extension() != ".json")
+        fail({}, "--dependencies must name a separate .json file", "E302");
+      std::ofstream output(destination);
+      if (!output) fail({}, "cannot open dependency manifest", "E302");
+      std::string body;
+      llvm::raw_string_ostream stream(body);
+      stream << llvm::json::Value(std::move(manifest));
+      output << body << '\n';
+      if (!output) fail({}, "cannot write dependency manifest", "E302");
+    }
+    if (request.editorHints) printEditorHints(hints);
     return 0;
   } catch (const Diagnostic &error) {
+    if (!hints.bindings.empty()) printEditorHints(hints);
     printDiagnostic(error);
   } catch (const fs::filesystem_error &error) {
     std::cerr << "vaqc: error[E301]: " << error.what() << '\n';

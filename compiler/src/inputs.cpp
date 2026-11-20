@@ -1,4 +1,5 @@
 #include "inputs.hpp"
+#include <cstdlib>
 
 #include <algorithm>
 #include <fstream>
@@ -66,23 +67,50 @@ std::string pathsMessage(std::string message, const auto &paths) {
 }
 } // namespace
 
-Inputs::Inputs(const Path &executable) {
+Inputs::Inputs(const Path &executable, Path overlayPath, Path overlayContents)
+    : overlayPath(std::move(overlayPath)), overlayContents(std::move(overlayContents)) {
+  const char *sources = std::getenv("VAQRIN_STDLIB_DIR");
+  const char *runtime = std::getenv("VAQRIN_RUNTIME_DIR");
+  if (sources && runtime && fs::is_directory(sources) && fs::is_directory(runtime)) {
+    standardRoot = fs::canonical(sources);
+    runtimeRoot = fs::canonical(runtime);
+    return;
+  }
   for (auto dir : {executable.parent_path(), executable.parent_path().parent_path()}) {
     auto candidate = dir / "share/vaqrin/stdlib";
+    directoryProbes.insert(candidate);
     if (fs::is_directory(candidate)) {
       standardRoot = fs::canonical(candidate);
+      runtimeRoot = candidate.parent_path() / "runtime";
       break;
     }
   }
+}
+
+std::set<Inputs::Path> Inputs::dependencyFiles() const {
+  auto result = fileProbes;
+  for (const auto &[path, _] : outlines) result.insert(path);
+  if (!standardRoot.empty()) {
+    result.insert(taskRuntimeSource());
+    result.insert(ioRuntimeSource());
+  }
+  return result;
+}
+
+std::set<Inputs::Path> Inputs::dependencyDirectories() const {
+  auto result = directoryProbes;
+  for (const auto &[path, _] : directories) result.insert(path);
+  return result;
 }
 
 Inputs::Outline &Inputs::outline(const Path &path, Span span) {
   auto [it, inserted] = outlines.try_emplace(path);
   auto &out = it->second;
   if (!inserted) return out;
-  if (path.extension() != ".vqr" || !fs::is_regular_file(path))
+  const auto &contents = path == overlayPath ? overlayContents : path;
+  if (path.extension() != ".vqr" || !fs::is_regular_file(contents))
     fail(span, "expected an existing .vqr file: " + path.string(), "E301");
-  std::ifstream input(path, std::ios::binary);
+  std::ifstream input(contents, std::ios::binary);
   if (!input) fail(span, "cannot read " + path.string(), "E301");
   out.source = {path.string(), std::string(std::istreambuf_iterator<char>{input}, {})};
   out.stem = identifier(path.stem().string());
@@ -125,6 +153,7 @@ const std::vector<fs::path> &Inputs::siblings(const Path &dir) {
   auto [it, inserted] = directories.try_emplace(dir);
   if (inserted) {
     std::set<Path> unique;
+    if (!overlayPath.empty() && overlayPath.parent_path() == dir) unique.insert(overlayPath);
     for (const auto &p : fs::directory_iterator(dir))
       if (p.path().extension() == ".vqr" && p.is_regular_file()) {
         auto canonical = fs::canonical(p);
@@ -177,6 +206,7 @@ File &Inputs::activate(const Path &path, Span span) {
 
 std::string Inputs::resolveImport(const Path &dir, const Import &item) {
   if (item.filePath) {
+    fileProbes.insert(dir / item.path);
     auto path = fs::weakly_canonical(dir / item.path);
     if (!outline(path, item.span).package.empty())
       fail(item.span, "named packages require a logical import", "E301");
@@ -185,14 +215,17 @@ std::string Inputs::resolveImport(const Path &dir, const Import &item) {
   auto logical = item.path.starts_with("std/") ? item.path.substr(4) : item.path;
   auto leaf = fs::path(logical).filename().string();
   Path directory;
+  if (!standardRoot.empty()) directoryProbes.insert(standardRoot / logical);
   if (!standardRoot.empty() && logical != "collections" && fs::is_directory(standardRoot / logical))
     directory = standardRoot / logical;
   if (directory.empty() && !item.path.starts_with("std/")) {
-    for (const auto &root : roots)
+    for (const auto &root : roots) {
+      directoryProbes.insert(root / logical);
       if (fs::is_directory(root / logical)) {
         directory = fs::canonical(root / logical);
         break;
       }
+    }
   }
   if (directory.empty()) {
     if (logical == "task" || logical == "channel" || logical == "net")
@@ -254,11 +287,13 @@ void Inputs::load(const std::vector<Path> &inputs, const std::vector<Path> &pack
   project = fs::weakly_canonical(inputs.front());
   if (!directory) {
     project = project.parent_path();
-    for (auto ancestor = project; ancestor != ancestor.root_path(); ancestor = ancestor.parent_path())
+    for (auto ancestor = project; ancestor != ancestor.root_path(); ancestor = ancestor.parent_path()) {
+      fileProbes.insert(ancestor / "package.toml");
       if (fs::is_regular_file(ancestor / "package.toml")) {
         project = ancestor;
         break;
       }
+    }
   }
   roots = {project, project.parent_path()};
   if (!directory)

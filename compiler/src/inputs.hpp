@@ -12,14 +12,16 @@ class Inputs {
   using Path = std::filesystem::path;
 
 public:
-  explicit Inputs(const Path &executable);
+  explicit Inputs(const Path &executable, Path overlayPath = {}, Path overlayContents = {});
+  std::set<Path> dependencyFiles() const;
+  std::set<Path> dependencyDirectories() const;
   void load(const std::vector<Path> &inputs, const std::vector<Path> &packagePaths, const Path &entry,
             bool hostedExecutable);
   std::string qualifier(const File &file, std::string_view alias, Span span);
   std::string scope(const File &file, std::string_view symbol, Span span);
   bool directoryVisible(const File &a, const File &b) const;
-  Path taskRuntimeSource() const { return standardRoot.parent_path() / "runtime/tasks.c"; }
-  Path ioRuntimeSource() const { return standardRoot.parent_path() / "runtime/io_posix.cpp"; }
+  Path taskRuntimeSource() const { return runtimeRoot / "tasks.c"; }
+  Path ioRuntimeSource() const { return runtimeRoot / "io_posix.cpp"; }
 
   std::deque<File> files;
   std::string rootName;
@@ -33,7 +35,8 @@ private:
     bool entrySignature = false, exported = false;
     File *file = nullptr;
   };
-  Path project, standardRoot;
+  Path project, standardRoot, runtimeRoot, overlayPath, overlayContents;
+  std::set<Path> fileProbes, directoryProbes;
   std::vector<Path> roots;
   std::map<Path, Outline> outlines;
   std::map<Path, std::vector<Path>> directories;

@@ -1,0 +1,272 @@
+package http
+import (coll, fmt, io, parse, text)
+
+class ReadBudget {
+    pub var remaining: usize;
+    pub func consume() !void {
+        if remaining == 0 { return HttpError.HeaderLimit; }
+        remaining--;
+    }
+}
+
+func readByte(reader: *io.Reader) !u8 {
+    var data = [1]u8{0};
+    io.readExact(reader, data[:])!;
+    data[0]
+}
+
+func readLine(reader: *io.Reader, maximum: usize, budget: *ReadBudget) !string {
+    var data = coll.Vec<u8>();
+    for {
+        budget.consume()!;
+        var byte = readByte(reader)!;
+        if byte == 13 {
+            budget.consume()!;
+            if readByte(reader)! != 10 { return HttpError.InvalidFraming; }
+            return text.fromBytes(data.asConstSlice());
+        }
+        if byte == 10 { return HttpError.InvalidFraming; }
+        if data.len() >= maximum { return HttpError.HeaderLimit; }
+        data.push(byte)!;
+    }
+}
+
+func byteAt(data: []const u8, needle: u8) usize {
+    for i in usize(0)..data.len() { if data[i] == needle { return i; } }
+    data.len()
+}
+
+func version(value: str) !bool {
+    if value == "HTTP/1.1" { return true; }
+    if value == "HTTP/1.0" { return false; }
+    HttpError.InvalidStartLine
+}
+
+func readFields(reader: *io.Reader, limits: HttpLimits, budget: *ReadBudget) !HeaderMap {
+    var fields = HeaderMap();
+    for {
+        var line = readLine(reader, limits.maxLineBytes, budget)!;
+        var data = line.asBytes();
+        if data.len() == 0 { return move(fields); }
+        if fields.len() >= limits.maxHeaders { return HttpError.HeaderLimit; }
+        var colon = byteAt(data, 58);
+        if colon == data.len() || colon == 0 { return HttpError.InvalidHeader; }
+        var name = unsafe { __vqr_text_borrow_utf8(data[0..colon]) };
+        var value = unsafe { __vqr_text_borrow_utf8(data[colon + 1..data.len()]) };
+        fields.append(name, value)!;
+    }
+}
+
+class Framing {
+    pub var length: ?usize;
+    pub var chunked: bool;
+    pub var host: bool;
+}
+
+func digits(value: str, radix: u8) !usize {
+    if value.byteLen() == 0 { return HttpError.InvalidFraming; }
+    for byte in value.asBytes() {
+        var digit = 48 <= byte && byte <= 57;
+        var hex = radix == 16 && 97 <= lower(byte) && lower(byte) <= 102;
+        if !digit && !hex { return HttpError.InvalidFraming; }
+    }
+    parse.parseUint<usize>(value, radix) catch { return HttpError.InvalidFraming; }
+}
+
+func inspect(fields: *const HeaderMap) !Framing {
+    var out = Framing{length: null, chunked: false, host: false};
+    for field in fields.items() {
+        if sameName(field.0, "Content-Length") {
+            if out.length != null { return HttpError.InvalidFraming; }
+            out.length = some(digits(field.1, 10)!);
+        } else if sameName(field.0, "Transfer-Encoding") {
+            if out.chunked { return HttpError.InvalidFraming; }
+            if !sameName(field.1, "chunked") { return HttpError.UnsupportedTransfer; }
+            out.chunked = true;
+        } else if sameName(field.0, "Host") {
+            if out.host || field.1.byteLen() == 0 { return HttpError.InvalidHeader; }
+            for byte in field.1.asBytes() {
+                if byte <= 32 || byte >= 127 || byte == 44 || byte == 47 || byte == 63 ||
+                   byte == 35 || byte == 64 { return HttpError.InvalidHeader; }
+            }
+            out.host = true;
+        }
+    }
+    if out.chunked && out.length != null { return HttpError.InvalidFraming; }
+    out
+}
+
+func appendBody(reader: *io.Reader, body: *coll.Vec<u8>, count: usize, limit: usize) !void {
+    var start = body.len();
+    if start > limit || count > limit - start { return HttpError.BodyLimit; }
+    body.reserveAdditional(count)!;
+    for i in usize(0)..count { body.push(0)!; }
+    var bytes = body.asSlice();
+    io.readExact(reader, bytes[start..bytes.len()])
+}
+
+func readChunked(reader: *io.Reader, limits: HttpLimits, budget: *ReadBudget) !Body {
+    var body = coll.Vec<u8>();
+    for {
+        var line = readLine(reader, limits.maxLineBytes, budget)!;
+        var raw = line.asBytes();
+        var end = byteAt(raw, 59);
+        for byte in raw[end..raw.len()] {
+            if (byte < 32 && byte != 9) || byte >= 127 { return HttpError.InvalidFraming; }
+        }
+        var sizeText = unsafe { __vqr_text_borrow_utf8(raw[0..end]) };
+        var count = digits(sizeText, 16)!;
+        if count == 0 {
+            var trailers = readFields(reader, limits, budget)!;
+            if trailers.contains("Content-Length") || trailers.contains("Transfer-Encoding") ||
+               trailers.contains("Host") || trailers.contains("Connection") {
+                return HttpError.InvalidFraming;
+            }
+            return Body.fromOwned(move(body));
+        }
+        appendBody(reader, &body, count, limits.maxBodyBytes)!;
+        if readByte(reader)! != 13 || readByte(reader)! != 10 { return HttpError.InvalidFraming; }
+    }
+}
+
+func readBody(reader: *io.Reader, framing: Framing, limits: HttpLimits, budget: *ReadBudget,
+              untilClose: bool) !Body {
+    if framing.chunked { return readChunked(reader, limits, budget); }
+    if framing.length == null && untilClose {
+        var bytes = io.readToEnd(reader, limits.maxBodyBytes) catch (reason) {
+            if reason == io.IoError.LimitExceeded { return HttpError.BodyLimit; }
+            return reason;
+        };
+        return Body.fromOwned(move(bytes));
+    }
+    var body = coll.Vec<u8>();
+    appendBody(reader, &body, framing.length ?? 0, limits.maxBodyBytes)!;
+    Body.fromOwned(move(body))
+}
+
+pub func parseRequest(reader: *io.Reader, limits: HttpLimits) !Request {
+    var budget = ReadBudget{remaining: limits.maxHeaderBytes};
+    var line = readLine(reader, limits.maxLineBytes, &budget)!;
+    var data = line.asBytes();
+    var first = byteAt(data, 32);
+    if first == data.len() { return HttpError.InvalidStartLine; }
+    var tail = data[first + 1..data.len()];
+    var second = byteAt(tail, 32);
+    if second == tail.len() { return HttpError.InvalidStartLine; }
+    var method = parseMethod(unsafe { __vqr_text_borrow_utf8(data[0..first]) })!;
+    var target = unsafe { __vqr_text_borrow_utf8(tail[0..second]) };
+    var modern = version(unsafe { __vqr_text_borrow_utf8(tail[second + 1..tail.len()]) })!;
+    var request = Request.new(method, target)!;
+    var fields = readFields(reader, limits, &budget)!;
+    var framing = inspect(&fields)!;
+    if modern && !framing.host { return HttpError.MissingHost; }
+    if !modern && framing.chunked { return HttpError.InvalidFraming; }
+    var targetFields = request.headers();
+    *targetFields = move(fields);
+    request.setBody(readBody(reader, framing, limits, &budget, false)!);
+    move(request)
+}
+
+func suppressBody(code: u16, method: Method) bool {
+    method == Method.HEAD || code < 200 || code == 204 || code == 304
+}
+
+pub func parseResponse(reader: *io.Reader, limits: HttpLimits) !Response {
+    parseResponseFor(reader, Method.GET, limits)
+}
+
+pub func parseResponseFor(reader: *io.Reader, method: Method, limits: HttpLimits) !Response {
+    var budget = ReadBudget{remaining: limits.maxHeaderBytes};
+    var line = readLine(reader, limits.maxLineBytes, &budget)!;
+    var data = line.asBytes();
+    if data.len() < 13 || data[8] != 32 || data[12] != 32 { return HttpError.InvalidStartLine; }
+    var modern = version(unsafe { __vqr_text_borrow_utf8(data[0..8]) })!;
+    var status = digits(unsafe { __vqr_text_borrow_utf8(data[9..12]) }, 10)!;
+    validateValue(unsafe { __vqr_text_borrow_utf8(data[13..data.len()]) })!;
+    var code = u16(status)!;
+    var response = Response.new(code)!;
+    var fields = readFields(reader, limits, &budget)!;
+    var framing = inspect(&fields)!;
+    if (code < 200 || code == 204) && (framing.chunked || framing.length != null) {
+        return HttpError.InvalidFraming;
+    }
+    if !modern && framing.chunked { return HttpError.InvalidFraming; }
+    if code == 101 || (method == Method.CONNECT && code >= 200 && code < 300) {
+        return HttpError.UnsupportedUpgrade;
+    }
+    var targetFields = response.headers();
+    *targetFields = move(fields);
+    if !suppressBody(code, method) {
+        response.setBody(readBody(reader, framing, limits, &budget, true)!);
+    }
+    move(response)
+}
+
+func writeFields(writer: *io.Writer, fields: *const HeaderMap, length: ?usize) !void {
+    for field in fields.items() {
+        io.writeString(writer, field.0)!;
+        io.writeString(writer, ": ")!;
+        io.writeString(writer, field.1)!;
+        io.writeString(writer, "\r\n")!;
+    }
+    if length != null {
+        var number: u64 = u64(length.unwrap());
+        var digits = fmt.formatUint(number, 10)!;
+        io.writeString(writer, "Content-Length: ")!;
+        io.writeString(writer, digits)!;
+        io.writeString(writer, "\r\n")!;
+    }
+    io.writeString(writer, "\r\n")
+}
+
+func outgoingLength(framing: Framing, size: usize, emitBody: bool) !?usize {
+    if framing.chunked { return HttpError.UnsupportedTransfer; }
+    if framing.length != null {
+        if emitBody && framing.length.unwrap() != size { return HttpError.InvalidFraming; }
+        return null;
+    }
+    if emitBody { some(size) } else { null }
+}
+
+pub func writeRequest(writer: *io.Writer, request: *Request) !void {
+    requestTarget(request.target())!;
+    var fields = request.headers();
+    var framing = inspect(fields)!;
+    if !framing.host { return HttpError.MissingHost; }
+    var data = request.bodyBytes();
+    var length = outgoingLength(framing, data.len(), true)!;
+    io.writeString(writer, methodText(request.method()))!;
+    io.writeString(writer, " ")!;
+    io.writeString(writer, request.target())!;
+    io.writeString(writer, " HTTP/1.1\r\n")!;
+    writeFields(writer, fields, length)!;
+    io.writeAll(writer, data)
+}
+
+pub func writeResponse(writer: *io.Writer, response: *Response) !void {
+    writeResponseFor(writer, response, Method.GET)
+}
+
+pub func writeResponseFor(writer: *io.Writer, response: *Response, method: Method) !void {
+    var status = response.status();
+    var code = status.value();
+    var fields = response.headers();
+    var framing = inspect(fields)!;
+    var data = response.bodyBytes();
+    if code == 101 || (method == Method.CONNECT && status.isSuccess()) { return HttpError.UnsupportedUpgrade; }
+    if (code < 200 || code == 204) && framing.length != null { return HttpError.InvalidFraming; }
+    var emitBody = !suppressBody(code, method);
+    if !emitBody && method != Method.HEAD && data.len() != 0 { return HttpError.InvalidFraming; }
+    var length = outgoingLength(framing, data.len(), emitBody)!;
+    if code >= 200 && code != 204 && code != 304 && method == Method.HEAD && framing.length == null {
+        length = some(data.len());
+    }
+    var number = fmt.formatUint(code, 10)!;
+    io.writeString(writer, "HTTP/1.1 ")!;
+    io.writeString(writer, number)!;
+    io.writeString(writer, " ")!;
+    io.writeString(writer, status.reasonPhrase() ?? "")!;
+    io.writeString(writer, "\r\n")!;
+    writeFields(writer, fields, length)!;
+    if emitBody { io.writeAll(writer, data)!; }
+}

@@ -1,4 +1,7 @@
 """Run the examples for the numeric, data, Unicode and utility packages."""
+from concurrent.futures import ThreadPoolExecutor
+from http.client import HTTPConnection
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import subprocess
 import unittest
@@ -376,6 +379,153 @@ class StandardLibraryAcceptance(CompilerCase):
                 io.println(empty.len == 0 && !empty.truncated)!;
             }
         """, "true\n[fe80::1%7]:80\ntrue\n127.0.0.1:81\ntrue\ntrue\ntrue\nping\ntrue\n8\ntrue\ntrue\n0\ntrue\n")
+
+    def test_dense_linear_algebra(self):
+        self.hosted(r"""
+            import (linalg, math, result)
+            func main() !void {
+                var entries = [4]f64{0.0, 2.0, 1.0, 3.0};
+                var rhs = [2]f64{4.0, 7.0};
+                var matrix = linalg.Matrix<f64>.fromFlat(2, 2, entries[:])!;
+                var b = linalg.Vector<f64>.fromSlice(rhs[:])!;
+                var solution = linalg.solve<f64>(&matrix, &b)!;
+                io.println(*solution.get(0).unwrap() == 1.0 && *solution.get(1).unwrap() == 2.0)!;
+                io.println(linalg.determinant<f64>(&matrix)! == -2.0)!;
+                var inverse = linalg.inverse<f64>(&matrix)!;
+                var identity = matrix.matmul(&inverse)!;
+                io.println(math.abs<f64>(identity.at(0, 0) - 1.0) < 0.000001)!;
+                var singular = linalg.Matrix<f64>.zeros(2, 2)!;
+                var rejected = linalg.inverse<f64>(&singular);
+                io.println(result.errorOf(&rejected).unwrap() == linalg.LinalgError.Singular)!;
+            }
+        """, "true\n" * 4)
+
+    def test_qr_least_squares(self):
+        self.hosted(r"""
+            import (linalg, math, result)
+            func main() !void {
+                var design = [6]f64{1.0, 0.0, 1.0, 1.0, 1.0, 2.0};
+                var measurements = [3]f64{1.0, 2.0, 2.0};
+                var matrix = linalg.Matrix<f64>.fromFlat(3, 2, design[:])!;
+                var rhs = linalg.Vector<f64>.fromSlice(measurements[:])!;
+                var factor = linalg.qr<f64>(&matrix)!;
+                var coeff = factor.solveLeastSquares(&rhs)!;
+                io.println(math.abs<f64>(*coeff.get(0).unwrap() - 7.0 / 6.0) < 0.000001)!;
+                io.println(math.abs<f64>(*coeff.get(1).unwrap() - 0.5) < 0.000001)!;
+                var q = factor.q()!;
+                var r = factor.r()!;
+                var reconstructed = q.matmul(&r)!;
+                var transpose = q.transposeCopy()!;
+                var gram = transpose.matmul(&q)!;
+                io.println(linalg.distance<f64>(reconstructed.asSlice(), matrix.asSlice())! < 0.000001)!;
+                io.println(math.abs<f64>(gram.at(0, 0) - 1.0) < 0.000001 &&
+                           math.abs<f64>(gram.at(1, 1) - 1.0) < 0.000001 &&
+                           math.abs<f64>(gram.at(0, 1)) < 0.000001)!;
+                var rankZero = linalg.Matrix<f64>.zeros(3, 2)!;
+                var deficient = linalg.qr<f64>(&rankZero)!;
+                var rejected = deficient.solveLeastSquares(&rhs);
+                io.println(result.errorOf(&rejected).unwrap() == linalg.LinalgError.Singular)!;
+            }
+        """, "true\n" * 5)
+
+    def test_http_wire_and_message_boundaries(self):
+        self.hosted(r"""
+            import (http, result)
+            func main() !void {
+                var input = io.MemoryReader("POST /submit HTTP/1.1\r\nhOsT: localhost\r\nTransfer-Encoding: chunked\r\n\r\n4\r\ndata\r\n0\r\n\r\nGET /next HTTP/1.1\r\nHost: localhost\r\n\r\n".asBytes());
+                var limits = http.HttpLimits();
+                var request = http.parseRequest(&input, limits)!;
+                io.println(request.target())!;
+                io.println(request.bodyBytes().len())!;
+                var next = http.parseRequest(&input, limits)!;
+                io.println(next.target())!;
+                var response = http.Response.new(200)!;
+                response.setBody(http.Body.fromBytes("hello".asBytes())!);
+                var writer = io.MemoryWriter();
+                http.writeResponse(&writer, &response)!;
+                var back = io.MemoryReader(writer.asSlice());
+                var decoded = http.parseResponse(&back, limits)!;
+                io.println(decoded.status().value())!;
+                io.println(decoded.bodyBytes().len())!;
+                var other = io.MemoryReader("HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\n".asBytes());
+                var head = http.parseResponseFor(&other, http.Method.HEAD, limits)!;
+                io.println(head.bodyBytes().len())!;
+                var duplicate = io.MemoryReader("POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nContent-Length: 1\r\n\r\n".asBytes());
+                var rejected = http.parseRequest(&duplicate, limits);
+                io.println(result.errorOf(&rejected).unwrap() == http.HttpError.InvalidFraming)!;
+            }
+        """, "/submit\n4\n/next\n200\n5\n0\ntrue\n")
+
+    def test_http_tcp_client(self):
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                data = self.path.encode("ascii")
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *args):
+                pass
+
+        with HTTPServer(("127.0.0.1", 0), Handler) as server:
+            server.timeout = 8
+            with ThreadPoolExecutor(max_workers=1) as thread:
+                handled = thread.submit(server.handle_request)
+                self.hosted(f"""
+                    import (http, text)
+                    func main() !void {{
+                        var response = http.get("http://127.0.0.1:{server.server_port}/value?x=1")!;
+                        io.println(response.status().value())!;
+                        io.println(text.fromBytes(response.bodyBytes())!)!;
+                    }}
+                """, "200\n/value?x=1\n")
+                handled.result(timeout=10)
+
+    def test_http_tcp_server(self):
+        program = self.source("server.vqr", r"""
+            import (fmt, http, io, net)
+
+            class Echo {
+                #implements: http.Handler
+                pub func handle(request: http.Request) !http.Response {
+                    var response = http.Response.new(201)!;
+                    response.setBody(http.Body.fromBytes(request.bodyBytes())!);
+                    move(response)
+                }
+            }
+
+            func main() !void {
+                var endpoint = net.parseSocketAddr("127.0.0.1:0")!;
+                var server = http.Server.bind(endpoint)!;
+                var address = server.localAddr()!;
+                var port: u16 = address.port();
+                var digits = fmt.formatUint(port, 10)!;
+                io.print(digits)!;
+                io.print("\n")!;
+                var handler = Echo{};
+                server.serveOne(&handler)
+            }
+        """)
+        executable = self.root / "http-server"
+        self.process(VAQC, program, "-o", executable)
+        with subprocess.Popen([executable], stdout=subprocess.PIPE, stderr=subprocess.PIPE) as server:
+            with ThreadPoolExecutor(max_workers=1) as thread:
+                port_result = thread.submit(server.stdout.readline)
+                try:
+                    port = int(port_result.result(timeout=5))
+                    connection = HTTPConnection("127.0.0.1", port, timeout=5)
+                    try:
+                        connection.request("POST", "/echo", body=b"Vaqrin")
+                        response = connection.getresponse()
+                        self.assertEqual(response.status, 201)
+                        self.assertEqual(response.read(), b"Vaqrin")
+                    finally:
+                        connection.close()
+                    self.assertEqual(server.wait(timeout=5), 0)
+                finally:
+                    if server.poll() is None:
+                        server.kill()
 
     def test_json(self):
         lines = self.example("stdlib/json/examples/json_smoke.vqr").splitlines()

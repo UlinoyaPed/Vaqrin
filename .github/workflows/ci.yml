@@ -73,6 +73,7 @@ jobs:
           compiler="$RUNNER_TEMP/vaqrin/bin/vaqc"
           python3 compiler/tests/acceptance.py "$compiler" Acceptance.test_shipped_packages_load_together
           python3 compiler/tests/io_acceptance.py "$compiler" IoAcceptance.test_task_and_io_runtimes_link_together
+          python3 compiler/tools/release.py smoke "$RUNNER_TEMP/vaqrin"
 
       - name: Upload CTest diagnostics
         if: failure()
@@ -81,3 +82,15 @@ jobs:
           name: ctest-llvm-${{ matrix.llvm }}
           path: build/ci/Testing/Temporary/
           if-no-files-found: ignore
+
+  zed-extension:
+    name: Build Zed extension
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build WebAssembly extension
+        run: |
+          rustup target add wasm32-wasip1
+          cargo build --locked --release --target wasm32-wasip1 --manifest-path editors/zed/Cargo.toml

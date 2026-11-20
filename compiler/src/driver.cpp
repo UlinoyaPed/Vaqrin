@@ -1,5 +1,6 @@
 #include "codegen.hpp"
 #include "inputs.hpp"
+#include "tooling.hpp"
 
 #include <llvm/ADT/StringExtras.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
@@ -75,6 +76,7 @@ struct Request {
   fs::path output, sysroot, linkerScript, entry, overlay, dependencies;
   bool timings = false;
   bool editorHints = false;
+  bool syntaxOnly = false;
   std::string cDriver, archiver;
 };
 
@@ -82,6 +84,7 @@ void help() {
   std::cout << "Vaqrin native compiler\n"
                "Usage: vaqc [build|check] [options] source.vqr [source.vqr ...]\n"
                "       vaqc build [options] package-directory\n"
+               "       vaqc fmt [--check | --write] FILE... | vaqc fmt -\n"
                "  --emit=exe|obj|llvm-ir|bc|asm|staticlib|sharedlib|ast\n"
                "  -o PATH                 Output path\n"
                "  -O0|-O1|-O2|-O3         Optimization level\n"
@@ -92,6 +95,8 @@ void help() {
                "  --profile PROFILE       hosted or freestanding\n"
                "  --entry FILE            Select a file-local main\n"
                "  --overlay FILE          Read replacement contents for one .vqr in check mode\n"
+               "  --syntax-only          Check syntax without resolving imports or types\n"
+               "  --diagnostics=json     Emit a JSON diagnostic with a UTF-16 range\n"
                "  --editor-hints         Report inferred binding types as JSON in check mode\n"
                "  --dependencies FILE     List source inputs and directory probes for one .vqr\n"
                "  --timings              Report build stage durations on stderr\n"
@@ -113,6 +118,8 @@ Request arguments(int argc, char **argv) {
       continue;
     }
     if (a == "--timings") { r.timings = true; continue; }
+    if (a == "--syntax-only") { r.syntaxOnly = true; continue; }
+    if (a == "--diagnostics=json") continue;
     if (a == "--editor-hints") { r.editorHints = true; continue; }
     if (a == "--check") {
       r.options.check = true;
@@ -174,6 +181,8 @@ Request arguments(int argc, char **argv) {
   if ((!r.overlay.empty() || !r.dependencies.empty()) &&
       (r.inputs.size() != 1 || r.inputs.front().extension() != ".vqr" || fs::is_directory(r.inputs.front())))
     fail({}, "--overlay and --dependencies require exactly one .vqr input", "E300");
+  if (r.syntaxOnly && (!r.options.check || r.editorHints || !r.dependencies.empty() || r.options.emit == "ast"))
+    fail({}, "--syntax-only requires check mode and accepts source files and an optional overlay", "E300");
   if (!r.overlay.empty() && !r.options.check) fail({}, "--overlay requires check mode", "E300");
   if (r.editorHints && (!r.options.check || r.options.emit == "ast" || r.inputs.size() != 1 ||
                         r.inputs.front().extension() != ".vqr" || fs::is_directory(r.inputs.front())))
@@ -536,10 +545,24 @@ int main(int argc, char **argv) {
     std::cout << "vaqc 0.1.5 (Vaqrin 0.1.5, LLVM " << LLVM_VERSION_STRING << ")\n";
     return 0;
   }
+  if (argc >= 2 && std::string_view(argv[1]) == "fmt") return formatCommand(argc, argv);
+  const bool jsonDiagnostics = std::any_of(argv + 1, argv + argc, [](const char *arg) {
+    return std::string_view(arg) == "--diagnostics=json";
+  });
   std::unique_ptr<Inputs> inputs;
+  Source syntaxSource;
   EditorHints hints;
   try {
     auto request = arguments(argc, argv);
+    if (request.syntaxOnly) {
+      for (const auto &path : request.inputs) {
+        if (path.extension() != ".vqr" || fs::is_directory(path))
+          fail({}, "syntax check requires .vqr source files", "E300");
+        syntaxSource = readSource(fs::absolute(path), request.overlay.empty() ? path : request.overlay);
+        parse(syntaxSource);
+      }
+      return 0;
+    }
     static int executableAnchor;
     auto executable = llvm::sys::fs::getMainExecutable(argv[0], &executableAnchor);
     auto start = std::chrono::steady_clock::now();
@@ -597,11 +620,16 @@ int main(int argc, char **argv) {
     return 0;
   } catch (const Diagnostic &error) {
     if (!hints.bindings.empty()) printEditorHints(hints);
-    printDiagnostic(error);
+    if (jsonDiagnostics) printJsonDiagnostic(error);
+    else printDiagnostic(error);
   } catch (const fs::filesystem_error &error) {
-    std::cerr << "vaqc: error[E301]: " << error.what() << '\n';
+    Diagnostic diagnostic({}, "E301", error.what());
+    if (jsonDiagnostics) printJsonDiagnostic(diagnostic);
+    else printDiagnostic(diagnostic);
   } catch (const std::exception &error) {
-    std::cerr << "vaqc: error[E900]: " << error.what() << '\n';
+    Diagnostic diagnostic({}, "E900", error.what());
+    if (jsonDiagnostics) printJsonDiagnostic(diagnostic);
+    else printDiagnostic(diagnostic);
   }
   return 1;
 }

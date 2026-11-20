@@ -111,5 +111,9 @@ if __name__ == "__main__":
         build_llvm()
     elif sys.argv[1:] == ["package"]:
         package()
+    elif len(sys.argv) == 3 and sys.argv[1] == "smoke":
+        prefix = Path(sys.argv[2]).resolve()
+        compiler = prefix / "bin" / ("vaqc.exe" if WINDOWS else "vaqc")
+        smoke(compiler, prefix)
     else:
-        sys.exit("usage: release.py llvm|package")
+        sys.exit("usage: release.py llvm|package|smoke PREFIX")

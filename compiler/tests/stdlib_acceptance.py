@@ -1,4 +1,6 @@
 """Run the examples for the numeric, data, Unicode and utility packages."""
+from concurrent.futures import ThreadPoolExecutor
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import subprocess
 import unittest
@@ -424,6 +426,36 @@ class StandardLibraryAcceptance(CompilerCase):
                 io.println(result.errorOf(&rejected).unwrap() == http.HttpError.InvalidFraming)!;
             }
         """, "/submit\n4\n/next\n200\n5\n0\ntrue\n")
+
+    def test_http_tcp_client(self):
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                data = self.path.encode("ascii")
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *args):
+                pass
+
+        with HTTPServer(("127.0.0.1", 0), Handler) as server:
+            server.timeout = 8
+            with ThreadPoolExecutor(max_workers=1) as thread:
+                handled = thread.submit(server.handle_request)
+                self.hosted(f"""
+                    import (http, net, text)
+                    func checkServer(handler: *http.Handler) !void {{
+                        var server = http.Server.bind(net.parseSocketAddr("127.0.0.1:0")!)!;
+                        server.serveOne(handler)
+                    }}
+                    func main() !void {{
+                        var response = http.get("http://127.0.0.1:{server.server_port}/value?x=1")!;
+                        io.println(response.status().value())!;
+                        io.println(text.fromBytes(response.bodyBytes())!)!;
+                    }}
+                """, "200\n/value?x=1\n")
+                handled.result(timeout=10)
 
     def test_json(self):
         lines = self.example("stdlib/json/examples/json_smoke.vqr").splitlines()

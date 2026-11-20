@@ -43,10 +43,20 @@ jobs:
         with:
           python-version: '3.12'
 
-      - if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: ${{ matrix.msvc }}
+      - name: Select native Visual Studio tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          VAQRIN_MSVC_ARCH: ${{ matrix.msvc }}
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -property installationPath
+          if (-not $vs) { throw "Visual Studio is unavailable" }
+          & "$vs\Common7\Tools\Launch-VsDevShell.ps1" -Arch $env:VAQRIN_MSVC_ARCH -HostArch $env:VAQRIN_MSVC_ARCH -SkipAutomaticLocation
+          foreach ($key in @("PATH", "INCLUDE", "LIB", "LIBPATH", "VCToolsInstallDir", "WindowsSdkDir", "WindowsSDKVersion")) {
+            $value = [Environment]::GetEnvironmentVariable($key)
+            if ($value) { "$key=$value" >> $env:GITHUB_ENV }
+          }
 
       - name: Ensure Ninja is available
         run: python -m pip install ninja
@@ -115,4 +125,13 @@ jobs:
           if [[ "$GITHUB_REF_NAME" == *-* ]]; then
             args+=(--prerelease)
           fi
-          gh release create "$GITHUB_REF_NAME" "${args[@]}" -- vaqrin-*.tar.gz vaqrin-*.zip SHA256SUMS
+          if gh release view "$GITHUB_REF_NAME" --json isDraft > release-state.json 2>/dev/null; then
+            if [[ "$(jq -r '.isDraft' release-state.json)" != true ]]; then
+              printf '%s\n' 'This tag already has a published release.'
+              exit 0
+            fi
+          else
+            gh release create "$GITHUB_REF_NAME" "${args[@]}" --draft
+          fi
+          gh release upload "$GITHUB_REF_NAME" --clobber -- vaqrin-*.tar.gz vaqrin-*.zip SHA256SUMS
+          gh release edit "$GITHUB_REF_NAME" --draft=false

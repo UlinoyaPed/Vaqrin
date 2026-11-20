@@ -775,7 +775,7 @@ class Server:
         try:
             with tempfile.TemporaryDirectory(prefix="vaqrin-lsp-") as temp:
                 overlay = Path(temp) / "buffer.vqr"
-                overlay.write_text(text, encoding="utf-8")
+                overlay.write_bytes(text.encode("utf-8"))
                 def run(*flags):
                     return subprocess.run([compiler, "check", *flags, "--overlay", overlay, source],
                                           cwd=self.root, capture_output=True, encoding="utf-8",

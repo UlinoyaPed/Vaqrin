@@ -213,6 +213,43 @@ class StandardLibraryAcceptance(CompilerCase):
             }
         """, "true\n" * 10)
 
+    def test_process_status_and_output(self):
+        self.hosted(r"""
+            import (env, fs, path, process)
+            func main() !void {
+                fs.mkdir("child-workdir")!;
+                env.set("VAQRIN_CHILD_MARKER", "works")!;
+                var command = process.Command.new(path.fromString("/bin/sh")!);
+                command.cwd(path.fromString("child-workdir")!)!;
+                var args = [2]str{"-c",
+                    "test \"${PWD##*/}\" = child-workdir && printf %s \"$VAQRIN_CHILD_MARKER\"; printf stderr >&2; exit 37"};
+                command.args(args[:])!;
+                var captured = command.output(11)!;
+                io.println(captured.stdoutText()!)!;
+                io.println(captured.stderrText()!)!;
+                io.println(captured.status().code().unwrap())!;
+                io.println(captured.status().signal() == null)!;
+                command.output(10) catch (reason) {
+                    io.println(reason == process.ProcessError.OutputLimit)!;
+                    var empty = process.Command.new(path.fromString("/bin/true")!);
+                    var zero = empty.output(0)!;
+                    io.println(zero.status().success() && zero.stdout().len() == 0)!;
+                    var script = [2]str{"-c", "head -c 70000 /dev/zero; head -c 80000 /dev/zero >&2"};
+                    var both = process.output(path.fromString("/bin/sh")!, script[:], 150000)!;
+                    io.println(both.stdout().len() == 70000 && both.stderr().len() == 80000)!;
+                    var terminate = [2]str{"-c", "kill -TERM $$"};
+                    var signaled = process.run(path.fromString("/bin/sh")!, terminate[:])!;
+                    io.println(signaled.code() == null && signaled.signal().unwrap() == 15)!;
+                    var missing = process.Command.new(path.fromString("./missing-executable")!);
+                    missing.status() catch (reason) {
+                        io.println(io.isSystemError(reason))!;
+                        return;
+                    };
+                    return;
+                };
+            }
+        """, "works\nstderr\n37\n" + "true\n" * 6)
+
     def test_json(self):
         lines = self.example("stdlib/json/examples/json_smoke.vqr").splitlines()
         self.assertEqual(lines[0], "true")

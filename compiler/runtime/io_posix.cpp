@@ -400,6 +400,9 @@ int32_t __vqr_io_format_float(double value, int32_t style, int32_t precision,
     return 0;
 }
 
+int __vqr_io_env_lock() { return pthread_mutex_lock(&environment_mutex); }
+void __vqr_io_env_unlock() { pthread_mutex_unlock(&environment_mutex); }
+
 uintptr_t __vqr_io_env_get(const char *key, size_t *length, int32_t *out_error) {
     EnvironmentLock lock;
     set_error(out_error, lock.status);

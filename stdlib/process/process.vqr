@@ -1,0 +1,160 @@
+package process
+import (coll, env, io, path, text)
+
+pub error ProcessError { InvalidProgram, InvalidArgument, InvalidDirectory, OutputLimit }
+
+extern "C" func __vqr_process_run(args: *const u8, count: usize, cwd: *const u8, code: *i32, signal: *i32) i32;
+extern "C" func __vqr_process_output(args: *const u8, count: usize, cwd: *const u8, limit: usize, status: *i32) usize;
+extern "C" func __vqr_process_output_status(handle: usize, code: *i32, signal: *i32) void;
+extern "C" func __vqr_process_output_bytes(handle: usize, stream: i32, length: *usize) usize;
+extern "C" func __vqr_process_output_free(handle: usize) void;
+extern "C" func __vqr_process_pid() u64;
+extern "C" func __vqr_process_parent_pid() u64;
+
+pub class ExitStatus {
+    var exitCode: i32;
+    var signalNumber: i32;
+public:
+    func init(code: i32, signal: i32) : exitCode(code), signalNumber(signal) {}
+    const func success() bool { exitCode == 0 }
+    const func code() ?i32 { if exitCode < 0 { null } else { some(exitCode) } }
+    const func signal() ?i32 { if signalNumber == 0 { null } else { some(signalNumber) } }
+}
+
+pub class Output {
+    #copy: disabled
+    var termination: ExitStatus;
+    var outBytes: coll.Vec<u8>;
+    var errBytes: coll.Vec<u8>;
+public:
+    func init(status: ExitStatus, out: coll.Vec<u8>, err: coll.Vec<u8>)
+        : termination(status), outBytes(move(out)), errBytes(move(err)) {}
+    const func status() ExitStatus { termination }
+    const func stdout() []const u8 { outBytes.asConstSlice() }
+    const func stderr() []const u8 { errBytes.asConstSlice() }
+    const func stdoutText() !string { text.fromBytes(stdout()) }
+    const func stderrText() !string { text.fromBytes(stderr()) }
+}
+
+class NativeOutput {
+    #copy: disabled
+    var handle: usize;
+public:
+    func init(handle: usize) : handle(handle) {}
+    const func toOutput() !Output {
+        var code: i32 = 0;
+        var signal: i32 = 0;
+        unsafe { __vqr_process_output_status(handle, &code, &signal); }
+        var out = copyStream(0)!;
+        var err = copyStream(1)!;
+        Output(ExitStatus(code, signal), move(out), move(err))
+    }
+    func deinit() void { unsafe { __vqr_process_output_free(handle); } }
+private:
+    const func copyStream(stream: i32) !coll.Vec<u8> {
+        var length: usize = 0;
+        var address = unsafe { __vqr_process_output_bytes(handle, stream, &length) };
+        if length == 0 { return coll.Vec<u8>(); }
+        var data = unsafe { ptrFromInt<*u8>(address) };
+        var view = unsafe { __vqr_const_slice<u8>(some(data), length) };
+        coll.Vec<u8>.fromSlice(view)
+    }
+}
+
+func containsNul(value: str) bool {
+    for byte in value.asBytes() {
+        if byte == 0 { return true; }
+    }
+    false
+}
+
+func appendCString(output: *coll.Vec<u8>, value: str) !void {
+    for byte in value.asBytes() { output.push(byte)!; }
+    output.push(0)!
+}
+
+pub class Command {
+    #copy: disabled
+    var program: path.Path;
+    var arguments: coll.Vec<string>;
+    var directory: path.Path;
+    func init(program: path.Path)
+        : program(move(program)), arguments(coll.Vec<string>()), directory(path.Path("")) {}
+public:
+    static func new(program: path.Path) Self { Command(move(program)) }
+    func arg(value: str) !void {
+        if containsNul(value) { return ProcessError.InvalidArgument; }
+        arguments.push(text.fromBytes(value.asBytes())!)!
+    }
+    func args(values: []const str) !void {
+        var pending = coll.Vec<string>.withCapacity(values.len())!;
+        for value in values {
+            if containsNul(value) { return ProcessError.InvalidArgument; }
+            pending.push(text.fromBytes(value.asBytes())!)!;
+        }
+        arguments.reserveAdditional(pending.len())!;
+        for value in coll.Vec<string>.intoIter(move(pending)) {
+            arguments.push(move(value))!;
+        }
+    }
+    func cwd(value: path.Path) !void {
+        if value.asString().byteLen() == 0 || containsNul(value.asString()) {
+            return ProcessError.InvalidDirectory;
+        }
+        directory = move(value);
+    }
+    const func status() !ExitStatus {
+        var argv = argumentBlock()!;
+        var cwd = directoryBlock()!;
+        var code: i32 = 0;
+        var signal: i32 = 0;
+        var reason = unsafe { __vqr_process_run(&argv[0], arguments.len() + 1, &cwd[0], &code, &signal) };
+        if reason != 0 { return io.systemError(reason); }
+        ExitStatus(code, signal)
+    }
+    const func output(limit: usize) !Output {
+        var argv = argumentBlock()!;
+        var cwd = directoryBlock()!;
+        var reason: i32 = 0;
+        var handle = unsafe { __vqr_process_output(&argv[0], arguments.len() + 1, &cwd[0], limit, &reason) };
+        if reason == -1 { return ProcessError.OutputLimit; }
+        if reason != 0 { return io.systemError(reason); }
+        var result = NativeOutput(handle);
+        result.toOutput()
+    }
+private:
+    const func argumentBlock() !coll.Vec<u8> {
+        var name = program.asString();
+        if name.byteLen() == 0 || containsNul(name) { return ProcessError.InvalidProgram; }
+        var result = coll.Vec<u8>();
+        appendCString(&result, name)!;
+        for value in arguments.iterRef() { appendCString(&result, *value)!; }
+        move(result)
+    }
+    const func directoryBlock() !coll.Vec<u8> {
+        var result = coll.Vec<u8>();
+        appendCString(&result, directory.asString())!;
+        move(result)
+    }
+}
+
+pub func run(program: path.Path, args: []const str) !ExitStatus {
+    var command = Command.new(move(program));
+    command.args(args)!;
+    command.status()
+}
+
+pub func output(program: path.Path, args: []const str, limit: usize) !Output {
+    var command = Command.new(move(program));
+    command.args(args)!;
+    command.output(limit)
+}
+
+pub func pid() u64 { unsafe { __vqr_process_pid() } }
+
+pub func parentPid() !?u64 {
+    var id = unsafe { __vqr_process_parent_pid() };
+    if id == 0 { null } else { some(id) }
+}
+
+pub func executable() !path.PathBuf { env.currentExe() }

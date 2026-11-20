@@ -37,7 +37,7 @@
 | `fs` | 16 | 53 | 31 | 0 | 部分实现，已运行代表用例 | POSIX 文件、目录、定位和元数据，MemFS、递归遍历、链接及其他系统端口待补 | `coll`, `io`, `path`, `text` |
 | `time` | 17 | 79 | 17 | 0 | 部分实现，已运行代表用例 | 时长、单调时钟、定时和公历，时区数据库和格式化待补 | `cmp` |
 | `env` | 3 | 8 | 17 | 0 | 部分实现，已运行代表用例 | 进程环境读写、独立快照和路径查询。参数、主机信息、原生字节与变量展开待补 | `coll`, `io`, `path`, `text` |
-| `process` | 6 | 31 | 10 | 0 | 未实现 | 暂无标准包源码 | — |
+| `process` | 6 | 31 | 10 | 0 | 部分实现，已运行代表用例 | POSIX 同步执行、工作目录、退出状态、有上限的双流输出捕获。异步子进程句柄、细粒度环境与 stdio 配置待补 | `coll`, `env`, `io`, `path`, `text` |
 | `net` | 14 | 58 | 14 | 0 | 未实现 | 暂无标准包源码 | — |
 | `http` | 15 | 55 | 12 | 0 | 未实现 | 暂无标准包源码 | — |
 | `json` | 12 | 45 | 13 | 0 | 部分实现，已运行代表用例 | 嵌套 DOM、精确数字词法、代理对、指针及 Codec。编码支持递归键排序、非 ASCII 转义和 f64 转换；完整 RFC 向量待补 | `algo`, `bytes`, `cmp`, `coll`, `convert`, `core`, `fmt`, `io`, `iter`, `math`, `opt`, `parse`, `serde`, `text` |
@@ -68,7 +68,7 @@ v0.1.4 的安全容器查询覆盖 Vec、HashMap 和 BTreeMap。引用来源与�
 
 ## 当前源码的依赖顺序
 
-标准库包含 44 个有公开源码的包，以及供 `math` 使用的内部 `math_ffi` 包。内部包声明目标 C ABI 的数学符号。以下依赖图无环。
+标准库包含 45 个有公开源码的包，以及供 `math` 使用的内部 `math_ffi` 包。内部包声明目标 C ABI 的数学符号。以下依赖图无环。
 
 ```text
 atomic, binary, cmp, convert, core, hash, iter, math_ffi, meta
@@ -79,6 +79,7 @@ bytes, opt, result, text
 cell, encoding, io, num, parse, path, random, task, thread, unicode
 bufio, csv, fmt, fs, log, regex, serde, sync, url
 channel, env, errors, json, toml
+process
 ```
 
 容器和 I/O 的具体入口与验证边界见[容器实现](coll-container-implementation.md)和[I/O 实现](io-stack.md)。[全量 API 设计清单](Vaqrin-stdlib-API-complete-draft.md)及其 CSV/JSON 保留目标合同。

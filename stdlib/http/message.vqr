@@ -1,0 +1,268 @@
+package http
+import (coll, io, text, time, url as uri)
+
+pub error HttpError {
+    InvalidStartLine, InvalidHeader, InvalidFraming, HeaderLimit, BodyLimit,
+    UnsupportedMethod, UnsupportedTransfer, UnsupportedScheme, UnsupportedUpgrade,
+    InvalidStatus, InvalidTarget, MissingHost, TooManyResponses,
+}
+
+pub enum Method { GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS, TRACE, CONNECT }
+pub type Url = uri.Url;
+pub type UrlBuilder = uri.UrlBuilder;
+
+pub func parseMethod(value: str) !Method {
+    if value == "GET" { return Method.GET; }
+    if value == "POST" { return Method.POST; }
+    if value == "PUT" { return Method.PUT; }
+    if value == "DELETE" { return Method.DELETE; }
+    if value == "PATCH" { return Method.PATCH; }
+    if value == "HEAD" { return Method.HEAD; }
+    if value == "OPTIONS" { return Method.OPTIONS; }
+    if value == "TRACE" { return Method.TRACE; }
+    if value == "CONNECT" { return Method.CONNECT; }
+    HttpError.UnsupportedMethod
+}
+
+func methodText(value: Method) str {
+    switch value {
+        Method.GET => "GET", Method.POST => "POST", Method.PUT => "PUT",
+        Method.DELETE => "DELETE", Method.PATCH => "PATCH", Method.HEAD => "HEAD",
+        Method.OPTIONS => "OPTIONS", Method.TRACE => "TRACE", Method.CONNECT => "CONNECT",
+    }
+}
+
+pub func statusText(code: u16) ?str {
+    switch code {
+        100 => some("Continue"), 200 => some("OK"), 201 => some("Created"),
+        204 => some("No Content"), 205 => some("Reset Content"),
+        206 => some("Partial Content"), 301 => some("Moved Permanently"), 302 => some("Found"),
+        303 => some("See Other"), 304 => some("Not Modified"), 307 => some("Temporary Redirect"),
+        308 => some("Permanent Redirect"), 400 => some("Bad Request"), 401 => some("Unauthorized"),
+        403 => some("Forbidden"), 404 => some("Not Found"), 405 => some("Method Not Allowed"),
+        408 => some("Request Timeout"), 413 => some("Content Too Large"),
+        415 => some("Unsupported Media Type"), 429 => some("Too Many Requests"),
+        500 => some("Internal Server Error"), 501 => some("Not Implemented"),
+        502 => some("Bad Gateway"), 503 => some("Service Unavailable"),
+        504 => some("Gateway Timeout"), _ => null,
+    }
+}
+
+pub class StatusCode {
+    var code: u16;
+    func init(value: u16) : code(value) {}
+public:
+    static func new(value: u16) !Self {
+        if value < 100 || value > 599 { return HttpError.InvalidStatus; }
+        StatusCode(value)
+    }
+    const func value() u16 { code }
+    const func isSuccess() bool { code >= 200 && code < 300 }
+    const func isRedirection() bool { code >= 300 && code < 400 }
+    const func isClientError() bool { code >= 400 && code < 500 }
+    const func isServerError() bool { code >= 500 }
+    const func reasonPhrase() ?str { statusText(code) }
+}
+
+func lower(value: u8) u8 {
+    if value >= 65 && value <= 90 {
+        u8(value + 32u8) catch { panic("ASCII invariant"); }
+    } else { value }
+}
+
+func sameName(a: str, b: str) bool {
+    var first = a.asBytes();
+    var second = b.asBytes();
+    if first.len() != second.len() { return false; }
+    for i in usize(0)..first.len() {
+        if lower(first[i]) != lower(second[i]) { return false; }
+    }
+    true
+}
+
+func isToken(byte: u8) bool {
+    if (48 <= byte && byte <= 57) || (65 <= byte && byte <= 90) ||
+        (97 <= byte && byte <= 122) || byte == 96 { return true; }
+    for punctuation in "!#$%&'*+-.^_|~".asBytes() {
+        if byte == punctuation { return true; }
+    }
+    false
+}
+
+func validateName(value: str) !void {
+    if value.byteLen() == 0 { return HttpError.InvalidHeader; }
+    for byte in value.asBytes() {
+        if !isToken(byte) { return HttpError.InvalidHeader; }
+    }
+}
+
+func validateValue(value: str) !void {
+    for byte in value.asBytes() {
+        if (byte < 32 && byte != 9) || byte == 127 { return HttpError.InvalidHeader; }
+    }
+}
+
+pub class HeaderMap {
+    #copy: disabled
+    var entries: coll.Vec<(string,string)>;
+public:
+    func init() : entries(coll.Vec<(string,string)>()) {}
+    const func len() usize { entries.len() }
+    func append(name: str, value: str) !void {
+        validateName(name)!;
+        validateValue(value)!;
+        var ownedName = text.fromBytes(name.asBytes())!;
+        var raw = value.asBytes();
+        var first: usize = 0;
+        var end = raw.len();
+        for first < end && (raw[first] == 32 || raw[first] == 9) { first++; }
+        for end > first && (raw[end - 1] == 32 || raw[end - 1] == 9) { end--; }
+        var ownedValue = text.fromBytes(raw[first..end])!;
+        entries.push((move(ownedName), move(ownedValue)))!
+    }
+    func set(name: str, value: str) !void {
+        var pending = HeaderMap();
+        pending.append(name, value)!;
+        entries.reserveAdditional(1)!;
+        remove(name);
+        var field = pending.entries.pop().unwrap();
+        entries.push(move(field))!
+    }
+    const func get(name: str) ?str {
+        for field in entries.iterRef() {
+            if sameName(field.0, name) {
+                var value: str = field.1;
+                return some(value);
+            }
+        }
+        null
+    }
+    const func getAll(name: str) !coll.Vec<string> {
+        var out = coll.Vec<string>();
+        for field in entries.iterRef() {
+            if sameName(field.0, name) { out.push(field.1)!; }
+        }
+        move(out)
+    }
+    const func items() []const (string,string) { entries.asConstSlice() }
+    const func contains(name: str) bool { get(name) != null }
+    func remove(name: str) bool {
+        var found = false;
+        var i: usize = 0;
+        for i < entries.len() {
+            if sameName(entries[i].0, name) {
+                var removed = entries.remove(i);
+                found = true;
+            } else { i++; }
+        }
+        found
+    }
+    func clear() void { entries.clear(); }
+}
+
+pub class Body {
+    #copy: disabled
+    #implements: io.Reader
+    var data: coll.Vec<u8>;
+    var position: usize;
+public:
+    func init() : data(coll.Vec<u8>()), position(0) {}
+    static func fromBytes(value: []const u8) !Self { Body.fromOwned(coll.Vec<u8>.fromSlice(value)!) }
+    static func fromOwned(value: coll.Vec<u8>) Self {
+        var body = Body();
+        body.data = move(value);
+        move(body)
+    }
+    const func bytes() []const u8 { data.asConstSlice()[position..data.len()] }
+    const func len() usize { data.len() - position }
+    const func isComplete() bool { position == data.len() }
+    func read(destination: []u8) !usize {
+        var count = if destination.len() < len() { destination.len() } else { len() };
+        for i in usize(0)..count { destination[i] = data[position + i]; }
+        position += count;
+        count
+    }
+    func writeTo(writer: *io.Writer) !u64 {
+        var count = len();
+        io.writeAll(writer, bytes())!;
+        position += count;
+        u64(count)
+    }
+    func discard(limit: usize) !u64 {
+        var count = len();
+        if count > limit { return HttpError.BodyLimit; }
+        position += count;
+        u64(count)
+    }
+    func close() !void { position = data.len(); }
+}
+
+pub class HttpLimits {
+    pub var maxLineBytes: usize;
+    pub var maxHeaderBytes: usize;
+    pub var maxHeaders: usize;
+    pub var maxBodyBytes: usize;
+    pub var timeout: time.Duration;
+    pub func init() : maxLineBytes(8192), maxHeaderBytes(65536), maxHeaders(128),
+        maxBodyBytes(16 * 1024 * 1024), timeout(time.Duration.fromSeconds(15)) {}
+}
+
+func requestTarget(value: str) !void {
+    if value.byteLen() == 0 { return HttpError.InvalidTarget; }
+    for byte in value.asBytes() {
+        if byte <= 32 || byte >= 127 || byte == 35 { return HttpError.InvalidTarget; }
+    }
+}
+
+pub class Request {
+    #copy: disabled
+    var verb: Method;
+    var targetValue: string;
+    var fields: HeaderMap;
+    var payload: Body;
+public:
+    func init(method: Method, target: string)
+        : verb(method), targetValue(move(target)), fields(HeaderMap()), payload(Body()) {}
+    static func new(method: Method, target: str) !Self {
+        requestTarget(target)!;
+        Request(method, text.fromBytes(target.asBytes())!)
+    }
+    const func method() Method { verb }
+    const func target() str { targetValue }
+    func headers() *HeaderMap { &fields }
+    const func header(name: str) ?str { fields.get(name) }
+    const func bodyBytes() []const u8 { payload.bytes() }
+    func body() *Body { &payload }
+    func setBody(body: Body) void { payload = move(body); }
+}
+
+pub class Response {
+    #copy: disabled
+    var code: StatusCode;
+    var fields: HeaderMap;
+    var payload: Body;
+public:
+    func init(status: StatusCode) : code(status), fields(HeaderMap()), payload(Body()) {}
+    static func new(status: u16) !Self { Response(StatusCode.new(status)!) }
+    const func status() StatusCode { code }
+    func headers() *HeaderMap { &fields }
+    const func header(name: str) ?str { fields.get(name) }
+    const func bodyBytes() []const u8 { payload.bytes() }
+    func body() *Body { &payload }
+    func setBody(body: Body) void { payload = move(body); }
+    func close() !void { payload.close() }
+}
+
+pub func parseUrl(value: str) !Url { uri.parse(value) }
+pub func encodeQuery(items: []const (str,str)) !string { uri.encodeQuery(items) }
+
+pub func decodeQuery(value: str) !coll.Vec<(string,string)> {
+    var query = uri.parseQuery(value)!;
+    var out = coll.Vec<(string,string)>.withCapacity(query.len())!;
+    for field in query.items() {
+        var key = text.fromBytes(field.key().asBytes())!;
+        var item = text.fromBytes(field.value().asBytes())!;
+        out.push((move(key), move(item)))!;
+    }
+    move(out)
+}

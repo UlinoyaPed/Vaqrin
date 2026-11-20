@@ -1,0 +1,122 @@
+package http
+import (bufio, fmt, io, net, text, time)
+
+func httpHost(target: *const Url) !str {
+    if !sameName(target.scheme(), "http") { return HttpError.UnsupportedScheme; }
+    if target.userInfo() != null { return HttpError.InvalidTarget; }
+    var host = target.host() ?? { return HttpError.MissingHost; };
+    if host.byteLen() == 0 { return HttpError.MissingHost; }
+    host
+}
+
+func pathTarget(target: *const Url) !string {
+    var out = text.StringBuilder();
+    var path = target.path();
+    out.append(if path.byteLen() == 0 { "/" } else { path })!;
+    switch target.query() {
+        some(query) => { out.append("?")!; out.append(query)!; },
+        null => {},
+    };
+    out.build()
+}
+
+func hostHeader(target: *const Url, host: str) !string {
+    var out = text.StringBuilder();
+    var bytes = host.asBytes();
+    var bracket = byteAt(bytes, 58) < bytes.len();
+    if bracket { out.append("[")!; }
+    out.append(host)!;
+    if bracket { out.append("]")!; }
+    switch target.port() {
+        some(port) => {
+            var digits = fmt.formatUint(port, 10)!;
+            out.append(":")!;
+            out.append(digits)!;
+        },
+        null => {},
+    };
+    out.build()
+}
+
+func dial(target: *const Url, host: str, timeout: time.Duration) !net.TcpStream {
+    var bytes = host.asBytes();
+    var port: u16 = target.port() ?? 80;
+    if byteAt(bytes, 58) < bytes.len() {
+        var address = net.SocketAddr.new(net.IpAddr.V6(net.parseIpv6(host)!), port);
+        return net.TcpStream.connectTimeout(address, timeout);
+    }
+    var endpoints = net.resolveAddr(host, port)!;
+    var last: ErrorId = net.NetError.NameResolution;
+    for endpoint in endpoints.asConstSlice() {
+        var stream = net.TcpStream.connectTimeout(endpoint, timeout) catch (reason) {
+            last = reason;
+            continue;
+        };
+        return move(stream);
+    }
+    last
+}
+
+pub class Client {
+    pub var limits: HttpLimits;
+public:
+    func init() : limits(HttpLimits()) {}
+    func setTimeout(value: time.Duration) void { limits.timeout = value; }
+    const func send(address: str, request: *Request) !Response {
+        var target = parseUrl(address)!;
+        var host = httpHost(&target)!;
+        var authority = hostHeader(&target, host)!;
+        request.headers().set("Host", authority)!;
+        request.headers().set("Connection", "close")!;
+        var stream = dial(&target, host, limits.timeout)!;
+        stream.setReadTimeout(some(limits.timeout))!;
+        stream.setWriteTimeout(some(limits.timeout))!;
+        writeRequest(&stream, request)!;
+        var reader = bufio.BufferedReader(&stream, 8192)!;
+        for attempt in 0..8 {
+            var response = parseResponseFor(&reader, request.method(), limits)!;
+            if response.status().value() >= 200 { return move(response); }
+        }
+        HttpError.TooManyResponses
+    }
+    const func get(address: str) !Response { fetch(address, Method.GET, Body()) }
+    const func head(address: str) !Response { fetch(address, Method.HEAD, Body()) }
+    const func post(address: str, body: Body) !Response { fetch(address, Method.POST, move(body)) }
+private:
+    const func fetch(address: str, verb: Method, body: Body) !Response {
+        var target = parseUrl(address)!;
+        var path = pathTarget(&target)!;
+        var request = Request.new(verb, path)!;
+        request.setBody(move(body));
+        send(address, &request)
+    }
+}
+
+pub interface Handler {
+    func handle(request: Request) !Response;
+}
+
+pub class Server {
+    #copy: disabled
+    var listener: net.TcpListener;
+    pub var limits: HttpLimits;
+    func init(value: net.TcpListener) : listener(move(value)), limits(HttpLimits()) {}
+public:
+    static func bind(address: net.SocketAddr) !Self { Server(net.listenTcp(address)!) }
+    const func localAddr() !net.SocketAddr { listener.localAddr() }
+    func close() !void { listener.close() }
+    func serveOne(handler: *Handler) !void {
+        var accepted = listener.accept()!;
+        accepted.0.setReadTimeout(some(limits.timeout))!;
+        accepted.0.setWriteTimeout(some(limits.timeout))!;
+        var reader = bufio.BufferedReader(&accepted.0, 8192)!;
+        var request = parseRequest(&reader, limits)!;
+        var method = request.method();
+        var response = handler.handle(move(request))!;
+        response.headers().set("Connection", "close")!;
+        writeResponseFor(&accepted.0, &response, method)
+    }
+}
+
+pub func get(address: str) !Response { Client().get(address) }
+pub func post(address: str, body: Body) !Response { Client().post(address, move(body)) }

@@ -397,6 +397,34 @@ class StandardLibraryAcceptance(CompilerCase):
             }
         """, "true\n" * 4)
 
+    def test_http_wire_and_message_boundaries(self):
+        self.hosted(r"""
+            import (http, result)
+            func main() !void {
+                var input = io.MemoryReader("POST /submit HTTP/1.1\r\nhOsT: localhost\r\nTransfer-Encoding: chunked\r\n\r\n4\r\ndata\r\n0\r\n\r\nGET /next HTTP/1.1\r\nHost: localhost\r\n\r\n".asBytes());
+                var limits = http.HttpLimits();
+                var request = http.parseRequest(&input, limits)!;
+                io.println(request.target())!;
+                io.println(request.bodyBytes().len())!;
+                var next = http.parseRequest(&input, limits)!;
+                io.println(next.target())!;
+                var response = http.Response.new(200)!;
+                response.setBody(http.Body.fromBytes("hello".asBytes())!);
+                var writer = io.MemoryWriter();
+                http.writeResponse(&writer, &response)!;
+                var back = io.MemoryReader(writer.asSlice());
+                var decoded = http.parseResponse(&back, limits)!;
+                io.println(decoded.status().value())!;
+                io.println(decoded.bodyBytes().len())!;
+                var other = io.MemoryReader("HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\n".asBytes());
+                var head = http.parseResponseFor(&other, http.Method.HEAD, limits)!;
+                io.println(head.bodyBytes().len())!;
+                var duplicate = io.MemoryReader("POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nContent-Length: 1\r\n\r\n".asBytes());
+                var rejected = http.parseRequest(&duplicate, limits);
+                io.println(result.errorOf(&rejected).unwrap() == http.HttpError.InvalidFraming)!;
+            }
+        """, "/submit\n4\n/next\n200\n5\n0\ntrue\n")
+
     def test_json(self):
         lines = self.example("stdlib/json/examples/json_smoke.vqr").splitlines()
         self.assertEqual(lines[0], "true")

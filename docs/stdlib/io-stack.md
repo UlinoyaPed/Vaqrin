@@ -50,15 +50,14 @@ bytes are never replayed by a later flush.
 
 - Path currently models POSIX-style UTF-8 paths; arbitrary non-UTF-8 directory names
   are reported as UTF-8 errors. Windows UTF-16 paths are not implemented.
-- Metadata exposes size, file type, mode bits and modified Unix seconds. Creation time
+- Metadata exposes size, file type, device/inode identity, mode bits and modified Unix seconds. Creation time
   and richer ACL/security descriptors are not exposed.
-- Directory traversal is one directory level; recursive walking and symlink policy
-  helpers are not implemented.
-- Scanner uses ASCII whitespace splitting. Custom split callbacks and Unicode
-  whitespace tokenization are not implemented.
+- Recursive traversal follows directory descriptors and skips symbolic links.
+- Scanner supports ASCII whitespace and byte-delimiter splitting. Unicode whitespace
+  and custom callbacks remain future extensions.
 - Formatter supports a small brace-format subset; user-defined Display/DebugFormat
   dispatch, locale-aware formatting and cached FormatPlan are not implemented.
-- Host I/O is synchronous. No asynchronous or network interfaces are added.
+- File I/O is synchronous. Task-aware TCP and readiness use Linux epoll.
 
 
 ## Public API inventory
@@ -246,3 +245,9 @@ defaults to ASCII whitespace. Select a byte delimiter with
 `setSplitMode` and use `nextBytes` to read non-UTF-8 tokens. Both
 scanner modes skip empty tokens and honor `setMaxToken`. `next`
 validates UTF-8. Token offsets are byte offsets.
+
+For a recoverable stream copy, keep an `io.CopyCursor` and its scratch
+buffer. `transfer` retains the unwritten suffix of the current chunk in
+that buffer after a destination error and reports committed bytes through
+`copied()`. Pass the same source, destination, total limit, and scratch
+buffer when resuming.

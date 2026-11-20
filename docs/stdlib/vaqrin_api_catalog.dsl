@@ -535,8 +535,8 @@
 #interface ReadSeeker|组合 Reader 与 Seeker
 #interface WriteSeeker|组合 Writer 与 Seeker
 #enum SeekOrigin|Start, Current, End
-#enum ReadStatus|Bytes, Eof, WouldBlock, Interrupted
-#record IoProgress|已处理字节数和可恢复状态
+#enum ReadStatus|Bytes, Eof, WouldBlock, Interrupted, Cancelled, DeadlineExceeded, Failed
+#record IoProgress|已处理字节数、停止状态和原始错误
 #class MemoryReader|借用只读字节作为 Reader
 + init(data: []const u8)->Self; read(dst: []u8)->!usize; seek(offset: i64,origin: SeekOrigin)->!u64; remaining()->usize
 #class MemoryWriter|写入可增长 Buffer
@@ -559,10 +559,12 @@
 + read(dst: []u8)->!usize; close()->!void
 #class PipeWriter|内存管道写入端
 + write(data: []const u8)->!usize; close()->!void
-= read(reader: *Reader,dst: []u8)->!usize; readExact(reader: *Reader,dst: []u8)->!void; readExactProgress(reader: *Reader,dst: []u8)->!IoProgress; readAtLeast(reader: *Reader,dst: []u8,min: usize)->!usize; readToEnd(reader: *Reader,limit: usize)->!coll.Vec<u8>; readToString(reader: *Reader,limit: usize)->!string; write(writer: *Writer,src: []const u8)->!usize; writeAll(writer: *Writer,src: []const u8)->!void; writeAllProgress(writer: *Writer,src: []const u8)->!IoProgress; writeString(writer: *Writer,value: str)->!void; copy(reader: *Reader,writer: *Writer,scratch: []u8)->!u64; copyN(reader: *Reader,writer: *Writer,n: u64,scratch: []u8)->!u64; copyAll(reader: *Reader,writer: *Writer)->!u64; discard(reader: *Reader,n: u64,scratch: []u8)->!u64; pipe(capacity: usize)->!(PipeReader,PipeWriter); limit(reader: *Reader,n: u64)->LimitedReader; tee(reader: *Reader,writer: *Writer)->TeeReader; stdin()->!Reader; stdout()->!Writer; stderr()->!Writer; print<T>(value: T)->!void; println<T>(value: T)->!void; eprint<T>(value: T)->!void; eprintln<T>(value: T)->!void; printf<F>(pattern: str,args: F)->!void; flushStdout()->!void
+= read(reader: *Reader,dst: []u8)->!usize; readExact(reader: *Reader,dst: []u8)->!void; readExact(reader: *Reader,dst: []u8,processed: *usize)->!void; readExactProgress(reader: *Reader,dst: []u8)->!IoProgress; readAtLeast(reader: *Reader,dst: []u8,min: usize)->!usize; readToEnd(reader: *Reader,limit: usize)->!coll.Vec<u8>; readToString(reader: *Reader,limit: usize)->!string; write(writer: *Writer,src: []const u8)->!usize; writeAll(writer: *Writer,src: []const u8)->!void; writeAll(writer: *Writer,src: []const u8,processed: *usize)->!void; writeAllProgress(writer: *Writer,src: []const u8)->!IoProgress; writeString(writer: *Writer,value: str)->!void; copy(reader: *Reader,writer: *Writer,scratch: []u8)->!u64; copyN(reader: *Reader,writer: *Writer,n: u64,scratch: []u8)->!u64; copyAll(reader: *Reader,writer: *Writer)->!u64; discard(reader: *Reader,n: u64,scratch: []u8)->!u64; pipe(capacity: usize)->!(PipeReader,PipeWriter); limit(reader: *Reader,n: u64)->LimitedReader; tee(reader: *Reader,writer: *Writer)->TeeReader; stdin()->!Reader; stdout()->!Writer; stderr()->!Writer; print<T>(value: T)->!void; println<T>(value: T)->!void; eprint<T>(value: T)->!void; eprintln<T>(value: T)->!void; printf<F>(pattern: str,args: F)->!void; flushStdout()->!void
+#class CopyCursor|保持复制进度和 scratch 中尚未写出的后缀
++ init()->Self; copied()->u64; pending()->usize; transfer(reader: *Reader,writer: *Writer,limit: u64,scratch: []u8)->!u64
 @bufio|缓冲 Reader/Writer、按行和 Token 扫描，短写后保留未提交后缀
 // 当前实现：Scanner.nextInt<T>() !?T 区分 EOF；Scanner.readInt<T>() !T 要求存在字段。
-// 当前实现：当前基本 Scanner、BufferedReader/Writer 与短写恢复已验收；Token 的文本借用 Token。其余扫描策略仍为目标。
+// 当前实现：Scanner 支持 ASCII 空白与自定义字节分隔，nextBytes 返回拥有字节的 ByteToken。BufferedWriter.finish 成功后封闭写入，失败时可重试。
 #class BufferedReader|持久字节缓冲、peek 视图会被下一次修改失效
 + init(reader: *io.Reader,capacity: usize)->!Self; read(dst: []u8)->!usize; readByte()->!?u8; unreadByte(value: u8)->!void; peek(n: usize)->![]const u8; discard(n: usize)->!usize; readUntil(delim: u8,max: usize)->!coll.Vec<u8>; readLine(max: usize)->!?string; readString(delim: u8,max: usize)->!string; bufferLen()->usize; reset(reader: *io.Reader)->void
 #class BufferedWriter|可明确 flush/finish 错误
@@ -570,7 +572,7 @@
 #class ReadWriter|BufferedReader 与 BufferedWriter 组合
 + init(reader: *io.Reader,writer: *io.Writer,readCapacity: usize,writeCapacity: usize)->!Self; read(dst: []u8)->!usize; write(data: []const u8)->!usize; flush()->!void
 #class Scanner|可配置 token 边界和最大 token
-+ init(reader: *io.Reader)->!Self; setSplit(split: SplitFn)->void; setMaxToken(n: usize)->void; next()->!?[]const u8; nextString()->!?string; position()->u64; reset(reader: *io.Reader)->void
++ init(reader: *io.Reader)->!Self; setSplitMode(mode: SplitMode)->void; setMaxToken(n: usize)->void; next()->!?Token; nextBytes()->!?ByteToken; nextString()->!?string; position()->u64; reset(reader: *io.Reader)->void
 #interface SplitFn|token(data: []const u8,atEof: bool)->!SplitResult
 #record SplitResult|advance、token 和 NeedMore
 #class LineReader|保留换行规范的行扫描器
@@ -588,7 +590,7 @@
 #enum PrefixKind|Drive, UNC, Device, Verbatim
 = join(a: Path,b: Path)->!PathBuf; resolve(base: Path,child: Path)->!PathBuf; normalizeLexical(path: Path)->!PathBuf; clean(path: Path)->!PathBuf; isAbsolute(path: Path)->bool; isRelative(path: Path)->bool; base(path: Path)->?str; dir(path: Path)->?Path; extension(path: Path)->?str; stem(path: Path)->?str; split(path: Path)->(?Path,?str); splitExtension(path: Path)->(Path,?str); relative(base: Path,target: Path)->!PathBuf; commonPrefix(a: Path,b: Path)->!PathBuf; fromString(value: str)->!PathBuf; toString(path: Path)->!string; separator()->char; listSeparator()->char
 @fs|宿主文件系统接口及 MemFS；路径下真实操作可失败
-// 当前实现：当前 Directory 和 DirectoryEntry 提供单层目录操作；MemFS 和递归遍历仍为目标。
+// 当前实现：目录相对的递归操作、符号链接、原子写入、临时文件与临时目录、文件身份和 tryExists。MemFS 仍为目标。
 #interface FileSystem|open(path: path.Path,options: OpenOptions)->!File
 #interface ReadDirFs|readDir(path: path.Path)->!ReadDir
 #interface StatFs|stat(path: path.Path)->!Metadata
@@ -606,15 +608,18 @@
 + name()->str; path()->path.PathBuf; fileType()->!FileType; metadata()->!Metadata
 #class ReadDir|目录项流
 + next()->!?DirEntry; close()->void
-#class WalkDir|递归遍历、显式符号链接策略与深度上限
-+ init(root: path.Path,options: WalkOptions)->!Self; next()->!?DirEntry; close()->void
-#record WalkOptions|深度、跟随链接与错误策略
+#record WalkLimits|递归深度与目录项上限
+#interface WalkVisitor|visit(entry: DirectoryEntry,depth: usize)->!void
+#class TempFile|持有同目录临时文件
++ inDir(path: path.Path)->!Self; location()->!path.Path; commit(name: str)->!void; close()->!void
+#class TempDir|持有临时目录并在作用域结束时清理
++ inDir(path: path.Path)->!Self; location()->!path.Path; close()->!void
 #class MemFS|内存文件系统，适配测试与嵌入式
 + init()->Self; open(path: path.Path,options: OpenOptions)->!File; mkdir(path: path.Path)->!void; remove(path: path.Path)->!void; rename(a: path.Path,b: path.Path)->!void; readDir(path: path.Path)->!ReadDir; stat(path: path.Path)->!Metadata
 #class EmbeddedFS|只读嵌入资源的文件系统
 + fromManifest(manifest: []const Resource)->Self; open(path: path.Path)->!File; readDir(path: path.Path)->!ReadDir
 #record Resource|编译期资源路径与字节数据
-= open(path: path.Path,options: OpenOptions)->!File; create(path: path.Path)->!File; openRead(path: path.Path)->!File; openWrite(path: path.Path)->!File; readFile(path: path.Path,limit: usize)->!coll.Vec<u8>; readText(path: path.Path,limit: usize)->!string; writeFile(path: path.Path,bytes: []const u8)->!void; writeText(path: path.Path,value: str)->!void; appendFile(path: path.Path,bytes: []const u8)->!void; copy(src: path.Path,dst: path.Path)->!u64; rename(src: path.Path,dst: path.Path)->!void; remove(path: path.Path)->!void; removeAll(path: path.Path)->!void; mkdir(path: path.Path)->!void; mkdirAll(path: path.Path)->!void; readDir(path: path.Path)->!ReadDir; walkDir(path: path.Path,options: WalkOptions)->!WalkDir; stat(path: path.Path)->!Metadata; lstat(path: path.Path)->!Metadata; exists(path: path.Path)->bool; isFile(path: path.Path)->!bool; isDir(path: path.Path)->!bool; canonicalize(path: path.Path)->!path.PathBuf; readLink(path: path.Path)->!path.PathBuf; symlink(target: path.Path,link: path.Path)->!void; hardLink(target: path.Path,link: path.Path)->!void; currentDir()->!path.PathBuf; setCurrentDir(path: path.Path)->!void; tempDir()->!path.PathBuf; tempFile(prefix: str)->!File; tempDirectory(prefix: str)->!path.PathBuf
+= open(path: path.Path,options: OpenOptions)->!File; create(path: path.Path)->!File; openRead(path: path.Path)->!File; openWrite(path: path.Path)->!File; readFile(path: path.Path,limit: usize)->!coll.Vec<u8>; readText(path: path.Path,limit: usize)->!string; writeFile(path: path.Path,bytes: []const u8)->!void; writeText(path: path.Path,value: str)->!void; appendFile(path: path.Path,bytes: []const u8)->!void; copy(src: path.Path,dst: path.Path)->!u64; sameFile(first: path.Path,second: path.Path)->!bool; atomicWrite(target: path.Path,data: []const u8)->!void; rename(src: path.Path,dst: path.Path)->!void; remove(path: path.Path)->!void; removeAll(path: path.Path)->!void; mkdir(path: path.Path)->!void; mkdirAll(path: path.Path)->!void; readDir(path: path.Path)->!ReadDir; walkDir(path: path.Path,options: WalkLimits,visitor: *WalkVisitor)->!void; stat(path: path.Path)->!Metadata; lstat(path: path.Path)->!Metadata; exists(path: path.Path)->bool; tryExists(path: path.Path)->!bool; isFile(path: path.Path)->!bool; isDir(path: path.Path)->!bool; canonicalize(path: path.Path)->!path.PathBuf; readLink(path: path.Path)->!path.PathBuf; symlink(target: path.Path,link: path.Path)->!void; hardLink(target: path.Path,link: path.Path)->!void; currentDir()->!path.PathBuf; setCurrentDir(path: path.Path)->!void; tempDir()->!path.PathBuf; tempFile(prefix: str)->!File; tempDirectory(prefix: str)->!path.PathBuf
 @time|Duration 与单调 Instant、墙钟 Date/Time/Zone 分开；时间等待依赖目标能力
 #record Duration|带符号秒与纳秒归一化
 + zero()->Self; fromNanos(value: i64)->Self; fromMicros(value: i64)->Self; fromMillis(value: i64)->Self; fromSeconds(value: i64)->Self; fromMinutes(value: i64)->Self; fromHours(value: i64)->Self; fromDays(value: i64)->Self; seconds()->i64; nanosPart()->i32; toMillis()->!i64; toNanos()->!i64; abs()->!Self; add(other: Self)->!Self; sub(other: Self)->!Self; mul(scale: i64)->!Self; div(scale: i64)->!Self; compare(other: Self)->cmp.Ordering; isNegative()->bool; isZero()->bool
@@ -663,6 +668,9 @@
 + status()->ExitStatus; stdout()->[]const u8; stderr()->[]const u8; stdoutText()->!string; stderrText()->!string
 #enum Signal|Term, Kill, Int, Hup 等可用目标子集
 = run(program: path.Path,args: []const str)->!ExitStatus; output(program: path.Path,args: []const str,limit: usize)->!Output; spawn(command: Command)->!Child; exit(code: i32)->never; abort()->never; pid()->u64; parentPid()->!?u64; executable()->!path.PathBuf; signal(pid: u64,signal: Signal)->!void; currentCommandLine()->!string
+@reactor|Linux epoll 就绪事件和句柄代际
+#class Reactor|拥有 epoll 及注册描述符的单持有者
++ open()->!Self; register(fd: i32,interest: Interest)->!WatchId; update(watch: WatchId,interest: Interest)->!void; remove(watch: WatchId)->!void; wait(timeout: ?time.Duration)->!?Event; close()->void
 @net|Socket 地址值与字节序，TCP/UDP 和 DNS；后台阻塞不得卡死轻量调度器
 #enum IpAddr|V4(Ipv4Addr), V6(Ipv6Addr)
 #record Ipv4Addr|4 字节网络地址
@@ -677,6 +685,10 @@
 + connect(address: SocketAddr)->!Self; connectTimeout(address: SocketAddr,timeout: time.Duration)->!Self; read(dst: []u8)->!usize; write(src: []const u8)->!usize; flush()->!void; shutdownRead()->!void; shutdownWrite()->!void; close()->!void; localAddr()->!SocketAddr; peerAddr()->!SocketAddr; setNoDelay(value: bool)->!void; setReadTimeout(value: ?time.Duration)->!void; setWriteTimeout(value: ?time.Duration)->!void; tryClone()->!Self
 #class TcpListener|TCP 被动监听
 + bind(address: SocketAddr)->!Self; accept()->!(TcpStream,SocketAddr); localAddr()->!SocketAddr; setNonblocking(value: bool)->!void; close()->!void
+#class AsyncTcpStream|非阻塞 TCP 读写与 TaskGroup 挂起
++ connect(address: SocketAddr,deadline: ?time.Deadline)->!Self; fromTcp(socket: TcpStream)->!Self; setReadDeadline(deadline: ?time.Deadline)->void; setWriteDeadline(deadline: ?time.Deadline)->void; read(dst: []u8)->!usize; write(src: []const u8)->!usize; close()->!void
+#class AsyncTcpListener|非阻塞监听和可挂起 accept
++ bind(address: SocketAddr)->!Self; accept(deadline: ?time.Deadline)->!(AsyncTcpStream,SocketAddr); close()->!void
 #class UdpSocket|独立消息边界，截断状态显式返回
 + bind(address: SocketAddr)->!Self; connect(address: SocketAddr)->!void; sendTo(data: []const u8,address: SocketAddr)->!usize; recvFrom(dst: []u8)->!Datagram; send(data: []const u8)->!usize; recv(dst: []u8)->!Datagram; localAddr()->!SocketAddr; joinMulticast(ip: IpAddr)->!void; leaveMulticast(ip: IpAddr)->!void; setBroadcast(value: bool)->!void; close()->!void
 #record Datagram|已收到字节、来源地址、是否截断
@@ -818,6 +830,7 @@
 + init()->Self; insert(cpu: usize)->!void; remove(cpu: usize)->bool; contains(cpu: usize)->bool; iter()->iter.Iterator<usize>
 = spawn<T,F>(f: F)->!Thread<T>; currentId()->ThreadId; currentName()->?str; setCurrentName(value: str)->!void; cpuCount()->usize; availableParallelism()->usize; yieldNow()->void; sleep(duration: time.Duration)->!void; park()->!void; unpark(id: ThreadId)->!void; setAffinity(cpus: CpuSet)->!void; getAffinity()->!CpuSet; isMainThread()->bool
 @task|结构化并行 + CSP，无强制 async/await；协作取消和可挂起调用
+// 当前实现：waitDescriptor(fd: i32,interest: reactor.Interest,deadline: ?time.Deadline)->!void
 #class TaskGroup|作用域化管理子任务，析构取消并回收
 + init()->Self; spawn<T,F>(f: F)->!Task<T>; spawnWithContext<T,F>(context: TaskContext,f: F)->!Task<T>; cancel()->void; isCancelled()->bool; joinAll()->!void; collectErrors()->!errors.Report; activeCount()->usize; close()->!void
 #class Task<T>|不可复制、一次性 join，组管理底层寿命

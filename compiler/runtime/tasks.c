@@ -354,6 +354,15 @@ static void run_task(void) {
     current->returned = true;
 }
 
+static void initialize_task_context(struct task *task, struct worker *worker) {
+    if (getcontext(&task->context)) abort();
+    task->context.uc_stack.ss_sp = (char *)task->mapping + task->guard_size;
+    task->context.uc_stack.ss_size = task->mapping_size - task->guard_size;
+    task->context.uc_stack.ss_flags = 0;
+    task->context.uc_link = &worker->scheduler;
+    makecontext(&task->context, run_task, 0);
+}
+
 static void *run_worker(void *context) {
     struct worker *worker = context;
     struct group *group = worker->group;
@@ -373,14 +382,7 @@ static void *run_worker(void *context) {
         bool started = task->worker != NULL;
         task->worker = worker;
         pthread_mutex_unlock(&mutex);
-        if (!started) {
-            if (getcontext(&task->context)) abort();
-            task->context.uc_stack.ss_sp = (char *)task->mapping + task->guard_size;
-            task->context.uc_stack.ss_size = task->mapping_size - task->guard_size;
-            task->context.uc_stack.ss_flags = 0;
-            task->context.uc_link = &worker->scheduler;
-            makecontext(&task->context, run_task, 0);
-        }
+        if (!started) initialize_task_context(task, worker);
         current = task;
         if (swapcontext(&worker->scheduler, &task->context)) abort();
         current = NULL;

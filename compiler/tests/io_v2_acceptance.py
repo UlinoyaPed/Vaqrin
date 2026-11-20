@@ -120,6 +120,37 @@ class IoV2Acceptance(CompilerCase):
             }
         """, "true\n" * 9)
 
+    def test_copy_resumes_its_pending_scratch(self):
+        self.hosted(r"""
+            import (bytes, result)
+
+            class Sink {
+                #implements: io.Writer
+                pub var output: io.MemoryWriter;
+                pub var attempts: i32;
+                pub func write(data: []const u8) !usize {
+                    attempts++;
+                    if attempts == 1 { return output.write(data[0..2]); }
+                    if attempts == 2 { return io.IoError.Cancelled; }
+                    output.write(data)
+                }
+                pub func flush() !void {}
+            }
+
+            func main() !void {
+                var data = "abcdefghi".asBytes();
+                var reader = io.MemoryReader(data);
+                var writer = Sink{output: io.MemoryWriter(), attempts: 0};
+                var scratch = [5]u8{0, 0, 0, 0, 0};
+                var cursor = io.CopyCursor();
+                var stopped = cursor.transfer(&reader, &writer, 9, scratch[:]);
+                io.println(result.errorOf(&stopped).unwrap() == io.IoError.Cancelled)!;
+                io.println(cursor.copied() == 2 && cursor.pending() == 3 && reader.remaining() == 4)!;
+                var total = cursor.transfer(&reader, &writer, 9, scratch[:])!;
+                io.println(total == 9 && bytes.equal(writer.output.asSlice(), data))!;
+            }
+        """, "true\n" * 3)
+
     def test_finish_retries_pending_suffix_and_seals_writer(self):
         self.hosted(r"""
             import (bufio, bytes, result)

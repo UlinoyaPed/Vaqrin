@@ -1,0 +1,176 @@
+package grpc
+import (cmp, coll, core, http2, time)
+
+pub interface StreamingHandler { func handle(stream: *ServerStream) !Status; }
+
+class DeferredEvents {
+    #copy: disabled
+    var events: coll.Vec<http2.Event>;
+    var buffered: usize;
+public:
+    func init() : events(coll.Vec<http2.Event>()), buffered(0) {}
+    func defer(event: http2.Event) !void {
+        var size = event.payload().len();
+        if events.len() >= 1024 || size > 4 * 1024 * 1024 - buffered {
+            return http2.Http2Error.ResourceLimit;
+        }
+        events.push(move(event))!;
+        buffered += size;
+    }
+    func next(session: *http2.Connection) !?http2.Event {
+        if events.len() != 0 { return take(0); }
+        session.next()
+    }
+    func forStream(stream: i32) ?http2.Event {
+        for index in usize(0)..events.len() {
+            if events.getPtr(index).unwrap().stream == stream { return take(index); }
+        }
+        null
+    }
+private:
+    func take(index: usize) ?http2.Event {
+        var size = events.getPtr(index).unwrap().payload().len();
+        buffered -= size;
+        events.remove(index)
+    }
+}
+
+pub class ServerStream {
+    #copy: disabled
+    var socket: *Transport;
+    var session: *http2.Connection;
+    var deferred: *DeferredEvents;
+    var id: i32;
+    var decoder: MessageReader;
+    var limit: usize;
+    var timeout: time.Duration;
+    var ended: bool;
+    var acknowledged: bool;
+    var cancelled: bool;
+    pub var path: string;
+    pub var metadata: Metadata;
+    pub var deadline: ?time.Deadline;
+    pub var initial: Metadata;
+    pub var trailing: Metadata;
+public:
+    func init(socket: *Transport, session: *http2.Connection, deferred: *DeferredEvents,
+              id: i32, request: HeaderInfo, options: ServeOptions)
+        : socket(socket), session(session), deferred(deferred), id(id),
+          decoder(MessageReader(options.maxMessageBytes)), limit(options.maxMessageBytes),
+          timeout(options.timeout), ended(false), acknowledged(false), cancelled(false),
+          path(core.replace<string>(&request.path, "")),
+          metadata(core.replace<Metadata>(&request.metadata, Metadata())), deadline(request.deadline),
+          initial(Metadata()), trailing(Metadata()) {}
+    const func checkDeadline() !void {
+        if cancelled { return RpcError.Cancelled; }
+        if deadline != null && deadline.unwrap().expired()! { return RpcError.DeadlineExceeded; }
+    }
+    func sendHeaders() !void {
+        checkDeadline()!;
+        if acknowledged { return; }
+        var headers = http2.HeaderBlock();
+        headers.add(":status", "200")!;
+        headers.add("content-type", "application/grpc")!;
+        headers.add("grpc-accept-encoding", "identity")!;
+        initial.writeTo(&headers)!;
+        session.respond(id, &headers, false)!;
+        acknowledged = true;
+        flush()
+    }
+    func sendMessage(message: []const u8) !void {
+        checkDeadline()!;
+        var data = frame(message, limit)!;
+        sendHeaders()!;
+        session.sendData(id, data.asConstSlice(), false)!;
+        flush()
+    }
+    func recvMessage() !?coll.Vec<u8> {
+        for {
+            checkDeadline()!;
+            var payload = decoder.next()!;
+            if payload != null { return move(payload); }
+            if ended { return null; }
+            var event = nextEvent()!;
+            switch event.kind {
+                http2.EventKind.Data => {
+                    decoder.feed(event.payload())!;
+                    session.consume(id, event.payload().len())!;
+                },
+                http2.EventKind.EndStream => {
+                    decoder.finish()!;
+                    ended = true;
+                },
+                http2.EventKind.Closed => { cancelled = true; return RpcError.Cancelled; },
+                http2.EventKind.InvalidFrame => { return RpcError.Protocol; },
+                _ => {},
+            };
+        }
+    }
+    func finish(result: Status) !void {
+        if cancelled { return; }
+        socket.setTimeout(timeout)!;
+        if acknowledged {
+            var trailers = http2.HeaderBlock();
+            trailing.writeTo(&trailers)!;
+            encodeStatus(&trailers, &result)!;
+            session.sendTrailers(id, &trailers)!;
+        } else {
+            var headers = core.replace<Metadata>(&initial, Metadata());
+            var trailers = core.replace<Metadata>(&trailing, Metadata());
+            var response = UnaryResponse{initial: move(headers), trailing: move(trailers),
+                                         status: move(result), body: null};
+            sendResponse(session, id, &response, limit)!;
+        }
+        session.flush(socket)
+    }
+private:
+    func nextEvent() !http2.Event {
+        var waiting = deferred.forStream(id);
+        if waiting != null {
+            switch move(waiting) {
+                some(event) => { return move(event); },
+                null => {},
+            };
+        }
+        for {
+            var incoming = session.next()! ?? {
+                flush()!;
+                if !session.receive(socket)! { return RpcError.ConnectionClosed; }
+                continue;
+            };
+            if incoming.stream == id { return move(incoming); }
+            var stopped = incoming.kind == http2.EventKind.GoAway &&
+                (incoming.code != 0 || incoming.stream < id);
+            deferred.defer(move(incoming))!;
+            if stopped { return RpcError.ConnectionClosed; }
+        }
+    }
+    func flush() !void {
+        var duration = timeout;
+        if deadline != null {
+            var remaining = deadline.unwrap().remaining()!;
+            if remaining.isZero() { return RpcError.DeadlineExceeded; }
+            if remaining.compare(duration) == cmp.Ordering.Less { duration = remaining; }
+        }
+        socket.setTimeout(duration)!;
+        session.flush(socket)
+    }
+}
+
+func performStream(handler: *StreamingHandler, wire: *Transport, connection: *http2.Connection,
+                   deferred: *DeferredEvents, id: i32, head: HeaderInfo, options: ServeOptions) !void {
+    var stream = ServerStream(wire, connection, deferred, id, move(head), options);
+    var outcome = handler.handle(&stream) catch (reason) {
+        if reason == RpcError.Cancelled { return; }
+        var code = if reason == RpcError.DeadlineExceeded { StatusCode.DeadlineExceeded }
+            else if reason == RpcError.MessageTooLarge { StatusCode.ResourceExhausted }
+            else if reason == RpcError.UnsupportedEncoding { StatusCode.Unimplemented }
+            else if reason == RpcError.Protocol { StatusCode.InvalidArgument }
+            else { StatusCode.Internal };
+        return stream.finish(status(code, ""));
+    };
+    if stream.deadline != null && stream.deadline.unwrap().expired()! {
+        return stream.finish(status(StatusCode.DeadlineExceeded, ""));
+    }
+    stream.finish(move(outcome))
+}

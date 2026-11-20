@@ -479,6 +479,96 @@ class ProtocolAcceptance(CompilerCase):
                 if server.poll() is None:
                     server.kill()
 
+    def test_grpc_streaming_python_server(self):
+        from threading import Event
+        import grpc
+
+        cert, key = self.make_certificate()
+        schema = self.reference_schema()
+        self.compile_fixture("grpc_stream_client.vqr", "client")
+        cancelled = Event()
+
+        def broadcast(request, context):
+            for value in range(request.left, request.left + 3):
+                yield schema.Child(left=value)
+
+        def sum_messages(requests, context):
+            return schema.Child(left=sum(request.left for request in requests))
+
+        def echo(requests, context):
+            for request in requests:
+                if request.left == 5:
+                    context.add_callback(cancelled.set)
+                yield schema.Child(left=request.left * 2)
+
+        codec = dict(request_deserializer=schema.Child.FromString, response_serializer=schema.Child.SerializeToString)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            server = grpc.server(pool)
+            server.add_generic_rpc_handlers((
+                grpc.method_handlers_generic_handler("interop.Stream", {
+                    "Broadcast": grpc.unary_stream_rpc_method_handler(broadcast, **codec),
+                    "Sum": grpc.stream_unary_rpc_method_handler(sum_messages, **codec),
+                    "Echo": grpc.stream_stream_rpc_method_handler(echo, **codec),
+                }),
+            ))
+            credentials = grpc.ssl_server_credentials(((key.read_bytes(), cert.read_bytes()),))
+            port = server.add_secure_port("127.0.0.1:0", credentials)
+            server.start()
+            try:
+                process = subprocess.run(
+                    [self.root / "client"], capture_output=True, timeout=15,
+                    env={**os.environ, "VAQRIN_RPC_ADDRESS": f"https://localhost:{port}",
+                         "VAQRIN_RPC_CERT": str(cert)},
+                )
+                self.assertEqual(process.returncode, 0, (process.stdout, process.stderr))
+                self.assertTrue(cancelled.wait(3), "the peer did not observe cancellation")
+            finally:
+                server.stop(0).wait(5)
+
+    def test_grpc_streaming_python_client(self):
+        from threading import Event
+        import grpc
+
+        cert, key = self.make_certificate()
+        schema = self.reference_schema()
+        self.compile_fixture("grpc_stream_server.vqr", "server")
+        environment = {**os.environ, "VAQRIN_RPC_CERT": str(cert), "VAQRIN_RPC_KEY": str(key)}
+        with subprocess.Popen([self.root / "server"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              env=environment) as server:
+            try:
+                with ThreadPoolExecutor(max_workers=1) as worker:
+                    port = int(worker.submit(server.stdout.readline).result(timeout=5))
+                creds = grpc.ssl_channel_credentials(root_certificates=cert.read_bytes())
+                with grpc.secure_channel(f"localhost:{port}", creds) as channel:
+                    codec = dict(request_serializer=schema.Child.SerializeToString,
+                                 response_deserializer=schema.Child.FromString)
+                    broadcast = channel.unary_stream("/interop.Stream/Broadcast", **codec)
+                    call = broadcast(schema.Child(left=10), timeout=4)
+                    self.assertEqual([frame.left for frame in call], [10, 11, 12])
+                    self.assertEqual(dict(call.initial_metadata())["x-start"], "vaqrin")
+                    self.assertEqual(dict(call.trailing_metadata())["x-end"], "vaqrin")
+                    add = channel.stream_unary("/interop.Stream/Sum", **codec)
+                    values = (schema.Child(left=value) for value in (2, 3, 4))
+                    self.assertEqual(add(values, timeout=4).left, 9)
+                    echo = channel.stream_stream("/interop.Stream/Echo", **codec)
+                    first_reply = Event()
+
+                    def requests():
+                        yield schema.Child(left=15)
+                        if not first_reply.wait(3):
+                            raise TimeoutError("bidirectional reply did not arrive")
+                        yield schema.Child(left=16)
+
+                    call = echo(requests(), timeout=4)
+                    self.assertEqual(next(call).left, 30)
+                    first_reply.set()
+                    self.assertEqual([frame.left for frame in call], [32])
+                out, err = server.communicate(timeout=6)
+                self.assertEqual(server.returncode, 0, (out, err))
+            finally:
+                if server.poll() is None:
+                    server.kill()
+
     def test_grpc_message_boundaries(self):
         self.hosted(r"""
             import (bytes, grpc, result)

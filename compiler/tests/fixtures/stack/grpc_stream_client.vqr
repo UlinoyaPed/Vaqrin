@@ -1,0 +1,68 @@
+package main
+import (env, grpc, protobuf, result, time)
+
+error StreamTestError { BadValue }
+
+func require(ok: bool) !void { if !ok { return StreamTestError.BadValue; } }
+
+func send(connection: *grpc.ClientConn, call: *grpc.Call, value: i32) !void {
+    var writer = protobuf.Writer(64);
+    writer.writeInt32(1, value)!;
+    connection.sendMessage(call, writer.written())
+}
+
+func receive(connection: *grpc.ClientConn, call: *grpc.Call, expected: i32) !void {
+    var message = connection.recvMessage(call)! ?? { return StreamTestError.BadValue; };
+    var reader = protobuf.Reader.open(message.asConstSlice(), protobuf.DecodeLimits())!;
+    var field = reader.next()!.unwrap();
+    require(field.asInt32()! == expected)
+}
+
+func finish(connection: *grpc.ClientConn, call: *grpc.Call) !void {
+    if connection.recvMessage(call)! != null { return StreamTestError.BadValue; }
+    var complete = call.complete()!;
+    require(complete.status.isOk())
+}
+
+func main() !void {
+    var endpoint = env.get("VAQRIN_RPC_ADDRESS")!.unwrap();
+    var certificate = env.get("VAQRIN_RPC_CERT")!.unwrap();
+    var root: str = certificate;
+    var dialOptions = grpc.DialOptions();
+    dialOptions.trustedRoots = some(root);
+    dialOptions.timeout = time.Duration.fromSeconds(4);
+    var connection = grpc.dial(endpoint, dialOptions)!;
+    var options = grpc.CallOptions();
+
+    var broadcast = connection.start("/interop.Stream/Broadcast", &options)!;
+    send(&connection, &broadcast, 10)!;
+    connection.finishSend(&broadcast)!;
+    receive(&connection, &broadcast, 10)!;
+    receive(&connection, &broadcast, 11)!;
+    receive(&connection, &broadcast, 12)!;
+    finish(&connection, &broadcast)!;
+
+    var sum = connection.start("/interop.Stream/Sum", &options)!;
+    send(&connection, &sum, 2)!;
+    send(&connection, &sum, 3)!;
+    send(&connection, &sum, 4)!;
+    connection.finishSend(&sum)!;
+    receive(&connection, &sum, 9)!;
+    finish(&connection, &sum)!;
+
+    var echo = connection.start("/interop.Stream/Echo", &options)!;
+    send(&connection, &echo, 15)!;
+    receive(&connection, &echo, 30)!;
+    send(&connection, &echo, 16)!;
+    receive(&connection, &echo, 32)!;
+    connection.finishSend(&echo)!;
+    finish(&connection, &echo)!;
+
+    var cancelled = connection.start("/interop.Stream/Echo", &options)!;
+    send(&connection, &cancelled, 5)!;
+    receive(&connection, &cancelled, 10)!;
+    connection.cancel(&cancelled)!;
+    var rejected = connection.recvMessage(&cancelled);
+    require(result.errorOf(&rejected).unwrap() == grpc.RpcError.Cancelled)!;
+    connection.close()
+}

@@ -46,7 +46,7 @@
 | `tls` | [通用 TLS 客户端与服务端、证书校验、ALPN 和加密流](tls/README.md) |
 | `protobuf` | [Protobuf Wire Format、标量和嵌套消息、Packed 字段与 Codec](protobuf/README.md) |
 | `http2` | [nghttp2 支持的 HTTP/2 连接、HPACK、流及流量控制](http2/README.md) |
-| `grpc` | [gRPC Unary 客户端和服务端、元数据、状态、截止时间与取消](grpc/README.md) |
+| `grpc` | [gRPC Unary 和三种流式 RPC、元数据、状态、截止时间与取消](grpc/README.md) |
 | `linalg` | 稠密向量与矩阵、矩阵积、范数、带主元 LU 分解和线性系统求解 |
 | `net` | IPv4/IPv6 地址、系统名称解析、TCP 流与监听、UDP 数据报和超时 |
 | `bufio` | BufferedReader/Writer、Scanner、Token、peek/unread、按行和分隔符读取 |

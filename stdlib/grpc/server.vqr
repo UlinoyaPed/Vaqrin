@@ -28,9 +28,11 @@ pub func response(body: coll.Vec<u8>) UnaryResponse {
                   body: some(move(body))}
 }
 
+enum RouteHandler { Unary(*UnaryHandler), Streaming(*StreamingHandler) }
+
 class Route {
     pub var path: string;
-    pub var handler: *UnaryHandler;
+    pub var handler: RouteHandler;
 }
 
 class Incoming {
@@ -57,9 +59,10 @@ pub class Server {
 public:
     func init() : routes(coll.Vec<Route>()) {}
     func register(path: str, handler: *UnaryHandler) !void {
-        if !validMethod(path) || find(path) != null { return RpcError.InvalidMethod; }
-        var name = text.fromBytes(path.asBytes())!;
-        routes.push(Route{path: move(name), handler: handler})
+        registerRoute(path, RouteHandler.Unary(handler))
+    }
+    func registerStreaming(path: str, handler: *StreamingHandler) !void {
+        registerRoute(path, RouteHandler.Streaming(handler))
     }
     func serveTls(socket: tls.TlsStream, options: ServeOptions) !void {
         var settings = http2.Settings();
@@ -85,14 +88,18 @@ public:
         serveTls(move(secure), options)
     }
 private:
-    const func find(path: str) ?*UnaryHandler {
+    func registerRoute(path: str, handler: RouteHandler) !void {
+        if !validMethod(path) || find(path) != null { return RpcError.InvalidMethod; }
+        var name = text.fromBytes(path.asBytes())!;
+        routes.push(Route{path: move(name), handler: handler})
+    }
+    const func find(path: str) ?RouteHandler {
         for route in routes.iterRef() {
             if route.path == path { return some(route.handler); }
         }
         null
     }
-    func incoming(event: *const http2.Event, session: *http2.Connection,
-                  limit: usize) !?Incoming {
+    func incoming(event: *const http2.Event, session: *http2.Connection) !?HeaderInfo {
         var head = parseHeaders(event) catch {
             sendError(session, event.stream, StatusCode.InvalidArgument)!;
             return null;
@@ -105,19 +112,16 @@ private:
             sendError(session, event.stream, StatusCode.Unimplemented)!;
             return null;
         }
-        var handler = find(head.path) ?? {
-            sendError(session, event.stream, StatusCode.Unimplemented)!;
-            return null;
-        };
-        some(Incoming(event.stream, handler, move(head), limit))
+        some(move(head))
     }
     func serve(wire: *Transport, session: *http2.Connection, options: ServeOptions) !void {
         var active = coll.Vec<Incoming>();
+        var deferred = DeferredEvents();
         var goingAway = false;
         for {
             session.flush(wire)!;
             if goingAway && active.len() == 0 { return; }
-            var event = session.next()! ?? {
+            var event = deferred.next(session)! ?? {
                 var received = session.receive(wire) catch (reason) {
                     if reason == tls.TlsError.UnexpectedEof && active.len() == 0 { return; }
                     return reason;
@@ -135,10 +139,19 @@ private:
                         session.reset(event.stream, 1)!;
                         active.swapRemove(position.unwrap());
                     } else {
-                        var call = incoming(&event, session, options.maxMessageBytes)!;
-                        switch move(call) {
-                            some(value) => { active.push(move(value))!; },
-                            null => {},
+                        var head = incoming(&event, session)! ?? { continue; };
+                        var handler = find(head.path) ?? {
+                            sendError(session, event.stream, StatusCode.Unimplemented)!;
+                            continue;
+                        };
+                        switch handler {
+                            RouteHandler.Unary(handler) => {
+                                active.push(Incoming(event.stream, handler, move(head), options.maxMessageBytes))!;
+                            },
+                            RouteHandler.Streaming(handler) => {
+                                performStream(handler, wire, session, &deferred, event.stream,
+                                              move(head), options)!;
+                            },
                         };
                     }
                 },

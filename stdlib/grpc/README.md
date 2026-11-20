@@ -29,6 +29,15 @@ passes metadata and deadline to the handler, and encodes one response message
 or an error status. Both roles use the five-byte gRPC envelope. The supported
 compression format is identity.
 
+For streaming, register a `StreamingHandler` with `registerStreaming`.
+A `ServerStream` reads and writes individual messages and exposes initial
+and trailing metadata. End of the sending half returns `null` from
+`recvMessage` while the responding half remains usable. Return a `Status`
+to finish the call. The APIs support server-streaming, client-streaming
+and bidirectional calls. Application handlers execute synchronously.
+While a handler reads its stream, events for other streams are deferred
+within a fixed bound and dispatched when the handler returns.
+
 The transport uses OpenSSL 3 and nghttp2 on hosted GNU/Linux. Reference
 acceptance tests use Python grpcio for both directions plus a Vaqrin-to-Vaqrin
 loopback with real Protobuf messages.

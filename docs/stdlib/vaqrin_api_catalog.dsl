@@ -980,6 +980,15 @@
 #interface Codec<T>|构造、编码及按 schema 合并消息
 + newValue()->!T; encode(value: *const T,writer: *Writer)->!void; merge(value: *T,reader: *Reader)->!void
 = encode<T>(value: *const T,codec: *Codec<T>,maxBytes: usize)->!coll.Vec<u8>; decode<T>(input: []const u8,codec: *Codec<T>,limits: DecodeLimits)->!T; mergeMessage<T>(field: Field,value: *T,codec: *Codec<T>)->!void
+@http2|HTTP/2 帧、HPACK、多路复用、流量控制与 GOAWAY
+#class FrameHeader|解码帧标头及 Stream ID
++ parse(wire: []const u8)->!Self
+#class Settings|配置并发、帧队列、HPACK 与流窗口上限
+#class HeaderBlock|按顺序保留伪标头、元数据及敏感字段
++ add(name: str,value: str)->!void; addBytes(name: str,value: []const u8,sensitive: bool)->!void
+#class Connection|由单一 I/O 所有者驱动的 HTTP/2 会话
++ open(role: Role,settings: Settings)->!Self; ingest(data: []const u8)->!void; receive(reader: *io.Reader)->!bool; flush(writer: *io.Writer)->!void; next()->!?Event; request(headers: *const HeaderBlock,end: bool)->!i32; respond(stream: i32,headers: *const HeaderBlock,end: bool)->!void; sendData(stream: i32,data: []const u8,end: bool)->!void; sendTrailers(stream: i32,headers: *const HeaderBlock)->!void; consume(stream: i32,count: usize)->!void; reset(stream: i32,code: u32)->!void; goAway(code: u32)->!void; ping(token: [8]u8)->!void; close()->void
+= openTls(role: Role,stream: *const tls.TlsStream,settings: Settings)->!Connection
 @context|跨调用的取消、deadline、键值上下文；与 task.TaskContext 统一适配
 #class Context|父级上下文、取消令牌、deadline、请求元数据
 + background()->Self; child()->Self; withCancel()->(Self,CancelHandle); withTimeout(duration: time.Duration)->!(Self,CancelHandle); withDeadline(deadline: time.Deadline)->(Self,CancelHandle); cancelled()->!void; checkCancelled()->!void; deadline()->?time.Deadline; get<T>(key: ContextKey<T>)->?*const T; withValue<T>(key: ContextKey<T>,value: T)->!Self

@@ -1,0 +1,94 @@
+package main
+import (bytes, coll, env, http2, io, net, time, tls)
+
+error TestError { Unexpected }
+
+func require(ok: bool) !void { if !ok { return TestError.Unexpected; } }
+
+func headers(name: str) !http2.HeaderBlock {
+    var result = http2.HeaderBlock();
+    result.add(":method", "POST")!;
+    result.add(":scheme", "https")!;
+    result.add(":authority", "localhost")!;
+    result.add(":path", name)!;
+    result.add("x-hpack", "a-repeated-dynamic-header-value")!;
+    move(result)
+}
+
+func main() !void {
+    var address = env.get("VAQRIN_H2_ADDRESS")!.unwrap();
+    var cert = env.get("VAQRIN_H2_CERT")!.unwrap();
+    var socket = net.TcpStream.connect(net.parseSocketAddr(address)!)!;
+    socket.setReadTimeout(some(time.Duration.fromSeconds(5)))!;
+    socket.setWriteTimeout(some(time.Duration.fromSeconds(5)))!;
+    var config = tls.TlsConfig();
+    config.setRootFile(cert)!;
+    config.addProtocol("h2".asBytes())!;
+    config.requireProtocol = true;
+    var secure = tls.TlsStream.connect(move(socket), "localhost", &config)!;
+    var options = http2.Settings();
+    options.initialStreamWindow = 4096;
+    var connection = http2.openTls(http2.Role.Client, &secure, options)!;
+
+    var first = headers("/one")!;
+    var second = headers("/two")!;
+    var one = connection.request(&first, false)!;
+    var two = connection.request(&second, false)!;
+    require(one == 1 && two == 3)!;
+    var request = coll.Vec<u8>.withCapacity(70000)!;
+    for i in usize(0)..70000 { request.push(65)!; }
+    connection.sendData(one, request.asConstSlice(), true)!;
+    connection.sendData(two, "two".asBytes(), true)!;
+    var token = [8]u8{0, 1, 2, 3, 4, 5, 6, 7};
+    connection.ping(token)!;
+
+    var totalOne: usize = 0;
+    var totalTwo: usize = 0;
+    var ends: usize = 0;
+    var trailers: usize = 0;
+    var statuses: usize = 0;
+    var ping = false;
+    for ends < 2 || !ping {
+        connection.flush(&secure)!;
+        require(connection.receive(&secure)!)!;
+        for {
+            var event = connection.next()! ?? { break; };
+            switch event.kind {
+                http2.EventKind.Headers => {
+                    var fields = event.headers()!;
+                    for {
+                        var field = fields.next()! ?? { break; };
+                        if field.name == ":status" {
+                            require(bytes.equal(field.value, "200".asBytes()))!;
+                            statuses++;
+                        } else if field.name == "x-end" {
+                            require(bytes.equal(field.value, "done".asBytes()))!;
+                            trailers++;
+                        }
+                    }
+                },
+                http2.EventKind.Data => {
+                    if event.stream == one {
+                        totalOne += event.payload().len();
+                        for byte in event.payload() { require(byte == 97)!; }
+                    } else {
+                        require(event.stream == two)!;
+                        totalTwo += event.payload().len();
+                        for byte in event.payload() { require(byte == 98)!; }
+                    }
+                    connection.consume(event.stream, event.payload().len())!;
+                },
+                http2.EventKind.EndStream => { ends++; },
+                http2.EventKind.Ping => {
+                    require(bytes.equal(event.payload(), token[:]))!;
+                    ping = true;
+                },
+                http2.EventKind.InvalidFrame => { return TestError.Unexpected; },
+                _ => {},
+            };
+        }
+    }
+    require(totalOne == 90000 && totalTwo == 111 && trailers == 2 && statuses == 2)!;
+    connection.goAway(0)!;
+    connection.flush(&secure)!;
+}

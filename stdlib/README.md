@@ -1,6 +1,6 @@
 # Vaqrin 标准包
 
-可用 `import (core, coll, iter, opt, result, cmp, convert, meta, mem, hash, mmio, bits, algo, atomic, binary, bytes, cell, encoding, simd, text, parse, io, path, fs, env, process, net, http, tls, protobuf, bufio, fmt, thread, sync, time, channel, task, num, math, linalg, random, json, csv, toml, serde, unicode, regex, url, log, errors)` 导入标准包，也可使用 `std/` 前缀。CMake 在构建目录生成 `share/vaqrin/stdlib`，安装时将标准包源码复制到安装前缀下。编译器按使用情况实例化泛型声明。完整的目标接口见[标准包 API 清单](../docs/stdlib/Vaqrin-stdlib-API-complete-draft.md)。
+可用 `import (core, coll, iter, opt, result, cmp, convert, meta, mem, hash, mmio, bits, algo, atomic, binary, bytes, cell, encoding, simd, text, parse, io, path, fs, env, process, net, http, tls, protobuf, http2, bufio, fmt, thread, sync, time, channel, task, num, math, linalg, random, json, csv, toml, serde, unicode, regex, url, log, errors)` 导入标准包，也可使用 `std/` 前缀。CMake 在构建目录生成 `share/vaqrin/stdlib`，安装时将标准包源码复制到安装前缀下。编译器按使用情况实例化泛型声明。完整的目标接口见[标准包 API 清单](../docs/stdlib/Vaqrin-stdlib-API-complete-draft.md)。
 
 | 包 | 当前接口 |
 | --- | --- |
@@ -45,6 +45,7 @@
 | `http` | [HTTP/1.x 报文读写、带证书验证的 HTTPS 客户端、单连接 HTTP 服务端](http/README.md) |
 | `tls` | [通用 TLS 客户端与服务端、证书校验、ALPN 和加密流](tls/README.md) |
 | `protobuf` | [Protobuf Wire Format、标量和嵌套消息、Packed 字段与 Codec](protobuf/README.md) |
+| `http2` | [nghttp2 支持的 HTTP/2 连接、HPACK、流及流量控制](http2/README.md) |
 | `linalg` | 稠密向量与矩阵、矩阵积、范数、带主元 LU 分解和线性系统求解 |
 | `net` | IPv4/IPv6 地址、系统名称解析、TCP 流与监听、UDP 数据报和超时 |
 | `bufio` | BufferedReader/Writer、Scanner、Token、peek/unread、按行和分隔符读取 |
@@ -130,4 +131,4 @@ LinkedList 使用双向节点和独立 Box 所有权表，节点地址在插入�
 或 AArch64，以及支持浮点 charconv 的 libstdc++。链接静态库的外部程序需要链接
 libstdc++。
 
-协议验收在回环地址运行，并使用 Python 的 `grpcio-tools` 调用官方 Protobuf 编译器。运行完整 CTest 前请在 CMake 选用的 Python 环境安装该依赖。TLS 验收还需要 OpenSSL 3 开发头文件和 `openssl` 命令。
+协议验收在回环地址运行，并使用 Python 的 `grpcio-tools` 调用官方 Protobuf 编译器。运行完整 CTest 前请在 CMake 选用的 Python 环境安装该依赖和 `h2`。系统还需要 OpenSSL 3 开发头文件、`openssl` 命令与 nghttp2 开发包。

@@ -1,0 +1,69 @@
+package http2
+import (binary, coll, text)
+
+pub error Http2Error { Protocol, ResourceLimit, InvalidArgument, StreamClosed, ConnectionClosed, WrongEvent }
+
+pub class FrameHeader {
+    pub var length: u32;
+    pub var kind: u8;
+    pub var flags: u8;
+    pub var stream: i32;
+    pub static func parse(wire: []const u8) !Self {
+        if wire.len() < 9 { return Http2Error.Protocol; }
+        var count = (u32(wire[0]) << 16) | (u32(wire[1]) << 8) | u32(wire[2]);
+        var stream = binary.readU32(wire[5..9], binary.Endian.Big)! & 0x7fffffffu32;
+        FrameHeader{length: count, kind: wire[3], flags: wire[4], stream: i32(stream)!}
+    }
+}
+
+pub class Header {
+    pub var name: string;
+    pub var value: []const u8;
+    pub var sensitive: bool;
+}
+
+pub class HeaderReader {
+    var reader: binary.Reader;
+public:
+    func init(value: []const u8) : reader(binary.Reader(value, binary.Endian.Big)) {}
+    func next() !?Header {
+        if reader.remaining() == 0 { return null; }
+        var label = reader.readU32()!;
+        var size = reader.readU32()!;
+        var name = text.fromBytes(reader.readBytes(usize(label & 0x7fffffffu32))!)!;
+        var value = reader.readBytes(usize(size))!;
+        some(Header{name: move(name), value: value, sensitive: (label & 0x80000000u32) != 0})
+    }
+}
+
+pub class HeaderBlock {
+    #copy: disabled
+    var data: coll.Vec<u8>;
+    var cost: usize;
+public:
+    func init() : data(coll.Vec<u8>()), cost(0) {}
+    func add(name: str, value: str) !void { addBytes(name, value.asBytes(), false) }
+    func addBytes(name: str, value: []const u8, sensitive: bool) !void {
+        var key = name.asBytes();
+        var limit: usize = 262144 - cost;
+        if key.len() == 0 || limit < 32 || key.len() > limit - 32 || value.len() > limit - 32 - key.len() {
+            return Http2Error.ResourceLimit;
+        }
+        // Capacity is charged with RFC header-list overhead, including empty values.
+        var needed = data.len() + 8 + key.len() + value.len();
+        if needed > data.capacity() {
+            var growth = data.capacity() * 2;
+            data.reserve(if needed > growth { needed } else { growth })!;
+        }
+        var size = u32(key.len())!;
+        if sensitive { size |= 0x80000000u32; }
+        var a = binary.u32ToBytes(size, binary.Endian.Big);
+        var b = binary.u32ToBytes(u32(value.len())!, binary.Endian.Big);
+        for byte in a[:] { data.push(byte)!; }
+        for byte in b[:] { data.push(byte)!; }
+        for byte in key { data.push(byte)!; }
+        for byte in value { data.push(byte)!; }
+        cost += key.len() + value.len() + 32;
+    }
+    const func encoded() []const u8 { data.asConstSlice() }
+}

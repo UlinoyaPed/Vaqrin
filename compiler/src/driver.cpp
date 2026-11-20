@@ -412,6 +412,7 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
       });
     };
     const bool usesProcessRuntime = usesRuntime("__vqr_process_");
+    const bool usesNetRuntime = usesRuntime("__vqr_net_");
     const bool usesIoRuntime = usesProcessRuntime || usesRuntime("__vqr_io_");
     const bool usesDecimalRuntime = usesRuntime("__vqr_decimal_");
     const bool supportsHostRuntime =
@@ -420,6 +421,8 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
         (target.getArch() == llvm::Triple::x86_64 || target.getArch() == llvm::Triple::aarch64);
     if (usesProcessRuntime && !supportsHostRuntime)
       fail({}, "process execution requires hosted GNU/Linux x86-64 or AArch64", "E290");
+    if (usesNetRuntime && !supportsHostRuntime)
+      fail({}, "host networking requires hosted GNU/Linux x86-64 or AArch64", "E290");
     if (usesIoRuntime && !supportsHostRuntime)
       fail({}, "host I/O currently requires hosted GNU/Linux x86-64 or AArch64", "E290");
     if (usesDecimalRuntime && !supportsHostRuntime)
@@ -451,6 +454,8 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
     if (usesIoRuntime) compileCppRuntime(inputs.ioRuntimeSource(), ioRuntime, true);
     auto processRuntime = intermediates / "vaqrin-process-runtime.o";
     if (usesProcessRuntime) compileCppRuntime(inputs.processRuntimeSource(), processRuntime, true);
+    auto netRuntime = intermediates / "vaqrin-net-runtime.o";
+    if (usesNetRuntime) compileCppRuntime(inputs.netRuntimeSource(), netRuntime, false);
     auto decimalRuntime = intermediates / "vaqrin-decimal-runtime.o";
     if (usesDecimalRuntime) compileCppRuntime(inputs.decimalRuntimeSource(), decimalRuntime, false);
     if (kind == "staticlib") {
@@ -460,6 +465,7 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
       if (usesTasks) args.push_back(runtime.string());
       if (usesIoRuntime) args.push_back(ioRuntime.string());
       if (usesProcessRuntime) args.push_back(processRuntime.string());
+      if (usesNetRuntime) args.push_back(netRuntime.string());
       if (usesDecimalRuntime) args.push_back(decimalRuntime.string());
       execute(r.archiver.empty() ? "llvm-ar" : r.archiver, args);
     } else {
@@ -480,6 +486,7 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
       if (usesTasks) args.push_back(runtime.string());
       if (usesIoRuntime) args.push_back(ioRuntime.string());
       if (usesProcessRuntime) args.push_back(processRuntime.string());
+      if (usesNetRuntime) args.push_back(netRuntime.string());
       if (usesDecimalRuntime) args.push_back(decimalRuntime.string());
       for (const auto &input : r.linkInputs)
         args.push_back(fs::absolute(input).string());

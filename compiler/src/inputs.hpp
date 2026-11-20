@@ -23,6 +23,7 @@ public:
   Path taskRuntimeSource() const { return runtimeRoot / "tasks.c"; }
   Path ioRuntimeSource() const { return runtimeRoot / "io_posix.cpp"; }
   Path processRuntimeSource() const { return runtimeRoot / "process_posix.cpp"; }
+  Path netRuntimeSource() const { return runtimeRoot / "net_posix.cpp"; }
   Path decimalRuntimeSource() const { return runtimeRoot / "decimal.cpp"; }
 
   std::deque<File> files;

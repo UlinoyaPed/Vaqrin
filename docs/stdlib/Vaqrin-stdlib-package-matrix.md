@@ -38,7 +38,7 @@
 | `time` | 17 | 79 | 17 | 0 | 部分实现，已运行代表用例 | 时长、单调时钟、定时和公历，时区数据库和格式化待补 | `cmp` |
 | `env` | 3 | 8 | 17 | 0 | 部分实现，已运行代表用例 | 进程环境读写、独立快照和路径查询。参数、主机信息、原生字节与变量展开待补 | `coll`, `io`, `path`, `text` |
 | `process` | 6 | 31 | 10 | 0 | 部分实现，已运行代表用例 | POSIX 命令执行和子进程句柄、环境覆盖、工作目录、标准流与文件重定向、退出状态和有上限的双流捕获 | `coll`, `env`, `fs`, `io`, `path`, `text` |
-| `net` | 14 | 58 | 14 | 0 | 未实现 | 暂无标准包源码 | — |
+| `net` | 14 | 58 | 14 | 0 | 部分实现，已运行代表用例 | IPv4/IPv6、TCP 与 UDP、正向系统解析、网络字节序、连接及 I/O 超时。Unix 域、多播、反向解析与异步 I/O 待补 | `binary`, `coll`, `fmt`, `io`, `mem`, `parse`, `text`, `time` |
 | `http` | 15 | 55 | 12 | 0 | 未实现 | 暂无标准包源码 | — |
 | `json` | 12 | 45 | 13 | 0 | 部分实现，已运行代表用例 | 嵌套 DOM、精确数字词法、代理对、指针及 Codec。编码支持递归键排序、非 ASCII 转义和 f64 转换；完整 RFC 向量待补 | `algo`, `bytes`, `cmp`, `coll`, `convert`, `core`, `fmt`, `io`, `iter`, `math`, `opt`, `parse`, `serde`, `text` |
 | `log` | 10 | 33 | 10 | 0 | 部分实现，已运行代表用例 | 级别、结构化属性、同步多 Handler；异步、系统和 JSON Handler 待补 | `coll`, `io`, `iter`, `text`, `time` |
@@ -68,7 +68,7 @@ v0.1.4 的安全容器查询覆盖 Vec、HashMap 和 BTreeMap。引用来源与�
 
 ## 当前源码的依赖顺序
 
-标准库包含 45 个有公开源码的包，以及供 `math` 使用的内部 `math_ffi` 包。内部包声明目标 C ABI 的数学符号。以下依赖图无环。
+标准库包含 46 个有公开源码的包，以及供 `math` 使用的内部 `math_ffi` 包。内部包声明目标 C ABI 的数学符号。以下依赖图无环。
 
 ```text
 atomic, binary, cmp, convert, core, hash, iter, math_ffi, meta
@@ -78,7 +78,7 @@ coll, simd
 bytes, opt, result, text
 cell, encoding, io, num, parse, path, random, task, thread, unicode
 bufio, csv, fmt, fs, log, regex, serde, sync, url
-channel, env, errors, json, toml
+channel, env, errors, json, net, toml
 process
 ```
 

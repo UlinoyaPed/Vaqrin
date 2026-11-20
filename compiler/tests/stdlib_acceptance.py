@@ -328,6 +328,55 @@ class StandardLibraryAcceptance(CompilerCase):
         result = self.process(VAQC, "check", source, good=False)
         self.assertIn(b"active borrow", result.stderr)
 
+    def test_network_addresses_and_loopback(self):
+        self.hosted(r"""
+            import (net, result, time)
+
+            func main() !void {
+                var ip = net.parseIpv4("127.0.0.2")!;
+                io.println(ip.isLoopback() && !ip.isPrivate())!;
+                var address6 = net.parseSocketAddr("[fe80::1%7]:80")!;
+                io.println(address6.toString()!)!;
+                var invalid = net.parseSocketAddr("::1:80");
+                io.println(result.errorOf(&invalid).unwrap() == net.NetError.InvalidAddress)!;
+                var resolved = net.resolveAddr("127.0.0.1", 81)!;
+                io.println(resolved[0].toString()!)!;
+                io.println(net.ntohl(net.htonl(0x12345678)) == 0x12345678)!;
+
+                var local = net.parseSocketAddr("127.0.0.1:0")!;
+                var listener = net.listenTcp(local)!;
+                var endpoint = listener.localAddr()!;
+                var client = net.TcpStream.connectTimeout(endpoint, time.Duration.fromSeconds(2))!;
+                var accepted = listener.accept()!;
+                io.println(client.peerAddr()!.port() == endpoint.port())!;
+                io.println(accepted.1.port() == client.localAddr()!.port())!;
+                client.setNoDelay(true)!;
+                client.setWriteTimeout(some(time.Duration.fromSeconds(1)))!;
+                io.writeString(&client, "ping")!;
+                client.shutdownWrite()!;
+                var clone = accepted.0.tryClone()!;
+                accepted.0.close()!;
+                io.println(io.readToString(&clone, 8)!)!;
+
+                listener.setNonblocking(true)!;
+                var pending = listener.accept();
+                io.println(io.isWouldBlock(result.errorOf(&pending).unwrap()))!;
+
+                var receiver = net.bindUdp(local)!;
+                var sender = net.bindUdp(local)!;
+                var destination = receiver.localAddr()!;
+                io.println(sender.sendTo("datagram".asBytes(), destination)!)!;
+                var buffer = [3]u8{0, 0, 0};
+                var datagram = receiver.recvFrom(buffer[:])!;
+                io.println(datagram.truncated && datagram.len == 3)!;
+                io.println(datagram.source.port() == sender.localAddr()!.port())!;
+                sender.connect(destination)!;
+                io.println(sender.send("".asBytes())!)!;
+                var empty = receiver.recv(buffer[0..0])!;
+                io.println(empty.len == 0 && !empty.truncated)!;
+            }
+        """, "true\n[fe80::1%7]:80\ntrue\n127.0.0.1:81\ntrue\ntrue\ntrue\nping\ntrue\n8\ntrue\ntrue\n0\ntrue\n")
+
     def test_json(self):
         lines = self.example("stdlib/json/examples/json_smoke.vqr").splitlines()
         self.assertEqual(lines[0], "true")

@@ -51,7 +51,9 @@ configure_file(runtime/tasks.c "${CMAKE_CURRENT_BINARY_DIR}/share/vaqrin/runtime
 configure_file(runtime/io_posix.cpp "${CMAKE_CURRENT_BINARY_DIR}/share/vaqrin/runtime/io_posix.cpp" COPYONLY)
 configure_file(runtime/decimal.cpp "${CMAKE_CURRENT_BINARY_DIR}/share/vaqrin/runtime/decimal.cpp" COPYONLY)
 configure_file(runtime/process_posix.cpp "${CMAKE_CURRENT_BINARY_DIR}/share/vaqrin/runtime/process_posix.cpp" COPYONLY)
-install(FILES runtime/tasks.c runtime/io_posix.cpp runtime/decimal.cpp runtime/process_posix.cpp DESTINATION share/vaqrin/runtime)
+configure_file(runtime/net_posix.cpp "${CMAKE_CURRENT_BINARY_DIR}/share/vaqrin/runtime/net_posix.cpp" COPYONLY)
+install(FILES runtime/tasks.c runtime/io_posix.cpp runtime/decimal.cpp runtime/process_posix.cpp
+    runtime/net_posix.cpp DESTINATION share/vaqrin/runtime)
 
 install(TARGETS vaqc RUNTIME DESTINATION bin)
 install(FILES UNICODE-LICENSE DESTINATION share/licenses/vaqc)

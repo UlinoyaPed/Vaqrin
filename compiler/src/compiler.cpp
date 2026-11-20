@@ -1109,6 +1109,8 @@ std::unique_ptr<Module> Program::build() {
   while (checked < files.size()) {
     indexFiles();
     const auto &file = files[checked++];
+    if (file.standard && file.package == "net" && !hostedLinux64())
+      fail(file.span, "standard package 'net' requires hosted GNU/Linux x86-64 or AArch64", "E290");
     if (file.standard && file.package != root) continue;
     for (const auto &d : file.declarations) {
       std::set<std::string> seen;

@@ -174,3 +174,8 @@ The host suite executes binaries for standard streams, positional file I/O, dire
 operations, short progress, path ownership and formatting. It also links an I/O
 static archive from C to count descriptor closures and links both bundled runtimes
 in one executable. x86-64 is the executed host target in this integration.
+
+`Scanner.nextInt<T>() !?T` 以十进制读取下一个完整 Token，EOF 返回空。
+`Scanner.readInt<T>() !T` 把 EOF 转换为 `io.IoError.UnexpectedEof`。
+两者原样传播输入错误和溢出。包级 `bufio.readLine` 每次只消费一行；
+连续高吞吐读取可复用同一 `BufferedReader`。

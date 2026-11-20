@@ -682,9 +682,9 @@ class Acceptance(CompilerCase):
             ("func f(p: !*i32) void { &x := p; }", "initialized pointer"),
             ("func f(p: *i32) void { var &x: i32 = p; }", "i32"),
             ("func f(&x: *i32) void {} func f(p: *i32) void {}", "duplicate overload"),
-            ("func f(p: *const ?i32) void { switch *p { some(&x) => { x++; }, null => {} } }", "writable"),
-            ("func f(v: ?i32) void { switch v { some(&x) => { a := move(v); }, null => {} } }", "cannot be moved"),
-            ("enum E { A(i32), B(i32) } func f(v: E) i32 { switch v { E.A(x), E.B(&x) => x } }", "alternative"),
+            ("func f(p: *const ?i32) void { switch *p { some(ref x) => { x++; }, null => {} } }", "writable"),
+            ("func f(v: ?i32) void { switch v { some(ref x) => { a := move(v); }, null => {} } }", "cannot be moved"),
+            ("enum E { A(i32), B(i32) } func f(v: E) i32 { switch v { E.A(x), E.B(ref x) => x } }", "alternative"),
         ):
             with self.subTest(source=code):
                 f = self.source("test.vqr", code)
@@ -708,8 +708,8 @@ class Acceptance(CompilerCase):
                 n, &z := pair(4, p); z += n;
                 event := Event.Link(&a);
                 switch event {
-                    Event.Link(&ptr) => { &v := ptr; v++; },
-                    Event.Num(&v) => { v++; },
+                    Event.Link(ref ptr) => { &v := ptr; v++; },
+                    Event.Num(ref v) => { v++; },
                 }
                 for (&v in [_]*i32{&a, &b}) { v++; }
                 io.println(readOnly)!; io.println(b)!;

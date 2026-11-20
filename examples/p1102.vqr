@@ -1,0 +1,24 @@
+import (io, bufio, coll)
+
+func main() !void {
+    var input = io.stdin();
+    var scan = bufio.newScanner(&input)!;
+    var n = scan.readInt<i64>()!;
+    var c = scan.readInt<i64>()!;
+    var freq = coll.i64Map<i64>();
+    for i in i64(0)..n {
+        var key = scan.readInt<i64>()!;
+        &count := freq.getOrInsert(key, 0)!;
+        count++;
+    }
+    var answer: i64 = 0;
+    var entries = freq.iterRef()!;
+    for entry in move(entries) {
+        var key = *entry.0 - c;
+        switch freq.get(&key) {
+            some(p) => { answer += *entry.1 * *p; },
+            null => {},
+        }
+    }
+    io.println(answer)!;
+}

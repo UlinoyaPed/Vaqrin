@@ -119,25 +119,25 @@ public:
     }
     func readI64() !i64 {
         switch *current.unwrap() {
-            Value.Number(&value) => value.asI64(),
+            Value.Number(ref value) => value.asI64(),
             _ => serde.SerdeError.TypeMismatch,
         }
     }
     func readU64() !u64 {
         switch *current.unwrap() {
-            Value.Number(&value) => value.asU64(),
+            Value.Number(ref value) => value.asU64(),
             _ => serde.SerdeError.TypeMismatch,
         }
     }
     func readF64() !f64 {
         switch *current.unwrap() {
-            Value.Number(&value) => value.asF64(),
+            Value.Number(ref value) => value.asF64(),
             _ => serde.SerdeError.TypeMismatch,
         }
     }
     func readNumber() !string {
         switch *current.unwrap() {
-            Value.Number(&value) => text.fromBytes(value.text().asBytes()),
+            Value.Number(ref value) => text.fromBytes(value.text().asBytes()),
             _ => serde.SerdeError.TypeMismatch,
         }
     }
@@ -150,7 +150,7 @@ public:
     func beginSeq() !?usize {
         var parent = current ?? { return serde.SerdeError.InvalidState; };
         switch *parent {
-            Value.Array(&array) => {
+            Value.Array(ref array) => {
                 frames.push(JsonReadFrame(false, parent))!;
                 some(array.len())
             },
@@ -178,7 +178,7 @@ public:
     func beginMap() !?usize {
         var parent = current ?? { return serde.SerdeError.InvalidState; };
         switch *parent {
-            Value.Object(&object) => {
+            Value.Object(ref object) => {
                 frames.push(JsonReadFrame(true, parent))!;
                 some(object.len())
             },

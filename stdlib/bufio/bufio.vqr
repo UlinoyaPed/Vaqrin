@@ -1,5 +1,5 @@
 package bufio
-import (io, coll, text, mem)
+import (io, coll, text, mem, parse)
 
 pub error BufferError { InvalidCapacity, BufferFull, UnreadUnavailable, TokenTooLong }
 
@@ -28,9 +28,13 @@ public:
         }
         if data.len() >= capacity { return; }
         var room = capacity - data.len();
-        var scratch = mem.zeroedBytes<4096>();
+        // Initialize the scratch space in its final location to avoid passing a 4 KiB array by value.
+        var storage = __vqr_uninitialized<[4096]u8>();
+        var scratch = unsafe { (*__vqr_raw_address(&storage))[:] };
         var count = if room < scratch.len() { room } else { scratch.len() };
-        var received = source.read(scratch[0..count])!;
+        var destination = scratch[0..count];
+        mem.zeroBytes(destination);
+        var received = source.read(destination)!;
         if received == 0 { eof = true; return; }
         if received > count { return io.IoError.InvalidCount; }
         for byte in scratch[0..received] { data.push(byte)!; }
@@ -265,6 +269,16 @@ public:
             some(value) => some(text.fromBytes(value.text().asBytes())!),
         }
     }
+    func nextInt<T>() !?T {
+        var item = next()!;
+        switch move(item) {
+            null => null,
+            some(token) => some(parse.parseInt<T>(token.text())!),
+        }
+    }
+    func readInt<T>() !T {
+        nextInt<T>()! ?? { return io.IoError.UnexpectedEof; }
+    }
     func reset(source: *io.Reader) void {
         reader.reset(source);
         consumed = 0;
@@ -279,6 +293,6 @@ pub func newWriter(writer: *io.Writer, capacity: usize) !BufferedWriter {
 }
 pub func newScanner(reader: *io.Reader) !Scanner { Scanner(reader) }
 pub func readLine(reader: *io.Reader, maxBytes: usize) !?string {
-    var buffered = BufferedReader(reader, 4096)!;
+    var buffered = BufferedReader(reader, 1)!;
     buffered.readLine(maxBytes)
 }

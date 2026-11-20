@@ -187,16 +187,16 @@ pub func asBool(value: *const Value) ?bool {
     switch *value { Value.Bool(item) => some(item), _ => null }
 }
 pub func asNumber(value: *const Value) ?*const JsonNumber {
-    switch *value { Value.Number(&item) => some(&item), _ => null }
+    switch *value { Value.Number(ref item) => some(&item), _ => null }
 }
 pub func asString(value: *const Value) ?str {
     switch *value { Value.String(item) => some(item), _ => null }
 }
 pub func asArray(value: *const Value) ?*const JsonArray {
-    switch *value { Value.Array(&item) => some(&item), _ => null }
+    switch *value { Value.Array(ref item) => some(&item), _ => null }
 }
 pub func asObject(value: *const Value) ?*const JsonObject {
-    switch *value { Value.Object(&item) => some(&item), _ => null }
+    switch *value { Value.Object(ref item) => some(&item), _ => null }
 }
 
 func hasFractionOrExponent(value: []const u8) bool {

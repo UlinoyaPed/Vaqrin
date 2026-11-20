@@ -235,7 +235,9 @@ public:
     func next() !?HostDirEntry {
         if handle == 0 { return IoError.Closed; }
         var directory = unsafe { ptrFromInt<*u8>(handle) };
-        var name = mem.zeroedBytes<4096>();
+        var storage = __vqr_uninitialized<[4096]u8>();
+        var name = unsafe { (*__vqr_raw_address(&storage))[:] };
+        mem.zeroBytes(name);
         var length: usize = 0;
         var kind: i32 = 0;
         var errorCode: i32 = 0;
@@ -305,7 +307,9 @@ pub func hostChmod(path: []const u8, mode: u32) !void {
 }
 
 pub func currentDir() !string {
-    var buffer = mem.zeroedBytes<4096>();
+    var storage = __vqr_uninitialized<[4096]u8>();
+    var buffer = unsafe { (*__vqr_raw_address(&storage))[:] };
+    mem.zeroBytes(buffer);
     var length: usize = 0;
     var errorCode: i32 = 0;
     if unsafe { __vqr_io_getcwd(&buffer[0], buffer.len(), &length, &errorCode) } != 0 {

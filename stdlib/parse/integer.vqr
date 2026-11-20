@@ -91,3 +91,6 @@ pub func parseChar(value: str) !char {
 }
 
 pub func parseWith<T, F>(value: str, parser: F) !T { parser(value) }
+
+pub func parseInt<T>(value: str) !T { parseInt<T>(value, 10) }
+pub func parseUint<T>(value: str) !T { parseUint<T>(value, 10) }

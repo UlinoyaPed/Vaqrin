@@ -59,12 +59,12 @@ private:
         switch *value {
             Value.Null => io.writeString(writer, "null"),
             Value.Bool(item) => io.writeString(writer, if item { "true" } else { "false" }),
-            Value.Number(&item) => io.writeString(writer, item.text()),
+            Value.Number(ref item) => io.writeString(writer, item.text()),
             Value.String(item) => {
                 var encoded = escapeString(item)!;
                 io.writeString(writer, encoded)
             },
-            Value.Array(&items) => {
+            Value.Array(ref items) => {
                 if depth >= options.maxDepth { return JsonError.DepthLimit; }
                 io.writeString(writer, "[")!;
                 depth++;
@@ -77,7 +77,7 @@ private:
                 if items.len() != 0 && options.indent != 0 { io.writeString(writer, "\n")!; writeIndent()!; }
                 io.writeString(writer, "]")
             },
-            Value.Object(&items) => {
+            Value.Object(ref items) => {
                 if depth >= options.maxDepth { return JsonError.DepthLimit; }
                 io.writeString(writer, "{")!;
                 depth++;

@@ -473,7 +473,9 @@ Ast Parser::statement(bool header) {
     auto t = take();
     if (t.text == "comptime") require("const");
     auto n = make(NodeKind::Binding, t.span, t.text);
-    n->names.push_back(t.text == "var" ? bindingName().text : name().text);
+    auto binding = t.text == "var" ? bindingName() : name();
+    n->names.push_back(binding.text);
+    n->bindingSpans.push_back(binding.span);
     if (eat(":")) n->type = type();
     if (eat("=")) n->children.push_back(expression());
     if (!n->type && n->children.empty()) fail(t.span, "binding requires a type or initializer", "E110");
@@ -483,7 +485,9 @@ Ast Parser::statement(bool header) {
   if (bindingAhead()) {
     auto n = make(NodeKind::Binding, current().span, ":=");
     do {
-      n->names.push_back(bindingName().text);
+      auto binding = bindingName();
+      n->names.push_back(binding.text);
+      n->bindingSpans.push_back(binding.span);
     } while (eat(","));
     require(":=");
     n->children.push_back(expression());
@@ -552,7 +556,9 @@ Ast Parser::loop() {
   if (bindingAhead(true)) {
     auto n = make(NodeKind::ForIn, t.span);
     do {
-      n->names.push_back(bindingName().text);
+      auto binding = bindingName();
+      n->names.push_back(binding.text);
+      n->bindingSpans.push_back(binding.span);
     } while (eat(","));
     require("in");
     n->children.push_back(expression(1, !parens));
@@ -578,7 +584,12 @@ Ast Parser::pattern() {
   Nest nesting(*this);
   auto t = current();
   if (eat("_")) return make(NodeKind::PatternAny, t.span);
-  if (eat("&")) return make(NodeKind::PatternRef, t.span, name().text);
+  if (eat("&")) fail(t.span, "use 'ref name' to borrow a matched value", "E110");
+  if (t.kind == TokenKind::Name && t.text == "ref" && current(1).kind == TokenKind::Name) {
+    take();
+    auto binding = name();
+    return make(NodeKind::PatternRef, binding.span, binding.text);
+  }
   if (eat("null")) return make(NodeKind::PatternCase, t.span, "null");
   if (eat("(")) {
     auto p = make(NodeKind::PatternTuple, t.span);

@@ -1,5 +1,5 @@
 package coll
-import (core, mem)
+import (core, mem, hash as hashing)
 
 pub enum InsertResult<K: Movable, V: Movable> {
     Inserted,
@@ -207,21 +207,23 @@ private:
         hashFunction(key, seed)
     }
 
-    const func findIndex(key: *const K, hash: usize) ?usize {
+    const func probe(key: *const K, hash: usize) (?usize, ?usize) {
         var cap = buckets.len();
-        if cap == 0 { return null; }
+        if cap == 0 { return (null, null); }
         var index = hash % cap;
-        var examined: usize = 0;
-        for examined < cap {
+        var firstTombstone: ?usize = null;
+        for examined in usize(0)..cap {
             var bucket = buckets.get(index).unwrap();
-            if bucket.isEmpty() { return null; }
-            if bucket.matches(hash, key, equalsFunction) { return some(index); }
-            examined++;
+            if bucket.isEmpty() { return (null, some(firstTombstone ?? index)); }
+            if bucket.matches(hash, key, equalsFunction) { return (some(index), null); }
+            if bucket.isTombstone() && firstTombstone == null { firstTombstone = some(index); }
             index++;
             if index == cap { index = 0; }
         }
-        null
+        (null, firstTombstone)
     }
+
+    const func findIndex(key: *const K, hash: usize) ?usize { probe(key, hash).0 }
 
     const func insertionIndex(hash: usize) usize {
         var cap = buckets.len();
@@ -239,12 +241,16 @@ private:
         firstTombstone.unwrap()
     }
 
-    func insertKnownHash(hash: usize, key: K, value: V) void {
-        var index = insertionIndex(hash);
+    func insertKnownHash(hash: usize, key: K, value: V) *V {
+        insertAt(insertionIndex(hash), hash, move(key), move(value))
+    }
+
+    func insertAt(index: usize, hash: usize, key: K, value: V) *V {
         var bucket = buckets.getMut(index).unwrap();
         if bucket.isTombstone() { tombstones--; }
         bucket.write(hash, move(key), move(value));
         length++;
+        bucket.valueMut()
     }
 
     func rehash(newCapacity: usize) !void {
@@ -274,19 +280,23 @@ private:
         if length != previousLength { panic("hash table rehash lost an entry"); }
     }
 
-    func ensureRoomForOne() !void {
+    func ensureRoomForOne() !bool {
         if length == ~usize(0) { return CapacityError.Overflow; }
         var cap = buckets.len();
         if cap == 0 {
             rehash(8)!;
-            return;
+            return true;
         }
         if length + 1 > cap - cap / 8 {
             if cap > ~usize(0) / 2 { return CapacityError.Overflow; }
             rehash(cap * 2)!;
-            return;
+            return true;
         }
-        if tombstones > cap / 4 { rehash(cap)!; }
+        if tombstones > cap / 4 {
+            rehash(cap)!;
+            return true;
+        }
+        false
     }
 
 public:
@@ -341,6 +351,18 @@ public:
         switch findIndex(key, hash) {
             null => null,
             some(index) => some(buckets.getMut(index).unwrap().valueMut()),
+        }
+    }
+
+    func getOrInsert(key: K, initial: V) !*V {
+        var hash = hashKey(&key);
+        var location = probe(&key, hash);
+        switch location.0 {
+            some(index) => buckets.getMut(index).unwrap().valueMut(),
+            null => {
+                var index = if ensureRoomForOne()! { insertionIndex(hash) } else { location.1.unwrap() };
+                insertAt(index, hash, move(key), move(initial))
+            },
         }
     }
 
@@ -549,4 +571,12 @@ public:
     func clear() void { values.clear(); }
     const func iterRef() !SetIterRef<T> { SetIterRef<T>(values.iterRef()!) }
     func deinit() void { values.clear(); }
+}
+
+pub func i32Map<V: Movable>() HashMap<i32, V> {
+    HashMap<i32, V>.withHasher(hashing.hashI32, hashing.eqI32)
+}
+
+pub func i64Map<V: Movable>() HashMap<i64, V> {
+    HashMap<i64, V>.withHasher(hashing.hashI64, hashing.eqI64)
 }

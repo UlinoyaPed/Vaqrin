@@ -283,6 +283,23 @@ class ContainerAcceptance(CompilerCase):
                     if !rejected || map.len() != 1 || map.get(&key).unwrap().id != 3 {
                         panic("failed rehash lost entry");
                     }
+                    var hit = map.getOrInsert(1, Probe{id: 4})!;
+                    if hit.id != 3 { panic("getOrInsert replaced a hit"); }
+                    for id in 2..8 {
+                        allocator.fail = false;
+                        var item = map.getOrInsert(id, Probe{id: id + 10})!;
+                        if item.id != id + 10 { panic("getOrInsert returned the wrong insertion"); }
+                    }
+                    allocator.fail = true;
+                    var insertionFailed = false;
+                    map.getOrInsert(8, Probe{id: 18}) catch (reason) {
+                        if reason != Injected.Exhausted { return reason; }
+                        insertionFailed = true;
+                        hit
+                    };
+                    if !insertionFailed || map.len() != 7 || map.get(&key).unwrap().id != 3 {
+                        panic("getOrInsert failed growth changed the map");
+                    }
                     allocator.fail = false;
                 }
                 if allocator.live != 0 { panic("map allocation/free layouts differed"); }

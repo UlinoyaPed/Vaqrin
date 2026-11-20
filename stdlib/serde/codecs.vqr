@@ -82,7 +82,7 @@ public:
     func encode(value: *const ?T, serializer: *Serializer) !void {
         switch *value {
             null => serializer.writeNull(),
-            some(&item) => element.encode(&item, serializer),
+            some(ref item) => element.encode(&item, serializer),
         }
     }
     func decode(deserializer: *Deserializer) !?T {

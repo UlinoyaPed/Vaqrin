@@ -316,7 +316,7 @@ func lookupPath(document: *const Document, path: str) ?*const Value {
         var value = current.get(key) ?? { return null; };
         if index + 1 == keys.len() { return value; }
         switch *value {
-            Value.Table(&table) => { current = &table; },
+            Value.Table(ref table) => { current = &table; },
             _ => return null,
         }
     }
@@ -334,7 +334,7 @@ func setDotted(document: *Document, path: []const string, value: Value, rejectDu
             child = current.getMut(key);
         }
         switch *child.unwrap() {
-            Value.Table(&table) => { current = &table; },
+            Value.Table(ref table) => { current = &table; },
             _ => return TomlError.TypeConflict,
         }
     }
@@ -355,7 +355,7 @@ func ensureTablePath(document: *Document, path: []const string) !void {
             child = current.getMut(key);
         }
         switch *child.unwrap() {
-            Value.Table(&table) => { current = &table; },
+            Value.Table(ref table) => { current = &table; },
             _ => return TomlError.TypeConflict,
         }
     }
@@ -606,15 +606,15 @@ func countEntries(document: *const Document, depth: usize, maxDepth: usize) !usi
     var count = document.len();
     for index in usize(0)..document.len() {
         switch *document.valueAt(index).unwrap() {
-            Value.Table(&table) => {
+            Value.Table(ref table) => {
                 var nested = countEntries(&table, depth + 1, maxDepth)!;
                 if nested > ~usize(0) - count { return TomlError.SizeLimit; }
                 count += nested;
             },
-            Value.Array(&array) => {
+            Value.Array(ref array) => {
                 for item in array.iterRef() {
                     switch *item {
-                        Value.Table(&table) => {
+                        Value.Table(ref table) => {
                             var nested = countEntries(&table, depth + 1, maxDepth)!;
                             if nested > ~usize(0) - count { return TomlError.SizeLimit; }
                             count += nested;
@@ -791,7 +791,7 @@ func writeValue(value: *const Value, builder: *text.StringBuilder, depth: usize,
             validateDateTime(item)!;
             appendRaw(builder, item)
         },
-        Value.Array(&items) => {
+        Value.Array(ref items) => {
             appendRaw(builder, "[")!;
             for index in usize(0)..items.len() {
                 if index != 0 { appendRaw(builder, ", ")!; }
@@ -799,7 +799,7 @@ func writeValue(value: *const Value, builder: *text.StringBuilder, depth: usize,
             }
             appendRaw(builder, "]")
         },
-        Value.Table(&table) => {
+        Value.Table(ref table) => {
             appendRaw(builder, "{")!;
             for index in usize(0)..table.len() {
                 if index != 0 { appendRaw(builder, ", ")!; }
@@ -830,7 +830,7 @@ func writeDocument(document: *const Document, builder: *text.StringBuilder,
     for index in usize(0)..document.len() {
         var value = document.valueAt(index).unwrap();
         switch *value {
-            Value.Table(&table) => {
+            Value.Table(ref table) => {
                 var pathBuilder = text.StringBuilder();
                 if prefix.byteLen() != 0 {
                     appendRaw(&pathBuilder, prefix)!;

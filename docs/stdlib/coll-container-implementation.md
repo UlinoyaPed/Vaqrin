@@ -269,3 +269,8 @@ BTreeSet 提供 `init(less)`、`withComparator(less)`、`len/isEmpty/contains/in
 尚未实现：ListCursor、链表 splice、Vec Drain/Splice、Map Entry API、keys/values/valuesMut 投影、IntoMapIter、HashSet union/intersection/difference、BTree range/cursor、BTreeMap/Set 自定义分配器、SipHash/系统随机种子、OrderedHashMap、FlatMap、MultiMap、SmallVec、RingBuffer、ForwardList、StableVec、SlotMap。
 
 宿主运行验收覆盖不可复制元素、析构计数、错误时保留输入、哈希碰撞与 tombstone、双端回绕、链表节点地址稳定、B 树分裂、合并、根收缩和使用借出键删除。Cortex-M3 已验证固定容量及自定义分配器路径生成对象且无未定义符号。ASan/UBSan 和全部重载仍待专项验收。
+
+`coll.i32Map<V>()` 和 `coll.i64Map<V>()` 预配整数键的哈希和相等回调。自定义键仍使用
+`withHasher` 或显式构造回调。`getOrInsert(key, initial) !*V` 消费两个输入，命中时保留
+已有值，缺失时先确保容量，再写入初值。返回指针与 `getMut` 的借用权限相同，删除对应键
+或重排桶会让旧指针失效。

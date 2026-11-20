@@ -236,8 +236,11 @@ ValueAt Body::match(const Ast &n, Type *expected) {
       checkPattern(pattern, subject, next, bindings);
       std::ranges::sort(bindings, {}, [](const auto &b) { return b.first->text; });
       std::vector<Binding> current;
-      for (auto &[pat, v] : bindings)
+      for (auto &[pat, v] : bindings) {
         current.emplace_back(pat->text, v.type, pat->kind == NodeKind::PatternRef);
+        hintBinding(pat->span, pat->kind == NodeKind::PatternRef ? v.type->parts[0] : v.type,
+                    EditorHints::BindingKind::Pattern);
+      }
       if (first) {
         signature = current;
         for (auto &[pat, v] : bindings)

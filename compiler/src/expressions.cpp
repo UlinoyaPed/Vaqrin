@@ -298,7 +298,7 @@ ValueAt Body::member(const Ast &n) {
     phi->addIncoming(value.value, from);
     phi->addIncoming(Constant::getNullValue(type->ir), none);
     merge({state, initialized}, state.size());
-    return {type, phi};
+    return {type, phi, nullptr, false, -1, false, field.temporaryBorrow};
   }
   auto target = base->kind == NodeKind::Generic ? base->children[0] : base;
   auto basePath = path(target);
@@ -341,7 +341,7 @@ ValueAt Body::member(const Ast &n) {
   if (!v.borrowed && p.drops(v.type))
     fail(n->span, "bind a resource-owning temporary before projecting one of its fields", "E290");
   if (v.type->kind == Kind::Pointer)
-    v = {v.type->parts[0], nullptr, read(v, n->span), !v.type->readOnly, -1, true};
+    v = {v.type->parts[0], nullptr, read(v, n->span), !v.type->readOnly, -1, true, v.temporaryBorrow};
   p.ensureSized(v.type, n->span);
   if (v.type->kind == Kind::Tuple) {
     auto index = tupleIndex(v.type);
@@ -409,7 +409,7 @@ ValueAt Body::index(const Ast &n) {
   if (n->kind == NodeKind::Index) {
     auto *i = bound(n->children[1], false);
     if (!i) return neverValue();
-    return {element, nullptr, offset(i), writable, t->kind == Kind::Array ? v.local : -1, true};
+    return {element, nullptr, offset(i), writable, t->kind == Kind::Array ? v.local : -1, true, v.temporaryBorrow};
   }
   Value *lo = zero, *hi = count;
   if (n->children.size() > 1) {
@@ -432,7 +432,7 @@ ValueAt Body::index(const Ast &n) {
   }
   auto *slice = p.slice(element, !writable);
   auto *out = ir.CreateInsertValue(Constant::getNullValue(slice->ir), offset(lo), 0);
-  return {slice, ir.CreateInsertValue(out, ir.CreateSub(hi, lo), 1)};
+  return {slice, ir.CreateInsertValue(out, ir.CreateSub(hi, lo), 1), nullptr, false, -1, false, v.temporaryBorrow};
 }
 
 ValueAt Body::unary(const Ast &n, Type *expected) {
@@ -445,7 +445,7 @@ ValueAt Body::unary(const Ast &n, Type *expected) {
   }
   if (op == "*") {
     if (v.type->kind != Kind::Pointer) fail(n->span, "dereference requires a pointer");
-    return {v.type->parts[0], nullptr, read(v, n->span), !v.type->readOnly, -1, true};
+    return {v.type->parts[0], nullptr, read(v, n->span), !v.type->readOnly, -1, true, v.temporaryBorrow};
   }
   if (op == "post!") {
     if (v.type->kind != Kind::Result || !result || result->kind != Kind::Result)
@@ -458,7 +458,7 @@ ValueAt Body::unary(const Ast &n, Type *expected) {
     emitReturn({p.errorTy, error}, n->span);
     ir.SetInsertPoint(success);
     auto out = payload(v, 1, v.type->parts[0]);
-    return {out.type, read(out, n->span)};
+    return {out.type, read(out, n->span), nullptr, false, -1, false, out.temporaryBorrow};
   }
   auto *raw = read(v, n->span);
   if (op == "!") return {p.boolTy, ir.CreateNot(raw)};
@@ -715,7 +715,7 @@ ValueAt Body::fallback(const Ast &n, Type *expected) {
   phi->addIncoming(value, good);
   if (other) phi->addIncoming(other, bad);
   merge(other ? std::vector{initial, initialized} : std::vector<std::vector<bool>>{initial}, initial.size());
-  return {inner, phi};
+  return {inner, phi, nullptr, false, -1, false, v.temporaryBorrow || alt.temporaryBorrow};
 }
 
 ValueAt Body::castNumber(Type *to, const Ast &arg, Span span) {
@@ -773,7 +773,9 @@ ValueAt Body::builtin(std::string_view key, const Ast &n, const std::vector<Ast>
       target = target->parts[0];
     auto value = expression(n->children[1], target && target->kind == kind ? target->parts[0] : nullptr);
     if (!live()) return neverValue();
-    return wrap(p.aggregate(kind, {value.type}), read(value, n->span), true);
+    auto wrapped = wrap(p.aggregate(kind, {value.type}), read(value, n->span), true);
+    wrapped.temporaryBorrow = value.temporaryBorrow;
+    return wrapped;
   }
   if (key == "bitCast") {
     arity(1);
@@ -1109,7 +1111,21 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
       if (best) fail(n->span, "ambiguous overload", "E202");
       best = &a;
     }
-  if (!best) fail(n->span, "no accessible overload matches the argument types and receiver", "E202");
+  if (!best) {
+    std::string message = "no accessible overload matches the argument types and receiver";
+    for (const auto &definition : defs) {
+      const auto &candidate = *definition.decl;
+      message += "\n  candidate " + candidate.name + "(";
+      for (unsigned i = 0; i < candidate.params.size(); ++i) {
+        if (i) message += ", ";
+        message += candidate.params[i].name;
+        if (const auto &type = candidate.params[i].type; type && !type->text.empty())
+          message += ": " + type->text;
+      }
+      message += ")";
+    }
+    fail(n->span, message, "E202");
+  }
   auto &d = *best->definition.decl;
   unsigned offset = receiver.has_value();
   for (unsigned i = 0; i < d.params.size(); ++i) {
@@ -1160,11 +1176,13 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
     values.push_back(address);
   }
   std::vector<int> transfers;
+  bool temporaryBorrow = receiver && receiver->temporaryBorrow;
   enter();
   for (unsigned i = 1; i < n->children.size(); ++i) {
     if (d.params[i - 1].comptime) continue;
     auto *t = best->parameters[i - 1 + offset];
     auto value = expression(n->children[i], t);
+    temporaryBorrow |= value.temporaryBorrow;
     if (!live()) {
       leave();
       return neverValue();
@@ -1202,7 +1220,8 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
   }
   if (returnType == p.neverTy) ir.CreateUnreachable();
   leave();
-  return returnType == p.voidTy ? voidValue() : ValueAt{returnType, called};
+  return returnType == p.voidTy ? voidValue() :
+      ValueAt{returnType, called, nullptr, false, -1, false, temporaryBorrow && carriesBorrow(returnType)};
 }
 
 ValueAt Body::construct(const Ast &n, Type *t, const std::vector<Definition> &defs) {
@@ -1687,7 +1706,7 @@ ValueAt Body::call(const Ast &n, Type *expected) {
       if (v.type->kind == Kind::Optional && member == "unwrap" && n->children.size() == 1) {
         guard(ir, ir.CreateExtractValue(read(v, n->span, false), 0));
         auto out = payload(v, 1, v.type->parts[0]);
-        return {out.type, read(out, n->span)};
+        return {out.type, read(out, n->span), nullptr, false, -1, false, out.temporaryBorrow};
       }
       if ((v.type == p.textTy || v.type == p.viewTy || v.type->kind == Kind::Slice ||
            v.type->kind == Kind::Array) &&
@@ -1700,7 +1719,7 @@ ValueAt Body::call(const Ast &n, Type *expected) {
         return {p.sizeTy, length};
       }
       if ((v.type == p.viewTy || v.type == p.textTy) && member == "asBytes" && n->children.size() == 1)
-        return {p.slice(p.integer(8, false), true), textView(v, n->span)};
+        return {p.slice(p.integer(8, false), true), textView(v, n->span), nullptr, false, -1, false, v.temporaryBorrow};
       if (v.type->kind == Kind::Pointer && member == "offset" && n->children.size() == 2) {
         if (!unsafeDepth) fail(n->span, "pointer offset requires an unsafe block", "E240");
         if (!v.type->ir->isPointerTy()) fail(n->span, "interface views do not support pointer arithmetic");
@@ -1723,13 +1742,11 @@ ValueAt Body::call(const Ast &n, Type *expected) {
       if (member == "init" || member == "deinit")
         fail(n->span, "lifecycle method cannot be called explicitly");
       if (!v.address) {
-        auto *temp = slot(v.type, "receiver.temp");
-        ir.CreateStore(read(v, n->span), temp);
-        enter();
-        auto local = bind(" <receiver>", v.type, true, ir.CreateLoad(v.type->ir, temp), n->span);
+        auto local = bind(" <receiver " + std::to_string(locals.size()) + ">", v.type, true,
+                          read(v, n->span), n->span, temporaryScope);
         auto r = invoke(n, p.methods(v.type, member, false), types,
                         ValueAt{v.type, nullptr, locals[local].slot, true, local, true}, v.type);
-        leave();
+        r.temporaryBorrow = carriesBorrow(r.type);
         return r;
       }
       return invoke(n, p.methods(v.type, member, false), types, v, v.type);
@@ -1748,7 +1765,7 @@ ValueAt Body::call(const Ast &n, Type *expected) {
     phi->addIncoming(some.value, from);
     phi->addIncoming(Constant::getNullValue(optional->ir), none);
     merge({initial, initialized}, initial.size());
-    return {optional, phi};
+    return {optional, phi, nullptr, false, -1, false, result.temporaryBorrow};
   }
   auto target = expression(callee);
   if (!live()) return neverValue();

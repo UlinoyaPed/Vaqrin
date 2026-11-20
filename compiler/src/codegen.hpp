@@ -10,6 +10,17 @@ namespace vqr {
 
 class Inputs;
 
+struct EditorHints {
+  enum class BindingKind { Local, Short, Loop, Pattern };
+  struct Binding {
+    std::size_t begin, end;
+    std::string type;
+    BindingKind kind;
+  };
+  std::string source;
+  std::vector<Binding> bindings;
+};
+
 struct Options {
   std::string triple, cpu, features;
   std::string profile = "hosted";
@@ -17,6 +28,7 @@ struct Options {
   unsigned optimization = 0;
   bool debug = false;
   bool check = false;
+  EditorHints *editorHints = nullptr;
 };
 
 struct Number {

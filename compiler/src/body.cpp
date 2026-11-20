@@ -25,7 +25,8 @@ int Body::findLocal(std::string_view name) const {
   return -1;
 }
 
-int Body::bind(std::string name, Type *t, bool writable, Value *initial, Span span) {
+int Body::bind(std::string name, Type *t, bool writable, Value *initial, Span span,
+               std::optional<std::size_t> targetScope) {
   bool reference = name.starts_with('&');
   if (reference) {
     name.erase(0, 1);
@@ -35,14 +36,19 @@ int Body::bind(std::string name, Type *t, bool writable, Value *initial, Span sp
     t = t->parts[0];
   }
   if (name == "_") name = " <discarded parameter " + std::to_string(locals.size()) + ">";
-  if (std::ranges::any_of(scopes.back(), [&](int i) { return locals[i].name == name; }))
+  auto scope = targetScope.value_or(scopes.size() - 1);
+  if (std::ranges::any_of(scopes[scope], [&](int i) { return locals[i].name == name; }))
     fail(span, "duplicate local '" + name + "'");
   int i = static_cast<int>(locals.size());
   auto *address = reference ? initial : slot(t, name);
   auto *order = !reference && p.drops(t) ? slot(p.integer(32, false), "drop.order") : nullptr;
-  if (order) ir.CreateStore(ir.getInt32(0), order);
-  locals.push_back({std::move(name), t, address, order, nullptr, reference, scopes.size() - 1, writable});
-  scopes.back().push_back(i);
+  if (order) {
+    IRBuilder<> entry(order->getParent(), std::next(order->getIterator()));
+    entry.CreateStore(ir.getInt32(0), order);
+    ir.CreateStore(ir.getInt32(0), order);
+  }
+  locals.push_back({std::move(name), t, address, order, nullptr, reference, scope, writable});
+  scopes[scope].push_back(i);
   initialized.resize(locals.size(), false);
   if (!reference && initial && t != p.voidTy) ir.CreateStore(initial, address);
   setAlive(i, initial != nullptr);
@@ -52,6 +58,60 @@ int Body::bind(std::string name, Type *t, bool writable, Value *initial, Span sp
 void Body::requireInit(ValueAt v, Span span) {
   if (v.local >= 0 && !initialized[v.local])
     fail(span, "local '" + locals[v.local].name + "' is not initialized on every incoming path", "E230");
+}
+
+static std::string bindingType(Type *type, const Source *source) {
+  auto arguments = [&](const auto &parts) {
+    std::string list;
+    for (auto *part : parts) {
+      if (!list.empty()) list += ", ";
+      list += bindingType(part, source);
+    }
+    return list;
+  };
+  switch (type->kind) {
+  case Kind::Tuple: return "(" + arguments(type->parts) + ")";
+  case Kind::Array: return "[" + std::to_string(type->count) + "]" + bindingType(type->parts[0], source);
+  case Kind::Optional: return "?" + bindingType(type->parts[0], source);
+  case Kind::Result: return "!" + bindingType(type->parts[0], source);
+  case Kind::Pointer:
+    return std::string(type->readOnly ? "*const " : "*") + bindingType(type->parts[0], source);
+  case Kind::Slice:
+    return std::string(type->readOnly ? "[]const " : "[]") + bindingType(type->parts[0], source);
+  case Kind::Class: case Kind::Interface: case Kind::Enum:
+    if (!type->comptimeArguments.empty()) return type->name;
+    if (type->def.decl) {
+      auto name = type->def.file->span.source == source || type->def.file->package.empty()
+                      ? type->def.decl->name : type->def.file->package + "." + type->def.decl->name;
+      if (!type->parts.empty()) name += "<" + arguments(type->parts) + ">";
+      return name;
+    }
+    [[fallthrough]];
+  default: return type->name;
+  }
+}
+
+void Body::hintBinding(Span span, Type *type, EditorHints::BindingKind kind) {
+  auto *hints = p.options.editorHints;
+  if (hints && span.source && span.source->path == hints->source)
+    hints->bindings.push_back({span.begin, span.end, bindingType(type, span.source), kind});
+}
+
+bool Body::carriesBorrow(Type *t) {
+  if (t == p.viewTy || t->kind == Kind::Pointer || t->kind == Kind::Slice) return true;
+  if (t->kind == Kind::Result || t->kind == Kind::Optional || t->kind == Kind::Tuple ||
+      t->kind == Kind::Array)
+    return std::ranges::any_of(t->parts, [&](auto *part) { return carriesBorrow(part); });
+  if (t->kind == Kind::Enum)
+    return std::ranges::any_of(t->variants, [&](const auto &variant) {
+      return std::ranges::any_of(variant.fields, [&](auto *part) { return carriesBorrow(part); });
+    });
+  return false;
+}
+
+void Body::rejectTemporaryBorrow(ValueAt value, Span span) {
+  if (value.temporaryBorrow && carriesBorrow(value.type))
+    fail(span, "borrow from a temporary cannot escape this expression; bind the owner first", "E230");
 }
 
 void Body::setAlive(int i, bool alive) {
@@ -405,17 +465,20 @@ ValueAt Body::coerce(ValueAt v, Type *t, Span span) {
       v.type->parts[0]->kind == Kind::Class && (t->readOnly || !v.type->readOnly)) {
     auto *table = p.interfaceTable(v.type->parts[0], t->parts[0], span);
     auto *view = ir.CreateInsertValue(PoisonValue::get(t->ir), read(v, span), 0);
-    return {t, ir.CreateInsertValue(view, table, 1)};
+    return {t, ir.CreateInsertValue(view, table, 1), nullptr, false, -1, false, v.temporaryBorrow};
   }
   if (t->kind == Kind::Pointer && v.type->kind == Kind::Pointer && t->readOnly && t->parts == v.type->parts)
-    return {t, read(v, span)};
+    return {t, read(v, span), nullptr, false, -1, false, v.temporaryBorrow};
   if (t->kind == Kind::Slice && v.type->kind == Kind::Slice && t->readOnly && t->parts == v.type->parts)
-    return {t, read(v, span)};
-  if (t == p.viewTy && v.type == p.textTy) return {t, textView(v, span)};
+    return {t, read(v, span), nullptr, false, -1, false, v.temporaryBorrow};
+  if (t == p.viewTy && v.type == p.textTy)
+    return {t, textView(v, span), nullptr, false, -1, false, v.temporaryBorrow};
   if (t->kind == Kind::Result && v.type == p.errorTy) return wrap(t, read(v, span), false);
   if (t->kind == Kind::Result || t->kind == Kind::Optional) {
     auto inner = coerce(v, t->parts[0], span);
-    return wrap(t, read(inner, span), true);
+    auto wrapped = wrap(t, read(inner, span), true);
+    wrapped.temporaryBorrow = inner.temporaryBorrow;
+    return wrapped;
   }
   fail(span, "expected '" + t->name + "', found '" + v.type->name + "'", "E201");
 }
@@ -444,14 +507,14 @@ ValueAt Body::payload(ValueAt source, unsigned i, Type *t) {
       address = ir.CreateInBoundsGEP(source.type->ir, source.address, {ir.getInt32(0), ir.getInt32(i)});
     else
       address = ir.CreateStructGEP(source.type->ir, source.address, i);
-    return {t, nullptr, address, source.writable, source.local, source.borrowed};
+    return {t, nullptr, address, source.writable, source.local, source.borrowed, source.temporaryBorrow};
   }
-  return {t, ir.CreateExtractValue(source.value, i)};
+  return {t, ir.CreateExtractValue(source.value, i), nullptr, false, -1, false, source.temporaryBorrow};
 }
 
 ValueAt Body::asPointer(ValueAt v, Span span) {
   requireInit(v, span);
-  if (v.address) return {p.pointer(v.type, !v.writable), v.address};
+  if (v.address) return {p.pointer(v.type, !v.writable), v.address, nullptr, false, -1, false, v.temporaryBorrow};
   auto *t = slot(v.type, "temporary");
   ir.CreateStore(read(v, span), t);
   return {p.pointer(v.type, true), t};
@@ -461,6 +524,7 @@ void Body::emitReturn(ValueAt value, Span span) {
   if (value.type == p.neverTy) return;
   if (result == p.neverTy) fail(span, "never function cannot return normally");
   value = coerce(value, result, span);
+  rejectTemporaryBorrow(value, span);
   auto *returned = read(value, span);
   clean(0);
   if (constructing && result->kind == Kind::Result) {
@@ -692,6 +756,7 @@ ValueAt Body::conditional(const Ast &n, Type *expected) {
   const auto initial = initialized;
   std::vector<std::vector<bool>> states;
   std::vector<std::pair<Value *, BasicBlock *>> edges;
+  bool temporaryBorrow = false;
   auto arm = [&](BasicBlock *target, const Ast &body) {
     ir.SetInsertPoint(target);
     merge({initial}, initial.size());
@@ -708,6 +773,7 @@ ValueAt Body::conditional(const Ast &n, Type *expected) {
     }
     if (!t) t = v.type;
     v = coerce(v, t, body ? body->span : n->span);
+    temporaryBorrow |= v.temporaryBorrow;
     auto *value = read(v, body ? body->span : n->span);
     leave();
     states.push_back(initialized);
@@ -726,22 +792,33 @@ ValueAt Body::conditional(const Ast &n, Type *expected) {
   auto *phi = ir.CreatePHI(p.storage(t), edges.size());
   for (auto [value, from] : edges)
     phi->addIncoming(value, from);
-  return {t, phi};
+  return {t, phi, nullptr, false, -1, false, temporaryBorrow};
 }
 
 void Body::statement(const Ast &n) {
   setDebug(n->span);
+  if (n->kind == NodeKind::Binding && n->text == "comptime" && !n->children.empty()) {
+    auto *type = n->type ? parseType(n->type) : nullptr;
+    auto [ct, value] = p.evaluate(n->children[0], file, type, generics, visibleConstants());
+    bindConstant(n->names[0], ct, value, n->span);
+    if (!n->type) hintBinding(n->bindingSpans[0], ct);
+    return;
+  }
+  const auto bindingScope = scopes.size() - 1;
+  enter();
+  auto previous = std::exchange(temporaryScope, scopes.size() - 1);
+  statementContents(n, bindingScope);
+  leave();
+  temporaryScope = previous;
+}
+
+void Body::statementContents(const Ast &n, std::size_t bindingScope) {
   if (n->kind == NodeKind::Binding) {
     auto *t = n->type ? parseType(n->type) : nullptr;
     bool writable = n->text != "const" && n->text != "comptime";
     ValueAt v{t};
     if (!n->children.empty()) {
-      if (n->text == "comptime") {
-        auto [ct, c] = p.evaluate(n->children[0], file, t, generics, visibleConstants());
-        bindConstant(n->names[0], ct, c, n->span);
-        return;
-      } else
-        v = expression(n->children[0], t);
+      v = expression(n->children[0], t);
       if (v.type == p.neverTy) return;
     }
     p.ensureSized(v.type, n->span);
@@ -751,9 +828,13 @@ void Body::statement(const Ast &n) {
         if (p.drops(v.type) && !v.borrowed) drop(v.type, asPointer(v, n->span).value);
         return;
       }
-      auto id =
-          bind(n->names[0], v.type, writable, (v.value || v.address) ? read(v, n->span) : nullptr, n->span);
+      rejectTemporaryBorrow(v, n->span);
+      auto id = bind(n->names[0], v.type, writable, (v.value || v.address) ? read(v, n->span) : nullptr,
+                     n->span, bindingScope);
       debugLocal(id, n->span);
+      if (!n->type)
+        hintBinding(n->bindingSpans[0], locals[id].type,
+                    n->text == ":=" ? EditorHints::BindingKind::Short : EditorHints::BindingKind::Local);
       return;
     }
     if (v.type->kind != Kind::Tuple || v.type->parts.size() != n->names.size())
@@ -762,8 +843,11 @@ void Body::statement(const Ast &n) {
       auto element = payload(v, i, v.type->parts[i]);
       if (n->names[i] == "_") {
         if (!v.borrowed && p.drops(element.type)) drop(element.type, asPointer(element, n->span).value);
-      } else
-        bind(n->names[i], element.type, writable, read(element, n->span), n->span);
+      } else {
+        rejectTemporaryBorrow(element, n->span);
+        auto id = bind(n->names[i], element.type, writable, read(element, n->span), n->span, bindingScope);
+        hintBinding(n->bindingSpans[i], locals[id].type, EditorHints::BindingKind::Short);
+      }
     }
     return;
   }
@@ -794,13 +878,20 @@ void Body::statement(const Ast &n) {
       bool shift = bin.starts_with("<<") || bin == ">>";
       ValueAt rhs;
       if (n->children.size() == 1) {
-        if (l.type->kind != Kind::Int) fail(n->span, "update requires an integer");
+        if (l.type->kind != Kind::Int) {
+          auto message = "update requires an integer, found '" + l.type->name + "'";
+          if (l.type->kind == Kind::Pointer)
+            message += l.type->readOnly ? "; the pointed-to value is read-only"
+                                       : "; use (*pointer)++ or bind the pointee with &name := pointer";
+          fail(n->span, message);
+        }
         rhs = {l.type, ConstantInt::get(l.type->ir, 1)};
       } else
         rhs = expression(n->children[1], shift ? nullptr : l.type);
       value = operate(bin, {l.type, old}, rhs, n->span, true);
     }
     if (value.type == p.neverTy) return;
+    rejectTemporaryBorrow(value, n->span);
     auto *r = read(value, n->span);
     if (whole)
       dropLocal(l.local);
@@ -831,7 +922,8 @@ ValueAt Body::sequence(const Ast &n, Type *expected, bool scoped) {
   ValueAt v = neverValue();
   if (live()) {
     v = n->tail ? expression(n->tail, expected) : coerce(voidValue(), expected, n->span);
-    if (live() && scoped && v.address) v = {v.type, read(v, n->span)};
+    if (live() && scoped && v.address)
+      v = {v.type, read(v, n->span), nullptr, false, -1, false, v.temporaryBorrow};
   }
   if (scoped) leave();
   return v;
@@ -958,9 +1050,14 @@ ValueAt Body::loop(const Ast &n) {
     ir.CreateCondBr(test, iteration, end);
     exits.push_back(initialized);
   } else if (condition) {
+    enter();
+    auto previous = std::exchange(temporaryScope, scopes.size() - 1);
     auto v = expression(condition, p.boolTy);
+    auto *test = live() ? read(v, n->span) : nullptr;
+    leave();
+    temporaryScope = previous;
     if (live()) {
-      ir.CreateCondBr(read(v, n->span), iteration, end);
+      ir.CreateCondBr(test, iteration, end);
       exits.push_back(initialized);
     } else {
       for (auto *unused : {iteration, next, end})
@@ -973,25 +1070,29 @@ ValueAt Body::loop(const Ast &n) {
   ir.SetInsertPoint(iteration);
   loops.push_back({end, next, scopes.size(), {}, {}});
   enter();
+  auto bindIteration = [&](std::size_t index, Type *type, Value *value) {
+    auto id = bind(n->names[index], type, true, value, n->span);
+    hintBinding(n->bindingSpans[index], locals[id].type, EditorHints::BindingKind::Loop);
+  };
   if (iterator.type) {
     auto item = payload(nextItem, 1, element);
-    auto bindItem = [&](const std::string &name, ValueAt value) {
-      if (name != "_")
-        bind(name, value.type, true, read(value, n->span), n->span);
+    auto bindItem = [&](std::size_t index, ValueAt value) {
+      if (n->names[index] != "_")
+        bindIteration(index, value.type, read(value, n->span));
       else if (p.drops(value.type))
         drop(value.type, asPointer(value, n->span).value);
     };
     if (enumerate) {
       counter = ir.CreateLoad(start.type->ir, indexSlot);
-      bindItem(n->names[0], {p.sizeTy, counter});
-      bindItem(n->names[1], item);
+      bindItem(0, {p.sizeTy, counter});
+      bindItem(1, item);
     } else if (n->names.size() == 1)
-      bindItem(n->names[0], item);
+      bindItem(0, item);
     else {
       if (element->kind != Kind::Tuple || n->names.size() != element->parts.size())
         fail(n->span, "iteration bindings require a matching tuple item");
       for (unsigned i = 0; i < n->names.size(); ++i)
-        bindItem(n->names[i], payload(item, i, element->parts[i]));
+        bindItem(i, payload(item, i, element->parts[i]));
     }
   } else if (each) {
     Value *item = counter;
@@ -1001,9 +1102,9 @@ ValueAt Body::loop(const Ast &n) {
                        : ir.CreateGEP(p.storage(element), arrayPtr, counter);
       item = read({element, nullptr, addr, false, -1, true}, n->span);
     }
-    if (enumerate && n->names[0] != "_") bind(n->names[0], p.sizeTy, true, counter, n->span);
+    if (enumerate && n->names[0] != "_") bindIteration(0, p.sizeTy, counter);
     if (n->names.back() != "_")
-      bind(n->names.back(), element, true, item, n->span);
+      bindIteration(n->names.size() - 1, element, item);
     else if (p.drops(element))
       drop(element, asPointer({element, item}, n->span).value);
   }
@@ -1137,6 +1238,7 @@ ValueAt Body::expression(const Ast &n, Type *expected) {
     if (!array && t && t->parts.size() != n->children.size()) fail(n->span, "tuple arity mismatch");
     std::vector<Type *> types;
     std::vector<int> temporaries;
+    bool temporaryBorrow = false;
     enter();
     for (unsigned i = 0; i < n->children.size(); ++i) {
       auto item = expression(n->children[i], array ? element : t ? t->parts[i] : nullptr);
@@ -1145,6 +1247,7 @@ ValueAt Body::expression(const Ast &n, Type *expected) {
         return neverValue();
       }
       types.push_back(item.type);
+      temporaryBorrow |= item.temporaryBorrow;
       temporaries.push_back(bind("", item.type, true, read(item, n->span), n->span));
       locals[temporaries.back()].name = " <element " + std::to_string(i) + ">";
     }
@@ -1156,7 +1259,7 @@ ValueAt Body::expression(const Ast &n, Type *expected) {
       setAlive(j, false);
     }
     leave();
-    v = {t, out};
+    v = {t, out, nullptr, false, -1, false, temporaryBorrow};
     break;
   }
   case NodeKind::Fields: {

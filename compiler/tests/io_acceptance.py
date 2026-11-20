@@ -11,6 +11,63 @@ class IoAcceptance(CompilerCase):
         self.process(VAQC, "build", file, "-O2", "-o", "app")
         return self.process("./app", input=input)
 
+    def test_chained_token_and_consecutive_lines(self):
+        result = self.run_source(r'''
+            import (bufio, io, parse)
+            func main() !void {
+                var input = io.MemoryReader("123 -7\r\n42".asBytes());
+                var scanner = bufio.newScanner(&input)!;
+                io.println(parse.parseInt<i32>(scanner.next()!.unwrap().text())!)!;
+                io.println(scanner.readInt<i32>()!)!;
+                io.println(scanner.readInt<i32>()!)!;
+                io.println(scanner.nextInt<i32>()! == null)!;
+                var lines = io.MemoryReader("a\r\n\nb".asBytes());
+                io.println(bufio.readLine(&lines, 10)!.unwrap())!;
+                io.println(bufio.readLine(&lines, 10)!.unwrap())!;
+                io.println(bufio.readLine(&lines, 10)!.unwrap())!;
+                io.println(bufio.readLine(&lines, 10)! == null)!;
+            }
+        ''')
+        self.assertEqual(result.stdout, b"123\n-7\n42\ntrue\na\n\nb\ntrue\n")
+
+    def test_temporary_receivers_cleanup_at_expression_end(self):
+        result = self.run_source(r'''
+            import (io)
+            error Stop { Now }
+            class Owner {
+                pub var id: i32;
+                pub const func view() str { "use" }
+                func deinit() void { io.println(id) catch {}; }
+            }
+            func combine(a: str, b: str) !void { io.println(a)!; }
+            func abort() !str { Stop.Now }
+            func stopped() !void { combine(Owner{id: 3}.view(), abort()!)!; }
+            func main() !void {
+                combine(Owner{id: 1}.view(), Owner{id: 2}.view())!;
+                stopped() catch { io.println("caught")!; };
+                if false && (Owner{id: 4}).view() == "use" { panic("short circuit"); }
+            }
+        ''')
+        self.assertEqual(result.stdout, b"use\n2\n1\n3\ncaught\n")
+        source = self.source("escape.vqr", '''
+            class Owner { pub const func view() str { "view" } }
+            func f() str { Owner{}.view() }
+        ''')
+        self.assertIn(b"borrow from a temporary", self.process(VAQC, "check", source, good=False).stderr)
+
+    def test_p1102_counts_and_input_errors(self):
+        self.process(VAQC, "build", REPOSITORY / "examples/p1102.vqr", "-o", "p1102")
+        for data, expected in (
+            (b"4 1\n1 1 2 3\n", b"3\n"), (b"4 1\n1 1 2 2\n", b"4\n"),
+            (b"3 9\n2 2 2\n", b"0\n"),
+            (b"100000 1\n" + b"1 " * 50000 + b"2 " * 50000, b"2500000000\n"),
+        ):
+            self.assertEqual(self.process("./p1102", input=data).stdout, expected)
+        for data, error in ((b"4 1\n1 1 2", b"UnexpectedEof"), (b"4 1\n1 1 2 x", b"InvalidSyntax")):
+            result = self.process("./p1102", input=data, good=False)
+            self.assertEqual(result.stdout, b"")
+            self.assertIn(error, result.stderr)
+
     def test_standard_streams_and_legacy_println(self):
         result = self.run_source(r'''
             import (io)

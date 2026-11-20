@@ -114,6 +114,7 @@ struct ValueAt {
   bool writable = false;
   int local = -1;
   bool borrowed = false;
+  bool temporaryBorrow = false;
 };
 
 struct FunctionEntry {
@@ -185,6 +186,7 @@ private:
   std::vector<Local> locals;
   std::multiset<int> patternBorrows;
   std::vector<std::vector<int>> scopes;
+  std::size_t temporaryScope = 0;
   std::vector<bool> initialized;
   std::vector<Loop> loops;
   bool constructing = false;
@@ -194,7 +196,11 @@ private:
   bool live() const { return !ir.GetInsertBlock()->getTerminator(); }
   BasicBlock *block(std::string_view name);
   AllocaInst *slot(Type *t, std::string_view name);
-  int bind(std::string name, Type *t, bool writable, Value *initial, Span span);
+  int bind(std::string name, Type *t, bool writable, Value *initial, Span span,
+           std::optional<std::size_t> scope = {});
+  bool carriesBorrow(Type *t);
+  void rejectTemporaryBorrow(ValueAt value, Span span);
+  void hintBinding(Span span, Type *type, EditorHints::BindingKind kind = EditorHints::BindingKind::Local);
   int findLocal(std::string_view name) const;
   void enter() { scopes.emplace_back(); }
   void leave();
@@ -206,6 +212,7 @@ private:
   void registerDrop(int local, bool alive);
   void merge(const std::vector<std::vector<bool>> &edges, std::size_t size);
   void statement(const Ast &n);
+  void statementContents(const Ast &n, std::size_t bindingScope);
   ValueAt sequence(const Ast &n, Type *expected, bool scoped);
   ValueAt name(const Ast &n);
   ValueAt numeric(const Ast &n, Type *expected);

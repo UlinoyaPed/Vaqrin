@@ -220,7 +220,7 @@ pub func arg(value: char) FormatArg { FormatArg.Character(value) }
 func writeArg(writer: *io.Writer, value: FormatArg, options: FormatOptions) !void {
     switch value {
         FormatArg.Text(item) => writeString(writer, item, options)!,
-        FormatArg.OwnedText(&item) => writeString(writer, item, options)!,
+        FormatArg.OwnedText(ref item) => writeString(writer, item, options)!,
         FormatArg.Signed(item) => writeSigned(writer, item, options)!,
         FormatArg.Unsigned(item) => writeUnsigned(writer, item, options)!,
         FormatArg.Float(item) => writeFloat(writer, item, options)!,

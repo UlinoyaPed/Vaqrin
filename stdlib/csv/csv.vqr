@@ -76,7 +76,7 @@ public:
     }
 
     const func headers() ?*const coll.Vec<string> {
-        switch headerValues { null => null, some(&value) => some(&value) }
+        switch headerValues { null => null, some(ref value) => some(&value) }
     }
     const func position() (usize, usize) { (recordNumber, byteOffset) }
     func close() void {}

@@ -147,7 +147,7 @@ public:
     func beginSeq() !?usize {
         var parent = current ?? { return serde.SerdeError.InvalidState; };
         switch *parent {
-            Value.Array(&array) => {
+            Value.Array(ref array) => {
                 frames.push(TomlReadFrame(false, parent))!;
                 some(array.len())
             },
@@ -175,7 +175,7 @@ public:
     func beginMap() !?usize {
         var parent = current ?? { return serde.SerdeError.InvalidState; };
         switch *parent {
-            Value.Table(&table) => {
+            Value.Table(ref table) => {
                 frames.push(TomlReadFrame(true, parent))!;
                 some(table.len())
             },
@@ -207,10 +207,10 @@ public:
 }
 
 func asArray(value: *const Value) ?*const coll.Vec<Value> {
-    switch *value { Value.Array(&array) => some(&array), _ => null }
+    switch *value { Value.Array(ref array) => some(&array), _ => null }
 }
 func asTable(value: *const Value) ?*const Document {
-    switch *value { Value.Table(&table) => some(&table), _ => null }
+    switch *value { Value.Table(ref table) => some(&table), _ => null }
 }
 func serdeIntegerText(value: i64) !string {
     var negative = value < 0;

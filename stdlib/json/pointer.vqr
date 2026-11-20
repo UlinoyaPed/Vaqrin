@@ -21,8 +21,8 @@ pub func pointerGet(value: *const Value, pointer: str) ?*const Value {
         if index != bytes.len() && bytes[index] != 47 { continue; }
         var token = decodePointerToken(bytes[start..index]) catch { return null; };
         switch *current {
-            Value.Object(&object) => { current = object.get(token) ?? { return null; }; },
-            Value.Array(&array) => {
+            Value.Object(ref object) => { current = object.get(token) ?? { return null; }; },
+            Value.Array(ref array) => {
                 var item = parsePointerIndex(token) catch { return null; };
                 current = array.get(item) ?? { return null; };
             },
@@ -57,12 +57,12 @@ pub func pointerSet(value: *Value, pointer: str, newValue: Value) !void {
         var token = decodePointerToken(bytes[start..index])!;
         if index == bytes.len() {
             switch *current {
-                Value.Object(&object) => {
+                Value.Object(ref object) => {
                     var owned = text.fromBytes(token.asBytes())!;
                     var previous = object.insert(move(owned), move(newValue))!;
                     return;
                 },
-                Value.Array(&array) => {
+                Value.Array(ref array) => {
                     var item = parsePointerIndex(token)!;
                     if item >= array.len() { return JsonError.IndexOutOfRange; }
                     array.replace(item, move(newValue)) ?? { return JsonError.IndexOutOfRange; };
@@ -72,8 +72,8 @@ pub func pointerSet(value: *Value, pointer: str, newValue: Value) !void {
             }
         }
         current = switch *current {
-            Value.Object(&object) => object.getMut(token) ?? { return JsonError.InvalidPointer; },
-            Value.Array(&array) => {
+            Value.Object(ref object) => object.getMut(token) ?? { return JsonError.InvalidPointer; },
+            Value.Array(ref array) => {
                 var item = parsePointerIndex(token)!;
                 array.getMut(item) ?? { return JsonError.IndexOutOfRange; }
             },

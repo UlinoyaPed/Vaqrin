@@ -268,7 +268,7 @@ public:
         var guard = state.lock();
         var outcome = guard.get().receive();
         switch outcome {
-            TryRecv.Value(&item) => { state.changed.notifyAll(); },
+            TryRecv.Value(ref item) => { state.changed.notifyAll(); },
             _ => {},
         }
         move(outcome)

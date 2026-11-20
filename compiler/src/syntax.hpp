@@ -71,6 +71,7 @@ struct Node {
   std::vector<Parameter> parameters;
   Ast type;
   Ast tail;
+  std::vector<Span> bindingSpans;
 };
 
 struct Attribute {

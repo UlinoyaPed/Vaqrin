@@ -42,7 +42,7 @@
 | `fs` | File、OpenOptions、Metadata、Permissions、目录读取及文件系统操作 |
 | `env` | 读写进程环境、独立的环境快照、当前目录与可执行文件路径 |
 | `process` | POSIX 命令、子进程句柄、环境与标准流配置、有上限的输出捕获 |
-| `http` | HTTP/1.x 报文读写、大小限制和 TCP 客户端、单连接服务端 |
+| `http` | [HTTP/1.x 报文读写、带证书验证的 HTTPS 客户端、单连接 HTTP 服务端](http/README.md) |
 | `linalg` | 稠密向量与矩阵、矩阵积、范数、带主元 LU 分解和线性系统求解 |
 | `net` | IPv4/IPv6 地址、系统名称解析、TCP 流与监听、UDP 数据报和超时 |
 | `bufio` | BufferedReader/Writer、Scanner、Token、peek/unread、按行和分隔符读取 |

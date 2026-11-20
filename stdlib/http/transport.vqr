@@ -2,7 +2,6 @@ package http
 import (bufio, fmt, io, net, text, time)
 
 func httpHost(target: *const Url) !str {
-    if !sameName(target.scheme(), "http") { return HttpError.UnsupportedScheme; }
     if target.userInfo() != null { return HttpError.InvalidTarget; }
     var host = target.host() ?? { return HttpError.MissingHost; };
     if host.byteLen() == 0 { return HttpError.MissingHost; }
@@ -38,9 +37,8 @@ func hostHeader(target: *const Url, host: str) !string {
     out.build()
 }
 
-func dial(target: *const Url, host: str, timeout: time.Duration) !net.TcpStream {
+func dial(host: str, port: u16, timeout: time.Duration) !net.TcpStream {
     var bytes = host.asBytes();
-    var port: u16 = target.port() ?? 80;
     if byteAt(bytes, 58) < bytes.len() {
         var address = net.SocketAddr.new(net.IpAddr.V6(net.parseIpv6(host)!), port);
         return net.TcpStream.connectTimeout(address, timeout);
@@ -57,6 +55,16 @@ func dial(target: *const Url, host: str, timeout: time.Duration) !net.TcpStream 
     last
 }
 
+func exchange(reader: *io.Reader, writer: *io.Writer, request: *Request, limits: HttpLimits) !Response {
+    writeRequest(writer, request)!;
+    var buffer = bufio.BufferedReader(reader, 8192)!;
+    for attempt in 0..8 {
+        var response = parseResponseFor(&buffer, request.method(), limits)!;
+        if response.status().value() >= 200 { return move(response); }
+    }
+    HttpError.TooManyResponses
+}
+
 pub class Client {
     pub var limits: HttpLimits;
 public:
@@ -64,31 +72,35 @@ public:
     func setTimeout(value: time.Duration) void { limits.timeout = value; }
     const func send(address: str, request: *Request) !Response {
         var target = parseUrl(address)!;
-        var host = httpHost(&target)!;
-        var authority = hostHeader(&target, host)!;
-        request.headers().set("Host", authority)!;
-        request.headers().set("Connection", "close")!;
-        var stream = dial(&target, host, limits.timeout)!;
-        stream.setReadTimeout(some(limits.timeout))!;
-        stream.setWriteTimeout(some(limits.timeout))!;
-        writeRequest(&stream, request)!;
-        var reader = bufio.BufferedReader(&stream, 8192)!;
-        for attempt in 0..8 {
-            var response = parseResponseFor(&reader, request.method(), limits)!;
-            if response.status().value() >= 200 { return move(response); }
-        }
-        HttpError.TooManyResponses
+        sendTo(&target, request)
     }
-    const func get(address: str) !Response { fetch(address, Method.GET, Body()) }
-    const func head(address: str) !Response { fetch(address, Method.HEAD, Body()) }
-    const func post(address: str, body: Body) !Response { fetch(address, Method.POST, move(body)) }
-private:
-    const func fetch(address: str, verb: Method, body: Body) !Response {
+    const func request(address: str, method: Method, body: Body) !Response {
         var target = parseUrl(address)!;
         var path = pathTarget(&target)!;
-        var request = Request.new(verb, path)!;
-        request.setBody(move(body));
-        send(address, &request)
+        var message = Request.new(method, path)!;
+        message.setBody(move(body));
+        sendTo(&target, &message)
+    }
+    const func get(address: str) !Response { request(address, Method.GET, Body()) }
+    const func head(address: str) !Response { request(address, Method.HEAD, Body()) }
+    const func post(address: str, body: Body) !Response { request(address, Method.POST, move(body)) }
+private:
+    const func sendTo(target: *const Url, request: *Request) !Response {
+        var secure = sameName(target.scheme(), "https");
+        if !secure && !sameName(target.scheme(), "http") { return HttpError.UnsupportedScheme; }
+        var host = httpHost(target)!;
+        var authority = hostHeader(target, host)!;
+        request.headers().set("Host", authority)!;
+        request.headers().set("Connection", "close")!;
+        var defaultPort: u16 = if secure { 443 } else { 80 };
+        var stream = dial(host, target.port() ?? defaultPort, limits.timeout)!;
+        stream.setReadTimeout(some(limits.timeout))!;
+        stream.setWriteTimeout(some(limits.timeout))!;
+        if secure {
+            var tls = TlsStream.connect(host, move(stream))!;
+            return exchange(&tls, &tls, request, limits);
+        }
+        exchange(&stream, &stream, request, limits)
     }
 }
 
@@ -119,4 +131,5 @@ public:
 }
 
 pub func get(address: str) !Response { Client().get(address) }
+pub func head(address: str) !Response { Client().head(address) }
 pub func post(address: str, body: Body) !Response { Client().post(address, move(body)) }

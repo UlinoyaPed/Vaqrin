@@ -44,7 +44,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             "clang-$LLVM_MAJOR" "llvm-$LLVM_MAJOR-dev" \
-            cmake ninja-build python3 gcc-arm-none-eabi
+            cmake ninja-build python3 gcc-arm-none-eabi openssl libssl-dev
           printf '/usr/lib/llvm-%s/bin\n' "$LLVM_MAJOR" >> "$GITHUB_PATH"
 
       - name: Configure and build
@@ -62,7 +62,8 @@ jobs:
       - name: Check native I/O runtime
         run: |
           clang++ -std=c++20 -Wall -Wextra -pedantic-errors \
-            -fno-exceptions -fno-rtti -fsyntax-only compiler/runtime/io_posix.cpp
+            -fno-exceptions -fno-rtti -fsyntax-only \
+            compiler/runtime/io_posix.cpp compiler/runtime/tls_openssl.cpp
 
       - name: Run all acceptance suites
         run: ctest --test-dir build/ci --output-on-failure --no-tests=error --parallel 1
@@ -73,6 +74,7 @@ jobs:
           compiler="$RUNNER_TEMP/vaqrin/bin/vaqc"
           python3 compiler/tests/acceptance.py "$compiler" Acceptance.test_shipped_packages_load_together
           python3 compiler/tests/io_acceptance.py "$compiler" IoAcceptance.test_task_and_io_runtimes_link_together
+          python3 compiler/tests/stdlib_acceptance.py "$compiler" StandardLibraryAcceptance.test_https_client
           python3 compiler/tools/release.py smoke "$RUNNER_TEMP/vaqrin"
 
       - name: Upload CTest diagnostics

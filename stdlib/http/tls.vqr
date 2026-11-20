@@ -9,6 +9,6 @@ func httpTlsError(reason: ErrorId) ErrorId {
     if reason == tls.TlsError.TrustStore { return TlsError.TrustStore; }
     if reason == tls.TlsError.Certificate { return TlsError.Certificate; }
     if reason == tls.TlsError.Handshake { return TlsError.Handshake; }
-    if reason == tls.TlsError.Protocol { return TlsError.Protocol; }
+    if reason == tls.TlsError.Protocol || reason == tls.TlsError.UnexpectedEof { return TlsError.Protocol; }
     reason
 }

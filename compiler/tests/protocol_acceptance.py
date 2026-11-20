@@ -20,12 +20,16 @@ class ProtocolAcceptance(CompilerCase):
         source = self.source("main.vqr", (FIXTURES / name).read_text(encoding="utf-8"))
         self.process(VAQC, source, "-o", executable)
 
-    def test_protobuf_reference(self):
+    def reference_schema(self):
         self.process(sys.executable, "-m", "grpc_tools.protoc",
                      f"-I{FIXTURES}", "--python_out=.", FIXTURES / "wire.proto")
         spec = importlib.util.spec_from_file_location("wire_pb2", self.root / "wire_pb2.py")
         schema = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(schema)
+        return schema
+
+    def test_protobuf_reference(self):
+        schema = self.reference_schema()
         canonical = schema.Envelope(
             signed32=-(1 << 31), signed64=-(1 << 63), unsigned32=(1 << 32) - 1,
             unsigned64=(1 << 64) - 1, zig32=-(1 << 31), zig64=-(1 << 63),
@@ -362,6 +366,147 @@ class ProtocolAcceptance(CompilerCase):
                 io.println(result.errorOf(&badSize).unwrap() == http2.Http2Error.InvalidArgument)!;
             }
         """, "true\n" * 4)
+
+    def test_grpc_python_server(self):
+        import time
+        import grpc
+
+        cert, key = self.make_certificate()
+        schema = self.reference_schema()
+        self.compile_fixture("grpc_client.vqr", "client")
+
+        def twice(request, context):
+            self.assertEqual(dict(context.invocation_metadata())["proof-bin"], b"binary\x00")
+            self.assertEqual(dict(context.invocation_metadata())["x-request"], "client")
+            self.assertIsNotNone(context.time_remaining())
+            context.send_initial_metadata((("x-initial", "open"),))
+            context.set_trailing_metadata((("proof-bin", b"tail\x00"),))
+            return schema.Child(left=request.left * 2)
+
+        def missing(request, context):
+            context.set_trailing_metadata((("grpc-status-details-bin", b"details"),))
+            context.abort(grpc.StatusCode.NOT_FOUND, "缺失 % field")
+
+        def wait(request, context):
+            time.sleep(0.25)
+            return schema.Child()
+
+        def unary(callback):
+            return grpc.unary_unary_rpc_method_handler(
+                callback, request_deserializer=schema.Child.FromString,
+                response_serializer=schema.Child.SerializeToString,
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as worker:
+            server = grpc.server(worker)
+            server.add_generic_rpc_handlers((
+                grpc.method_handlers_generic_handler("interop.Echo", {
+                    "Double": unary(twice), "Missing": unary(missing), "Wait": unary(wait),
+                }),
+            ))
+            credentials = grpc.ssl_server_credentials(((key.read_bytes(), cert.read_bytes()),))
+            port = server.add_secure_port("127.0.0.1:0", credentials)
+            server.start()
+            try:
+                process = subprocess.run(
+                    [self.root / "client"], cwd=self.root, capture_output=True, timeout=20,
+                    env={**os.environ, "VAQRIN_RPC_ADDRESS": f"https://localhost:{port}",
+                         "VAQRIN_RPC_CERT": str(cert)},
+                )
+                self.assertEqual(process.returncode, 0, (process.stdout, process.stderr))
+            finally:
+                server.stop(0).wait(5)
+
+    def test_grpc_python_client(self):
+        import grpc
+
+        cert, key = self.make_certificate()
+        schema = self.reference_schema()
+        self.compile_fixture("grpc_server.vqr", "server")
+        environment = {**os.environ, "VAQRIN_RPC_CERT": str(cert), "VAQRIN_RPC_KEY": str(key)}
+        with subprocess.Popen([self.root / "server"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              env=environment) as server:
+            try:
+                with ThreadPoolExecutor(max_workers=1) as worker:
+                    port = int(worker.submit(server.stdout.readline).result(timeout=5))
+                creds = grpc.ssl_channel_credentials(root_certificates=cert.read_bytes())
+                with grpc.secure_channel(f"localhost:{port}", creds) as channel:
+                    def unary(name):
+                        return channel.unary_unary(
+                            f"/interop.Echo/{name}", request_serializer=schema.Child.SerializeToString,
+                            response_deserializer=schema.Child.FromString,
+                        )
+
+                    answer, call = unary("Double").with_call(
+                        schema.Child(left=14), timeout=4, metadata=(("proof-bin", b"binary\x00"),),
+                    )
+                    self.assertEqual(answer.left, 28)
+                    self.assertEqual(dict(call.initial_metadata())["x-initial"], "open")
+                    self.assertEqual(dict(call.trailing_metadata())["proof-bin"], b"tail\x00")
+                    with self.assertRaises(grpc.RpcError) as rejected:
+                        unary("Missing")(schema.Child(), timeout=4)
+                    error = rejected.exception
+                    self.assertEqual(error.code(), grpc.StatusCode.NOT_FOUND)
+                    self.assertEqual(error.details(), "缺失 % field")
+                    self.assertEqual(dict(error.trailing_metadata())["grpc-status-details-bin"], b"details")
+                    with self.assertRaises(grpc.RpcError) as unmatched:
+                        unary("Unknown")(schema.Child(), timeout=4)
+                    self.assertEqual(unmatched.exception.code(), grpc.StatusCode.UNIMPLEMENTED)
+                out, err = server.communicate(timeout=6)
+                self.assertEqual(server.returncode, 0, (out, err))
+            finally:
+                if server.poll() is None:
+                    server.kill()
+
+    def test_grpc_vaqrin_to_vaqrin(self):
+        cert, key = self.make_certificate()
+        self.compile_fixture("grpc_server.vqr", "server")
+        self.compile_fixture("grpc_client.vqr", "client")
+        environment = {**os.environ, "VAQRIN_RPC_CERT": str(cert), "VAQRIN_RPC_KEY": str(key)}
+        with subprocess.Popen([self.root / "server"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              env=environment) as server:
+            try:
+                with ThreadPoolExecutor(max_workers=1) as worker:
+                    port = int(worker.submit(server.stdout.readline).result(timeout=5))
+                process = subprocess.run(
+                    [self.root / "client"], capture_output=True, timeout=15,
+                    env={**environment, "VAQRIN_RPC_ADDRESS": f"https://localhost:{port}"},
+                )
+                self.assertEqual(process.returncode, 0, (process.stdout, process.stderr))
+                out, err = server.communicate(timeout=6)
+                self.assertEqual(server.returncode, 0, (out, err))
+            finally:
+                if server.poll() is None:
+                    server.kill()
+
+    def test_grpc_message_boundaries(self):
+        self.hosted(r"""
+            import (bytes, grpc, result)
+            func main() !void {
+                var first = grpc.frame("a".asBytes(), 10)!;
+                var second = grpc.frame("bc".asBytes(), 10)!;
+                var small = first.asConstSlice();
+                var reader = grpc.MessageReader(10);
+                reader.feed(small[0..2])!;
+                io.println(reader.next()! == null)!;
+                var packed = bytes.join([_] []const u8 {small[2..small.len()], second.asConstSlice()}[:], "".asBytes())!;
+                reader.feed(packed.asConstSlice())!;
+                var a = reader.next()!.unwrap();
+                var b = reader.next()!.unwrap();
+                io.println(bytes.equal(a.asConstSlice(), "a".asBytes()))!;
+                io.println(bytes.equal(b.asConstSlice(), "bc".asBytes()))!;
+                reader.finish()!;
+                var invalid = [5]u8{1, 0, 0, 0, 0};
+                reader.feed(invalid[:])!;
+                var unsupported = reader.next();
+                io.println(result.errorOf(&unsupported).unwrap() == grpc.RpcError.UnsupportedEncoding)!;
+                var size = [5]u8{0, 0, 0, 0, 11};
+                var bounded = grpc.MessageReader(10);
+                bounded.feed(size[:])!;
+                var tooLong = bounded.next();
+                io.println(result.errorOf(&tooLong).unwrap() == grpc.RpcError.MessageTooLarge)!;
+            }
+        """, "true\n" * 5)
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@ import (coll, io, mem, net, text, time)
 
 pub error TlsError {
     Unavailable, SetupFailed, TrustStore, Certificate, Handshake, Protocol,
-    InvalidName, InvalidProtocol, MissingProtocol, ServerIdentity,
+    InvalidName, InvalidProtocol, MissingProtocol, ServerIdentity, UnexpectedEof,
 }
 pub enum Version { Tls12, Tls13 }
 
@@ -37,6 +37,7 @@ func checkStatus(status: i32) !void {
         -5 => { return TlsError.Handshake; },
         -7 => { return TlsError.MissingProtocol; },
         -8 => { return TlsError.ServerIdentity; },
+        -9 => { return TlsError.UnexpectedEof; },
         _ => { return TlsError.Protocol; },
     };
 }

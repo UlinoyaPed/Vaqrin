@@ -1,0 +1,118 @@
+package grpc
+import (bytes, fmt, http2, io, net, text, time, tls, url)
+
+enum StreamSocket { Clear(net.TcpStream), Secure(tls.TlsStream) }
+
+class Transport {
+    #copy: disabled
+    #implements: io.Reader, io.Writer
+    var stream: StreamSocket;
+public:
+    func init(socket: StreamSocket) : stream(move(socket)) {}
+    func read(dst: []u8) !usize {
+        switch stream { StreamSocket.Clear(ref raw) => raw.read(dst), StreamSocket.Secure(ref secure) => secure.read(dst) }
+    }
+    func write(src: []const u8) !usize {
+        switch stream { StreamSocket.Clear(ref raw) => raw.write(src), StreamSocket.Secure(ref secure) => secure.write(src) }
+    }
+    func flush() !void {
+        switch stream { StreamSocket.Clear(ref raw) => raw.flush(), StreamSocket.Secure(ref secure) => secure.flush() }
+    }
+    func close() !void {
+        switch stream { StreamSocket.Clear(ref raw) => raw.close(), StreamSocket.Secure(ref secure) => secure.close() }
+    }
+    func setTimeout(timeout: time.Duration) !void {
+        switch stream {
+            StreamSocket.Clear(ref raw) => {
+                raw.setReadTimeout(some(timeout))!;
+                raw.setWriteTimeout(some(timeout))!;
+            },
+            StreamSocket.Secure(ref secure) => {
+                secure.setReadTimeout(some(timeout))!;
+                secure.setWriteTimeout(some(timeout))!;
+            },
+        };
+    }
+}
+
+pub class DialOptions {
+    pub var allowH2c: bool;
+    pub var trustedRoots: ?str;
+    pub var timeout: time.Duration;
+    pub var maxMessageBytes: usize;
+    pub func init() : allowH2c(false), trustedRoots(null), timeout(time.Duration.fromSeconds(15)),
+        maxMessageBytes(4 * 1024 * 1024) {}
+}
+
+pub class CallOptions {
+    #copy: disabled
+    pub var metadata: Metadata;
+    pub var deadline: ?time.Deadline;
+    pub func init() : metadata(Metadata()), deadline(null) {}
+}
+
+func connectTcp(host: str, port: u16, duration: time.Duration) !net.TcpStream {
+    var addresses = net.resolveAddr(host, port)!;
+    var unsuccessful: ErrorId = net.NetError.NameResolution;
+    for address in addresses.asConstSlice() {
+        var socket = net.TcpStream.connectTimeout(address, duration) catch (reason) {
+            unsuccessful = reason;
+            continue;
+        };
+        socket.setReadTimeout(some(duration))!;
+        socket.setWriteTimeout(some(duration))!;
+        return move(socket);
+    }
+    unsuccessful
+}
+
+pub func dial(endpoint: str, options: DialOptions) !ClientConn {
+    var target = url.parse(endpoint)!;
+    var host = target.host() ?? { return RpcError.InvalidEndpoint; };
+    var secure = target.scheme() == "https";
+    if !secure && !(target.scheme() == "http" && options.allowH2c) { return RpcError.InvalidEndpoint; }
+    if target.userInfo() != null || target.query() != null || target.fragment() != null ||
+       (target.path() != "" && target.path() != "/") { return RpcError.InvalidEndpoint; }
+    var portDefault: u16 = if secure { 443 } else { 80 };
+    var port = target.port() ?? portDefault;
+    var authority = text.StringBuilder();
+    var ipv6 = bytes.find(host.asBytes(), 58) != null;
+    if ipv6 { authority.append("[")!; }
+    authority.append(host)!;
+    if ipv6 { authority.append("]")!; }
+    if target.port() != null {
+        var digits = fmt.formatUint(port, 10)!;
+        authority.append(":")!;
+        authority.append(digits)!;
+    }
+    var name = authority.build()!;
+    var socket = connectTcp(host, port, options.timeout)!;
+    if secure {
+        var config = tls.TlsConfig();
+        config.requireProtocol = true;
+        config.addProtocol("h2".asBytes())!;
+        if options.trustedRoots != null { config.setRootFile(options.trustedRoots.unwrap())!; }
+        var tlsStream = tls.TlsStream.connect(move(socket), host, &config)!;
+        var h2 = http2.openTls(http2.Role.Client, &tlsStream, http2.Settings())!;
+        return ClientConn(Transport(StreamSocket.Secure(move(tlsStream))), move(h2), move(name), true, options);
+    }
+    var h2 = http2.Connection.open(http2.Role.Client, http2.Settings())!;
+    ClientConn(Transport(StreamSocket.Clear(move(socket))), move(h2), move(name), false, options)
+}
+
+func validMethod(path: str) bool {
+    var raw = path.asBytes();
+    if raw.len() < 4 || raw[0] != 47 { return false; }
+    var found = false;
+    for index in usize(1)..raw.len() {
+        var char = raw[index];
+        if char == 47 {
+            if found || index == 1 || index == raw.len() - 1 { return false; }
+            found = true;
+        } else if !(65 <= char && char <= 90) && !(97 <= char && char <= 122) &&
+                  !(48 <= char && char <= 57) && char != 46 && char != 95 {
+            return false;
+        }
+    }
+    found
+}

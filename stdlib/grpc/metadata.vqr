@@ -1,0 +1,111 @@
+package grpc
+import (bytes, coll, encoding, fmt, http2, text)
+
+pub class MetadataField {
+    pub var name: string;
+    pub var value: coll.Vec<u8>;
+}
+
+func binaryKey(name: str) bool { bytes.endsWith(name.asBytes(), "-bin".asBytes()) }
+
+func metadataKey(name: str) bool {
+    if name.byteLen() == 0 || bytes.startsWith(name.asBytes(), "grpc-".asBytes()) ||
+       name == "content-type" || name == "te" || name == "user-agent" { return false; }
+    for byte in name.asBytes() {
+        if !(byte >= 97 && byte <= 122) && !(byte >= 48 && byte <= 57) &&
+           byte != 45 && byte != 46 && byte != 95 { return false; }
+    }
+    true
+}
+
+func base64Options() encoding.Base64Options {
+    encoding.Base64Options{alphabet: encoding.Base64Alphabet.Standard, padding: false,
+                           lineWidth: 0, ignoreWhitespace: false}
+}
+
+pub class Metadata {
+    #copy: disabled
+    var entries: coll.Vec<MetadataField>;
+public:
+    func init() : entries(coll.Vec<MetadataField>()) {}
+    func addText(name: str, value: str) !void {
+        if !metadataKey(name) || binaryKey(name) { return RpcError.InvalidMetadata; }
+        for byte in value.asBytes() {
+            if byte < 32 || byte > 126 { return RpcError.InvalidMetadata; }
+        }
+        add(name, value.asBytes())
+    }
+    func addBinary(name: str, value: []const u8) !void {
+        if !metadataKey(name) || !binaryKey(name) { return RpcError.InvalidMetadata; }
+        add(name, value)
+    }
+    const func items() []const MetadataField { entries.asConstSlice() }
+    const func get(name: str) ?[]const u8 {
+        for item in entries.iterRef() {
+            if item.name == name { return some(item.value.asConstSlice()); }
+        }
+        null
+    }
+    const func writeTo(headers: *http2.HeaderBlock) !void {
+        for field in entries.iterRef() {
+            if binaryKey(field.name) {
+                var encoded = encoding.base64Encode(field.value.asConstSlice(), base64Options())!;
+                headers.addBytes(field.name, encoded.asBytes(), true)!;
+            } else {
+                headers.addBytes(field.name, field.value.asConstSlice(), true)!;
+            }
+        }
+    }
+    func readField(header: *const http2.Header) !void {
+        var name: str = header.name;
+        if !metadataKey(name) { return; }
+        var value = header.value;
+        if binaryKey(name) {
+            var start: usize = 0;
+            for index in usize(0)..value.len() {
+                if value[index] == 44 {
+                    addEncoded(name, value[start..index])!;
+                    start = index + 1;
+                }
+            }
+            addEncoded(name, value[start..value.len()])!;
+        } else {
+            var decoded = text.fromBytes(value)!;
+            addText(name, decoded)!;
+        }
+    }
+private:
+    func add(name: str, value: []const u8) !void {
+        var key = text.fromBytes(name.asBytes())!;
+        var data = coll.Vec<u8>.fromSlice(value)!;
+        entries.push(MetadataField{name: move(key), value: move(data)})
+    }
+    func addEncoded(name: str, value: []const u8) !void {
+        var first: usize = 0;
+        var last = value.len();
+        for first < last && (value[first] == 32 || value[first] == 9) { first++; }
+        for last > first && (value[last - 1] == 32 || value[last - 1] == 9) { last--; }
+        var encoded = text.fromBytes(value[first..last])!;
+        var data = decodeBinary(encoded)!;
+        addBinary(name, data.asConstSlice())
+    }
+}
+
+func encodeStatus(headers: *http2.HeaderBlock, value: *const Status) !void {
+    var number = fmt.formatUint(statusNumber(value.code), 10)!;
+    headers.add("grpc-status", number)!;
+    if value.message.byteLen() != 0 {
+        var encoded = encoding.percentEncode(value.message.asBytes(), "".asBytes())!;
+        headers.add("grpc-message", encoded)!;
+    }
+    if value.details.len() != 0 {
+        var encoded = encoding.base64Encode(value.details.asConstSlice(), base64Options())!;
+        headers.addBytes("grpc-status-details-bin", encoded.asBytes(), true)!;
+    }
+}
+
+func decodeBinary(value: str) !coll.Vec<u8> {
+    var options = base64Options();
+    options.padding = bytes.endsWith(value.asBytes(), "=".asBytes());
+    encoding.base64Decode(value, options)
+}

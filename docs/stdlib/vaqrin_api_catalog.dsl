@@ -989,6 +989,18 @@
 #class Connection|由单一 I/O 所有者驱动的 HTTP/2 会话
 + open(role: Role,settings: Settings)->!Self; ingest(data: []const u8)->!void; receive(reader: *io.Reader)->!bool; flush(writer: *io.Writer)->!void; next()->!?Event; request(headers: *const HeaderBlock,end: bool)->!i32; respond(stream: i32,headers: *const HeaderBlock,end: bool)->!void; sendData(stream: i32,data: []const u8,end: bool)->!void; sendTrailers(stream: i32,headers: *const HeaderBlock)->!void; consume(stream: i32,count: usize)->!void; reset(stream: i32,code: u32)->!void; goAway(code: u32)->!void; ping(token: [8]u8)->!void; close()->void
 = openTls(role: Role,stream: *const tls.TlsStream,settings: Settings)->!Connection
+@grpc|gRPC 状态、元数据、消息帧与 Unary 调用
+#class Status|远程状态码、消息及二进制详情
++ isOk()->bool
+#class Metadata|ASCII 字段与二进制字段
++ init()->Self; addText(name: str,value: str)->!void; addBinary(name: str,value: []const u8)->!void; get(name: str)->?[]const u8
+#class ClientConn|一个可复用 HTTP/2 连接
++ unary(path: str,message: []const u8,options: *const CallOptions)->!UnaryResponse; close()->!void
+#interface UnaryHandler|按方法接收一个数据消息并生成响应
++ call(request: UnaryRequest)->!UnaryResponse
+#class Server|TLS 或显式 h2c 连接上的方法分发
++ register(path: str,handler: *UnaryHandler)->!void; serveTls(socket: tls.TlsStream,options: ServeOptions)->!void; serveH2c(socket: net.TcpStream,options: ServeOptions)->!void; acceptTls(listener: *net.TcpListener,acceptor: *const tls.TlsAcceptor,options: ServeOptions)->!void
+= dial(endpoint: str,options: DialOptions)->!ClientConn; frame(message: []const u8,limit: usize)->!coll.Vec<u8>
 @context|跨调用的取消、deadline、键值上下文；与 task.TaskContext 统一适配
 #class Context|父级上下文、取消令牌、deadline、请求元数据
 + background()->Self; child()->Self; withCancel()->(Self,CancelHandle); withTimeout(duration: time.Duration)->!(Self,CancelHandle); withDeadline(deadline: time.Deadline)->(Self,CancelHandle); cancelled()->!void; checkCancelled()->!void; deadline()->?time.Deadline; get<T>(key: ContextKey<T>)->?*const T; withValue<T>(key: ContextKey<T>,value: T)->!Self

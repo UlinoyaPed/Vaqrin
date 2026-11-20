@@ -1,0 +1,213 @@
+package grpc
+import (cmp, coll, core, http2, time)
+
+pub class UnaryResponse {
+    #copy: disabled
+    pub var initial: Metadata;
+    pub var trailing: Metadata;
+    pub var status: Status;
+    pub var body: ?coll.Vec<u8>;
+}
+
+pub class Call {
+    #copy: disabled
+    pub var stream: i32;
+    pub var deadline: ?time.Deadline;
+    pub var id: u64;
+    pub var decoder: MessageReader;
+    pub var sentEnd: bool;
+    pub var remoteEnd: bool;
+    pub var cancelled: bool;
+    pub var gotHeaders: bool;
+    pub var grpc: bool;
+    pub var http: u32;
+    pub var initial: Metadata;
+    pub var trailing: Metadata;
+    pub var status: ?Status;
+    pub func init(stream: i32, deadline: ?time.Deadline, id: u64, limit: usize)
+        : stream(stream), deadline(deadline), id(id), decoder(MessageReader(limit)), sentEnd(false),
+          remoteEnd(false), cancelled(false), gotHeaders(false), grpc(false), http(0),
+          initial(Metadata()), trailing(Metadata()), status(null) {}
+    pub func complete() !UnaryResponse {
+        if !remoteEnd { return RpcError.CallInProgress; }
+        var current = core.replace<?Status>(&status, null) ?? { return RpcError.CallClosed; };
+        var headers = core.replace<Metadata>(&initial, Metadata());
+        var trailers = core.replace<Metadata>(&trailing, Metadata());
+        UnaryResponse{initial: move(headers), trailing: move(trailers), status: move(current), body: null}
+    }
+}
+
+pub class ClientConn {
+    #copy: disabled
+    var wire: Transport;
+    var connection: http2.Connection;
+    var authority: string;
+    var secure: bool;
+    var timeout: time.Duration;
+    var limit: usize;
+    var active: i32;
+    var goingAway: bool;
+    var serial: u64;
+public:
+    func init(wire: Transport, session: http2.Connection, authority: string, secure: bool, options: DialOptions)
+        : wire(move(wire)), connection(move(session)), authority(move(authority)), secure(secure),
+          timeout(options.timeout), limit(options.maxMessageBytes), active(0), goingAway(false), serial(0) {}
+    func close() !void {
+        goingAway = true;
+        connection.goAway(0) catch {};
+        connection.flush(&wire) catch {};
+        connection.close();
+        wire.close()
+    }
+    func start(path: str, options: *const CallOptions) !Call {
+        if goingAway { return RpcError.ConnectionClosed; }
+        if active != 0 { return RpcError.CallInProgress; }
+        if !validMethod(path) { return RpcError.InvalidMethod; }
+        var headers = http2.HeaderBlock();
+        headers.add(":method", "POST")!;
+        headers.add(":scheme", if secure { "https" } else { "http" })!;
+        headers.add(":path", path)!;
+        headers.add(":authority", authority)!;
+        headers.add("content-type", "application/grpc")!;
+        headers.add("te", "trailers")!;
+        headers.add("grpc-accept-encoding", "identity")!;
+        if options.deadline != null {
+            var remaining = options.deadline.unwrap().remaining()!;
+            var value = durationHeader(remaining)!;
+            headers.add("grpc-timeout", value)!;
+        }
+        options.metadata.writeTo(&headers)!;
+        var stream = connection.request(&headers, false)!;
+        active = stream;
+        serial +%= 1;
+        Call(stream, options.deadline, serial, limit)
+    }
+    func sendMessage(call: *Call, message: []const u8) !void {
+        requireActive(call)!;
+        if call.sentEnd { return RpcError.CallClosed; }
+        var encoded = frame(message, limit)!;
+        connection.sendData(call.stream, encoded.asConstSlice(), false)!;
+        updateTimeout(call)!;
+        connection.flush(&wire)
+    }
+    func finishSend(call: *Call) !void {
+        requireActive(call)!;
+        if call.sentEnd { return; }
+        connection.sendData(call.stream, "".asBytes(), true)!;
+        call.sentEnd = true;
+        updateTimeout(call)!;
+        connection.flush(&wire)
+    }
+    func cancel(call: *Call) !void {
+        requireActive(call)!;
+        call.cancelled = true;
+        active = 0;
+        connection.reset(call.stream, 8)!;
+        wire.setTimeout(timeout)!;
+        connection.flush(&wire)
+    }
+    func recvMessage(call: *Call) !?coll.Vec<u8> {
+        if call.cancelled { return RpcError.Cancelled; }
+        if call.remoteEnd { return null; }
+        requireActive(call)!;
+        readMessage(call) catch (reason) {
+            var expired = call.deadline != null && (call.deadline.unwrap().expired() catch { false });
+            cancel(call) catch { goingAway = true; };
+            if expired { return RpcError.DeadlineExceeded; }
+            return reason;
+        }
+    }
+    func unary(path: str, message: []const u8, options: *const CallOptions) !UnaryResponse {
+        var call = start(path, options)!;
+        sendMessage(&call, message) catch (reason) { cancel(&call) catch {}; return reason; };
+        finishSend(&call) catch (reason) { cancel(&call) catch {}; return reason; };
+        var body = recvMessage(&call)!;
+        var extra = recvMessage(&call)!;
+        if extra != null { cancel(&call) catch {}; return RpcError.Protocol; }
+        var response = call.complete()!;
+        if response.status.isOk() && body == null { return RpcError.Protocol; }
+        response.body = move(body);
+        move(response)
+    }
+private:
+    const func requireActive(call: *const Call) !void {
+        if call.cancelled { return RpcError.Cancelled; }
+        if active != call.stream || serial != call.id || active == 0 { return RpcError.CallClosed; }
+    }
+    func updateTimeout(call: *const Call) !void {
+        var duration = timeout;
+        if call.deadline != null {
+            var remaining = call.deadline.unwrap().remaining()!;
+            if remaining.isZero() { return RpcError.DeadlineExceeded; }
+            if remaining.compare(duration) == cmp.Ordering.Less { duration = remaining; }
+        }
+        wire.setTimeout(duration)
+    }
+    func finishRemote(call: *Call) !void {
+        call.decoder.finish()!;
+        if call.status == null {
+            call.status = some(status(httpStatus(call.http), ""));
+        }
+        // An early final response can arrive before the application half-closes.
+        if !call.sentEnd { connection.reset(call.stream, 0) catch {}; }
+        call.remoteEnd = true;
+        active = 0;
+    }
+    func readMessage(call: *Call) !?coll.Vec<u8> {
+        for {
+            var message = call.decoder.next()!;
+            if message != null { return move(message); }
+            var event = connection.next()! ?? {
+                updateTimeout(call)!;
+                connection.flush(&wire)!;
+                if !connection.receive(&wire)! { return RpcError.ConnectionClosed; }
+                continue;
+            };
+            if event.kind == http2.EventKind.GoAway {
+                goingAway = true;
+                if event.stream < call.stream || event.code != 0 { return RpcError.ConnectionClosed; }
+                continue;
+            }
+            if event.stream != call.stream { continue; }
+            switch event.kind {
+                http2.EventKind.Headers => {
+                    var info = parseHeaders(&event)!;
+                    if info.http >= 100 && info.http < 200 { continue; }
+                    var initial = !call.gotHeaders;
+                    if initial {
+                        call.http = info.http;
+                        call.grpc = info.http == 200 && info.grpc;
+                        call.gotHeaders = true;
+                        if !info.identity && call.grpc { return RpcError.UnsupportedEncoding; }
+                    }
+                    if info.remoteStatus != null {
+                        if (event.code & 1) == 0 || call.status != null { return RpcError.Protocol; }
+                        var remote = Status{code: info.remoteStatus.unwrap(),
+                            message: core.replace<string>(&info.message, ""),
+                            details: core.replace<coll.Vec<u8>>(&info.details, coll.Vec<u8>())};
+                        call.status = some(move(remote));
+                        call.trailing = core.replace<Metadata>(&info.metadata, Metadata());
+                    } else if initial {
+                        call.initial = core.replace<Metadata>(&info.metadata, Metadata());
+                    } else {
+                        call.trailing = core.replace<Metadata>(&info.metadata, Metadata());
+                    }
+                },
+                http2.EventKind.Data => {
+                    if call.grpc { call.decoder.feed(event.payload())!; }
+                    connection.consume(call.stream, event.payload().len())!;
+                },
+                http2.EventKind.EndStream => {
+                    finishRemote(call)!;
+                    return null;
+                },
+                http2.EventKind.Closed => {
+                    if event.code == 8 { return RpcError.Cancelled; }
+                    return RpcError.Protocol;
+                },
+                http2.EventKind.InvalidFrame => { return RpcError.Protocol; },
+                _ => {},
+            };
+        }
+    }
+}

@@ -1,0 +1,48 @@
+package main
+import (bytes, env, grpc, io, protobuf, result, time)
+
+error TestError { Unexpected }
+
+func require(ok: bool) !void { if !ok { return TestError.Unexpected; } }
+
+func main() !void {
+    var endpoint = env.get("VAQRIN_RPC_ADDRESS")!.unwrap();
+    var cert = env.get("VAQRIN_RPC_CERT")!.unwrap();
+    var settings = grpc.DialOptions();
+    var path: str = cert;
+    settings.trustedRoots = some(path);
+    settings.timeout = time.Duration.fromSeconds(4);
+    var connection = grpc.dial(endpoint, settings)!;
+    var options = grpc.CallOptions();
+    options.metadata.addText("x-request", "client")!;
+    options.metadata.addBinary("proof-bin", "binary\u{0}".asBytes())!;
+    options.deadline = some(time.Deadline.after(time.Duration.fromSeconds(3))!);
+    var request = protobuf.Writer(128);
+    request.writeInt32(1, 14)!;
+    var reply = connection.unary("/interop.Echo/Double", request.written(), &options)!;
+    require(reply.status.isOk())!;
+    require(bytes.equal(reply.initial.get("x-initial").unwrap(), "open".asBytes()))!;
+    require(bytes.equal(reply.trailing.get("proof-bin").unwrap(), "tail\u{0}".asBytes()))!;
+    switch reply.body {
+        some(ref response) => {
+            var reader = protobuf.Reader.open(response.asConstSlice(), protobuf.DecodeLimits())!;
+            var field = reader.next()!.unwrap();
+            require(field.asInt32()! == 28)!;
+        },
+        null => { return TestError.Unexpected; },
+    };
+    var missing = connection.unary("/interop.Echo/Missing", request.written(), &options)!;
+    require(missing.status.code == grpc.StatusCode.NotFound)!;
+    require(missing.status.message == "缺失 % field")!;
+    require(bytes.equal(missing.status.details.asConstSlice(), "details".asBytes()))!;
+    options.deadline = some(time.Deadline.after(time.Duration.fromMillis(80))!);
+    var wait = connection.unary("/interop.Echo/Wait", request.written(), &options);
+    switch result.errorOf(&wait) {
+        some(reason) => { require(reason == grpc.RpcError.DeadlineExceeded)!; },
+        null => {
+            var reply = move(wait)!;
+            require(reply.status.code == grpc.StatusCode.DeadlineExceeded)!;
+        },
+    };
+    connection.close()!
+}

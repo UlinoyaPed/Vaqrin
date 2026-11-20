@@ -1,0 +1,117 @@
+package grpc
+import (bytes, coll, encoding, fmt, http2, parse, text, time)
+
+func grpcType(value: str) bool {
+    if value == "application/grpc" { return true; }
+    bytes.startsWith(value.asBytes(), "application/grpc+".asBytes()) ||
+        bytes.startsWith(value.asBytes(), "application/grpc;".asBytes())
+}
+
+func durationHeader(duration: time.Duration) !string {
+    var total = i128(duration.seconds()) * 1000000000 + i128(duration.nanosPart());
+    if total <= 0 { return RpcError.DeadlineExceeded; }
+    var suffix = "n";
+    if total > 5999999940000000000i128 {
+        total = (total + 3599999999999i128) / 3600000000000i128;
+        if total > 99999999 { total = 99999999; }
+        suffix = "H";
+    } else if total > 99999999000000000 {
+        total = (total + 59999999999) / 60000000000;
+        suffix = "M";
+    } else if total > 99999999000000 {
+        total = (total + 999999999) / 1000000000;
+        suffix = "S";
+    } else if total > 99999999000 {
+        total = (total + 999999) / 1000000;
+        suffix = "m";
+    } else if total > 99999999 {
+        total = (total + 999) / 1000;
+        suffix = "u";
+    }
+    var output = text.StringBuilder();
+    var magnitude = u64(total)!;
+    var digits = fmt.formatUint(magnitude, 10)!;
+    output.append(digits)!;
+    output.append(suffix)!;
+    output.build()
+}
+
+func parseTimeout(value: str) !time.Duration {
+    var raw = value.asBytes();
+    if raw.len() < 2 || raw.len() > 9 { return RpcError.Protocol; }
+    for index in usize(0)..raw.len() - 1 {
+        if raw[index] < 48 || raw[index] > 57 { return RpcError.Protocol; }
+    }
+    var digits = text.fromBytes(raw[0..raw.len() - 1])!;
+    var number = parse.parseInt<i64>(digits, 10)!;
+    switch raw[raw.len() - 1] {
+        110 => time.Duration.fromNanos(number),
+        117 => time.Duration.fromMicros(number),
+        109 => time.Duration.fromMillis(number),
+        83 => time.Duration.fromSeconds(number),
+        77 => time.Duration.fromMinutes(number),
+        72 => time.Duration.fromHours(number),
+        _ => { return RpcError.Protocol; },
+    }
+}
+
+class HeaderInfo {
+    pub var metadata: Metadata;
+    pub var method: string;
+    pub var path: string;
+    pub var grpc: bool;
+    pub var trailersExpected: bool;
+    pub var identity: bool;
+    pub var deadline: ?time.Deadline;
+    pub var http: u32;
+    pub var remoteStatus: ?StatusCode;
+    pub var message: string;
+    pub var details: coll.Vec<u8>;
+    pub func init() : metadata(Metadata()), method(""), path(""), grpc(false), trailersExpected(false),
+        identity(true), deadline(null), http(0), remoteStatus(null), message(""), details(coll.Vec<u8>()) {}
+}
+
+func parseHeaders(event: *const http2.Event) !HeaderInfo {
+    var info = HeaderInfo();
+    var reader = event.headers()!;
+    for {
+        var field = reader.next()! ?? { break; };
+        var name: str = field.name;
+        if name == ":status" {
+            var value = text.fromBytes(field.value)!;
+            info.http = parse.parseUint<u32>(value, 10)!;
+        } else if name == ":method" {
+            info.method = text.fromBytes(field.value)!;
+        } else if name == ":path" {
+            info.path = text.fromBytes(field.value)!;
+        } else if name == "te" {
+            info.trailersExpected = bytes.equal(field.value, "trailers".asBytes());
+        } else if name == "content-type" {
+            var value = text.fromBytes(field.value)!;
+            info.grpc = grpcType(value);
+        } else if name == "grpc-encoding" {
+            info.identity = bytes.equal(field.value, "identity".asBytes());
+        } else if name == "grpc-timeout" {
+            if info.deadline != null { return RpcError.Protocol; }
+            var value = text.fromBytes(field.value)!;
+            info.deadline = some(time.Deadline.after(parseTimeout(value)!)!);
+        } else if name == "grpc-status" {
+            if info.remoteStatus != null { return RpcError.Protocol; }
+            var value = text.fromBytes(field.value)!;
+            info.remoteStatus = some(parseStatus(parse.parseUint<u32>(value, 10)!));
+        } else if name == "grpc-message" {
+            var value = text.fromBytes(field.value)!;
+            var decoded = encoding.percentDecode(value) catch {
+                info.message = move(value);
+                continue;
+            };
+            info.message = text.fromBytes(decoded.asConstSlice())!;
+        } else if name == "grpc-status-details-bin" {
+            var value = text.fromBytes(field.value)!;
+            info.details = decodeBinary(value)!;
+        } else {
+            info.metadata.readField(&field)!;
+        }
+    }
+    move(info)
+}

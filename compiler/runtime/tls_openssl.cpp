@@ -11,6 +11,7 @@ enum TlsStatus : int32_t {
     protocol = -6,
     missing_protocol = -7,
     server_identity = -8,
+    unexpected_eof = -9,
 };
 }
 
@@ -18,6 +19,7 @@ enum TlsStatus : int32_t {
 #if __has_include(<openssl/ssl.h>) && __has_include(<openssl/x509v3.h>)
 #include <openssl/err.h>
 #include <openssl/ssl.h>
+#include <openssl/sslerr.h>
 #include <openssl/x509v3.h>
 #endif
 
@@ -78,6 +80,7 @@ namespace {
     X(SSL_write_ex) \
     X(SSL_get_error) \
     X(SSL_shutdown) \
+    X(ERR_peek_last_error) \
     X(ERR_clear_error)
 
 struct TlsApi {
@@ -92,11 +95,17 @@ pthread_once_t load_once = PTHREAD_ONCE_INIT;
 
 BIO_METHOD *socket_method = nullptr;
 
+struct SocketState {
+    int32_t fd;
+    bool eof;
+};
+
 // The TCP stream owns the descriptor. TLS writes never raise SIGPIPE.
 int socket_read(BIO *bio, char *data, int length) {
     api.BIO_clear_retry_flags(bio);
-    const auto fd = *static_cast<const int32_t *>(api.BIO_get_data(bio));
-    const auto count = recv(fd, data, length, 0);
+    auto &socket = *static_cast<SocketState *>(api.BIO_get_data(bio));
+    const auto count = recv(socket.fd, data, length, 0);
+    if (count == 0 && length != 0) socket.eof = true;
     if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
         const auto reason = errno;
         api.BIO_set_retry_read(bio);
@@ -107,8 +116,8 @@ int socket_read(BIO *bio, char *data, int length) {
 
 int socket_write(BIO *bio, const char *data, int length) {
     api.BIO_clear_retry_flags(bio);
-    const auto fd = *static_cast<const int32_t *>(api.BIO_get_data(bio));
-    const auto count = send(fd, data, length, MSG_NOSIGNAL);
+    const auto &socket = *static_cast<const SocketState *>(api.BIO_get_data(bio));
+    const auto count = send(socket.fd, data, length, MSG_NOSIGNAL);
     if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
         const auto reason = errno;
         api.BIO_set_retry_write(bio);
@@ -117,8 +126,13 @@ int socket_write(BIO *bio, const char *data, int length) {
     return static_cast<int>(count);
 }
 
-long socket_control(BIO *, int operation, long, void *) {
-    return operation == BIO_CTRL_FLUSH ? 1 : 0;
+long socket_control(BIO *bio, int operation, long, void *) {
+    if (operation == BIO_CTRL_FLUSH) return 1;
+    if (operation == BIO_CTRL_EOF) {
+        const auto *socket = static_cast<const SocketState *>(api.BIO_get_data(bio));
+        return socket != nullptr && socket->eof;
+    }
+    return 0;
 }
 
 bool load_socket_method() {
@@ -135,10 +149,10 @@ bool load_socket_method() {
     return false;
 }
 
-bool attach_socket(SSL *ssl, int32_t &fd) {
+bool attach_socket(SSL *ssl, SocketState &socket) {
     BIO *bio = api.BIO_new(socket_method);
     if (bio == nullptr) return false;
-    api.BIO_set_data(bio, &fd);
+    api.BIO_set_data(bio, &socket);
     api.BIO_set_init(bio, 1);
     api.SSL_set_bio(ssl, bio, bio);
     return true;
@@ -161,7 +175,7 @@ void load_openssl() {
 
 struct Session {
     SSL *ssl;
-    int32_t fd;
+    SocketState socket;
     bool failed;
 };
 
@@ -182,6 +196,12 @@ TlsResult run_tls(SSL *ssl, Operation operation) {
         if (error == SSL_ERROR_WANT_READ || error == SSL_ERROR_WANT_WRITE) {
             if (reason == EINTR) continue;
             if (reason == EAGAIN || reason == EWOULDBLOCK) return {error, ETIMEDOUT};
+        }
+        if (error == SSL_ERROR_SSL) {
+            const auto detail = api.ERR_peek_last_error();
+            if (ERR_GET_LIB(detail) == ERR_LIB_SSL &&
+                ERR_GET_REASON(detail) == SSL_R_UNEXPECTED_EOF_WHILE_READING)
+                return {error, unexpected_eof};
         }
         return {error, error == SSL_ERROR_SYSCALL ? reason : 0};
     }
@@ -214,7 +234,7 @@ int select_alpn(SSL *, const unsigned char **selected, unsigned char *size,
 
 int no_password(char *, int, int, void *) { return 0; }
 
-SSL *open_tls(int32_t &fd, const char *host, const char *ca, const char *cert, const char *key,
+SSL *open_tls(SocketState &socket, const char *host, const char *ca, const char *cert, const char *key,
               Alpn &alpn, int32_t version, int32_t &status) {
     const bool server = *cert != '\0';
     status = setup_failed;
@@ -245,7 +265,7 @@ SSL *open_tls(int32_t &fd, const char *host, const char *ca, const char *cert, c
                 status = trust_store;
         }
     }
-    if (ssl != nullptr && attach_socket(ssl, fd) &&
+    if (ssl != nullptr && attach_socket(ssl, socket) &&
         (server || (configure_identity(ssl, host) &&
                     (alpn.length == 0 || api.SSL_set_alpn_protos(ssl, alpn.protocols, alpn.length) == 0)))) {
         const auto result = run_tls(ssl, [&] { return server ? api.SSL_accept(ssl) : api.SSL_connect(ssl); });
@@ -280,7 +300,8 @@ size_t transfer(Session &session, int32_t &status, bool reading, Operation opera
         status = 0;
         return count;
     }
-    status = result.status != 0 ? result.status : protocol;
+    status = result.status != 0 ? result.status
+        : session.socket.eof && result.error == SSL_ERROR_SYSCALL ? unexpected_eof : protocol;
     session.failed = true;
     return 0;
 }
@@ -300,8 +321,8 @@ extern "C" uintptr_t __vqr_tls_open(int32_t fd, const char *host, const char *ca
         return 0;
     }
     Alpn alpn{protocols, size, required != 0};
-    session->fd = fd;
-    session->ssl = open_tls(session->fd, host, ca, cert, key, alpn, version, *status);
+    session->socket = {fd, false};
+    session->ssl = open_tls(session->socket, host, ca, cert, key, alpn, version, *status);
     if (session->ssl == nullptr) {
         free(session);
         return 0;

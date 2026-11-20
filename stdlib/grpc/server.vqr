@@ -1,0 +1,243 @@
+package grpc
+import (coll, core, http2, net, text, time, tls)
+
+pub class UnaryRequest {
+    #copy: disabled
+    pub var path: string;
+    pub var metadata: Metadata;
+    pub var deadline: ?time.Deadline;
+    pub var body: coll.Vec<u8>;
+}
+
+pub interface UnaryHandler { func call(request: UnaryRequest) !UnaryResponse; }
+
+pub class ServeOptions {
+    pub var timeout: time.Duration;
+    pub var maxMessageBytes: usize;
+    pub var maxConcurrentStreams: u32;
+    pub func init() : timeout(time.Duration.fromSeconds(15)), maxMessageBytes(4 * 1024 * 1024),
+        maxConcurrentStreams(16) {}
+}
+
+pub func reply(status: Status) UnaryResponse {
+    UnaryResponse{initial: Metadata(), trailing: Metadata(), status: move(status), body: null}
+}
+
+pub func response(body: coll.Vec<u8>) UnaryResponse {
+    UnaryResponse{initial: Metadata(), trailing: Metadata(), status: status(StatusCode.Ok, ""),
+                  body: some(move(body))}
+}
+
+class Route {
+    pub var path: string;
+    pub var handler: *UnaryHandler;
+}
+
+class Incoming {
+    #copy: disabled
+    pub var stream: i32;
+    pub var route: *UnaryHandler;
+    pub var decoder: MessageReader;
+    pub var head: HeaderInfo;
+    pub func init(stream: i32, route: *UnaryHandler, head: HeaderInfo, limit: usize)
+        : stream(stream), route(route), decoder(MessageReader(limit)), head(move(head)) {}
+    pub func request() !UnaryRequest {
+        var body = decoder.next()! ?? { return RpcError.Protocol; };
+        decoder.finish()!;
+        var path = core.replace<string>(&head.path, "");
+        var metadata = core.replace<Metadata>(&head.metadata, Metadata());
+        UnaryRequest{path: move(path), metadata: move(metadata), deadline: head.deadline,
+                     body: move(body)}
+    }
+}
+
+pub class Server {
+    #copy: disabled
+    var routes: coll.Vec<Route>;
+public:
+    func init() : routes(coll.Vec<Route>()) {}
+    func register(path: str, handler: *UnaryHandler) !void {
+        if !validMethod(path) || find(path) != null { return RpcError.InvalidMethod; }
+        var name = text.fromBytes(path.asBytes())!;
+        routes.push(Route{path: move(name), handler: handler})
+    }
+    func serveTls(socket: tls.TlsStream, options: ServeOptions) !void {
+        var settings = http2.Settings();
+        settings.maxStreams = options.maxConcurrentStreams;
+        var session = http2.openTls(http2.Role.Server, &socket, settings)!;
+        var stream = Transport(StreamSocket.Secure(move(socket)));
+        stream.setTimeout(options.timeout)!;
+        serve(&stream, &session, options)
+    }
+    func serveH2c(socket: net.TcpStream, options: ServeOptions) !void {
+        var settings = http2.Settings();
+        settings.maxStreams = options.maxConcurrentStreams;
+        var session = http2.Connection.open(http2.Role.Server, settings)!;
+        var stream = Transport(StreamSocket.Clear(move(socket)));
+        stream.setTimeout(options.timeout)!;
+        serve(&stream, &session, options)
+    }
+    func acceptTls(listener: *net.TcpListener, acceptor: *const tls.TlsAcceptor, options: ServeOptions) !void {
+        raw, _ := listener.accept()!;
+        raw.setReadTimeout(some(options.timeout))!;
+        raw.setWriteTimeout(some(options.timeout))!;
+        var secure = acceptor.accept(move(raw))!;
+        serveTls(move(secure), options)
+    }
+private:
+    const func find(path: str) ?*UnaryHandler {
+        for route in routes.iterRef() {
+            if route.path == path { return some(route.handler); }
+        }
+        null
+    }
+    func incoming(event: *const http2.Event, session: *http2.Connection,
+                  limit: usize) !?Incoming {
+        var head = parseHeaders(event) catch {
+            sendError(session, event.stream, StatusCode.InvalidArgument)!;
+            return null;
+        };
+        if !head.grpc || head.method != "POST" || !head.trailersExpected || !validMethod(head.path) {
+            sendError(session, event.stream, StatusCode.InvalidArgument)!;
+            return null;
+        }
+        if !head.identity {
+            sendError(session, event.stream, StatusCode.Unimplemented)!;
+            return null;
+        }
+        var handler = find(head.path) ?? {
+            sendError(session, event.stream, StatusCode.Unimplemented)!;
+            return null;
+        };
+        some(Incoming(event.stream, handler, move(head), limit))
+    }
+    func serve(wire: *Transport, session: *http2.Connection, options: ServeOptions) !void {
+        var active = coll.Vec<Incoming>();
+        var goingAway = false;
+        for {
+            session.flush(wire)!;
+            if goingAway && active.len() == 0 { return; }
+            var event = session.next()! ?? {
+                var received = session.receive(wire) catch (reason) {
+                    if reason == tls.TlsError.UnexpectedEof && active.len() == 0 { return; }
+                    return reason;
+                };
+                if !received {
+                    if active.len() != 0 { return RpcError.ConnectionClosed; }
+                    return;
+                }
+                continue;
+            };
+            var position = callAt(&active, event.stream);
+            switch event.kind {
+                http2.EventKind.Headers => {
+                    if position != null {
+                        session.reset(event.stream, 1)!;
+                        active.swapRemove(position.unwrap());
+                    } else {
+                        var call = incoming(&event, session, options.maxMessageBytes)!;
+                        switch move(call) {
+                            some(value) => { active.push(move(value))!; },
+                            null => {},
+                        };
+                    }
+                },
+                http2.EventKind.Data => {
+                    if position != null {
+                        var index = position.unwrap();
+                        var item = active.getMutPtr(index).unwrap();
+                        item.decoder.feed(event.payload()) catch (reason) {
+                            sendError(session, event.stream, if reason == RpcError.MessageTooLarge {
+                                StatusCode.ResourceExhausted
+                            } else { StatusCode.Internal })!;
+                            active.swapRemove(index);
+                        };
+                    }
+                    session.consume(event.stream, event.payload().len())!;
+                },
+                http2.EventKind.EndStream => {
+                    if position != null {
+                        var item = active.swapRemove(position.unwrap()).unwrap();
+                        runHandler(session, &item, options.maxMessageBytes)!;
+                    }
+                },
+                http2.EventKind.Closed => {
+                    if position != null { active.swapRemove(position.unwrap()); }
+                },
+                http2.EventKind.GoAway => { goingAway = true; },
+                _ => {},
+            };
+        }
+    }
+}
+
+func callAt(calls: *const coll.Vec<Incoming>, stream: i32) ?usize {
+    for index in usize(0)..calls.len() {
+        if calls.getPtr(index).unwrap().stream == stream { return some(index); }
+    }
+    null
+}
+
+func runHandler(session: *http2.Connection, item: *Incoming, limit: usize) !void {
+    var deadline = item.head.deadline;
+    if deadline != null && deadline.unwrap().expired()! {
+        return sendError(session, item.stream, StatusCode.DeadlineExceeded);
+    }
+    var request = item.request() catch (reason) {
+        return sendError(session, item.stream,
+            if reason == RpcError.MessageTooLarge { StatusCode.ResourceExhausted }
+            else if reason == RpcError.UnsupportedEncoding { StatusCode.Unimplemented }
+            else { StatusCode.InvalidArgument });
+    };
+    var result = item.route.call(move(request)) catch {
+        return sendError(session, item.stream, StatusCode.Internal);
+    };
+    if deadline != null && deadline.unwrap().expired()! {
+        return sendError(session, item.stream, StatusCode.DeadlineExceeded);
+    }
+    var status = result.status.code;
+    if status == StatusCode.Ok && result.body == null {
+        return sendError(session, item.stream, StatusCode.Internal);
+    }
+    sendResponse(session, item.stream, &result, limit)
+}
+
+func sendError(session: *http2.Connection, stream: i32, code: StatusCode) !void {
+    var answer = reply(status(code, ""));
+    sendResponse(session, stream, &answer, 0)
+}
+
+func sendResponse(session: *http2.Connection, stream: i32,
+                  response: *const UnaryResponse, limit: usize) !void {
+    var headers = http2.HeaderBlock();
+    headers.add(":status", "200")!;
+    headers.add("content-type", "application/grpc")!;
+    headers.add("grpc-accept-encoding", "identity")!;
+    response.initial.writeTo(&headers)!;
+    switch response.body {
+        null => {
+            if response.initial.items().len() == 0 {
+                response.trailing.writeTo(&headers)!;
+                encodeStatus(&headers, &response.status)!;
+                return session.respond(stream, &headers, true);
+            }
+        },
+        some(ref body) => {
+            if body.len() > limit {
+                return sendError(session, stream, StatusCode.ResourceExhausted);
+            }
+        },
+    };
+    var trailers = http2.HeaderBlock();
+    response.trailing.writeTo(&trailers)!;
+    encodeStatus(&trailers, &response.status)!;
+    session.respond(stream, &headers, false)!;
+    switch response.body {
+        some(ref body) => {
+            var payload = frame(body.asConstSlice(), limit)!;
+            session.sendData(stream, payload.asConstSlice(), false)!;
+        },
+        null => {},
+    };
+    session.sendTrailers(stream, &trailers)
+}

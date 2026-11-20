@@ -101,7 +101,7 @@ public:
     func encode(value: *const coll.Vec<T>, serializer: *Serializer) !void {
         serializer.beginSeq(some(value.len()))!;
         for index in usize(0)..value.len() {
-            element.encode(value.get(index).unwrap(), serializer)!;
+            element.encode(value.getPtr(index).unwrap(), serializer)!;
         }
         serializer.endSeq()
     }
@@ -125,7 +125,7 @@ public:
     func encode(value: *const coll.Vec<(string, T)>, serializer: *Serializer) !void {
         serializer.beginMap(some(value.len()))!;
         for index in usize(0)..value.len() {
-            var entry = value.get(index).unwrap();
+            var entry = value.getPtr(index).unwrap();
             serializer.writeKey(entry.0)!;
             element.encode(&entry.1, serializer)!;
         }

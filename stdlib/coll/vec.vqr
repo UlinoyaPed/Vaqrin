@@ -237,7 +237,7 @@ public:
         var kept: usize = 0;
         for i in usize(0)..length {
             var address = data.unwrap().offset(i);
-            if predicate(get(i).unwrap()) {
+            if predicate(getPtr(i).unwrap()) {
                 if kept != i {
                     unsafe { __vqr_slot_write<T>(data.unwrap().offset(kept), __vqr_slot_take<T>(address)); }
                 }
@@ -313,21 +313,33 @@ public:
     func asPtr() ?*T { if length == 0 { null } else { data } }
     const func asConstPtr() ?*const T { if length == 0 { null } else { some(data.unwrap()) } }
 
-    const func get(index: usize) ?*const T {
+    const func getPtr(index: usize) ?*const T {
         if index < length { some(&asSlice()[index]) } else { null }
     }
-    func getMut(index: usize) ?*T {
+    func getMutPtr(index: usize) ?*T {
         if index < length { some(&asSlice()[index]) } else { null }
     }
-    const func at(index: usize) *const T { get(index).unwrap() }
-    func atMut(index: usize) *T { getMut(index).unwrap() }
-    const func first() ?*const T { get(0) }
-    func firstMut() ?*T { getMut(0) }
+    #return_borrow: self
+    const func get(index: usize) ?&const T {
+        if index >= length { return null; }
+        unsafe { __vqr_borrow_from_self(getPtr(index).unwrap()) }
+    }
+
+    #return_borrow: self
+    func getMut(index: usize) ?&T {
+        if index >= length { return null; }
+        unsafe { __vqr_borrow_from_self(getMutPtr(index).unwrap()) }
+    }
+
+    const func at(index: usize) *const T { getPtr(index).unwrap() }
+    func atMut(index: usize) *T { getMutPtr(index).unwrap() }
+    const func first() ?*const T { getPtr(0) }
+    func firstMut() ?*T { getMutPtr(0) }
     const func last() ?*const T {
-        if length == 0 { null } else { get(length - 1) }
+        if length == 0 { null } else { getPtr(length - 1) }
     }
     func lastMut() ?*T {
-        if length == 0 { null } else { getMut(length - 1) }
+        if length == 0 { null } else { getMutPtr(length - 1) }
     }
 
     func swap(a: usize, b: usize) void { core.swap<T>(atMut(a), atMut(b)); }

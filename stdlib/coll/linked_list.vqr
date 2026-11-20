@@ -154,12 +154,12 @@ private:
 
         var index = node.ownerIndex;
         var expected: *const ListNode<T> = node;
-        if index >= nodes.len() || (*nodes.get(index).unwrap()).asPtr() != expected {
+        if index >= nodes.len() || (*nodes.getPtr(index).unwrap()).asPtr() != expected {
             panic("LinkedList node ownership index invariant");
         }
         var owner = nodes.swapRemove(index).unwrap();
         if index < nodes.len() {
-            (*nodes.getMut(index).unwrap()).asPtr().ownerIndex = index;
+            (*nodes.getMutPtr(index).unwrap()).asPtr().ownerIndex = index;
         }
 
         length--;
@@ -282,7 +282,7 @@ public:
         var base = nodes.len();
         nodes.append(&other.nodes)!;
         for i := base; i < nodes.len(); i++ {
-            (*nodes.getMut(i).unwrap()).asPtr().ownerIndex = i;
+            (*nodes.getMutPtr(i).unwrap()).asPtr().ownerIndex = i;
         }
 
         switch lastNode {
@@ -319,7 +319,7 @@ public:
             var ownerIndex = node.ownerIndex;
             var owner = nodes.swapRemove(ownerIndex);
             if ownerIndex < nodes.len() {
-                (*nodes.getMut(ownerIndex).unwrap()).asPtr().ownerIndex = ownerIndex;
+                (*nodes.getMutPtr(ownerIndex).unwrap()).asPtr().ownerIndex = ownerIndex;
             }
             node.ownerIndex = result.nodes.len();
             result.nodes.push(move(owner).unwrap())!;

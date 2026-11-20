@@ -65,7 +65,7 @@ API 草案中的 `SmallVec`、`RingBuffer`、`ForwardList`、`StableVec`、`Orde
 - `clone() -> !Self`（要求 T 可复制）
 
 借用、遍历和维护：
-- `get(index: usize) -> ?*const T`、`getMut(index: usize) -> ?*T`
+- `get(index: usize) -> ?&const T`、`getMut(index: usize) -> ?&T`
 - `at(index: usize) -> *const T`、`atMut(index: usize) -> *T`
 - `first() -> ?*const T`、`firstMut() -> ?*T`
 - `last() -> ?*const T`、`lastMut() -> ?*T`
@@ -208,7 +208,7 @@ HashMap 操作：
 - `len`、`capacity`、`isEmpty`、`reserve`、`reserveAdditional`
 - `insert(key,value) -> !?V`
 - `insertPreserving(key,value) -> InsertResult<K,V>`
-- `get(key) -> ?*const V`、`getMut(key) -> ?*V`
+- `get(key: in &const K) -> ?&const V`、`getMut(key: in &const K) -> ?&V`
 - `getKeyValue(key) -> ?(*const K,*const V)`、`containsKey(key) -> bool`
 - `remove(key) -> ?V`、`removeEntry(key) -> ?(K,V)`
 - `retain(predicate)`、`extend(entries) -> !void`
@@ -224,7 +224,7 @@ BTreeMap 构造必须提供严格弱序回调 `less: func(*const K,*const K) boo
 - `init(less)`、`withComparator(less)`
 - `len`、`isEmpty`
 - `insert(key,value) -> !?V`
-- `get(key) -> ?*const V`、`getMut(key) -> ?*V`、`containsKey(key) -> bool`
+- `get(key: in &const K) -> ?&const V`、`getMut(key: in &const K) -> ?&V`、`containsKey(key) -> bool`
 - `remove(key) -> ?V`、`removeEntry(key) -> ?(K,V)`
 - `first/last -> ?(*const K,*const V)`
 - `popFirst/popLast -> ?(K,V)`
@@ -237,6 +237,10 @@ BTreeSet 提供 `init(less)`、`withComparator(less)`、`len/isEmpty/contains/in
 树节点最多 7 个键、8 个子节点，最小度数为 4。插入在降层前分裂满子节点。删除先定位键，再自底向上借用兄弟节点、合并节点或收缩根。比较等价定义为 `!less(a,b) && !less(b,a)`。`remove` 和 `removeEntry` 可使用同一棵树借出的键作为查询，比较在任何修改之前完成。删除成功后应重新获取借用。迭代器创建时分配有序指针索引，失败会返回分配错误。当前 BTree 节点使用默认 Box 分配器，自定义分配器入口仍待实现。
 
 ## 6. 内存、所有权和迭代器合同
+
+v0.1.4 的 `Vec.get/getMut`、`HashMap.get/getMut`、`BTreeMap.get/getMut` 返回可空引用，来源是容器接收者。容器持有的引用结束前，禁止冲突的结构性写入及移动。映射的查询、检查和删除参数使用 `in &const K`；集合对应操作使用 `in &const T`。
+
+Vec 的 `getPtr/getMutPtr` 保留底层裸地址访问，指针迭代器、BTree 游标和元组指针查询保留原有裸地址合同。
 
 - 所有拥有型容器均不可复制；移动容器只转移其缓冲区/节点所有权。
 - 非 Copy 元素通过 `__vqr_slot_write/take/drop` 或 `MaybeUninit` 显式管理，不对未初始化槽读取或析构。
@@ -271,6 +275,6 @@ BTreeSet 提供 `init(less)`、`withComparator(less)`、`len/isEmpty/contains/in
 宿主运行验收覆盖不可复制元素、析构计数、错误时保留输入、哈希碰撞与 tombstone、双端回绕、链表节点地址稳定、B 树分裂、合并、根收缩和使用借出键删除。Cortex-M3 已验证固定容量及自定义分配器路径生成对象且无未定义符号。ASan/UBSan 和全部重载仍待专项验收。
 
 `coll.i32Map<V>()` 和 `coll.i64Map<V>()` 预配整数键的哈希和相等回调。自定义键仍使用
-`withHasher` 或显式构造回调。`getOrInsert(key, initial) !*V` 消费两个输入，命中时保留
-已有值，缺失时先确保容量，再写入初值。返回指针与 `getMut` 的借用权限相同，删除对应键
-或重排桶会让旧指针失效。
+`withHasher` 或显式构造回调。`getOrInsert(key, initial) !&V` 消费两个输入，命中时保留
+已有值，缺失时先确保容量，再写入初值。返回引用与 `getMut` 一样独占借用接收者，
+活跃时禁止删除和重排。显式的 `getOrInsertPtr` 返回裸指针，删除对应键或重排后须重新查找。

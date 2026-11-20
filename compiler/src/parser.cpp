@@ -118,12 +118,13 @@ private:
     return items;
   }
 
-  std::vector<Attribute> attributes();
+  std::vector<Attribute> attributes(bool typeBody = false);
   Decl declaration(bool member = false, bool iface = false);
   void members(std::vector<Decl> &out, bool publicMembers, bool iface);
   void parameters(Decl &d);
   void genericParameters(Decl &d);
   Ast type(bool inferArray = false);
+  Ast parameterType();
   std::vector<Ast> genericArguments();
   Ast block();
   Ast statement(bool header = false);
@@ -177,9 +178,11 @@ File Parser::file() {
   return f;
 }
 
-std::vector<Attribute> Parser::attributes() {
+std::vector<Attribute> Parser::attributes(bool typeBody) {
   std::vector<Attribute> out;
-  while (eat("#")) {
+  while (at("#")) {
+    if (typeBody && current(1).text == "return_borrow") break;
+    take();
     auto t = at("move") ? take() : name();
     require(":");
     if (t.text == "implements") {
@@ -207,12 +210,11 @@ void Parser::parameters(Decl &d) {
     auto start = d.params.size();
     bool comptime = eat("comptime");
     do {
-      auto t = bindingName();
-      if (comptime && t.text.starts_with('&')) fail(t.span, "comptime parameter cannot borrow storage");
+      auto t = name(true);
       d.params.push_back({t.text, t.span, nullptr, comptime});
     } while (!at(":") && eat(","));
     require(":");
-    auto t = type();
+    auto t = parameterType();
     for (; start < d.params.size(); ++start)
       d.params[start].type = t;
   });
@@ -324,7 +326,7 @@ Decl Parser::declaration(bool member, bool iface) {
   d.name = name().text;
   genericParameters(d);
   require("{");
-  auto inside = attributes();
+  auto inside = attributes(true);
   d.attributes.insert(d.attributes.end(), inside.begin(), inside.end());
   if (d.kind == DeclKind::Enum || d.kind == DeclKind::Error) {
     list("}", [&] {
@@ -404,12 +406,23 @@ std::vector<Ast> Parser::genericArguments() {
   return items;
 }
 
+Ast Parser::parameterType() {
+  auto start = current();
+  if (!eat("in")) return type();
+  auto reference = type();
+  if (reference->kind != NodeKind::TypePrefix || reference->text != "&const")
+    fail(start.span, "'in' requires a read-only reference parameter", "E110");
+  return make(NodeKind::TypePrefix, start.span, "in &const", reference->children);
+}
+
 Ast Parser::type(bool inferArray) {
   Nest nesting(*this);
   auto start = current();
-  if (typePunctuation('?') || eat("!") || eat("^") || eat("*") || eat("const")) {
-    auto key = start.text == "??" ? "?" : start.text;
+  if (at("in")) fail(start.span, "'in' is only permitted in parameter types", "E110");
+  if (typePunctuation('?') || eat("!") || eat("^") || eat("*") || typePunctuation('&') || eat("const")) {
+    auto key = start.text == "??" ? "?" : start.text == "&&" ? "&" : start.text;
     if (key == "*" && eat("const")) key = "*const";
+    if (key == "&" && eat("const")) key = "&const";
     return make(NodeKind::TypePrefix, start.span, key, {type()});
   }
   if (eat("[")) {
@@ -443,7 +456,7 @@ Ast Parser::type(bool inferArray) {
     require("func");
     require("(");
     std::vector<Ast> types;
-    list(")", [&] { types.push_back(type()); });
+    list(")", [&] { types.push_back(parameterType()); });
     auto n = make(NodeKind::TypeFunction, start.span, c ? "C" : "", std::move(types));
     n->type = type();
     return n;
@@ -476,7 +489,11 @@ Ast Parser::statement(bool header) {
     auto binding = t.text == "var" ? bindingName() : name();
     n->names.push_back(binding.text);
     n->bindingSpans.push_back(binding.span);
-    if (eat(":")) n->type = type();
+    if (eat(":")) {
+      if (binding.text.starts_with('&'))
+        fail(binding.span, "use 'var name: &T = ...' for a typed reference", "E110");
+      n->type = type();
+    }
     if (eat("=")) n->children.push_back(expression());
     if (!n->type && n->children.empty()) fail(t.span, "binding requires a type or initializer", "E110");
     if (n->children.empty() && t.text != "var") fail(t.span, "constant requires an initializer", "E110");
@@ -584,7 +601,10 @@ Ast Parser::pattern() {
   Nest nesting(*this);
   auto t = current();
   if (eat("_")) return make(NodeKind::PatternAny, t.span);
-  if (eat("&")) fail(t.span, "use 'ref name' to borrow a matched value", "E110");
+  if (eat("&")) {
+    auto binding = name();
+    return make(NodeKind::PatternIndirect, binding.span, binding.text);
+  }
   if (t.kind == TokenKind::Name && t.text == "ref" && current(1).kind == TokenKind::Name) {
     take();
     auto binding = name();
@@ -668,10 +688,10 @@ Ast Parser::lambda(bool excludeFields) {
     require("(");
     std::size_t untyped = 0;
     list(")", [&] {
-      auto param = bindingName();
+      auto param = name(true);
       node->parameters.push_back({param.text, param.span, nullptr, false});
       if (eat(":")) {
-        auto t = type();
+        auto t = parameterType();
         for (; untyped < node->parameters.size(); ++untyped)
           node->parameters[untyped].type = t;
       }

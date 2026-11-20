@@ -166,8 +166,8 @@ private:
         }
         for i in usize(0)..length {
             var source = physical(i);
-            var value = unsafe { slots.getMut(source).unwrap().assumeInit() };
-            unsafe { next.getMut(i).unwrap().write(move(value)); }
+            var value = unsafe { slots.getMutPtr(source).unwrap().assumeInit() };
+            unsafe { next.getMutPtr(i).unwrap().write(move(value)); }
         }
         core.swap<Vec<mem.MaybeUninit<T>>>(&slots, &next);
         head = 0;
@@ -182,14 +182,14 @@ private:
 public:
     func pushBack(value: T) !void {
         ensureRoomForOne()!;
-        unsafe { slots.getMut(physical(length)).unwrap().write(move(value)); }
+        unsafe { slots.getMutPtr(physical(length)).unwrap().write(move(value)); }
         length++;
     }
 
     func pushFront(value: T) !void {
         ensureRoomForOne()!;
         if head == 0 { head = capacity() - 1; } else { head--; }
-        unsafe { slots.getMut(head).unwrap().write(move(value)); }
+        unsafe { slots.getMutPtr(head).unwrap().write(move(value)); }
         length++;
     }
 
@@ -197,7 +197,7 @@ public:
         ensureRoomForOne() catch (reason) {
             return PushResult<T>.Failed(reason, move(value));
         };
-        unsafe { slots.getMut(physical(length)).unwrap().write(move(value)); }
+        unsafe { slots.getMutPtr(physical(length)).unwrap().write(move(value)); }
         length++;
         PushResult<T>.Stored()
     }
@@ -207,14 +207,14 @@ public:
             return PushResult<T>.Failed(reason, move(value));
         };
         if head == 0 { head = capacity() - 1; } else { head--; }
-        unsafe { slots.getMut(head).unwrap().write(move(value)); }
+        unsafe { slots.getMutPtr(head).unwrap().write(move(value)); }
         length++;
         PushResult<T>.Stored()
     }
 
     func popFront() ?T {
         if length == 0 { return null; }
-        var value = unsafe { slots.getMut(head).unwrap().assumeInit() };
+        var value = unsafe { slots.getMutPtr(head).unwrap().assumeInit() };
         length--;
         if length == 0 { head = 0; }
         else if head + 1 == capacity() { head = 0; }
@@ -225,7 +225,7 @@ public:
     func popBack() ?T {
         if length == 0 { return null; }
         var index = physical(length - 1);
-        var value = unsafe { slots.getMut(index).unwrap().assumeInit() };
+        var value = unsafe { slots.getMutPtr(index).unwrap().assumeInit() };
         length--;
         if length == 0 { head = 0; }
         some(move(value))
@@ -233,12 +233,12 @@ public:
 
     func get(index: usize) ?*const T {
         if index >= length { return null; }
-        some(slots.get(physical(index)).unwrap().asConstPtr())
+        some(slots.getPtr(physical(index)).unwrap().asConstPtr())
     }
 
     func getMut(index: usize) ?*T {
         if index >= length { return null; }
-        some(slots.getMut(physical(index)).unwrap().asPtr())
+        some(slots.getMutPtr(physical(index)).unwrap().asPtr())
     }
 
     const func front() ?*const T { get(0) }
@@ -252,21 +252,21 @@ public:
         for i := length; i > index; i-- {
             var source = physical(i - 1);
             var target = physical(i);
-            var item = unsafe { slots.getMut(source).unwrap().assumeInit() };
-            unsafe { slots.getMut(target).unwrap().write(move(item)); }
+            var item = unsafe { slots.getMutPtr(source).unwrap().assumeInit() };
+            unsafe { slots.getMutPtr(target).unwrap().write(move(item)); }
         }
-        unsafe { slots.getMut(physical(index)).unwrap().write(move(value)); }
+        unsafe { slots.getMutPtr(physical(index)).unwrap().write(move(value)); }
         length++;
     }
 
     func remove(index: usize) ?T {
         if index >= length { return null; }
-        var value = unsafe { slots.getMut(physical(index)).unwrap().assumeInit() };
+        var value = unsafe { slots.getMutPtr(physical(index)).unwrap().assumeInit() };
         for i := index; i + 1 < length; i++ {
             var source = physical(i + 1);
             var target = physical(i);
-            var item = unsafe { slots.getMut(source).unwrap().assumeInit() };
-            unsafe { slots.getMut(target).unwrap().write(move(item)); }
+            var item = unsafe { slots.getMutPtr(source).unwrap().assumeInit() };
+            unsafe { slots.getMutPtr(target).unwrap().write(move(item)); }
         }
         length--;
         if length == 0 { head = 0; }
@@ -281,7 +281,7 @@ public:
 
     func replace(index: usize, value: T) ?T {
         if index >= length { return null; }
-        var slot = slots.getMut(physical(index)).unwrap();
+        var slot = slots.getMutPtr(physical(index)).unwrap();
         var previous = unsafe { slot.assumeInit() };
         unsafe { slot.write(move(value)); }
         some(move(previous))
@@ -290,11 +290,11 @@ public:
     func retain<F: Movable>(predicate: F) void {
         var kept: usize = 0;
         for i in usize(0)..length {
-            var slot = slots.getMut(physical(i)).unwrap();
+            var slot = slots.getMutPtr(physical(i)).unwrap();
             if predicate(slot.asConstPtr()) {
                 if kept != i {
                     var item = unsafe { slot.assumeInit() };
-                    unsafe { slots.getMut(physical(kept)).unwrap().write(move(item)); }
+                    unsafe { slots.getMutPtr(physical(kept)).unwrap().write(move(item)); }
                 }
                 kept++;
             } else {

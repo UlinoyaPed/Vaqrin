@@ -69,7 +69,9 @@ Vec 按值接收可移动元素。其 `reserve` 先分配，再搬迁已有元�
 
 LinkedList 使用双向节点和独立 Box 所有权表，节点地址在插入、删除其他节点和链表拼接时保持稳定；按索引访问仍为 O(n)。HashMap/HashSet 使用开放寻址和 tombstone 删除标记，构造时必须提供哈希与相等回调；`HashMap.iterRef()` 构建指针索引，返回 `!MapIterRef`，迭代器只借用键和值，容器结构修改后失效；`hash` 包提供 FNV-1a 32 位实现和 i8/u8/i16/u16/i32/u32/i64/u64/bool 的回调。种子由调用方提供，FNV 不适合抵御主动哈希洪泛。BTreeMap/BTreeSet 使用最小度数为 4 的 B 树，构造时必须提供严格弱序比较回调；迭代器创建时会构建指针索引，因此可能分配失败。关联容器的键只能通过只读借用访问，不能原地修改。
 
-按引用遍历时使用 `iterRef()` 或 `iterMut()`，后者可配合 `for &item in ...` 修改原位置。
+容器的安全查询 `get/getMut` 返回绑定到接收者的可空引用。活跃引用结束前，禁止冲突的写入和结构性修改。Vec 的 `getPtr/getMutPtr` 提供遵循失效合同的裸指针。
+
+按裸指针遍历时使用 `iterRef()` 或 `iterMut()`，后者可配合 `for &item in ...` 修改原位置。
 
 文本按字节比较，`chars` 按 Unicode 标量遍历。`fromBytes` 验证 UTF-8 后复制成不可变字符串，`StringBuilder.build()` 生成可独立持有的快照。拥有型 `string` 的副本共享不可变存储，`str` 与字节视图遵守来源的生命周期。
 

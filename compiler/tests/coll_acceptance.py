@@ -283,8 +283,10 @@ class ContainerAcceptance(CompilerCase):
                     if !rejected || map.len() != 1 || map.get(&key).unwrap().id != 3 {
                         panic("failed rehash lost entry");
                     }
-                    var hit = map.getOrInsert(1, Probe{id: 4})!;
-                    if hit.id != 3 { panic("getOrInsert replaced a hit"); }
+                    {
+                        var hit = map.getOrInsert(1, Probe{id: 4})!;
+                        if hit.id != 3 { panic("getOrInsert replaced a hit"); }
+                    }
                     for id in 2..8 {
                         allocator.fail = false;
                         var item = map.getOrInsert(id, Probe{id: id + 10})!;
@@ -292,11 +294,13 @@ class ContainerAcceptance(CompilerCase):
                     }
                     allocator.fail = true;
                     var insertionFailed = false;
-                    map.getOrInsert(8, Probe{id: 18}) catch (reason) {
-                        if reason != Injected.Exhausted { return reason; }
-                        insertionFailed = true;
-                        hit
-                    };
+                    for i in 0..1 {
+                        map.getOrInsert(8, Probe{id: 18}) catch (reason) {
+                            if reason != Injected.Exhausted { return reason; }
+                            insertionFailed = true;
+                            break;
+                        };
+                    }
                     if !insertionFailed || map.len() != 7 || map.get(&key).unwrap().id != 3 {
                         panic("getOrInsert failed growth changed the map");
                     }

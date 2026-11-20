@@ -50,7 +50,7 @@ public:
     func beginMap(length: ?usize) !void { frames.push(JsonWriteFrame(true))!; }
     func writeKey(value: str) !void {
         if frames.isEmpty() { return JsonSerdeError.InvalidState; }
-        var frame = frames.getMut(frames.len() - 1).unwrap();
+        var frame = frames.getMutPtr(frames.len() - 1).unwrap();
         if !frame.objectMode || frame.pendingKey != null { return JsonSerdeError.InvalidState; }
         frame.pendingKey = some(text.fromBytes(value.asBytes())!);
     }
@@ -71,7 +71,7 @@ private:
             root = some(move(value));
             return;
         }
-        var frame = frames.getMut(frames.len() - 1).unwrap();
+        var frame = frames.getMutPtr(frames.len() - 1).unwrap();
         if frame.objectMode {
             var key = opt.take<string>(&frame.pendingKey) ?? { return JsonSerdeError.InvalidState; };
             if frame.object.containsKey(key) { return serde.SerdeError.DuplicateKey; }
@@ -159,7 +159,7 @@ public:
     }
     func nextElement() !bool {
         if frames.isEmpty() { return serde.SerdeError.InvalidState; }
-        var frame = frames.getMut(frames.len() - 1).unwrap();
+        var frame = frames.getMutPtr(frames.len() - 1).unwrap();
         if frame.mapMode { return serde.SerdeError.InvalidState; }
         var array = asArray(frame.parent).unwrap();
         if frame.index >= array.len() { current = null; return false; }
@@ -187,7 +187,7 @@ public:
     }
     func nextKey() !?string {
         if frames.isEmpty() { return serde.SerdeError.InvalidState; }
-        var frame = frames.getMut(frames.len() - 1).unwrap();
+        var frame = frames.getMutPtr(frames.len() - 1).unwrap();
         if !frame.mapMode { return serde.SerdeError.InvalidState; }
         var object = asObject(frame.parent).unwrap();
         if frame.index >= object.len() { current = null; return null; }

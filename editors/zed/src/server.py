@@ -459,7 +459,7 @@ class Server:
         if not candidates:
             return []
         source = candidates[0]
-        receiver = self.type_of(model, source, seen).lstrip("!?* ").removeprefix("const ").strip()
+        receiver = self.type_of(model, source, seen).lstrip("!?*& ").removeprefix("const ").strip()
         if generic and source.kind in DECLARED_TYPES:
             receiver = head.rstrip() + "<" + arguments
         name = receiver.split("<", 1)[0]
@@ -538,7 +538,7 @@ class Server:
                         "range": {"start": offset_position(model.text, token.start()),
                                   "end": offset_position(model.text, token.end())}}
             if mode == "typeDefinition":
-                inferred = self.type_of(model, targets[0]).lstrip("!?* ").removeprefix("const ").split("<", 1)[0]
+                inferred = self.type_of(model, targets[0]).lstrip("!?*& ").removeprefix("const ").split("<", 1)[0]
                 if not inferred or inferred in TYPES:
                     return None
                 package, _, name = inferred.rpartition(".")

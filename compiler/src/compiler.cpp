@@ -29,7 +29,7 @@ Program::Program(LLVMContext &c, TargetMachine &target, const Options &o, Inputs
 #endif
   module->setDataLayout(target.createDataLayout());
   module->setSourceFileName(root);
-  module->addModuleFlag(Module::Warning, "Vaqrin language version", MDString::get(c, "0.1.3"));
+  module->addModuleFlag(Module::Warning, "Vaqrin language version", MDString::get(c, "0.1.4"));
   voidTy = add(Kind::Void, llvm::Type::getVoidTy(c), "void");
   neverTy = add(Kind::Never, voidTy->ir, "never");
   boolTy = add(Kind::Bool, llvm::Type::getInt1Ty(c), "bool");
@@ -50,7 +50,7 @@ Program::Program(LLVMContext &c, TargetMachine &target, const Options &o, Inputs
     debug = std::make_unique<DIBuilder>(*module);
     auto *di =
         debug->createFile(std::filesystem::path(files.front().span.source->path).filename().string(), ".");
-    unit = debug->createCompileUnit(0xb001, di, "vaqc 0.1.3", options.optimization != 0, "", 0);
+    unit = debug->createCompileUnit(0xb001, di, "vaqc 0.1.4", options.optimization != 0, "", 0);
   }
   indexFiles();
 }
@@ -102,7 +102,47 @@ Type *Program::pointer(Type *t, bool readOnly) {
   return p;
 }
 
+Type *Program::reference(Type *t, bool readOnly, bool compatible) {
+  auto key = std::string(compatible ? "in &const " : readOnly ? "&const " : "&") + t->name;
+  if (auto i = canonical.find(key); i != canonical.end()) return i->second;
+  auto *ref = add(Kind::Reference, pointer(t, readOnly)->ir, key, {t});
+  ref->readOnly = readOnly;
+  ref->compatible = compatible;
+  return ref;
+}
+
+bool Program::hasReference(Type *t) {
+  if (t->kind == Kind::Reference) return true;
+  if (t->kind != Kind::Optional && t->kind != Kind::Result && t->kind != Kind::Array &&
+      t->kind != Kind::Tuple)
+    return false;
+  return std::ranges::any_of(t->parts, [&](auto *part) { return hasReference(part); });
+}
+
+int Program::borrowParameter(Definition def, const std::vector<Type *> &params, Type *result, bool receiver) {
+  if (std::ranges::count(def.decl->attributes, "return_borrow", &Attribute::name) > 1)
+    fail(def.decl->span, "duplicate attribute 'return_borrow'");
+  auto source = attribute(*def.decl, "return_borrow");
+  if (!hasReference(result)) {
+    if (!source.empty()) fail(def.decl->span, "#return_borrow requires a reference result", "E230");
+    return -1;
+  }
+  if (receiver && source == "self") return 0;
+  int found = -1;
+  for (unsigned i = 0; i < def.decl->params.size(); ++i) {
+    if (params[i + receiver]->kind != Kind::Reference) continue;
+    if (!source.empty() && def.decl->params[i].name != source) continue;
+    if (found >= 0)
+      fail(def.decl->span, "reference result requires #return_borrow naming its source", "E230");
+    found = i + receiver;
+  }
+  if (found < 0)
+    fail(def.decl->span, "reference result requires a reference parameter or #return_borrow: self", "E230");
+  return found;
+}
+
 Type *Program::box(Type *t) {
+  if (hasReference(t)) fail({}, "references cannot be stored in Box allocations", "E230");
   auto key = '^' + t->name;
   if (auto i = canonical.find(key); i != canonical.end()) return i->second;
   auto *address = PointerType::getUnqual(context);
@@ -153,6 +193,7 @@ Type *Program::slice(Type *t, bool readOnly) {
 }
 
 Type *Program::rawStorage(Type *element, Span span) {
+  if (hasReference(element)) fail(span, "raw storage cannot contain safe references", "E230");
   ensureSized(element, span);
   if (element == neverTy) fail(span, "never has no storage");
   auto key = "<raw storage " + element->name + ">";
@@ -322,6 +363,7 @@ Type *Program::type(const Ast &n, const File &file, const Types &generics, const
     if ((integer->sign && len.isNegative()) || len.getActiveBits() > pointerBits() - 1)
       fail(n->span, "array length exceeds the target object size");
     auto *element = type(n->children[1], file, generics, values);
+    if (hasReference(element)) fail(n->span, "reference storage in arrays is not supported", "E230");
     ensureSized(element, n->span);
     auto size = module->getDataLayout().getTypeAllocSize(storage(element)).getFixedValue();
     auto limit = (std::uint64_t{1} << (pointerBits() - 1)) - 1;
@@ -336,7 +378,7 @@ Type *Program::type(const Ast &n, const File &file, const Types &generics, const
     if (n->type) {
       parts.push_back(type(n->type, file, generics, values));
       if (n->text == "C" && std::ranges::any_of(parts, [](auto *part) {
-            return part->kind == Kind::Pointer && !part->ir->isPointerTy();
+            return part->kind == Kind::Reference || (part->kind == Kind::Pointer && !part->ir->isPointerTy());
           }))
         fail(n->span, "interface views cannot use the C ABI");
       return aggregate(Kind::Function, parts, 0, n->text == "C");
@@ -347,7 +389,13 @@ Type *Program::type(const Ast &n, const File &file, const Types &generics, const
   }
   if (n->kind == NodeKind::TypePrefix) {
     auto *inner = type(n->children[0], file, generics, values);
+    if (n->text != "?" && n->text != "!" && hasReference(inner))
+      fail(n->span, "indirect storage of a reference-bearing type is not supported", "E230");
     if (n->text == "*" || n->text == "*const") return pointer(inner, n->text == "*const");
+    if (n->text == "&" || n->text == "&const" || n->text == "in &const") {
+      if (inner == voidTy || inner == neverTy) fail(n->span, "reference requires an object type");
+      return reference(inner, n->text != "&", n->text == "in &const");
+    }
     if (n->text == "^") return box(inner);
     if (n->text == "[]" || n->text == "[]const") return slice(inner, n->text == "[]const");
     if (n->text == "?" || n->text == "!") {
@@ -367,6 +415,8 @@ std::string Program::attribute(const Decl &d, std::string_view key) {
 
 Type *Program::nominal(Definition d, const std::vector<Type *> &args, bool complete,
                         const Constants &values) {
+  if (std::ranges::any_of(args, [&](auto *argument) { return hasReference(argument); }))
+    fail(d.decl->span, "nominal types cannot store reference type arguments", "E230");
   if (args.size() + values.size() != d.decl->generics.size())
     fail(d.decl->span, "wrong number of type arguments for " + d.decl->name);
   auto id = args.empty() ? key(d) : typeKey(key(d), args);
@@ -448,6 +498,7 @@ void Program::fill(Type *t, const Types &substitutions) {
       auto *field = m.type ? type(m.type, *t->def.file, substitutions, t->comptimeArguments)
                            : evaluate(m.body, *t->def.file, nullptr, substitutions, t->comptimeArguments).first;
       ensureSized(field, m.span);
+      if (hasReference(field)) fail(m.span, "reference storage in class fields is not supported", "E230");
       t->fields.push_back({&m, field, static_cast<unsigned>(layout.size())});
       layout.push_back(storage(field));
     }
@@ -478,6 +529,7 @@ void Program::fill(Type *t, const Types &substitutions) {
       for (const auto &a : m.params) {
         auto *field = type(a.type, *t->def.file, substitutions, t->comptimeArguments);
         ensureSized(field, a.span);
+        if (hasReference(field)) fail(m.span, "reference storage in enum fields is not supported", "E230");
         v.fields.push_back(field);
         layout.push_back(storage(field));
       }
@@ -578,8 +630,17 @@ void Program::validateInterfaces(Type *type) {
             continue;
           auto *owner = found.declaringType ? found.declaringType : type;
           auto methodTypes = classTypes(owner);
-          if (parameters(found, methodTypes, nullptr, owner->comptimeArguments) != expected) continue;
+          auto actual = parameters(found, methodTypes, nullptr, owner->comptimeArguments);
+          if (actual != expected) continue;
           if (this->type(method.type, *found.file, methodTypes, owner->comptimeArguments) != result) continue;
+          if (hasReference(result)) {
+            actual.insert(actual.begin(), pointer(owner, method.readOnly));
+            auto expectedReceiver = expected;
+            expectedReceiver.insert(expectedReceiver.begin(), pointer(interface, requirement.readOnly));
+            if (borrowParameter(found, actual, result, true) !=
+                borrowParameter(wanted, expectedReceiver, result, true))
+              continue;
+          }
           matches.push_back(std::move(found));
         }
         auto own = std::ranges::find_if(matches, [](const auto &method) { return method.receiverPath.empty(); });
@@ -657,6 +718,7 @@ bool Program::satisfies(Type *t, const Ast &constraint, const File &file, const 
 }
 
 bool Program::copyable(Type *t) {
+  if (t->kind == Kind::Reference) return t->readOnly;
   if (t->kind == Kind::Interface) return false;
   if (t->kind == Kind::Box || t->kind == Kind::Allocation || t->kind == Kind::RawStorage) return false;
   if (t->kind == Kind::Closure)
@@ -886,6 +948,7 @@ GlobalEntry &Program::global(Definition d) {
   if (!d.decl->body) fail(d.decl->span, "package binding requires a compile-time initializer");
   auto *expected = d.decl->type ? type(d.decl->type, *d.file) : nullptr;
   auto [t, c] = evaluate(d.decl->body, *d.file, expected, {});
+  if (hasReference(t)) fail(d.decl->span, "references cannot be stored at package scope", "E230");
   ensureSized(t, d.decl->span);
   if (t->kind == Kind::Text) {
     auto *storage = c->getAggregateElement(2u);
@@ -926,7 +989,10 @@ FunctionEntry &Program::function(Definition d, Types substitutions, Type *owner,
   std::vector<Type *> genericTypes;
   for (const auto &g : decl.generics)
     if (!g.comptime) genericTypes.push_back(substitutions.at(g.name));
-  auto instance = typeKey(typeKey(id, genericTypes), params);
+  auto overloadParams = params;
+  for (auto *&param : overloadParams)
+    if (param->compatible) param = reference(param->parts[0], true);
+  auto instance = typeKey(typeKey(id, genericTypes), overloadParams);
   for (const auto &[name, value] : values) {
     std::string operand;
     raw_string_ostream output(operand);
@@ -1050,6 +1116,7 @@ std::unique_ptr<Module> Program::build() {
         if (!seen.insert(a.name).second) fail(a.span, "duplicate attribute '" + a.name + "'");
         if ((a.name == "repr" &&
              (d.kind == DeclKind::Enum || (d.kind == DeclKind::Class && a.value == "C"))) ||
+            (d.kind == DeclKind::Function && a.name == "return_borrow") ||
             (d.kind == DeclKind::Class &&
              ((a.name == "copy" && (a.value == "enable" || a.value == "disabled")) ||
               (a.name == "move" && a.value == "disabled") || a.name == "implements")))

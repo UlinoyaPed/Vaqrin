@@ -124,6 +124,8 @@
   isSome<T>(value: *const ?T)->bool
   isNone<T>(value: *const ?T)->bool
   asPtr<T>(value: *const ?T)->?*const T
+  asRef<T>(value: in &const ?T)->?&const T
+  asMutRef<T>(value: &?T)->?&T
   asMutPtr<T>(value: *?T)->?*T
   map<T,U,F>(value: ?T,f: F)->?U
   andThen<T,U,F>(value: ?T,f: F)->?U
@@ -686,8 +688,10 @@
   asConstSlice()->[]const T
   asPtr()->?*T
   asConstPtr()->?*const T
-  get(index: usize)->?*const T
-  getMut(index: usize)->?*T
+  get(index: usize)->?&const T
+  getMut(index: usize)->?&T
+  getPtr(index: usize)->?*const T
+  getMutPtr(index: usize)->?*T
   at(index: usize)->*const T
   atMut(index: usize)->*T
   first()->?*const T
@@ -886,15 +890,17 @@
   capacity()->usize
   isEmpty()->bool
   reserve(n: usize)->!void
-  get(key: *const K)->?*const V
-  getMut(key: *const K)->?*V
+  get(key: in &const K)->?&const V
+  getMut(key: in &const K)->?&V
   getKeyValue(key: *const K)->?( *const K,*const V )
-  containsKey(key: *const K)->bool
+  containsKey(key: in &const K)->bool
   insert(key: K,value: V)->!?V
   tryInsert(key: K,value: V)->InsertResult<K,V>
-  remove(key: *const K)->?V
-  removeEntry(key: *const K)->?(K,V)
+  remove(key: in &const K)->?V
+  removeEntry(key: in &const K)->?(K,V)
   entry(key: K)->Entry<K,V>
+  getOrInsert(key: K,initial: V)->!&V
+  getOrInsertPtr(key: K,initial: V)->!*V
   getOrInsertWith<F>(key: K,f: F)->!*V
   retain<F>(predicate: F)->void
   clear()->void
@@ -939,9 +945,9 @@
   len()->usize
   isEmpty()->bool
   insert(value: T)->!bool
-  remove(value: *const T)->bool
-  take(value: *const T)->?T
-  contains(value: *const T)->bool
+  remove(value: in &const T)->bool
+  take(value: in &const T)->?T
+  contains(value: in &const T)->bool
   reserve(n: usize)->!void
   clear()->void
   retain<F>(pred: F)->void
@@ -977,18 +983,18 @@
   clear()->void
   iterRef()->coll.SetIterRef<T>
 ```
-**`class TreeMap<K,V>`**：B 树有序字典
+**`class BTreeMap<K,V>`**：B 树有序字典
 ```text
   init()->Self
   withComparator<C>(cmp: C)->Self
   len()->usize
   isEmpty()->bool
-  get(key: *const K)->?*const V
-  getMut(key: *const K)->?*V
-  containsKey(key: *const K)->bool
+  get(key: in &const K)->?&const V
+  getMut(key: in &const K)->?&V
+  containsKey(key: in &const K)->bool
   insert(key: K,value: V)->!?V
-  remove(key: *const K)->?V
-  removeEntry(key: *const K)->?(K,V)
+  remove(key: in &const K)->?V
+  removeEntry(key: in &const K)->?(K,V)
   first()->?(*const K,*const V)
   last()->?(*const K,*const V)
   popFirst()->?(K,V)
@@ -1009,14 +1015,14 @@
   next()->void
   prev()->void
 ```
-**`class TreeSet<T>`**：B 树有序集合
+**`class BTreeSet<T>`**：B 树有序集合
 ```text
   init()->Self
   len()->usize
-  contains(value: *const T)->bool
+  contains(value: in &const T)->bool
   insert(value: T)->!bool
-  remove(value: *const T)->bool
-  take(value: *const T)->?T
+  remove(value: in &const T)->bool
+  take(value: in &const T)->?T
   first()->?*const T
   last()->?*const T
   popFirst()->?T

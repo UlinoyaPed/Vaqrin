@@ -107,7 +107,7 @@ private:
         field.clear();
     }
 
-    func countRecordByte(&recordBytes: *usize) !void {
+    func countRecordByte(recordBytes: &usize) !void {
         if recordBytes == ~usize(0) { return CsvError.InputLimit; }
         recordBytes += 1;
         if recordBytes > options.maxRecordBytes { return CsvError.RecordLimit; }
@@ -119,7 +119,8 @@ private:
         var inQuotes = false;
         var afterQuote = false;
         var sawInput = false;
-        var recordBytes: usize = 0;
+        var byteCount: usize = 0;
+        var recordBytes: &usize = &byteCount;
         for {
             var next = nextByte()!;
             switch move(next) {
@@ -131,14 +132,14 @@ private:
                 },
                 some(byte) => {
                     sawInput = true;
-                    countRecordByte(&recordBytes)!;
+                    countRecordByte(recordBytes)!;
                     if inQuotes {
                         if byte == options.quote {
                             var lookahead = nextByte()!;
                             switch move(lookahead) {
                                 some(other) => {
                                     if other == options.quote {
-                                        countRecordByte(&recordBytes)!;
+                                        countRecordByte(recordBytes)!;
                                         field.push(options.quote)!;
                                     } else {
                                         inQuotes = false;
@@ -162,7 +163,7 @@ private:
                             var lookahead = nextByte()!;
                             switch move(lookahead) {
                                 some(other) => {
-                                    if other == 10 { countRecordByte(&recordBytes)!; }
+                                    if other == 10 { countRecordByte(recordBytes)!; }
                                     else { pendingByte = some(other); }
                                 },
                                 null => {},
@@ -184,7 +185,7 @@ private:
                         var lookahead = nextByte()!;
                         switch move(lookahead) {
                             some(other) => {
-                                if other == 10 { countRecordByte(&recordBytes)!; }
+                                if other == 10 { countRecordByte(recordBytes)!; }
                                 else { pendingByte = some(other); }
                             },
                             null => {},

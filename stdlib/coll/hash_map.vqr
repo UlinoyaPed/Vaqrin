@@ -87,7 +87,7 @@ public:
 
     func next() ?(*const K, *const V) {
         if frontIndex == backIndex { return null; }
-        var entry = entries.get(frontIndex).unwrap();
+        var entry = entries.getPtr(frontIndex).unwrap();
         frontIndex++;
         some(((*entry).0, (*entry).1))
     }
@@ -95,7 +95,7 @@ public:
     func nextBack() ?(*const K, *const V) {
         if frontIndex == backIndex { return null; }
         backIndex--;
-        var entry = entries.get(backIndex).unwrap();
+        var entry = entries.getPtr(backIndex).unwrap();
         some((entry.0, entry.1))
     }
 
@@ -213,7 +213,7 @@ private:
         var index = hash % cap;
         var firstTombstone: ?usize = null;
         for examined in usize(0)..cap {
-            var bucket = buckets.get(index).unwrap();
+            var bucket = buckets.getPtr(index).unwrap();
             if bucket.isEmpty() { return (null, some(firstTombstone ?? index)); }
             if bucket.matches(hash, key, equalsFunction) { return (some(index), null); }
             if bucket.isTombstone() && firstTombstone == null { firstTombstone = some(index); }
@@ -230,7 +230,7 @@ private:
         var index = hash % cap;
         var firstTombstone: ?usize = null;
         for examined := usize(0); examined < cap; examined++ {
-            var bucket = buckets.get(index).unwrap();
+            var bucket = buckets.getPtr(index).unwrap();
             if bucket.isEmpty() { return firstTombstone ?? index; }
             if bucket.isTombstone() && firstTombstone == null {
                 firstTombstone = some(index);
@@ -246,7 +246,7 @@ private:
     }
 
     func insertAt(index: usize, hash: usize, key: K, value: V) *V {
-        var bucket = buckets.getMut(index).unwrap();
+        var bucket = buckets.getMutPtr(index).unwrap();
         if bucket.isTombstone() { tombstones--; }
         bucket.write(hash, move(key), move(value));
         length++;
@@ -269,7 +269,7 @@ private:
         tombstones = 0;
 
         for i in usize(0)..next.len() {
-            var bucket = next.getMut(i).unwrap();
+            var bucket = next.getMutPtr(i).unwrap();
             if bucket.isOccupied() {
                 var hash = bucket.storedHash();
                 var pair = bucket.take();
@@ -314,7 +314,7 @@ public:
         var hash = hashKey(&key);
         switch findIndex(&key, hash) {
             some(index) => {
-                var bucket = buckets.getMut(index).unwrap();
+                var bucket = buckets.getMutPtr(index).unwrap();
                 var previous = bucket.take();
                 oldKey, oldValue := move(previous);
                 bucket.write(hash, move(key), move(value));
@@ -338,27 +338,30 @@ public:
         }
     }
 
-    const func get(key: *const K) ?*const V {
-        var hash = hashKey(key);
-        switch findIndex(key, hash) {
-            null => null,
-            some(index) => some(buckets.get(index).unwrap().valueRef()),
-        }
+    #return_borrow: self
+    const func get(key: in &const K) ?&const V {
+        var index = findIndex(&key, hashKey(&key)) ?? { return null; };
+        unsafe { __vqr_borrow_from_self(buckets.getPtr(index).unwrap().valueRef()) }
     }
 
-    func getMut(key: *const K) ?*V {
-        var hash = hashKey(key);
-        switch findIndex(key, hash) {
-            null => null,
-            some(index) => some(buckets.getMut(index).unwrap().valueMut()),
-        }
+    #return_borrow: self
+    func getMut(key: in &const K) ?&V {
+        var index = findIndex(&key, hashKey(&key)) ?? { return null; };
+        unsafe { __vqr_borrow_from_self(buckets.getMutPtr(index).unwrap().valueMut()) }
     }
 
-    func getOrInsert(key: K, initial: V) !*V {
+    #return_borrow: self
+    func getOrInsert(key: K, initial: V) !&V {
+        var address = getOrInsertPtr(move(key), move(initial))!;
+        unsafe { __vqr_borrow_from_self(address) }
+    }
+
+private:
+    func getOrInsertPtr(key: K, initial: V) !*V {
         var hash = hashKey(&key);
         var location = probe(&key, hash);
         switch location.0 {
-            some(index) => buckets.getMut(index).unwrap().valueMut(),
+            some(index) => buckets.getMutPtr(index).unwrap().valueMut(),
             null => {
                 var index = if ensureRoomForOne()! { insertionIndex(hash) } else { location.1.unwrap() };
                 insertAt(index, hash, move(key), move(initial))
@@ -366,27 +369,28 @@ public:
         }
     }
 
+public:
     const func getKeyValue(key: *const K) ?(*const K, *const V) {
         var hash = hashKey(key);
         switch findIndex(key, hash) {
             null => null,
             some(index) => {
-                var bucket = buckets.get(index).unwrap();
+                var bucket = buckets.getPtr(index).unwrap();
                 some((bucket.keyRef(), bucket.valueRef()))
             },
         }
     }
 
-    const func containsKey(key: *const K) bool {
-        findIndex(key, hashKey(key)) != null
+    const func containsKey(key: in &const K) bool {
+        findIndex(&key, hashKey(&key)) != null
     }
 
-    func removeEntry(key: *const K) ?(K, V) {
-        var hash = hashKey(key);
-        switch findIndex(key, hash) {
+    func removeEntry(key: in &const K) ?(K, V) {
+        var hash = hashKey(&key);
+        switch findIndex(&key, hash) {
             null => null,
             some(index) => {
-                var pair = buckets.getMut(index).unwrap().take();
+                var pair = buckets.getMutPtr(index).unwrap().take();
                 length--;
                 tombstones++;
                 some(move(pair))
@@ -394,7 +398,7 @@ public:
         }
     }
 
-    func remove(key: *const K) ?V {
+    func remove(key: in &const K) ?V {
         switch removeEntry(key) {
             null => null,
             some(pair) => {
@@ -406,7 +410,7 @@ public:
 
     func retain<F: Movable>(predicate: F) void {
         for i in usize(0)..buckets.len() {
-            var bucket = buckets.getMut(i).unwrap();
+            var bucket = buckets.getMutPtr(i).unwrap();
             if bucket.isOccupied() && !predicate(bucket.keyRef(), bucket.valueRef()) {
                 bucket.tombstoneEntry();
                 length--;
@@ -417,7 +421,7 @@ public:
 
     func clear() void {
         for i in usize(0)..buckets.len() {
-            buckets.getMut(i).unwrap().clearEntry();
+            buckets.getMutPtr(i).unwrap().clearEntry();
         }
         length = 0;
         tombstones = 0;
@@ -439,7 +443,7 @@ public:
         };
         entries.reserve(length)!;
         for i in usize(0)..buckets.len() {
-            var bucket = buckets.get(i).unwrap();
+            var bucket = buckets.getPtr(i).unwrap();
             if bucket.isOccupied() {
                 entries.push((bucket.keyRef(), bucket.valueRef()))!;
             }
@@ -549,14 +553,14 @@ public:
         }
     }
 
-    func remove(value: *const T) bool {
+    func remove(value: in &const T) bool {
         switch values.remove(value) {
             null => false,
             some(_) => true,
         }
     }
 
-    func take(value: *const T) ?T {
+    func take(value: in &const T) ?T {
         switch values.removeEntry(value) {
             null => null,
             some(entry) => {
@@ -566,7 +570,7 @@ public:
         }
     }
 
-    const func contains(value: *const T) bool { values.containsKey(value) }
+    const func contains(value: in &const T) bool { values.containsKey(value) }
     func reserve(n: usize) !void { values.reserve(n) }
     func clear() void { values.clear(); }
     const func iterRef() !SetIterRef<T> { SetIterRef<T>(values.iterRef()!) }

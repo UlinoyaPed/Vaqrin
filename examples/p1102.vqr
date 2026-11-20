@@ -16,7 +16,7 @@ func main() !void {
     for entry in move(entries) {
         var key = *entry.0 - c;
         switch freq.get(&key) {
-            some(p) => { answer += *entry.1 * *p; },
+            some(value) => { answer += *entry.1 * value; },
             null => {},
         }
     }

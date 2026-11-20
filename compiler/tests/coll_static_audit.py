@@ -196,7 +196,7 @@ def main() -> int:
 
     check("ownerIndex: usize" in linked and "nodes: Vec<^ListNode<T>>" in linked,
           "LinkedList lacks explicit Box ownership tracking", errors)
-    check("(*nodes.getMut(ownerIndex).unwrap()).asPtr().ownerIndex = ownerIndex" in linked,
+    check("(*nodes.getMutPtr(ownerIndex).unwrap()).asPtr().ownerIndex = ownerIndex" in linked,
           "LinkedList swap-removal does not repair the moved node index", errors)
     check("nodes.append(&other.nodes)!" in linked,
           "LinkedList append does not transfer Box ownership", errors)

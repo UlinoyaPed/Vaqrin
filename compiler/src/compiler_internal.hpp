@@ -40,6 +40,7 @@ enum class Kind {
   Array,
   Slice,
   Pointer,
+  Reference,
   Box,
   Allocation,
   AllocationContext,
@@ -105,6 +106,13 @@ struct Type {
   Function *callEntry = nullptr;
   bool consuming = false;
   std::vector<Ast> patterns;
+  bool compatible = false;
+};
+
+struct Borrow {
+  int root = -1;
+  int via = -1;
+  bool raw = false;
 };
 
 struct ValueAt {
@@ -115,6 +123,7 @@ struct ValueAt {
   int local = -1;
   bool borrowed = false;
   bool temporaryBorrow = false;
+  Borrow origin{};
 };
 
 struct FunctionEntry {
@@ -146,6 +155,8 @@ struct Local {
   Constant *constant = nullptr;
   DILocalVariable *debug = nullptr;
   bool debugParameter = false;
+  Type *reference = nullptr;
+  Borrow origin{};
 };
 struct Loop {
   BasicBlock *leave, *next;
@@ -190,6 +201,7 @@ private:
   std::vector<bool> initialized;
   std::vector<Loop> loops;
   bool constructing = false;
+  int returnRoot = -1;
   std::set<unsigned> constructed;
   DISubprogram *debug = nullptr;
 
@@ -208,6 +220,14 @@ private:
   void drop(Type *t, Value *address);
   void dropLocal(int index);
   void requireInit(ValueAt v, Span span);
+  void checkAccess(ValueAt v, bool write, Span span);
+  void invalidateOwnedAddresses(ValueAt owner);
+  ValueAt dereference(ValueAt v, Span span);
+  ValueAt borrow(ValueAt v, Type *t, Span span, bool materialize);
+  ValueAt argument(const Ast &n, Type *t);
+  ValueAt referenceName(int local, Span span);
+  Type *referenceHint(const Ast &n);
+  void recordBorrow(int local, ValueAt v, Span span);
   void setAlive(int local, bool alive);
   void registerDrop(int local, bool alive);
   void merge(const std::vector<std::vector<bool>> &edges, std::size_t size);
@@ -299,6 +319,9 @@ public:
   Type *integer(unsigned bits, bool sign);
   Type *aggregate(Kind kind, std::vector<Type *> parts, std::uint64_t count = 0, bool cAbi = false);
   Type *pointer(Type *t, bool readOnly);
+  Type *reference(Type *t, bool readOnly, bool compatible = false);
+  bool hasReference(Type *t);
+  int borrowParameter(Definition def, const std::vector<Type *> &parameters, Type *result, bool receiver);
   Type *slice(Type *t, bool readOnly);
   Type *box(Type *t);
   std::pair<Type *, Constant *> boxLayout(Type *element, Type *allocator);

@@ -68,8 +68,8 @@ public:
     const func len() usize { values.len() }
     const func isEmpty() bool { values.isEmpty() }
     func reserve(count: usize) !void { values.reserve(count) }
-    const func get(index: usize) ?*const Value { values.get(index) }
-    func getMut(index: usize) ?*Value { values.getMut(index) }
+    const func get(index: usize) ?*const Value { values.getPtr(index) }
+    func getMut(index: usize) ?*Value { values.getMutPtr(index) }
     func push(value: Value) !void { values.push(move(value)) }
     func pop() ?Value { values.pop() }
     func insert(index: usize, value: Value) !void { values.insert(index, move(value)) }
@@ -94,28 +94,28 @@ public:
     const func isEmpty() bool { entries.isEmpty() }
     const func containsKey(key: str) bool {
         for index in usize(0)..entries.len() {
-            var entry = entries.get(index).unwrap();
+            var entry = entries.getPtr(index).unwrap();
             if entry.key == key { return true; }
         }
         false
     }
     const func get(key: str) ?*const Value {
         for index in usize(0)..entries.len() {
-            var entry = entries.get(index).unwrap();
+            var entry = entries.getPtr(index).unwrap();
             if entry.key == key { return some(&entry.value); }
         }
         null
     }
     func getMut(key: str) ?*Value {
         for index in usize(0)..entries.len() {
-            var entry = entries.getMut(index).unwrap();
+            var entry = entries.getMutPtr(index).unwrap();
             if entry.key == key { return some(&entry.value); }
         }
         null
     }
     func insert(key: string, value: Value) !?Value {
         for index in usize(0)..entries.len() {
-            var entry = entries.getMut(index).unwrap();
+            var entry = entries.getMutPtr(index).unwrap();
             if entry.key == key {
                 var previous = core.replace<Value>(&entry.value, move(value));
                 return some(move(previous));
@@ -126,7 +126,7 @@ public:
     }
     func remove(key: str) ?Value {
         for index in usize(0)..entries.len() {
-            var entry = entries.get(index).unwrap();
+            var entry = entries.getPtr(index).unwrap();
             if entry.key == key {
                 var removed = entries.remove(index);
                 switch move(removed) {
@@ -139,15 +139,15 @@ public:
     }
     const func keyAt(index: usize) ?str {
         if index >= entries.len() { return null; }
-        some(entries.get(index).unwrap().key)
+        some(entries.getPtr(index).unwrap().key)
     }
     const func valueAt(index: usize) ?*const Value {
         if index >= entries.len() { return null; }
-        some(&entries.get(index).unwrap().value)
+        some(&entries.getPtr(index).unwrap().value)
     }
     func valueAtMut(index: usize) ?*Value {
         if index >= entries.len() { return null; }
-        some(&entries.getMut(index).unwrap().value)
+        some(&entries.getMutPtr(index).unwrap().value)
     }
     const func keys() JsonKeyIter { JsonKeyIter(self) }
     const func items() JsonItemIter { JsonItemIter(self) }

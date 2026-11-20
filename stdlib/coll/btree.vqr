@@ -105,7 +105,7 @@ public:
 
     func next() ?(*const K, *const V) {
         if frontIndex == backIndex { return null; }
-        var entry = *entries.get(frontIndex).unwrap();
+        var entry = *entries.getPtr(frontIndex).unwrap();
         frontIndex++;
         some((&(*entry).0, &(*entry).1))
     }
@@ -113,7 +113,7 @@ public:
     func nextBack() ?(*const K, *const V) {
         if frontIndex == backIndex { return null; }
         backIndex--;
-        var entry = *entries.get(backIndex).unwrap();
+        var entry = *entries.getPtr(backIndex).unwrap();
         some((&(*entry).0, &(*entry).1))
     }
 
@@ -130,7 +130,7 @@ public:
 
     func next() ?(*const K, *V) {
         if frontIndex == backIndex { return null; }
-        var entry = entries.get(frontIndex).unwrap();
+        var entry = entries.getPtr(frontIndex).unwrap();
         frontIndex++;
         some((&entry.0, &entry.1))
     }
@@ -138,7 +138,7 @@ public:
     func nextBack() ?(*const K, *V) {
         if frontIndex == backIndex { return null; }
         backIndex--;
-        var entry = entries.get(backIndex).unwrap();
+        var entry = entries.getPtr(backIndex).unwrap();
         some((&entry.0, &entry.1))
     }
 
@@ -415,7 +415,9 @@ public:
         move(result)
     }
 
-    const func get(key: *const K) ?*const V {
+    #return_borrow: self
+    const func get(query: in &const K) ?&const V {
+        var key = &query;
         var current = root;
         for current != null {
             var node = current.unwrap();
@@ -423,7 +425,7 @@ public:
             if index < node.entryCount() &&
                !less(key, &node.entryAt(index).0) &&
                !less(&node.entryAt(index).0, key) {
-                return some(&node.entryAt(index).1);
+                return unsafe { __vqr_borrow_from_self(&node.entryAt(index).1) };
             }
             if node.isLeaf() { return null; }
             current = some(node.childAt(index));
@@ -431,7 +433,9 @@ public:
         null
     }
 
-    func getMut(key: *const K) ?*V {
+    #return_borrow: self
+    func getMut(query: in &const K) ?&V {
+        var key = &query;
         var current = root;
         for current != null {
             var node = current.unwrap();
@@ -439,7 +443,7 @@ public:
             if index < node.entryCount() &&
                !less(key, &node.entryAt(index).0) &&
                !less(&node.entryAt(index).0, key) {
-                return some(&node.entryAtMut(index).1);
+                return unsafe { __vqr_borrow_from_self(&node.entryAtMut(index).1) };
             }
             if node.isLeaf() { return null; }
             current = some(node.childAt(index));
@@ -447,13 +451,13 @@ public:
         null
     }
 
-    const func containsKey(key: *const K) bool { get(key) != null }
+    const func containsKey(key: in &const K) bool { get(key) != null }
 
-    func removeEntry(key: *const K) ?(K, V) {
+    func removeEntry(key: in &const K) ?(K, V) {
         switch root {
             null => return null,
             some(node) => {
-                var removed = removeFrom(node, key);
+                var removed = removeFrom(node, &key);
                 if removed != null { length--; }
                 contractRoot();
                 move(removed)
@@ -461,7 +465,7 @@ public:
         }
     }
 
-    func remove(key: *const K) ?V {
+    func remove(key: in &const K) ?V {
         switch removeEntry(key) {
             null => null,
             some(entry) => {
@@ -599,7 +603,7 @@ public:
 
     const func len() usize { values.len() }
     const func isEmpty() bool { values.isEmpty() }
-    const func contains(value: *const T) bool { values.containsKey(value) }
+    const func contains(value: in &const T) bool { values.containsKey(value) }
 
     func insert(value: T) !bool {
         switch values.insert(move(value), 0u8)! {
@@ -608,14 +612,14 @@ public:
         }
     }
 
-    func remove(value: *const T) bool {
+    func remove(value: in &const T) bool {
         switch values.remove(value) {
             null => false,
             some(_) => true,
         }
     }
 
-    func take(value: *const T) ?T {
+    func take(value: in &const T) ?T {
         switch values.removeEntry(value) {
             null => null,
             some(entry) => {

@@ -43,6 +43,7 @@ enum class NodeKind {
   ForIn,
   PatternName,
   PatternRef,
+  PatternIndirect,
   PatternCase,
   PatternTuple,
   PatternValue,

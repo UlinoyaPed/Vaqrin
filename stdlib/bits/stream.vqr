@@ -62,8 +62,8 @@ public:
             var index = cursor + i;
             var bit = if (order == BitOrder.LsbFirst) i else count - 1 - i;
             var bitInByte = positionWithinByte(index, order);
-            var &byte = &destination[index / 8];
-            byte = if (testBit(value, bit)) setBit(byte, bitInByte) else clearBit(byte, bitInByte);
+            var address = &destination[index / 8];
+            *address = if (testBit(value, bit)) setBit(*address, bitInByte) else clearBit(*address, bitInByte);
         }
         cursor += count;
     }

@@ -126,7 +126,7 @@ func sample(value: i32) !i32 {
     &alias := &total;
     for i in i64(0)..b { alias += a; }
     for j := i16(0); j < a; j++ { alias += j; }
-    var opt: ?*i16 = some(&total);
+    var opt: ?*i16 = some(&alias);
     switch opt { some(ptr) => { (*ptr)++; }, null => {}, }
     switch opt { some(ref borrowed) => { (*borrowed)++; }, null => {}, }
 }
@@ -142,8 +142,8 @@ func sample(value: i32) !i32 {
             expected = {}
             short = {1, 3, 5}
             for row, name, hint in ((1, "a", "i16"), (1, "b", "i64"), (2, "total", "i16"),
-                                    (3, "alias", "i16"), (4, "i", "i64"), (5, "j", "i16"),
-                                    (7, "ptr", "*i16"), (8, "borrowed", "*i16")):
+                                    (3, "alias", "&i16"), (4, "i", "i64"), (5, "j", "i16"),
+                                    (7, "ptr", "*i16"), (8, "borrowed", "&*i16")):
                 line = source.splitlines()[row]
                 end = line.index(name, 8 if row == 4 else 0) + len(name)
                 label = hint if row in short else (": " if row == 2 else ":") + hint

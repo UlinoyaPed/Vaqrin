@@ -89,7 +89,7 @@ public:
 
     const func get(key: str) ?str {
         for index in usize(0)..entries.len() {
-            var entry = entries.get(index).unwrap();
+            var entry = entries.getPtr(index).unwrap();
             if entry.key() == key { return some(entry.value()); }
         }
         null
@@ -120,10 +120,10 @@ public:
         var output = text.StringBuilder();
         for i := usize(0); i < entries.len(); i++ {
             if i != 0 { output.append("&")!; }
-            var key = queryEscape(entries.get(i).unwrap().key())!;
+            var key = queryEscape(entries.getPtr(i).unwrap().key())!;
             output.append(key)!;
             output.append("=")!;
-            var value = queryEscape(entries.get(i).unwrap().value())!;
+            var value = queryEscape(entries.getPtr(i).unwrap().value())!;
             output.append(value)!;
         }
         output.build()

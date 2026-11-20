@@ -14,8 +14,7 @@ public:
 
     const func map<U, F: Movable>(project: F) BorrowRef<U> {
         var target = project(pointer);
-        &count := counter;
-        count++;
+        (*counter)++;
         unsafe { BorrowRef<U>(target, counter) }
     }
 
@@ -42,8 +41,7 @@ public:
 
     func deinit() void {
         if ownsBorrow {
-            var &count = counter;
-            count = 0;
+            *counter = 0;
         }
     }
 }

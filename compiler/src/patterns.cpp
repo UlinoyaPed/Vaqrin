@@ -9,7 +9,7 @@ struct Constructor {
 
 bool wildcard(const Ast &p) {
   return !p || p->kind == NodeKind::PatternAny || p->kind == NodeKind::PatternName ||
-         p->kind == NodeKind::PatternRef;
+         p->kind == NodeKind::PatternRef || p->kind == NodeKind::PatternIndirect;
 }
 
 std::string patternKey(const Ast &p) {
@@ -132,10 +132,28 @@ void Body::assertCondition(Value *test, BasicBlock *failure) {
 void Body::checkPattern(const Ast &pat, ValueAt subject, BasicBlock *failure,
                         std::vector<std::pair<Ast, ValueAt>> &bindings) {
   if (pat->kind == NodeKind::PatternAny) return;
-  if (pat->kind == NodeKind::PatternName || pat->kind == NodeKind::PatternRef) {
+  if (pat->kind == NodeKind::PatternName || pat->kind == NodeKind::PatternRef ||
+      pat->kind == NodeKind::PatternIndirect) {
     if (std::ranges::any_of(bindings, [&](auto &b) { return b.first->text == pat->text; }))
       fail(pat->span, "duplicate pattern binding");
-    if (pat->kind == NodeKind::PatternRef) subject = asPointer(subject, pat->span);
+    if (pat->kind != NodeKind::PatternName) {
+      if (pat->kind == NodeKind::PatternIndirect) {
+        subject = dereference(subject, pat->span);
+      } else if (p.hasReference(subject.type)) {
+        fail(pat->span, "use '&' to borrow through a reference payload", "E230");
+      }
+      auto *reference = p.reference(subject.type, !subject.writable);
+      auto origin = subject.origin;
+      if (pat->kind == NodeKind::PatternRef && subject.local >= 0 &&
+          (origin.root < 0 || (origin.raw && !locals[subject.local].reference))) {
+        if (subject.writable && origin.raw) locals[subject.local].origin = {};
+        origin = {subject.local, -1};
+      }
+      origin.raw = false;
+      subject.origin = origin;
+      checkAccess(subject, !reference->readOnly, pat->span);
+      subject = {reference, subject.address, nullptr, false, -1, false, subject.temporaryBorrow, origin};
+    }
     bindings.emplace_back(pat, subject);
     return;
   }
@@ -194,7 +212,9 @@ ValueAt Body::match(const Ast &n, Type *expected) {
   Type *ownerType = nullptr;
   AllocaInst *selection = nullptr;
   if (!subject.borrowed) {
-    subject.address = asPointer(subject, n->span).value;
+    auto *address = slot(subject.type, "matched.value");
+    ir.CreateStore(read(subject, n->span), address);
+    subject.address = address;
     subject.value = nullptr;
     subject.writable = true;
   }
@@ -222,7 +242,7 @@ ValueAt Body::match(const Ast &n, Type *expected) {
   for (std::size_t i = 1; i < n->children.size(); ++i) {
     auto arm = n->children[i];
     auto *entry = block("switch.arm");
-    using Binding = std::tuple<std::string, Type *, bool>;
+    using Binding = std::tuple<std::string, Type *, NodeKind, int, int>;
     std::vector<Binding> signature;
     std::vector<AllocaInst *> slots;
     bool first = true;
@@ -237,9 +257,8 @@ ValueAt Body::match(const Ast &n, Type *expected) {
       std::ranges::sort(bindings, {}, [](const auto &b) { return b.first->text; });
       std::vector<Binding> current;
       for (auto &[pat, v] : bindings) {
-        current.emplace_back(pat->text, v.type, pat->kind == NodeKind::PatternRef);
-        hintBinding(pat->span, pat->kind == NodeKind::PatternRef ? v.type->parts[0] : v.type,
-                    EditorHints::BindingKind::Pattern);
+        current.emplace_back(pat->text, v.type, pat->kind, v.origin.root, v.origin.via);
+        hintBinding(pat->span, v.type, EditorHints::BindingKind::Pattern);
       }
       if (first) {
         signature = current;
@@ -264,16 +283,22 @@ ValueAt Body::match(const Ast &n, Type *expected) {
       bind(" <match remainder>", ownerType, true, owner, arm->span);
     }
     for (unsigned j = 0; j < signature.size(); ++j) {
-      auto &[key, t, reference] = signature[j];
-      bind(reference ? "&" + key : key, t, true, ir.CreateLoad(p.storage(t), slots[j]), arm->span);
+      auto &[key, t, mode, root, via] = signature[j];
+      auto id = bind(key, t, true, ir.CreateLoad(p.storage(t), slots[j]), arm->span);
+      if (t->kind == Kind::Reference || p.hasReference(t))
+        recordBorrow(id, {t, nullptr, nullptr, false, -1, false, false, {root, via}}, arm->span);
     }
     auto borrow = patternBorrows.end();
-    if (subject.local >= 0 && std::ranges::any_of(signature, [](const auto &item) { return std::get<2>(item); }))
+    if (subject.local >= 0 && std::ranges::any_of(signature, [](const auto &item) {
+          return std::get<2>(item) != NodeKind::PatternName;
+        }))
       borrow = patternBorrows.insert(subject.local);
     auto v = expression(arm->tail, resultType == p.voidTy ? nullptr : resultType);
     if (borrow != patternBorrows.end()) patternBorrows.erase(borrow);
     if (live()) {
       if (!resultType) resultType = v.type;
+      if (p.hasReference(resultType))
+        fail(arm->span, "reference-valued switch expressions require explicit returns", "E230");
       if (resultType == p.voidTy) {
         if (v.type->kind == Kind::Result) fail(arm->span, "unused error result", "E231");
         if (p.drops(v.type) && !v.borrowed) drop(v.type, asPointer(v, arm->span).value);

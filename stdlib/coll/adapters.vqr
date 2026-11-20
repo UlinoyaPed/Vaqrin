@@ -213,8 +213,8 @@ public:
 
 private:
     func higherPriority(a: usize, b: usize) bool {
-        if order == HeapOrder.Max { less(values.get(b).unwrap(), values.get(a).unwrap()) }
-        else { less(values.get(a).unwrap(), values.get(b).unwrap()) }
+        if order == HeapOrder.Max { less(values.getPtr(b).unwrap(), values.getPtr(a).unwrap()) }
+        else { less(values.getPtr(a).unwrap(), values.getPtr(b).unwrap()) }
     }
 
     func siftUp(index: usize) void {

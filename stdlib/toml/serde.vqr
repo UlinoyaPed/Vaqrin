@@ -50,7 +50,7 @@ public:
     func beginMap(length: ?usize) !void { frames.push(TomlWriteFrame(true))!; }
     func writeKey(value: str) !void {
         if frames.isEmpty() { return TomlSerdeError.InvalidState; }
-        var frame = frames.getMut(frames.len() - 1).unwrap();
+        var frame = frames.getMutPtr(frames.len() - 1).unwrap();
         if !frame.mapMode || frame.pendingKey != null { return TomlSerdeError.InvalidState; }
         frame.pendingKey = some(text.fromBytes(value.asBytes())!);
     }
@@ -71,7 +71,7 @@ private:
             root = some(move(value));
             return;
         }
-        var frame = frames.getMut(frames.len() - 1).unwrap();
+        var frame = frames.getMutPtr(frames.len() - 1).unwrap();
         if frame.mapMode {
             var key = opt.take<string>(&frame.pendingKey) ?? { return TomlSerdeError.InvalidState; };
             frame.table.insertUnique(move(key), move(value))!;
@@ -156,11 +156,11 @@ public:
     }
     func nextElement() !bool {
         if frames.isEmpty() { return TomlSerdeError.InvalidState; }
-        var frame = frames.getMut(frames.len() - 1).unwrap();
+        var frame = frames.getMutPtr(frames.len() - 1).unwrap();
         if frame.mapMode { return TomlSerdeError.InvalidState; }
         var array = asArray(frame.parent).unwrap();
         if frame.index >= array.len() { current = null; return false; }
-        current = array.get(frame.index);
+        current = array.getPtr(frame.index);
         frame.index++;
         true
     }
@@ -184,7 +184,7 @@ public:
     }
     func nextKey() !?string {
         if frames.isEmpty() { return TomlSerdeError.InvalidState; }
-        var frame = frames.getMut(frames.len() - 1).unwrap();
+        var frame = frames.getMutPtr(frames.len() - 1).unwrap();
         if !frame.mapMode { return TomlSerdeError.InvalidState; }
         var table = asTable(frame.parent).unwrap();
         if frame.index >= table.len() { current = null; return null; }

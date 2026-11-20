@@ -254,7 +254,7 @@ class Acceptance(CompilerCase):
         self.hosted('''
             import (std/core, std/text, coll as seq, iter)
             func twice(x: i32) i32 { x * 2 }
-            func even(&x: *const i32) bool { x % 2 == 0 }
+            func even(x: *const i32) bool { *x % 2 == 0 }
             func seven() i32 { 7 }
 
             func main() !void {
@@ -674,16 +674,16 @@ class Acceptance(CompilerCase):
             ("func f(x: i32) void { x move= x; }", "expected"),
             ("func f() i32 { if (true) 7 }", "else"),
             ("func f() never {}", "never"),
-            ("func f(p: *i32) void { &x := p; &x := p; }", "duplicate local"),
-            ("func f(p: *const i32) void { &x := p; x = 2; }", "writable"),
-            ("func f(p: *i32) void { &x := p; y := move(x); }", "cannot be moved"),
-            ("func f() void { var &x: *i32; }", "initialized pointer"),
-            ("func f(p: ?*i32) void { &x := p; }", "initialized pointer"),
-            ("func f(p: !*i32) void { &x := p; }", "initialized pointer"),
-            ("func f(p: *i32) void { var &x: i32 = p; }", "i32"),
-            ("func f(&x: *i32) void {} func f(p: *i32) void {}", "duplicate overload"),
+            ("func f() void { var n = 0; var x: &const i32 = &n; var x: &const i32 = &n; }", "duplicate local"),
+            ("func f() void { var n = 0; var x: &const i32 = &n; x = 2; }", "writable"),
+            ("func f() void { var n = 0; &x := &n; y := move(x); }", "cannot be moved"),
+            ("func f() void { var &x: *i32; }", "typed reference"),
+            ("func f(p: ?*i32) void { &x := p; }", "requires a pointer"),
+            ("func f(p: !*i32) void { &x := p; }", "requires a pointer"),
+            ("func f(p: *i32) void { var &x: i32 = p; }", "typed reference"),
+            ("func f(&x: *i32) void {} func f(p: *i32) void {}", "identifier"),
             ("func f(p: *const ?i32) void { switch *p { some(ref x) => { x++; }, null => {} } }", "writable"),
-            ("func f(v: ?i32) void { switch v { some(ref x) => { a := move(v); }, null => {} } }", "cannot be moved"),
+            ("func f(v: ?i32) void { switch v { some(ref x) => { a := move(v); }, null => {} } }", "active borrow"),
             ("enum E { A(i32), B(i32) } func f(v: E) i32 { switch v { E.A(x), E.B(ref x) => x } }", "alternative"),
         ):
             with self.subTest(source=code):
@@ -693,26 +693,29 @@ class Acceptance(CompilerCase):
     def test_borrowing_and_control_flow(self):
         self.hosted("""
             enum Event { Link(*i32), Num(i32) }
-            func inc(&x: *i32) void { x++; }
+            func inc(x: &i32) void { x++; }
             func pair(x: i32, p: *i32) (i32, *i32) { return (x, p); }
             class C { private: pub var n: i32; pub const func value() !i32 { n } }
             func abort() never { panic("stop") }
             func liveValue(okay: bool) i32 { if okay { 7 } else { abort() } }
             func main() !void {
                 a := 1; b := 8; p := &a;
-                &x := p;
-                var &readOnly: *const i32 = p;
-                f := [&x]() void => { x++; };
-                p = &b; f(); inc(&x);
-                pp := &p; &slot := pp; slot = &a;
-                n, &z := pair(4, p); z += n;
+                {
+                    &x := p;
+                    f := (target: &i32) void => { target++; };
+                    p = &b; f(x); inc(x);
+                }
+                { var slot: &*i32 = &p; slot = &a; }
+                n, address := pair(4, p);
+                *address += n;
                 event := Event.Link(&a);
                 switch event {
-                    Event.Link(ref ptr) => { &v := ptr; v++; },
+                    Event.Link(&v) => { v++; },
                     Event.Num(ref v) => { v++; },
                 }
                 for (&v in [_]*i32{&a, &b}) { v++; }
-                io.println(readOnly)!; io.println(b)!;
+                { var readOnly: &const i32 = &a; io.println(readOnly)!; }
+                io.println(b)!;
                 c := C{n: 9}; maybe := some(c);
                 var nested: ?!i32 = maybe?.value();
                 io.println(nested.unwrap()!)!;
@@ -722,11 +725,132 @@ class Acceptance(CompilerCase):
             }
         """, "9\n9\n9\n7\n")
 
+    def test_reference_contracts(self):
+        source = REPOSITORY / "examples/references.vqr"
+        self.process(VAQC, "build", "-g", "-O2", source, "-o", "references")
+        self.assertEqual(self.process("./references").stdout.decode(), "11\n24\n*i32\ni32\n42\n10\n21\n11\n12\n31\n")
+        self.hosted("""
+            class Large {
+                #copy: disabled
+                pub var values: [4]i32;
+                pub func init() : values([4]i32{0, 1, 2, 3}) {}
+            }
+            func read(value: in &const Large) i32 { value.values[3] }
+            interface Reader {
+                #return_borrow: self
+                const func get() &const i32;
+                const func read(value: in &const Large) i32;
+            }
+            class Impl {
+                #implements: Reader
+                #return_borrow: self
+                pub const func get() &const i32 { var result: &const i32 = id; result }
+                pub var id: i32;
+                pub const func read(value: in &const Large) i32 { value.values[2] }
+            }
+            #return_borrow: second
+            func second(first, second: &const i32) &const i32 { second }
+            func main() !void {
+                var owned = Large();
+                io.println(read(owned) + read(Large()))!;
+                var impl = Impl{id: 7};
+                var reader: *const Reader = &impl;
+                io.println(reader.read(owned))!;
+                var checked: &const Reader = &impl;
+                io.println(checked.read(owned))!;
+                var value = checked.get();
+                io.println(*second(value, value))!;
+            }
+        """, "6\n2\n2\n7\n")
+        self.hosted("""
+            import (opt)
+            class Items {
+                private:
+                var sent: bool;
+                pub func init() : sent(false) {}
+                pub func next() ?^i32 {
+                    if sent { return null; }
+                    sent = true;
+                    return some(new i32(41) catch panic("allocation failed"));
+                }
+            }
+            func main() !void {
+                for &value in Items() { value++; io.println(value)!; }
+                key, &value := (7, new i32(34)!);
+                value++;
+                io.println(key + value)!;
+                var item: ?i32 = some(41);
+                {
+                    var slot: &?i32 = &item;
+                    switch opt.asMutRef(slot) { some(&n) => { n++; }, null => {} }
+                }
+                switch opt.asRef(item) { some(&n) => { io.println(n)!; }, null => {} }
+            }
+        """, "42\n42\n42\n")
+        self.hosted("""
+            error Failure { Stop }
+            class Probe {
+                #copy: disabled
+                pub var id: i32;
+                func deinit() void { io.println(id) catch {}; }
+            }
+            func use(item: in &const Probe, value: i32) !void { io.println(item.id + value)!; }
+            func stop() !i32 { return Failure.Stop; }
+            func attempt() !void { use(Probe{id: 2}, stop()!)!; }
+            func main() !void {
+                use(Probe{id: 1}, 100)!;
+                attempt() catch (reason) {
+                    if reason != Failure.Stop { return reason; }
+                    io.println(3)!;
+                };
+            }
+        """, "101\n1\n2\n3\n")
+        for code, diagnostic in [
+            ("func f(r: &i32) void {} func g() void { var n = 0; f(n); }", "no accessible overload"),
+            ("func f(r: &const i32) void {} func g() void { var n = 0; f(&n); }", "no accessible overload"),
+            ("func f(r: &const i32) void { var p: &i32 = r; }", "read-only"),
+            ("func f() void { var n = 0; var p: &i32 = &n; var q: &i32 = &n; }", "active borrow"),
+            ("func f(x: &const i32) &const i32 { var n = 0; var r: &const i32 = &n; return r; }",
+             "declared source"),
+            ("func get(x: in &const i32) &const i32 { x } func f() void { var r = get(7); }", "temporary"),
+            ("func f() !void { var b = new i32(7)!; var r: &const i32 = b; var next = move(b); }",
+             "active borrow"),
+            ("func f() !void { var v = coll.Vec<i32>(); v.push(7)!; var r = v.get(0); v.push(8)!; }",
+             "active borrow"),
+            ("func f() !void { var b = new i32(7)!; var b2 = b; }", "cannot copy"),
+            ("func f() void { var r: in &const i32; }", "only permitted in parameter"),
+            ("func f() in &const i32 { return 0; }", "only permitted in parameter"),
+            ("func f(r: in &i32) void {}", "read-only reference parameter"),
+            ("func f(r: &&i32) void {}", "indirect storage"),
+            ("func f(r: &const i32) void {} func f(r: in &const i32) void {}", "duplicate overload"),
+            ("func f(a, b: &i32) void {} func g() void { var n = 0; var r: &i32 = &n; f(r, r); }",
+             "active borrow"),
+            ("func f(obj: ?i32) void { switch obj { some(&x) => {}, null => {}, } }",
+             "requires a pointer, reference or Box"),
+            ("func f(r: in &const i32) void {} func g() void { var n = 0; var p = &n; var pp = &p; f(pp); }",
+             "no accessible overload"),
+            ("func f() !void { var v = coll.Vec<i32>(); v.push(7)!; var opt = v.getMut(0);"
+             " switch opt { some(value) => { value++; }, null => {}, } }", "cannot copy"),
+            ("func f() void { var n = 0; var b = 1; var p = &n; var pp = &p;"
+             " *pp = &b; var r: &i32 = p; }", "source is unproven"),
+            ("func set(p: *i32) void { *p = 18; } func f() void { var n = 0; var p = &n;"
+             " var r: &const i32 = p; set(p); }", "active borrow"),
+            ("func f(use: bool) void { var n = 0; var b = 1; var p: ?*i32 = some(&n);"
+             " var address = p ?? &b; var r: &i32 = address; }", "source is unproven"),
+            ("func f() !void { var box = new i32(1)!; var p = box.asPtr();"
+             " box = new i32(2)!; var r: &const i32 = p; }", "source is unproven"),
+            ("func f() void { var n = 0; var b = 1; var p = &n;"
+             " for i in 0..2 { var r: &const i32 = p; p = &b; } }", "source is unproven"),
+        ]:
+            with self.subTest(code=code):
+                bad = self.source("bad-reference.vqr", "import (coll)\n" + code)
+                self.assertIn(diagnostic, self.process(VAQC, "check", bad, good=False).stderr.decode())
+
     def test_optional_core_and_iterator_contracts(self):
         self.hosted("""
             import (core, opt, iter, coll)
             error Broken { Stop }
-            func bumped(&x: *const i32) bool { x > 3 }
+            func bumped(x: *const i32) bool { *x > 3 }
             func sum(x, y: i32) i32 { x + y }
             func seven() i32 { 7 }
             func noReturn(message: str) never { panic(message) }
@@ -738,16 +862,16 @@ class Acceptance(CompilerCase):
                 core.drop(b);
                 var o: ?i32 = null;
                 io.println(opt.isNone(&o))!;
-                var &value = opt.getOrInsert(&o, 3);
-                value += 2;
+                var value = opt.getOrInsert(&o, 3);
+                *value += 2;
                 opt.getOrInsertWith(&o, seven);
                 io.println(*opt.asPtr(&o).unwrap())!;
                 io.println(opt.replace(&o, 8).unwrap())!;
                 io.println(opt.take(&o).unwrap())!;
                 io.println(opt.isNone(&o))!;
-                &newValue := opt.insert(&o, 9);
-                newValue--;
-                io.println(opt.contains(&o, &newValue))!;
+                var newValue = opt.insert(&o, 9);
+                (*newValue)--;
+                io.println(opt.contains(&o, newValue))!;
                 seed := 3;
                 transform := [seed](n: i32) ?i32 => { if (n > seed) some(n) else null };
                 io.println(opt.andThen<i32, i32>(o, move(transform)).unwrap())!;
@@ -835,7 +959,7 @@ class Acceptance(CompilerCase):
             const width = meta.bitWidth<u24>();
             const stride = meta.strideOf<[3]u32>();
             const typeLabel = meta.typeName<i64>();
-            func shorter(&a: *const i32, &b: *const i32) bool { a < b }
+            func shorter(a: *const i32, b: *const i32) bool { *a < *b }
             func main() !void {
                 io.println(width)!; io.println(stride)!; io.println(typeLabel)!;
                 io.println(meta.alignOf<u32>())!;
@@ -932,9 +1056,9 @@ class Acceptance(CompilerCase):
     def test_slice_search_and_heap(self):
         self.hosted("""
             import (algo, core)
-            func less(&a, &b: *const i32) bool { a < b }
-            func equal(&a, &b: *const i32) bool { a == b }
-            func positive(&value: *const i32) bool { value > 0 }
+            func less(a, b: *const i32) bool { *a < *b }
+            func equal(a, b: *const i32) bool { *a == *b }
+            func positive(value: *const i32) bool { *value > 0 }
             func main() !void {
                 var values = [_]i32{7, 3, 2, 3, 4};
                 var key = 3;
@@ -967,7 +1091,7 @@ class Acceptance(CompilerCase):
                 algo.reverse(values[:]);
                 io.println(values[0])!;
                 offset := -1;
-                descending := [offset](&a, &b: *const i32) bool => a * offset < b * offset;
+                descending := [offset](a, b: *const i32) bool => *a * offset < *b * offset;
                 algo.sortBy(values[:], move(descending));
                 io.println(values[0])!;
                 algo.sort(values[:]);
@@ -1141,7 +1265,7 @@ class Acceptance(CompilerCase):
                 const func id() i32 { number }
                 func deinit() void { io.println(number) catch {}; }
             }
-            func even(&n: *const i32) bool { n % 2 == 0 }
+            func even(n: *const i32) bool { *n % 2 == 0 }
             func cleanup<F: Movable>(callback: F) mem.ScopeGuard<F> {
                 mem.ScopeGuard<F>(move(callback))
             }
@@ -1159,8 +1283,8 @@ class Acceptance(CompilerCase):
                 numbers.retain(even);
                 io.println(numbers.len())!;
                 io.println(numbers.asConstSlice()[1])!;
-                &alias := numbers.getMut(2).unwrap();
-                alias = 8;
+                var alias = numbers.getMut(2).unwrap();
+                *alias = 8;
                 var cursor = coll.FixedVec<i32, 4>.intoIter(move(numbers));
                 io.println(cursor.nextBack().unwrap())!;
                 io.println(cursor.next().unwrap())!;
@@ -1294,9 +1418,8 @@ class Acceptance(CompilerCase):
             }
             func statically<T: Readable<i32> & Copyable>(target: *const T) i32 { target.read() }
             func dynamically(target: *const Readable<i32>) i32 {
-                &view := target;
-                var restored = &view;
-                var call = [&view]() i32 => view.read();
+                var restored = target;
+                var call = [target]() i32 => target.read();
                 if (target == restored) call() else 0
             }
             func mutate(target: *Writable) void { target.write(88); }
@@ -1779,8 +1902,8 @@ class Acceptance(CompilerCase):
                 {
                     var borrowed = storage.borrowMut()!;
                     var leaf = cell.BorrowMut<Pair>.map<i32>(move(borrowed), edit);
-                    &x := leaf.get();
-                    x = 20;
+                    var x = leaf.get();
+                    *x = 20;
                     var conflict = storage.tryBorrow();
                     io.println(core.isNone(&conflict))!;
                 }
@@ -2007,8 +2130,8 @@ class Acceptance(CompilerCase):
                     var unavailable = lock.tryLock();
                     io.println(core.isNone(&unavailable))!;
                     var entry = sync.MutexGuard<Pair>.map<i32>(move(first), choose);
-                    &number := entry.get();
-                    number *= 4;
+                    var number = entry.get();
+                    *number *= 4;
                     entry.unlock();
                 }
                 var observe = (pair: *Pair) !void => io.println(pair.other);
@@ -2149,9 +2272,9 @@ class Acceptance(CompilerCase):
                     var clone = weak.upgrade();
                     var owned = move(clone).unwrap();
                     var guard = owned.asPtr().lock()!;
-                    &value := guard.get();
-                    value += 9;
-                    value
+                    var value = guard.get();
+                    *value += 9;
+                    *value
                 };
                 var handle = thread.Thread<u32>.spawn(move(job))!;
                 io.println(handle.join()!)!;

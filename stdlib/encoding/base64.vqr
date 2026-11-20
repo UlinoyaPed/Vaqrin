@@ -27,12 +27,11 @@ func alphabet(options: Base64Options) str {
 
 func emit(byte: u8, width: usize, column: *usize, dst: *coll.Vec<u8>) !void {
     if width != 0 {
-        &position := column;
-        if position == width {
+        if *column == width {
             dst.push(10)!;
-            position = 0;
+            *column = 0;
         }
-        position++;
+        (*column)++;
     }
     dst.push(byte)
 }

@@ -27,11 +27,13 @@ int Body::findLocal(std::string_view name) const {
 
 int Body::bind(std::string name, Type *t, bool writable, Value *initial, Span span,
                std::optional<std::size_t> targetScope) {
-  bool reference = name.starts_with('&');
+  bool reference = name.starts_with('&') || t->kind == Kind::Reference;
+  Type *referenceType = nullptr;
   if (reference) {
-    name.erase(0, 1);
-    if (t->kind != Kind::Pointer || !initial)
-      fail(span, "dereference binding requires an initialized pointer");
+    if (name.starts_with('&')) name.erase(0, 1);
+    if ((t->kind != Kind::Pointer && t->kind != Kind::Reference) || !initial)
+      fail(span, "reference binding requires an initialized pointer or reference");
+    referenceType = p.reference(t->parts[0], t->readOnly);
     writable = !t->readOnly;
     t = t->parts[0];
   }
@@ -48,6 +50,7 @@ int Body::bind(std::string name, Type *t, bool writable, Value *initial, Span sp
     ir.CreateStore(ir.getInt32(0), order);
   }
   locals.push_back({std::move(name), t, address, order, nullptr, reference, scope, writable});
+  locals.back().reference = referenceType;
   scopes[scope].push_back(i);
   initialized.resize(locals.size(), false);
   if (!reference && initial && t != p.voidTy) ir.CreateStore(initial, address);
@@ -58,6 +61,146 @@ int Body::bind(std::string name, Type *t, bool writable, Value *initial, Span sp
 void Body::requireInit(ValueAt v, Span span) {
   if (v.local >= 0 && !initialized[v.local])
     fail(span, "local '" + locals[v.local].name + "' is not initialized on every incoming path", "E230");
+}
+
+void Body::checkAccess(ValueAt v, bool write, Span span) {
+  bool ownSlot =
+      v.origin.raw && v.local >= 0 && !locals[v.local].reference && v.address == locals[v.local].slot;
+  int root = !ownSlot && v.origin.root >= 0 ? v.origin.root : v.local;
+  if (root < 0) return;
+  const auto scope = locals[root].scope;
+  if (!initialized[root] || scope >= scopes.size() ||
+      std::ranges::find(scopes[scope], root) == scopes[scope].end()) {
+    if (v.origin.raw) return;
+    fail(span, "borrowed owner is no longer initialized", "E230");
+  }
+  for (const auto &scope : scopes)
+    for (int id : scope) {
+      const auto &loan = locals[id];
+      if (id == root || !initialized[id] || loan.origin.root != root || loan.origin.raw ||
+          (!loan.reference && !p.hasReference(loan.type)))
+        continue;
+      int via = v.origin.via;
+      while (via >= 0 && via != id)
+        via = locals[via].origin.via;
+      if (via == id) continue;
+      if (write || (loan.reference ? !loan.reference->readOnly : !p.copyable(loan.type)))
+        fail(span, "access conflicts with active borrow of '" + locals[root].name + "'", "E230");
+    }
+}
+
+void Body::invalidateOwnedAddresses(ValueAt owner) {
+  int root = owner.origin.root >= 0 ? owner.origin.root : owner.local;
+  if (root < 0 || !p.drops(locals[root].type)) return;
+  for (auto &local : locals)
+    if (local.origin.raw && local.origin.root == root) local.origin = {};
+}
+
+void Body::recordBorrow(int id, ValueAt v, Span span) {
+  if (p.hasReference(v.type) || locals[id].reference) {
+    if (v.temporaryBorrow)
+      fail(span, "borrow from a temporary cannot escape this expression; bind the owner first", "E230");
+    if (v.origin.root >= 0 && locals[v.origin.root].scope > locals[id].scope)
+      fail(span, "reference would outlive its owner", "E230");
+    v.origin.raw = false;
+    bool mutableLoan = locals[id].reference ? !locals[id].reference->readOnly : !p.copyable(v.type);
+    checkAccess(v, mutableLoan, span);
+  }
+  if (p.hasReference(v.type) || locals[id].reference || carriesBorrow(v.type)) locals[id].origin = v.origin;
+}
+
+ValueAt Body::referenceName(int id, Span span) {
+  const auto &local = locals[id];
+  if (!initialized[id]) fail(span, "reference is not initialized", "E230");
+  return {local.reference, local.slot, nullptr, false, -1, false, false, {local.origin.root, id}};
+}
+
+ValueAt Body::dereference(ValueAt v, Span span) {
+  auto *t = v.type;
+  if (t->kind == Kind::Box) {
+    if (!v.address) {
+      auto id = bind(" <borrowed box " + std::to_string(locals.size()) + ">", t, true, read(v, span), span,
+                     temporaryScope);
+      v = {t, nullptr, locals[id].slot, true, id, true, true};
+    }
+    auto *raw = read(v, span, false);
+    return {t->parts[0],
+            nullptr,
+            ir.CreateExtractValue(raw, 0),
+            v.writable,
+            -1,
+            true,
+            v.temporaryBorrow,
+            {v.origin.root >= 0 ? v.origin.root : v.local, v.origin.via}};
+  }
+  if (t->kind != Kind::Pointer && t->kind != Kind::Reference)
+    fail(span, "dereference requires a pointer, reference or Box");
+  auto origin = t->kind == Kind::Reference || v.origin.raw ? v.origin : Borrow{};
+  return {t->parts[0], nullptr, read(v, span, false), !t->readOnly, -1, true, v.temporaryBorrow, origin};
+}
+
+ValueAt Body::borrow(ValueAt v, Type *t, Span span, bool materialize) {
+  if (v.type == p.neverTy) return v;
+  auto *target = t->parts[0];
+  bool raw = v.type->kind == Kind::Pointer && v.type != target;
+  auto accepts = [target](Type *source) {
+    return source == target || (target->kind == Kind::Interface && source->kind == Kind::Class);
+  };
+  if (v.type != target) {
+    if (v.type->kind == Kind::Pointer || v.type->kind == Kind::Reference || v.type->kind == Kind::Box)
+      v = dereference(v, span);
+    if (!accepts(v.type)) fail(span, "cannot borrow '" + v.type->name + "' as '" + t->name + "'", "E201");
+  } else if (v.origin.raw && v.local >= 0 && !locals[v.local].reference) {
+    if (!t->readOnly) locals[v.local].origin = {};
+    v.origin = {};
+  }
+  if (!v.address) {
+    if (!materialize || !t->readOnly) fail(span, "borrow requires an existing object", "E230");
+    auto id = bind(" <borrowed argument " + std::to_string(locals.size()) + ">", v.type, true, read(v, span),
+                   span, temporaryScope);
+    v = {v.type, nullptr, locals[id].slot, true, id, true, true};
+  }
+  requireInit(v, span);
+  if (!t->readOnly && !v.writable) fail(span, "cannot borrow a read-only object mutably", "E230");
+  if (v.origin.root < 0) v.origin.root = v.local;
+  if (v.origin.root >= 0 && locals[v.origin.root].refCapture && !locals[v.origin.root].reference &&
+      !unsafeDepth)
+    fail(span, "safe reference cannot be derived from an untracked closure capture", "E230");
+  v.origin.raw = false;
+  checkAccess(v, !t->readOnly, span);
+  if (v.origin.root < 0 && materialize && raw)
+    v.temporaryBorrow = true;
+  else if (v.origin.root < 0 && !unsafeDepth)
+    fail(span, "reference source is unproven; borrowing a raw address requires unsafe", "E230");
+  auto *address = v.address;
+  if (target != v.type) {
+    auto *table = p.interfaceTable(v.type, target, span);
+    auto *view = ir.CreateInsertValue(PoisonValue::get(t->ir), address, 0);
+    address = ir.CreateInsertValue(view, table, 1);
+  }
+  return {t, address, nullptr, false, -1, false, v.temporaryBorrow, v.origin};
+}
+
+ValueAt Body::argument(const Ast &n, Type *t) {
+  if (t->kind != Kind::Reference) {
+    auto v = expression(n, t);
+    if (t->kind == Kind::Pointer && v.origin.raw) {
+      auto pointee = v;
+      pointee.local = -1;
+      checkAccess(pointee, !t->readOnly, n->span);
+      if (!t->readOnly) invalidateOwnedAddresses(pointee);
+    }
+    return v;
+  }
+  if (!t->compatible) return expression(n, t);
+  int id = n->kind == NodeKind::Name ? findLocal(n->text) : -1;
+  auto *target = t->parts[0];
+  if (id >= 0 && locals[id].reference && target != locals[id].reference)
+    return borrow(referenceName(id, n->span), t, n->span, true);
+  auto *hinted = hint(n);
+  return borrow(
+      expression(n, !hinted && (target->kind == Kind::Int || target->kind == Kind::Float) ? target : nullptr),
+      t, n->span, true);
 }
 
 static std::string bindingType(Type *type, const Source *source) {
@@ -76,6 +219,8 @@ static std::string bindingType(Type *type, const Source *source) {
   case Kind::Result: return "!" + bindingType(type->parts[0], source);
   case Kind::Pointer:
     return std::string(type->readOnly ? "*const " : "*") + bindingType(type->parts[0], source);
+  case Kind::Reference:
+    return std::string(type->readOnly ? "&const " : "&") + bindingType(type->parts[0], source);
   case Kind::Slice:
     return std::string(type->readOnly ? "[]const " : "[]") + bindingType(type->parts[0], source);
   case Kind::Class: case Kind::Interface: case Kind::Enum:
@@ -98,7 +243,8 @@ void Body::hintBinding(Span span, Type *type, EditorHints::BindingKind kind) {
 }
 
 bool Body::carriesBorrow(Type *t) {
-  if (t == p.viewTy || t->kind == Kind::Pointer || t->kind == Kind::Slice) return true;
+  if (t == p.viewTy || t->kind == Kind::Pointer || t->kind == Kind::Reference || t->kind == Kind::Slice)
+    return true;
   if (t->kind == Kind::Result || t->kind == Kind::Optional || t->kind == Kind::Tuple ||
       t->kind == Kind::Array)
     return std::ranges::any_of(t->parts, [&](auto *part) { return carriesBorrow(part); });
@@ -439,6 +585,7 @@ Value *Body::read(ValueAt v, Span span, bool take) {
   if (v.type == p.voidTy) return voidValue().value;
   if (v.value) return v.value;
   requireInit(v, span);
+  checkAccess(v, false, span);
   if (v.local >= 0 && v.address == locals[v.local].slot && locals[v.local].constant)
     return locals[v.local].constant;
   if (!v.address) fail(span, "expression has no value");
@@ -461,6 +608,10 @@ ValueAt Body::wrap(Type *t, Value *v, bool present) {
 
 ValueAt Body::coerce(ValueAt v, Type *t, Span span) {
   if (!t || v.type == t || v.type == p.neverTy) return v;
+  if (t->kind == Kind::Reference && v.type->kind == Kind::Reference && t->parts == v.type->parts &&
+      (t->readOnly || !v.type->readOnly)) {
+    return {t, read(v, span, false), nullptr, false, -1, false, v.temporaryBorrow, v.origin};
+  }
   if (t->kind == Kind::Pointer && t->parts[0]->kind == Kind::Interface && v.type->kind == Kind::Pointer &&
       v.type->parts[0]->kind == Kind::Class && (t->readOnly || !v.type->readOnly)) {
     auto *table = p.interfaceTable(v.type->parts[0], t->parts[0], span);
@@ -468,7 +619,7 @@ ValueAt Body::coerce(ValueAt v, Type *t, Span span) {
     return {t, ir.CreateInsertValue(view, table, 1), nullptr, false, -1, false, v.temporaryBorrow};
   }
   if (t->kind == Kind::Pointer && v.type->kind == Kind::Pointer && t->readOnly && t->parts == v.type->parts)
-    return {t, read(v, span), nullptr, false, -1, false, v.temporaryBorrow};
+    return {t, read(v, span), nullptr, false, -1, false, v.temporaryBorrow, v.origin};
   if (t->kind == Kind::Slice && v.type->kind == Kind::Slice && t->readOnly && t->parts == v.type->parts)
     return {t, read(v, span), nullptr, false, -1, false, v.temporaryBorrow};
   if (t == p.viewTy && v.type == p.textTy)
@@ -478,6 +629,7 @@ ValueAt Body::coerce(ValueAt v, Type *t, Span span) {
     auto inner = coerce(v, t->parts[0], span);
     auto wrapped = wrap(t, read(inner, span), true);
     wrapped.temporaryBorrow = inner.temporaryBorrow;
+    wrapped.origin = inner.origin;
     return wrapped;
   }
   fail(span, "expected '" + t->name + "', found '" + v.type->name + "'", "E201");
@@ -507,14 +659,35 @@ ValueAt Body::payload(ValueAt source, unsigned i, Type *t) {
       address = ir.CreateInBoundsGEP(source.type->ir, source.address, {ir.getInt32(0), ir.getInt32(i)});
     else
       address = ir.CreateStructGEP(source.type->ir, source.address, i);
-    return {t, nullptr, address, source.writable, source.local, source.borrowed, source.temporaryBorrow};
+    auto origin = source.origin;
+    if (source.type->kind == Kind::Class && t->kind == Kind::Pointer) origin = {};
+    return {t,     nullptr, address, source.writable, source.local, source.borrowed, source.temporaryBorrow,
+            origin};
   }
-  return {t, ir.CreateExtractValue(source.value, i), nullptr, false, -1, false, source.temporaryBorrow};
+  return {t,
+          ir.CreateExtractValue(source.value, i),
+          nullptr,
+          false,
+          -1,
+          false,
+          source.temporaryBorrow,
+          source.origin};
 }
 
 ValueAt Body::asPointer(ValueAt v, Span span) {
+  if (p.hasReference(v.type)) fail(span, "a raw address cannot expose reference storage", "E230");
   requireInit(v, span);
-  if (v.address) return {p.pointer(v.type, !v.writable), v.address, nullptr, false, -1, false, v.temporaryBorrow};
+  if (v.address) {
+    checkAccess(v, false, span);
+    if (v.local >= 0 && !locals[v.local].reference && v.origin.raw) {
+      if (v.writable) locals[v.local].origin = {};
+      v.origin = {v.local, -1};
+    }
+    if (v.origin.root < 0) v.origin.root = v.local;
+    v.origin.raw = true;
+    return {
+        p.pointer(v.type, !v.writable), v.address, nullptr, false, -1, false, v.temporaryBorrow, v.origin};
+  }
   auto *t = slot(v.type, "temporary");
   ir.CreateStore(read(v, span), t);
   return {p.pointer(v.type, true), t};
@@ -523,8 +696,13 @@ ValueAt Body::asPointer(ValueAt v, Span span) {
 void Body::emitReturn(ValueAt value, Span span) {
   if (value.type == p.neverTy) return;
   if (result == p.neverTy) fail(span, "never function cannot return normally");
+  bool error = value.type == p.errorTy && result->kind == Kind::Result;
   value = coerce(value, result, span);
   rejectTemporaryBorrow(value, span);
+  if (p.hasReference(result) && !error &&
+      !(isa_and_nonnull<Constant>(value.value) && cast<Constant>(value.value)->isNullValue()) &&
+      (returnRoot < 0 || value.origin.root != returnRoot))
+    fail(span, "returned reference must borrow from its declared source", "E230");
   auto *returned = read(value, span);
   clean(0);
   if (constructing && result->kind == Kind::Result) {
@@ -575,7 +753,8 @@ DIType *Program::debugType(Type *t) {
   case Kind::Float:
     out = debug->createBasicType(t->name, t->bits, dwarf::DW_ATE_float);
     break;
-  case Kind::Pointer: {
+  case Kind::Pointer:
+  case Kind::Reference: {
     if (!t->ir->isPointerTy()) {
       out = debug->createUnspecifiedType(t->name);
       break;
@@ -583,7 +762,10 @@ DIType *Program::debugType(Type *t) {
     auto *pointee = t->parts[0];
     auto *description =
         pointee->kind == Kind::Pointer ? debug->createUnspecifiedType(pointee->name) : debugType(pointee);
-    out = debug->createPointerType(description, pointerBits());
+    if (t->readOnly) description = debug->createQualifiedType(dwarf::DW_TAG_const_type, description);
+    out = t->kind == Kind::Reference
+              ? debug->createReferenceType(dwarf::DW_TAG_reference_type, description, pointerBits())
+              : debug->createPointerType(description, pointerBits());
     break;
   }
   default:
@@ -598,7 +780,10 @@ void Body::debugValue(int id, bool alive) {
   auto &l = locals[id];
   if (!l.debug || !ir.getCurrentDebugLocation()) return;
   auto *location = ir.getCurrentDebugLocation().get();
-  if (alive && l.debugParameter)
+  if (alive && l.reference)
+    p.debug->insertDbgValueIntrinsic(l.slot, l.debug, p.debug->createExpression(), location,
+                                     ir.GetInsertBlock());
+  else if (alive && l.debugParameter)
     p.debug->insertDbgValueIntrinsic(l.slot, l.debug, p.debug->createExpression({dwarf::DW_OP_deref}),
                                      location, ir.GetInsertBlock());
   else if (alive)
@@ -614,7 +799,7 @@ void Body::debugLocal(int id, Span span, unsigned argument) {
   setDebug(span);
   auto &local = locals[id];
   auto line = ir.getCurrentDebugLocation().getLine();
-  auto *type = p.debugType(local.type);
+  auto *type = p.debugType(local.reference ? local.reference : local.type);
   if (argument) {
     local.debug = p.debug->createParameterVariable(debug, local.name, argument, debug->getFile(), line, type);
     local.debugParameter = true;
@@ -649,11 +834,15 @@ void Body::build(FunctionEntry &entry) {
     for (const auto &[name, value] : owner->comptimeArguments)
       bindConstant(name, value.first, value.second, d.span);
   unsigned index = 0, runtime = 0;
+  auto borrowArgument = p.borrowParameter(entry.def, entry.parameters, entry.result, owner && !d.associated);
   if (owner && !d.associated) {
     auto *arg = fn->getArg(runtime++);
     ++index;
     arg->setName("self");
-    debugLocal(bind("self", entry.parameters[0], false, arg, d.span), d.span, runtime);
+    auto id = bind("self", entry.parameters[0], false, arg, d.span);
+    locals[id].origin = {id, -1, true};
+    if (borrowArgument == 0) returnRoot = id;
+    debugLocal(id, d.span, runtime);
   }
   for (const auto &param : d.params) {
     auto *t = entry.parameters[index++];
@@ -662,7 +851,10 @@ void Body::build(FunctionEntry &entry) {
     } else {
       auto *arg = fn->getArg(runtime++);
       arg->setName(param.name);
-      debugLocal(bind(param.name, t, true, arg, param.span), param.span, runtime);
+      auto id = bind(param.name, t, true, arg, param.span);
+      if (t->kind == Kind::Reference) locals[id].origin.root = id;
+      if (borrowArgument == static_cast<int>(index) - 1) returnRoot = id;
+      debugLocal(id, param.span, runtime);
     }
   }
   for (const auto &g : d.generics)
@@ -789,6 +981,7 @@ ValueAt Body::conditional(const Ast &n, Type *expected) {
   }
   merge(states, initial.size());
   if (t == p.voidTy) return voidValue();
+  if (p.hasReference(t)) fail(n->span, "reference-valued branches require explicit returns", "E230");
   auto *phi = ir.CreatePHI(p.storage(t), edges.size());
   for (auto [value, from] : edges)
     phi->addIncoming(value, from);
@@ -818,7 +1011,21 @@ void Body::statementContents(const Ast &n, std::size_t bindingScope) {
     bool writable = n->text != "const" && n->text != "comptime";
     ValueAt v{t};
     if (!n->children.empty()) {
-      v = expression(n->children[0], t);
+      const auto &init = n->children[0];
+      bool alias = n->names.size() == 1 && n->names[0].starts_with('&');
+      if ((t && t->kind == Kind::Reference) || alias) {
+        auto id = init->kind == NodeKind::Name ? findLocal(init->text) : -1;
+        v = id >= 0 && locals[id].reference ? referenceName(id, init->span) : expression(init);
+        if (v.type == p.neverTy) return;
+        if (alias) {
+          if (v.type->kind != Kind::Pointer && v.type->kind != Kind::Box && v.type->kind != Kind::Reference)
+            fail(init->span, "reference binding requires a pointer, reference or Box", "E230");
+          t = p.reference(v.type->parts[0], v.type->kind == Kind::Box ? !v.writable : v.type->readOnly);
+        }
+        v = borrow(v, t, init->span, false);
+      } else {
+        v = expression(init, t);
+      }
       if (v.type == p.neverTy) return;
     }
     p.ensureSized(v.type, n->span);
@@ -831,9 +1038,10 @@ void Body::statementContents(const Ast &n, std::size_t bindingScope) {
       rejectTemporaryBorrow(v, n->span);
       auto id = bind(n->names[0], v.type, writable, (v.value || v.address) ? read(v, n->span) : nullptr,
                      n->span, bindingScope);
+      recordBorrow(id, v, n->span);
       debugLocal(id, n->span);
       if (!n->type)
-        hintBinding(n->bindingSpans[0], locals[id].type,
+        hintBinding(n->bindingSpans[0], locals[id].reference ? locals[id].reference : locals[id].type,
                     n->text == ":=" ? EditorHints::BindingKind::Short : EditorHints::BindingKind::Local);
       return;
     }
@@ -844,9 +1052,24 @@ void Body::statementContents(const Ast &n, std::size_t bindingScope) {
       if (n->names[i] == "_") {
         if (!v.borrowed && p.drops(element.type)) drop(element.type, asPointer(element, n->span).value);
       } else {
+        if (n->names[i].starts_with('&')) {
+          auto *type = element.type;
+          if (type->kind != Kind::Pointer && type->kind != Kind::Reference && type->kind != Kind::Box)
+            fail(n->span, "reference binding requires a pointer, reference or Box", "E230");
+          if (type->kind == Kind::Box && !element.address) {
+            auto owner = bind(" <destructured box " + std::to_string(locals.size()) + ">", type, true,
+                              read(element, n->span), n->span, bindingScope);
+            element = {type, nullptr, locals[owner].slot, true, owner, true};
+          }
+          element = borrow(
+              element,
+              p.reference(type->parts[0], type->kind == Kind::Box ? !element.writable : type->readOnly),
+              n->span, false);
+        }
         rejectTemporaryBorrow(element, n->span);
         auto id = bind(n->names[i], element.type, writable, read(element, n->span), n->span, bindingScope);
-        hintBinding(n->bindingSpans[i], locals[id].type, EditorHints::BindingKind::Short);
+        recordBorrow(id, element, n->span);
+        hintBinding(n->bindingSpans[i], element.type, EditorHints::BindingKind::Short);
       }
     }
     return;
@@ -856,6 +1079,8 @@ void Body::statementContents(const Ast &n, std::size_t bindingScope) {
     if (l.type == p.neverTy) return;
     if (!l.writable) fail(n->span, "assignment requires a writable location");
     bool whole = l.local >= 0 && !locals[l.local].refCapture && locals[l.local].slot == l.address;
+    if (!whole || initialized[l.local]) checkAccess(l, true, n->span);
+    if (p.hasReference(l.type)) fail(n->span, "assignment cannot replace reference storage", "E230");
     if (!whole) requireInit(l, n->span);
     const auto &op = n->text;
     ValueAt value;
@@ -893,12 +1118,14 @@ void Body::statementContents(const Ast &n, std::size_t bindingScope) {
     if (value.type == p.neverTy) return;
     rejectTemporaryBorrow(value, n->span);
     auto *r = read(value, n->span);
+    if (p.drops(l.type)) invalidateOwnedAddresses(l);
     if (whole)
       dropLocal(l.local);
     else
       drop(l.type, l.address);
     if (l.type != p.voidTy) ir.CreateStore(r, l.address);
     if (whole) setAlive(l.local, true);
+    if (whole && carriesBorrow(l.type)) locals[l.local].origin = {};
     return;
   }
   Type *expected = nullptr;
@@ -923,7 +1150,7 @@ ValueAt Body::sequence(const Ast &n, Type *expected, bool scoped) {
   if (live()) {
     v = n->tail ? expression(n->tail, expected) : coerce(voidValue(), expected, n->span);
     if (live() && scoped && v.address)
-      v = {v.type, read(v, n->span), nullptr, false, -1, false, v.temporaryBorrow};
+      v = {v.type, read(v, n->span), nullptr, false, -1, false, v.temporaryBorrow, v.origin};
   }
   if (scoped) leave();
   return v;
@@ -1034,6 +1261,11 @@ ValueAt Body::loop(const Ast &n) {
        *end = block("loop.end");
   ir.CreateBr(header);
   ir.SetInsertPoint(header);
+  // A raw address retained by a back edge may have been changed or invalidated in the preceding iteration.
+  for (auto &local : locals)
+    if (local.origin.raw && local.origin.root >= 0 &&
+        (local.writable || p.drops(locals[local.origin.root].type)))
+      local.origin = {};
   auto initial = initialized;
   std::vector<std::vector<bool>> exits;
   Value *counter = nullptr;
@@ -1070,15 +1302,24 @@ ValueAt Body::loop(const Ast &n) {
   ir.SetInsertPoint(iteration);
   loops.push_back({end, next, scopes.size(), {}, {}});
   enter();
-  auto bindIteration = [&](std::size_t index, Type *type, Value *value) {
-    auto id = bind(n->names[index], type, true, value, n->span);
-    hintBinding(n->bindingSpans[index], locals[id].type, EditorHints::BindingKind::Loop);
+  auto bindIteration = [&](std::size_t index, ValueAt value) {
+    if (n->names[index].starts_with('&') && value.type->kind == Kind::Box) {
+      auto owner = bind(" <iteration box " + std::to_string(locals.size()) + ">", value.type, true,
+                        read(value, n->span), n->span);
+      value = {value.type, nullptr, locals[owner].slot, true, owner, true};
+      auto place = dereference(value, n->span);
+      value = borrow(place, p.reference(place.type, !place.writable), n->span, false);
+    }
+    auto id = bind(n->names[index], value.type, true, read(value, n->span), n->span);
+    recordBorrow(id, value, n->span);
+    hintBinding(n->bindingSpans[index], locals[id].reference ? locals[id].reference : locals[id].type,
+                EditorHints::BindingKind::Loop);
   };
   if (iterator.type) {
     auto item = payload(nextItem, 1, element);
     auto bindItem = [&](std::size_t index, ValueAt value) {
       if (n->names[index] != "_")
-        bindIteration(index, value.type, read(value, n->span));
+        bindIteration(index, value);
       else if (p.drops(value.type))
         drop(value.type, asPointer(value, n->span).value);
     };
@@ -1102,9 +1343,9 @@ ValueAt Body::loop(const Ast &n) {
                        : ir.CreateGEP(p.storage(element), arrayPtr, counter);
       item = read({element, nullptr, addr, false, -1, true}, n->span);
     }
-    if (enumerate && n->names[0] != "_") bindIteration(0, p.sizeTy, counter);
+    if (enumerate && n->names[0] != "_") bindIteration(0, {p.sizeTy, counter});
     if (n->names.back() != "_")
-      bindIteration(n->names.size() - 1, element, item);
+      bindIteration(n->names.size() - 1, {element, item});
     else if (p.drops(element))
       drop(element, asPointer({element, item}, n->span).value);
   }
@@ -1174,7 +1415,10 @@ ValueAt Body::expression(const Ast &n, Type *expected) {
   ValueAt v;
   switch (n->kind) {
   case NodeKind::Name:
-    v = name(n);
+    if (int id = findLocal(n->text); id >= 0 && locals[id].reference && expected && p.hasReference(expected))
+      v = referenceName(id, n->span);
+    else
+      v = name(n);
     break;
   case NodeKind::Number:
     v = numeric(n, literal);
@@ -1217,10 +1461,12 @@ ValueAt Body::expression(const Ast &n, Type *expected) {
     if (i < 0) fail(n->span, "move requires a complete local or parameter", "E230");
     auto l = name(src);
     requireInit(l, n->span);
+    checkAccess(l, true, n->span);
     if (patternBorrows.contains(i) || !l.writable || locals[i].refCapture || !p.movable(l.type))
       fail(n->span, "source cannot be moved", "E230");
     if (locals[i].captureFlag) closure->consuming = true;
-    v = {l.type, read(l, n->span, false)};
+    v = {l.type, read(l, n->span, false), nullptr, false, -1, false, l.temporaryBorrow, l.origin};
+    if (p.drops(l.type)) invalidateOwnedAddresses(l);
     setAlive(i, false);
     break;
   }
@@ -1246,6 +1492,8 @@ ValueAt Body::expression(const Ast &n, Type *expected) {
         leave();
         return neverValue();
       }
+      if (p.hasReference(item.type))
+        fail(n->span, "reference storage in array and tuple literals is not supported", "E230");
       types.push_back(item.type);
       temporaryBorrow |= item.temporaryBorrow;
       temporaries.push_back(bind("", item.type, true, read(item, n->span), n->span));

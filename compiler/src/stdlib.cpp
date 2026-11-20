@@ -25,6 +25,26 @@ ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::v
   auto arity = [&](unsigned count) {
     if (n->children.size() != count + 1) fail(n->span, "wrong intrinsic argument count");
   };
+  if (key == "__vqr_borrow_from_self") {
+    arity(1);
+    int self = findLocal("self");
+    if (!unsafeDepth || !file.standard || self < 0 || self != returnRoot ||
+        (file.package != "coll" && file.package != "cell" && file.package != "sync"))
+      fail(n->span, "storage borrow requires an unsafe standard-library receiver contract", "E240");
+    auto address = expression(n->children[1]);
+    if (!live()) return neverValue();
+    if (address.type->kind != Kind::Pointer) fail(n->span, "storage borrow requires a raw pointer");
+    if (!address.type->readOnly && locals[self].type->readOnly)
+      fail(n->span, "const receiver cannot return a mutable reference", "E230");
+    return {p.reference(address.type->parts[0], address.type->readOnly),
+            read(address, n->span),
+            nullptr,
+            false,
+            -1,
+            false,
+            address.temporaryBorrow,
+            {self, -1}};
+  }
   if (key == "__vqr_encode_system_error" || key == "__vqr_decode_system_error") {
     arity(1);
     constexpr std::uint32_t systemMask = 0xc0000000u, systemTag = 0x40000000u;

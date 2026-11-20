@@ -4,6 +4,14 @@
 
 namespace vqr::detail {
 
+Type *Body::referenceHint(const Ast &n) {
+  if (n->kind == NodeKind::Name) {
+    auto id = findLocal(n->text);
+    if (id >= 0 && locals[id].reference) return locals[id].reference;
+  }
+  return hint(n);
+}
+
 Type *Body::hint(const Ast &n) {
   if (!n) return p.voidTy;
   switch (n->kind) {
@@ -38,7 +46,9 @@ Type *Body::hint(const Ast &n) {
     auto *t = hint(n->children[0]);
     if (n->text == "!") return p.boolTy;
     if (!t) return nullptr;
-    if (n->text == "*") return t->kind == Kind::Pointer ? t->parts[0] : nullptr;
+    if (n->text == "*")
+      return t->kind == Kind::Pointer || t->kind == Kind::Box || t->kind == Kind::Reference ? t->parts[0]
+                                                                                            : nullptr;
     if (n->text == "post!") return t->kind == Kind::Result ? t->parts[0] : nullptr;
     if (n->text == "&" && n->children[0]->kind == NodeKind::Name) {
       int i = findLocal(n->children[0]->text);
@@ -186,7 +196,9 @@ ValueAt Body::name(const Ast &n) {
     if (n->text == "self" && constructing && constructed.size() < owner->fields.size())
       fail(n->span, "self cannot escape before every field is initialized", "E230");
     const auto &l = locals[i];
-    return {l.type, nullptr, l.slot, l.writable, i, true};
+    auto origin = l.origin;
+    if (l.reference || p.hasReference(l.type)) origin.via = i;
+    return {l.type, nullptr, l.slot, l.writable, i, true, false, origin};
   }
   if (owner)
     for (const auto &f : owner->fields) {
@@ -200,7 +212,9 @@ ValueAt Body::name(const Ast &n) {
               ir.CreateStructGEP(owner->ir, fn->getArg(0), f.index),
               !locals[self].type->readOnly && !f.decl->readOnly,
               -1,
-              true};
+              true,
+              false,
+              {f.type->kind == Kind::Pointer ? -1 : self, -1}};
     }
   auto defs = p.resolve(file, n->text, n->span);
   if (defs.size() == 1 && defs[0].decl->kind == DeclKind::Global) {
@@ -338,10 +352,10 @@ ValueAt Body::member(const Ast &n) {
   else
     v = expression(base);
   if (v.type == p.neverTy) return v;
-  if (!v.borrowed && p.drops(v.type))
+  if (!v.borrowed && p.drops(v.type) && v.type->kind != Kind::Box)
     fail(n->span, "bind a resource-owning temporary before projecting one of its fields", "E290");
-  if (v.type->kind == Kind::Pointer)
-    v = {v.type->parts[0], nullptr, read(v, n->span), !v.type->readOnly, -1, true, v.temporaryBorrow};
+  if (v.type->kind == Kind::Pointer || v.type->kind == Kind::Box || v.type->kind == Kind::Reference)
+    v = dereference(v, n->span);
   p.ensureSized(v.type, n->span);
   if (v.type->kind == Kind::Tuple) {
     auto index = tupleIndex(v.type);
@@ -409,7 +423,14 @@ ValueAt Body::index(const Ast &n) {
   if (n->kind == NodeKind::Index) {
     auto *i = bound(n->children[1], false);
     if (!i) return neverValue();
-    return {element, nullptr, offset(i), writable, t->kind == Kind::Array ? v.local : -1, true, v.temporaryBorrow};
+    return {element,
+            nullptr,
+            offset(i),
+            writable,
+            t->kind == Kind::Array ? v.local : -1,
+            true,
+            v.temporaryBorrow,
+            t->kind == Kind::Array ? v.origin : Borrow{}};
   }
   Value *lo = zero, *hi = count;
   if (n->children.size() > 1) {
@@ -444,8 +465,7 @@ ValueAt Body::unary(const Ast &n, Type *expected) {
     return asPointer(v, n->span);
   }
   if (op == "*") {
-    if (v.type->kind != Kind::Pointer) fail(n->span, "dereference requires a pointer");
-    return {v.type->parts[0], nullptr, read(v, n->span), !v.type->readOnly, -1, true, v.temporaryBorrow};
+    return dereference(v, n->span);
   }
   if (op == "post!") {
     if (v.type->kind != Kind::Result || !result || result->kind != Kind::Result)
@@ -458,7 +478,7 @@ ValueAt Body::unary(const Ast &n, Type *expected) {
     emitReturn({p.errorTy, error}, n->span);
     ir.SetInsertPoint(success);
     auto out = payload(v, 1, v.type->parts[0]);
-    return {out.type, read(out, n->span), nullptr, false, -1, false, out.temporaryBorrow};
+    return {out.type, read(out, n->span), nullptr, false, -1, false, out.temporaryBorrow, out.origin};
   }
   auto *raw = read(v, n->span);
   if (op == "!") return {p.boolTy, ir.CreateNot(raw)};
@@ -715,7 +735,18 @@ ValueAt Body::fallback(const Ast &n, Type *expected) {
   phi->addIncoming(value, good);
   if (other) phi->addIncoming(other, bad);
   merge(other ? std::vector{initial, initialized} : std::vector<std::vector<bool>>{initial}, initial.size());
-  return {inner, phi, nullptr, false, -1, false, v.temporaryBorrow || alt.temporaryBorrow};
+  bool sameSource = !other || (v.origin.root == alt.origin.root && v.origin.via == alt.origin.via &&
+                               v.origin.raw == alt.origin.raw);
+  if (p.hasReference(inner) && !sameSource)
+    fail(n->span, "reference alternatives must have the same borrow source", "E230");
+  return {inner,
+          phi,
+          nullptr,
+          false,
+          -1,
+          false,
+          v.temporaryBorrow || alt.temporaryBorrow,
+          sameSource ? v.origin : Borrow{}};
 }
 
 ValueAt Body::castNumber(Type *to, const Ast &arg, Span span) {
@@ -775,6 +806,7 @@ ValueAt Body::builtin(std::string_view key, const Ast &n, const std::vector<Ast>
     if (!live()) return neverValue();
     auto wrapped = wrap(p.aggregate(kind, {value.type}), read(value, n->span), true);
     wrapped.temporaryBorrow = value.temporaryBorrow;
+    wrapped.origin = value.origin;
     return wrapped;
   }
   if (key == "bitCast") {
@@ -984,10 +1016,13 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
         recurse(recurse, pattern->type, actual->parts.back());
       } else if (pattern->kind == NodeKind::TypePrefix && !actual->parts.empty()) {
         const auto &op = pattern->text;
-        if (((op == "*" || op == "*const") && actual->kind == Kind::Pointer) ||
-            ((op == "[]" || op == "[]const") && actual->kind == Kind::Slice) ||
-            (op == "?" && actual->kind == Kind::Optional) || (op == "!" && actual->kind == Kind::Result) ||
-            (op == "^" && actual->kind == Kind::Box))
+        if (op == "in &const")
+          recurse(recurse, pattern->children[0], actual->kind == Kind::Reference ? actual->parts[0] : actual);
+        else if (((op == "*" || op == "*const") && actual->kind == Kind::Pointer) ||
+                 ((op == "&" || op == "&const") && actual->kind == Kind::Reference) ||
+                 ((op == "[]" || op == "[]const") && actual->kind == Kind::Slice) ||
+                 (op == "?" && actual->kind == Kind::Optional) ||
+                 (op == "!" && actual->kind == Kind::Result) || (op == "^" && actual->kind == Kind::Box))
           recurse(recurse, pattern->children[0], actual->parts[0]);
       }
     };
@@ -996,7 +1031,7 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
       for (unsigned j = 0; j < d.params.size(); ++j) {
         auto node = n->children[j + 1];
         auto parameter = d.params[j].type;
-        if (auto *t = hint(node)) {
+        if (auto *t = referenceHint(node)) {
           infer(infer, parameter, t);
         } else if (mathInteger(node)) {
           untyped.emplace_back(parameter, p.integer(32, true));
@@ -1008,7 +1043,8 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
         }
       }
       for (const auto &[parameter, t] : untyped)
-        if (parameter->kind == NodeKind::TypeName && !subst.contains(parameter->text))
+        if ((parameter->kind == NodeKind::TypeName && !subst.contains(parameter->text)) ||
+            parameter->text == "in &const")
           infer(infer, parameter, t);
     }
     if (!consistent) continue;
@@ -1058,13 +1094,32 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
     for (unsigned i = 0; i < d.params.size(); ++i) {
       auto *t = c.parameters[offset + i];
       auto a = n->children[i + 1];
-      auto *from = hint(a);
+      auto *from = t->kind == Kind::Reference ? referenceHint(a) : hint(a);
       auto math = mathInteger(a);
       unsigned rank = 0;
       for (;;) {
         if (from == t) break;
         if (math && t->kind == Kind::Int && fits(*math, t->bits, t->sign)) break;
         if (a->kind == NodeKind::Null && t->kind == Kind::Optional) break;
+        if (t->kind == Kind::Reference) {
+          if (!from && a->kind != NodeKind::Null && (!math || t->compatible)) {
+            rank += t->compatible ? 2 : 0;
+            break;
+          }
+          if (from && from->kind == Kind::Reference && t->parts == from->parts &&
+              (t->readOnly || !from->readOnly)) {
+            rank += t->readOnly && !from->readOnly;
+            break;
+          }
+          if (t->compatible && from &&
+              (from == t->parts[0] ||
+               ((from->kind == Kind::Pointer || from->kind == Kind::Box) && from->parts[0] == t->parts[0]))) {
+            rank += 2;
+            break;
+          }
+          valid = false;
+          break;
+        }
         if (!from && !math && a->kind != NodeKind::Null) break;
         if (from && (((t->kind == Kind::Pointer || t->kind == Kind::Slice) && from->kind == t->kind &&
                       t->readOnly && t->parts == from->parts) ||
@@ -1142,6 +1197,9 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
   if (delegation && entry && entry->lowering) fail(n->span, "cyclic constructor delegation");
   Type *returnType = entry ? entry->result :
       p.type(d.type, *best->definition.file, best->substitutions, best->constants);
+  int borrowFrom = p.borrowParameter(best->definition, best->parameters, returnType, receiver.has_value());
+  Borrow returnOrigin{};
+  bool returnTemporary = false;
   if (dynamic) {
     auto containsSelf = [&](auto &&self, const Ast &node) -> bool {
       if (!node) return false;
@@ -1159,6 +1217,16 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
   std::vector<Value *> values;
   Value *callee = entry ? entry->ir : nullptr;
   if (receiver) {
+    checkAccess(*receiver, !d.readOnly, n->span);
+    if (borrowFrom == 0) {
+      returnOrigin = receiver->origin;
+      if (returnOrigin.root < 0) returnOrigin.root = receiver->local;
+      if (returnOrigin.root >= 0 && locals[returnOrigin.root].refCapture &&
+          !locals[returnOrigin.root].reference)
+        returnOrigin = {};
+      returnOrigin.raw = false;
+      returnTemporary = receiver->temporaryBorrow;
+    }
     auto *address = asPointer(*receiver, n->span).value;
     if (dynamic) {
       auto *table = ir.CreateExtractValue(address, 1);
@@ -1181,18 +1249,32 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
   for (unsigned i = 1; i < n->children.size(); ++i) {
     if (d.params[i - 1].comptime) continue;
     auto *t = best->parameters[i - 1 + offset];
-    auto value = expression(n->children[i], t);
+    auto value = argument(n->children[i], t);
     temporaryBorrow |= value.temporaryBorrow;
     if (!live()) {
       leave();
       return neverValue();
     }
     auto *raw = read(value, n->span);
+    if (borrowFrom == static_cast<int>(i - 1 + offset)) {
+      returnOrigin = value.origin;
+      returnTemporary = value.temporaryBorrow;
+    }
+    if (t->kind == Kind::Reference) {
+      checkAccess(value, !t->readOnly, n->span);
+      if (!t->readOnly) invalidateOwnedAddresses(value);
+      auto loan = bind(" <loan " + std::to_string(i) + ">", t, false, raw, n->span);
+      locals[loan].origin = value.origin;
+    }
     values.push_back(raw);
     if (p.drops(t)) {
       auto temp = bind(" <argument " + std::to_string(i) + ">", t, true, raw, n->span);
       transfers.push_back(temp);
     }
+  }
+  if (receiver) {
+    checkAccess(*receiver, !d.readOnly, n->span);
+    if (!d.readOnly) invalidateOwnedAddresses(*receiver);
   }
   for (auto i : transfers)
     setAlive(i, false);
@@ -1220,8 +1302,17 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
   }
   if (returnType == p.neverTy) ir.CreateUnreachable();
   leave();
-  return returnType == p.voidTy ? voidValue() :
-      ValueAt{returnType, called, nullptr, false, -1, false, temporaryBorrow && carriesBorrow(returnType)};
+  return returnType == p.voidTy
+             ? voidValue()
+             : ValueAt{returnType,
+                       called,
+                       nullptr,
+                       false,
+                       -1,
+                       false,
+                       p.hasReference(returnType) ? returnTemporary || returnOrigin.root < 0
+                                                  : temporaryBorrow && carriesBorrow(returnType),
+                       returnOrigin};
 }
 
 ValueAt Body::construct(const Ast &n, Type *t, const std::vector<Definition> &defs) {
@@ -1330,6 +1421,8 @@ ValueAt Body::lambda(const Ast &n, Type *expected) {
       if (i < 0) fail(item->span, "capture requires a local binding");
       if (!names.insert(original->text).second) fail(item->span, "duplicate lambda capture");
       auto &local = locals[i];
+      if ((local.reference && item->kind != NodeKind::Name) || p.hasReference(local.type))
+        fail(item->span, "safe references cannot be captured by a closure", "E230");
       bool reference = item->kind == NodeKind::Unary;
       if (!reference && !p.movable(local.type))
         fail(item->span, "immovable values require a reference capture", "E290");
@@ -1358,7 +1451,8 @@ ValueAt Body::lambda(const Ast &n, Type *expected) {
     const auto &param = n->parameters[i];
     auto *value = function->getArg(arg++);
     value->setName(param.name);
-    body.bind(param.name, signature[i], true, value, param.span);
+    auto id = body.bind(param.name, signature[i], true, value, param.span);
+    if (signature[i]->kind == Kind::Reference) body.locals[id].origin.root = id;
   }
   auto returned = body.expression(n->tail, result);
   if (!result) {
@@ -1547,7 +1641,8 @@ ValueAt Body::call(const Ast &n, Type *expected) {
         self->text = "self";
         self->span = n->span;
         auto v = name(self);
-        return invoke(n, ms, types, ValueAt{owner, nullptr, read(v, n->span), !v.type->readOnly, -1, true},
+        return invoke(n, ms, types,
+                      ValueAt{owner, nullptr, read(v, n->span), !v.type->readOnly, -1, true, false, v.origin},
                       owner);
       }
     }
@@ -1701,12 +1796,12 @@ ValueAt Body::call(const Ast &n, Type *expected) {
     auto invokeMember = [&]() -> ValueAt {
       if (v.type->kind == Kind::Box && member == "asPtr" && n->children.size() == 1) {
         if (!v.borrowed) fail(n->span, "bind the Box before taking a pointer to its contents", "E290");
-        return {p.pointer(v.type->parts[0], !v.writable), ir.CreateExtractValue(read(v, n->span, false), 0)};
+        return asPointer(dereference(v, n->span), n->span);
       }
       if (v.type->kind == Kind::Optional && member == "unwrap" && n->children.size() == 1) {
         guard(ir, ir.CreateExtractValue(read(v, n->span, false), 0));
         auto out = payload(v, 1, v.type->parts[0]);
-        return {out.type, read(out, n->span), nullptr, false, -1, false, out.temporaryBorrow};
+        return {out.type, read(out, n->span), nullptr, false, -1, false, out.temporaryBorrow, out.origin};
       }
       if ((v.type == p.textTy || v.type == p.viewTy || v.type->kind == Kind::Slice ||
            v.type->kind == Kind::Array) &&
@@ -1733,8 +1828,8 @@ ValueAt Body::call(const Ast &n, Type *expected) {
             ir.CreateIntCast(read(amount, n->span), p.integer(p.pointerBits(), true)->ir, amount.type->sign);
         return {v.type, ir.CreateGEP(p.storage(v.type->parts[0]), address, index)};
       }
-      if (v.type->kind == Kind::Pointer)
-        v = {v.type->parts[0], nullptr, read(v, n->span), !v.type->readOnly, -1, true};
+      if (v.type->kind == Kind::Pointer || v.type->kind == Kind::Reference || v.type->kind == Kind::Box)
+        v = dereference(v, n->span);
       if (v.type->kind != Kind::Class && v.type->kind != Kind::Interface)
         fail(n->span, "unknown method '" + member + "'");
       if (v.type->kind == Kind::Class) p.ensureSized(v.type, n->span);
@@ -1745,7 +1840,7 @@ ValueAt Body::call(const Ast &n, Type *expected) {
         auto local = bind(" <receiver " + std::to_string(locals.size()) + ">", v.type, true,
                           read(v, n->span), n->span, temporaryScope);
         auto r = invoke(n, p.methods(v.type, member, false), types,
-                        ValueAt{v.type, nullptr, locals[local].slot, true, local, true}, v.type);
+                        ValueAt{v.type, nullptr, locals[local].slot, true, local, true, true}, v.type);
         r.temporaryBorrow = carriesBorrow(r.type);
         return r;
       }
@@ -1765,7 +1860,7 @@ ValueAt Body::call(const Ast &n, Type *expected) {
     phi->addIncoming(some.value, from);
     phi->addIncoming(Constant::getNullValue(optional->ir), none);
     merge({initial, initialized}, initial.size());
-    return {optional, phi, nullptr, false, -1, false, result.temporaryBorrow};
+    return {optional, phi, nullptr, false, -1, false, result.temporaryBorrow, result.origin};
   }
   auto target = expression(callee);
   if (!live()) return neverValue();
@@ -1797,12 +1892,18 @@ ValueAt Body::call(const Ast &n, Type *expected) {
   }
   std::vector<int> drops;
   for (std::size_t i = 0; i + 1 < parts.size(); ++i) {
-    auto v = expression(n->children[i + 1], parts[i]);
+    auto v = argument(n->children[i + 1], parts[i]);
     if (!live()) {
       leave();
       return neverValue();
     }
     auto *value = read(v, n->span);
+    if (parts[i]->kind == Kind::Reference) {
+      checkAccess(v, !parts[i]->readOnly, n->span);
+      if (!parts[i]->readOnly) invalidateOwnedAddresses(v);
+      auto loan = bind(" <loan " + std::to_string(i) + ">", parts[i], false, value, n->span);
+      locals[loan].origin = v.origin;
+    }
     if (p.drops(v.type))
       drops.push_back(bind(" <argument " + std::to_string(i) + ">", v.type, true, value, n->span));
     values.push_back(value);
@@ -1811,6 +1912,7 @@ ValueAt Body::call(const Ast &n, Type *expected) {
   for (auto i : drops)
     setAlive(i, false);
   auto *ret = parts.back();
+  if (p.hasReference(ret)) fail(n->span, "indirect reference returns require a borrow contract", "E230");
   auto *f = ir.CreateCall(FunctionType::get(ret->ir, irTypes, false), address, values);
   if (target.type->cAbi && p.extendCNarrowInteger()) {
     if (ret->kind == Kind::Int && ret->bits < 32)

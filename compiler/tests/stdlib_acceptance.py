@@ -377,6 +377,26 @@ class StandardLibraryAcceptance(CompilerCase):
             }
         """, "true\n[fe80::1%7]:80\ntrue\n127.0.0.1:81\ntrue\ntrue\ntrue\nping\ntrue\n8\ntrue\ntrue\n0\ntrue\n")
 
+    def test_dense_linear_algebra(self):
+        self.hosted(r"""
+            import (linalg, math, result)
+            func main() !void {
+                var entries = [4]f64{0.0, 2.0, 1.0, 3.0};
+                var rhs = [2]f64{4.0, 7.0};
+                var matrix = linalg.Matrix<f64>.fromFlat(2, 2, entries[:])!;
+                var b = linalg.Vector<f64>.fromSlice(rhs[:])!;
+                var solution = linalg.solve<f64>(&matrix, &b)!;
+                io.println(*solution.get(0).unwrap() == 1.0 && *solution.get(1).unwrap() == 2.0)!;
+                io.println(linalg.determinant<f64>(&matrix)! == -2.0)!;
+                var inverse = linalg.inverse<f64>(&matrix)!;
+                var identity = matrix.matmul(&inverse)!;
+                io.println(math.abs<f64>(identity.at(0, 0) - 1.0) < 0.000001)!;
+                var singular = linalg.Matrix<f64>.zeros(2, 2)!;
+                var rejected = linalg.inverse<f64>(&singular);
+                io.println(result.errorOf(&rejected).unwrap() == linalg.LinalgError.Singular)!;
+            }
+        """, "true\n" * 4)
+
     def test_json(self):
         lines = self.example("stdlib/json/examples/json_smoke.vqr").splitlines()
         self.assertEqual(lines[0], "true")

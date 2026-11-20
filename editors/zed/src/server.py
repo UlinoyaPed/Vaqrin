@@ -10,7 +10,8 @@ import subprocess
 import sys
 import tempfile
 import threading
-from urllib.parse import unquote, urlsplit
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 
 from dataclasses import dataclass, replace
 
@@ -57,7 +58,7 @@ def position_offset(text, count):
 def file_path(uri):
     parts = urlsplit(uri)
     if parts.scheme == "file" and parts.netloc in ("", "localhost"):
-        return Path(unquote(parts.path)).resolve()
+        return Path(url2pathname(parts.path)).resolve()
 
 
 def read_message():
@@ -288,7 +289,8 @@ class Server:
     def compiler(self):
         explicit = os.environ.get("VAQC")
         choices = [explicit] if explicit else [
-            *(parent / "build/host/vaqc" for parent in (self.root, *self.root.parents)),
+            *(parent / "build/host" / ("vaqc.exe" if os.name == "nt" else "vaqc")
+              for parent in (self.root, *self.root.parents)),
             os.environ.get("VAQRIN_PATH_COMPILER"), shutil.which("vaqc"),
         ]
         for option in filter(None, choices):
@@ -778,7 +780,9 @@ class Server:
                     return subprocess.run([compiler, "check", *flags, "--overlay", overlay, source],
                                           cwd=self.root, capture_output=True, encoding="utf-8",
                                           errors="replace", timeout=20)
-                result = run("--editor-hints")
+                result = run("--editor-hints", "--diagnostics=json")
+                if "unknown option '--diagnostics=json'" in result.stderr:
+                    result = run("--editor-hints")
                 if "unknown option '--editor-hints'" in result.stderr:
                     result = run()
         except (OSError, subprocess.TimeoutExpired) as error:
@@ -789,6 +793,18 @@ class Server:
             bindings = None
         if result.returncode == 0:
             return [], bindings
+        try:
+            report = json.loads(result.stderr)
+        except ValueError:
+            report = None
+        if isinstance(report, dict) and "message" in report:
+            path = report.get("path")
+            item = diagnostic(report["message"], report.get("code"))
+            if path and Path(path).resolve() == source and "range" in report:
+                item["range"] = report["range"]
+            elif path:
+                item["message"] = f"{path}: {item['message']}"
+            return [item], bindings
         lines = text.split("\n")
         output = []
         for path, row, col, code, message in ERROR.findall(result.stderr):
@@ -830,6 +846,26 @@ class Server:
                 timer.cancel()
         self.thread.shutdown(wait=False, cancel_futures=True)
 
+    def format_document(self, params):
+        document = self.documents.get(params["textDocument"]["uri"])
+        compiler = self.compiler()
+        if document is None or not compiler:
+            return []
+        _, text = document
+        try:
+            result = subprocess.run([compiler, "fmt", "-"], input=text.encode("utf-8"),
+                                    cwd=self.root, capture_output=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            return []
+        if result.returncode:
+            return []
+        formatted = result.stdout.decode("utf-8")
+        if formatted == text:
+            return []
+        return [{"range": {"start": {"line": 0, "character": 0},
+                           "end": offset_position(text, len(text))},
+                 "newText": formatted}]
+
     def handle(self, method, params):
         if method == "initialize":
             capabilities = params.get("capabilities", {})
@@ -842,9 +878,12 @@ class Server:
                                      "signatureHelpProvider": {"triggerCharacters": ["(", ","]},
                                      "hoverProvider": True, "definitionProvider": True,
                                      "declarationProvider": True, "implementationProvider": True,
-                                     "typeDefinitionProvider": True, "inlayHintProvider": True}}
+                                     "typeDefinitionProvider": True, "inlayHintProvider": True,
+                                     "documentFormattingProvider": True}}
         if method == "shutdown":
             self.stop()
+        elif method == "textDocument/formatting":
+            return self.format_document(params)
         elif method == "textDocument/signatureHelp":
             return self.signature_help(params)
         elif method in ("textDocument/hover", "textDocument/definition", "textDocument/declaration",

@@ -1,10 +1,19 @@
 package process
-import (coll, env, io, path, text)
+import (coll, env, fs, io, path, text)
 
 pub error ProcessError { InvalidProgram, InvalidArgument, InvalidDirectory, OutputLimit }
 
-extern "C" func __vqr_process_run(args: *const u8, count: usize, cwd: *const u8, code: *i32, signal: *i32) i32;
-extern "C" func __vqr_process_output(args: *const u8, count: usize, cwd: *const u8, limit: usize, status: *i32) usize;
+extern "C" func __vqr_process_spawn(args: *const u8, count: usize, cwd: *const u8,
+    modes: *const i32, overrides: *const u8, overrideCount: usize, inheritEnv: i32, status: *i32) usize;
+extern "C" func __vqr_process_child_free(handle: usize) void;
+extern "C" func __vqr_process_child_id(handle: usize) u64;
+extern "C" func __vqr_process_child_has_pipe(handle: usize, stream: i32) i32;
+extern "C" func __vqr_process_child_close(handle: usize, stream: i32) void;
+extern "C" func __vqr_process_child_read(handle: usize, stream: i32, dst: *u8, length: usize, status: *i32) isize;
+extern "C" func __vqr_process_child_write(handle: usize, src: *const u8, length: usize, status: *i32) isize;
+extern "C" func __vqr_process_child_wait(handle: usize, mode: i32, ready: *i32, code: *i32, signal: *i32) i32;
+extern "C" func __vqr_process_child_signal(handle: usize, force: i32) i32;
+extern "C" func __vqr_process_child_output(handle: usize, limit: usize, status: *i32) usize;
 extern "C" func __vqr_process_output_status(handle: usize, code: *i32, signal: *i32) void;
 extern "C" func __vqr_process_output_bytes(handle: usize, stream: i32, length: *usize) usize;
 extern "C" func __vqr_process_output_free(handle: usize) void;
@@ -61,6 +70,136 @@ private:
     }
 }
 
+pub enum Stdio { Inherit, Null, Piped, File(fs.File) }
+
+const inheritStream: i32 = -1;
+const nullStream: i32 = -2;
+const pipedStream: i32 = -3;
+
+func mode(config: *const ?Stdio, fallback: i32) !i32 {
+    switch *config {
+        null => fallback,
+        some(ref value) => switch value {
+            Stdio.Inherit => inheritStream,
+            Stdio.Null => nullStream,
+            Stdio.Piped => pipedStream,
+            Stdio.File(ref file) => file.systemDescriptor()!,
+        },
+    }
+}
+
+func hasPipe(handle: usize, stream: i32) bool {
+    unsafe { __vqr_process_child_has_pipe(handle, stream) != 0 }
+}
+
+class ChildHandle {
+    pub var address: usize;
+}
+
+pub class ChildInput {
+    #copy: disabled
+    #implements: io.Writer, io.Closer
+    var handle: usize;
+public:
+    func init(token: ChildHandle) : handle(token.address) {}
+    func write(source: []const u8) !usize {
+        if !hasPipe(handle, 0) { return io.IoError.Closed; }
+        if source.len() == 0 { return 0; }
+        var reason: i32 = 0;
+        var count = unsafe { __vqr_process_child_write(handle, &source[0], source.len(), &reason) };
+        if reason != 0 { return io.systemError(reason); }
+        usize(count)
+    }
+    func flush() !void {
+        if !hasPipe(handle, 0) { return io.IoError.Closed; }
+    }
+    func close() !void { unsafe { __vqr_process_child_close(handle, 0); } }
+}
+
+pub class ChildOutput {
+    #copy: disabled
+    #implements: io.Reader, io.Closer
+    var handle: usize;
+    var stream: i32;
+public:
+    func init(token: ChildHandle, stream: i32) : handle(token.address), stream(stream) {}
+    func read(destination: []u8) !usize {
+        if !hasPipe(handle, stream) { return io.IoError.Closed; }
+        if destination.len() == 0 { return 0; }
+        var reason: i32 = 0;
+        var count = unsafe { __vqr_process_child_read(handle, stream, &destination[0], destination.len(), &reason) };
+        if reason != 0 { return io.systemError(reason); }
+        usize(count)
+    }
+    func close() !void { unsafe { __vqr_process_child_close(handle, stream); } }
+}
+
+func waitState(handle: usize, mode: i32) !?ExitStatus {
+    var ready: i32 = 0;
+    var code: i32 = 0;
+    var signal: i32 = 0;
+    var reason = unsafe { __vqr_process_child_wait(handle, mode, &ready, &code, &signal) };
+    if reason != 0 { return io.systemError(reason); }
+    if ready == 0 { return null; }
+    some(ExitStatus(code, signal))
+}
+
+pub class Child {
+    #copy: disabled
+    var handle: usize;
+    var inputPipe: ChildInput;
+    var outputPipe: ChildOutput;
+    var errorPipe: ChildOutput;
+public:
+    func init(token: ChildHandle)
+        : handle(token.address), inputPipe(ChildInput(token)), outputPipe(ChildOutput(token, 1)),
+          errorPipe(ChildOutput(token, 2)) {}
+    const func id() u64 { unsafe { __vqr_process_child_id(handle) } }
+    #return_borrow: self
+    func stdin() ?&ChildInput {
+        if !hasPipe(handle, 0) { return null; }
+        var pipe: &ChildInput = &inputPipe;
+        some(pipe)
+    }
+    #return_borrow: self
+    func stdout() ?&ChildOutput {
+        if !hasPipe(handle, 1) { return null; }
+        var pipe: &ChildOutput = &outputPipe;
+        some(pipe)
+    }
+    #return_borrow: self
+    func stderr() ?&ChildOutput {
+        if !hasPipe(handle, 2) { return null; }
+        var pipe: &ChildOutput = &errorPipe;
+        some(pipe)
+    }
+    func tryWait() !?ExitStatus { waitState(handle, 1) }
+    func wait() !ExitStatus { waitState(handle, 0)!.unwrap() }
+    func waitWithOutput(limit: usize) !Output {
+        var reason: i32 = 0;
+        var captured = unsafe { __vqr_process_child_output(handle, limit, &reason) };
+        if reason == -1 { return ProcessError.OutputLimit; }
+        if reason != 0 { return io.systemError(reason); }
+        var result = NativeOutput(captured);
+        result.toOutput()
+    }
+    func terminate() !void { sendSignal(0) }
+    func kill() !void { sendSignal(1) }
+    func closeHandles() void {
+        unsafe {
+            __vqr_process_child_close(handle, 0);
+            __vqr_process_child_close(handle, 1);
+            __vqr_process_child_close(handle, 2);
+        }
+    }
+    func deinit() void { unsafe { __vqr_process_child_free(handle); } }
+private:
+    func sendSignal(force: i32) !void {
+        var reason = unsafe { __vqr_process_child_signal(handle, force) };
+        if reason != 0 { return io.systemError(reason); }
+    }
+}
+
 func containsNul(value: str) bool {
     for byte in value.asBytes() {
         if byte == 0 { return true; }
@@ -73,13 +212,27 @@ func appendCString(output: *coll.Vec<u8>, value: str) !void {
     output.push(0)!
 }
 
+func validateEnvironmentKey(key: str) !void {
+    if key.byteLen() == 0 { return env.EnvError.InvalidKey; }
+    for byte in key.asBytes() {
+        if byte == 0 || byte == 61 { return env.EnvError.InvalidKey; }
+    }
+}
+
 pub class Command {
     #copy: disabled
     var program: path.Path;
     var arguments: coll.Vec<string>;
     var directory: path.Path;
+    var inputMode: ?Stdio;
+    var outputMode: ?Stdio;
+    var errorMode: ?Stdio;
+    var environment: coll.Vec<string>;
+    var inheritEnvironment: bool;
     func init(program: path.Path)
-        : program(move(program)), arguments(coll.Vec<string>()), directory(path.Path("")) {}
+        : program(move(program)), arguments(coll.Vec<string>()), directory(path.Path("")),
+          inputMode(null), outputMode(null), errorMode(null),
+          environment(coll.Vec<string>()), inheritEnvironment(true) {}
 public:
     static func new(program: path.Path) Self { Command(move(program)) }
     func arg(value: str) !void {
@@ -103,26 +256,56 @@ public:
         }
         directory = move(value);
     }
+    func stdin(value: Stdio) void { inputMode = some(move(value)); }
+    func stdout(value: Stdio) void { outputMode = some(move(value)); }
+    func stderr(value: Stdio) void { errorMode = some(move(value)); }
+
+    func env(key: str, value: str) !void {
+        validateEnvironmentKey(key)!;
+        if containsNul(value) { return env.EnvError.InvalidValue; }
+        var entry = text.StringBuilder();
+        entry.append(key)!;
+        entry.append("=")!;
+        entry.append(value)!;
+        environment.push(entry.build()!)!
+    }
+    func envRemove(key: str) !void {
+        validateEnvironmentKey(key)!;
+        environment.push(text.fromBytes(key.asBytes())!)!
+    }
+    func envClear() void {
+        inheritEnvironment = false;
+        environment.clear();
+    }
+
+    const func spawn() !Child {
+        Child(ChildHandle{address: start(inheritStream, inheritStream)!})
+    }
     const func status() !ExitStatus {
-        var argv = argumentBlock()!;
-        var cwd = directoryBlock()!;
-        var code: i32 = 0;
-        var signal: i32 = 0;
-        var reason = unsafe { __vqr_process_run(&argv[0], arguments.len() + 1, &cwd[0], &code, &signal) };
-        if reason != 0 { return io.systemError(reason); }
-        ExitStatus(code, signal)
+        var handle = start(inheritStream, inheritStream)!;
+        var child = Child(ChildHandle{address: handle});
+        waitState(handle, 2)!.unwrap()
     }
     const func output(limit: usize) !Output {
-        var argv = argumentBlock()!;
-        var cwd = directoryBlock()!;
-        var reason: i32 = 0;
-        var handle = unsafe { __vqr_process_output(&argv[0], arguments.len() + 1, &cwd[0], limit, &reason) };
-        if reason == -1 { return ProcessError.OutputLimit; }
-        if reason != 0 { return io.systemError(reason); }
-        var result = NativeOutput(handle);
-        result.toOutput()
+        var child = Child(ChildHandle{address: start(nullStream, pipedStream)!});
+        child.waitWithOutput(limit)
     }
 private:
+    const func start(defaultInput: i32, defaultOutput: i32) !usize {
+        var argv = argumentBlock()!;
+        var cwd = directoryBlock()!;
+        var overrides = coll.Vec<u8>();
+        for entry in environment.iterRef() { appendCString(&overrides, *entry)!; }
+        overrides.push(0)!;
+        var modes = [3]i32{mode(&inputMode, defaultInput)!,
+                           mode(&outputMode, defaultOutput)!, mode(&errorMode, defaultOutput)!};
+        var reason: i32 = 0;
+        var inherit = if inheritEnvironment { 1 } else { 0 };
+        var handle = unsafe { __vqr_process_spawn(&argv[0], arguments.len() + 1, &cwd[0], &modes[0],
+            &overrides[0], environment.len(), inherit, &reason) };
+        if reason != 0 { return io.systemError(reason); }
+        handle
+    }
     const func argumentBlock() !coll.Vec<u8> {
         var name = program.asString();
         if name.byteLen() == 0 || containsNul(name) { return ProcessError.InvalidProgram; }
@@ -137,6 +320,8 @@ private:
         move(result)
     }
 }
+
+pub func spawn(command: Command) !Child { command.spawn() }
 
 pub func run(program: path.Path, args: []const str) !ExitStatus {
     var command = Command.new(move(program));

@@ -41,7 +41,7 @@
 | `path` | UTF-8 词法路径、父目录/文件名/扩展名、组件迭代与规范化 |
 | `fs` | File、OpenOptions、Metadata、Permissions、目录读取及文件系统操作 |
 | `env` | 读写进程环境、独立的环境快照、当前目录与可执行文件路径 |
-| `process` | POSIX 同步命令、退出状态与带上限的标准输出和错误输出捕获 |
+| `process` | POSIX 命令、子进程句柄、环境与标准流配置、有上限的输出捕获 |
 | `bufio` | BufferedReader/Writer、Scanner、Token、peek/unread、按行和分隔符读取 |
 | `fmt` | Writer 格式化、整数/浮点/布尔/字符/字符串、宽度/精度/进制/填充 |
 | `thread` | GNU/Linux 原生线程、一次性领取结果、分离、协作停止、当前线程 ID 及 CPU 数 |

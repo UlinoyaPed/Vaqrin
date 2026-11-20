@@ -250,6 +250,84 @@ class StandardLibraryAcceptance(CompilerCase):
             }
         """, "works\nstderr\n37\n" + "true\n" * 6)
 
+    def test_spawn_child_pipes_and_file_redirection(self):
+        self.hosted(r"""
+            import (env, fs, path, process)
+
+            func main() !void {
+                env.set("VAQRIN_CHILD_REMOVE_TEST", "present")!;
+                var command = process.Command.new(path.fromString("/bin/sh")!);
+                var args = [2]str{"-c",
+                    "IFS= read -r word; printf '%s:%s' \"$word\" \"$VAQRIN_CHILD_TEST\"; test -z \"$VAQRIN_CHILD_REMOVE_TEST\""};
+                command.args(args[:])!;
+                command.env("VAQRIN_CHILD_TEST", "before")!;
+                command.env("VAQRIN_CHILD_TEST", "child")!;
+                command.envRemove("VAQRIN_CHILD_REMOVE_TEST")!;
+                command.stdin(process.Stdio.Piped);
+                command.stdout(process.Stdio.Piped);
+                command.stderr(process.Stdio.Null);
+                var child = command.spawn()!;
+                io.println(child.tryWait()! == null)!;
+                {
+                    var input = child.stdin().unwrap();
+                    io.writeAll(&input, "hello\n".asBytes())!;
+                    input.close()!;
+                }
+                var captured = child.waitWithOutput(20)!;
+                io.println(captured.stdoutText()!)!;
+                io.println(captured.status().success() && child.wait()!.success())!;
+                io.println(env.contains("VAQRIN_CHILD_REMOVE_TEST")!)!;
+
+                var producer = process.Command.new(path.fromString("/bin/sh")!);
+                var redirectedArgs = [2]str{"-c", "test -z \"$VAQRIN_CHILD_REMOVE_TEST\" && printf file"};
+                producer.args(redirectedArgs[:])!;
+                producer.envClear();
+                var destination = fs.create("redirected.txt")!;
+                producer.stdout(process.Stdio.File(move(destination)));
+                io.println(producer.status()!.success())!;
+                var file = fs.openRead(path.fromString("redirected.txt")!)!;
+                io.println(io.readToString(&file)!)!;
+
+                var blocked = process.Command.new(path.fromString("/bin/cat")!);
+                blocked.stdin(process.Stdio.Piped);
+                var running = blocked.spawn()!;
+                running.kill()!;
+                io.println(running.wait()!.signal().unwrap() == 9)!;
+
+                var closed = process.Command.new(path.fromString("/bin/sh")!);
+                var closedArgs = [2]str{"-c", "exec 0<&-; printf x"};
+                closed.args(closedArgs[:])!;
+                closed.stdin(process.Stdio.Piped);
+                closed.stdout(process.Stdio.Piped);
+                var noInput = closed.spawn()!;
+                {
+                    var out = noInput.stdout().unwrap();
+                    var byte = [1]u8{0};
+                    io.readExact(&out, byte[:])!;
+                }
+                {
+                    var input = noInput.stdin().unwrap();
+                    input.write("x".asBytes()) catch (reason) {
+                        io.println(io.systemErrorCode(reason).unwrap() == 32)!;
+                        usize(0)
+                    };
+                }
+                io.println(noInput.wait()!.success())!;
+            }
+        """, "true\nhello:child\ntrue\ntrue\ntrue\nfile\ntrue\ntrue\ntrue\n")
+
+        source = self.source("borrowed_child.vqr", """
+            import (path, process)
+            func f() !void {
+                var cmd = process.Command.new(path.fromString("/bin/cat")!);
+                var child = cmd.spawn()!;
+                var input = child.stdin();
+                var moved = move(child);
+            }
+        """)
+        result = self.process(VAQC, "check", source, good=False)
+        self.assertIn(b"active borrow", result.stderr)
+
     def test_json(self):
         lines = self.example("stdlib/json/examples/json_smoke.vqr").splitlines()
         self.assertEqual(lines[0], "true")

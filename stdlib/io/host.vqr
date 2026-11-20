@@ -93,6 +93,12 @@ public:
     static func standardOutput() Self { HostFile(1, false, false) }
     static func standardError() Self { HostFile(2, false, false) }
 
+    // A borrowed OS descriptor. Its ownership remains with this file.
+    const func systemDescriptor() !i32 {
+        if closed { return IoError.Closed; }
+        descriptor
+    }
+
     func read(dst: []u8) !usize {
         if closed { return IoError.Closed; }
         if dst.len() == 0 { return 0; }

@@ -205,3 +205,44 @@ the destination. An alias returns `FsError.SameFile`. A separate
 destination can contain partial data after a later I/O failure.
 `fs.tryExists` returns false on absent paths and propagates other system
 errors. `fs.exists` is the best-effort boolean convenience wrapper.
+
+## Atomic replacement and directory operations
+
+`fs.atomicWrite` opens the destination's parent once, creates a private
+temporary file in that directory, writes and syncs it, closes it, and
+replaces the destination using a same-directory rename. It then syncs
+the parent directory. A failed write or rename leaves the existing
+destination in place and attempts to remove the temporary file.
+If syncing the directory fails after rename, the new file is already
+visible and an error reports that durable publication could not be
+confirmed. Successful guarantees depend on the file system honoring
+file and directory synchronization. New files use mode 0600 before
+the process umask. An existing destination symlink is replaced as an
+entry. Its target is unaffected.
+
+`TempFile.inDir` and `TempDir.inDir` own their entries and parent
+descriptors. Scope exit attempts cleanup. Explicit `close` reports
+cleanup errors. `TempFile.commit` publishes the file under a single
+new name in the same directory and syncs it. The temporary path
+returned by `location` is informational. Cleanup stays anchored to the
+original parent descriptor.
+
+`mkdirAll` handles existing directories and reports access errors.
+`walkDir` provides a visitor, depth limit, and entry limit. Walks and
+recursive removal use directory-relative operations and skip symlink
+recursion. Links encountered by `removeAll` are removed as entries.
+The UTF-8 visitor can report a decoding error on a non-UTF-8 filename.
+Native recursive removal accepts such entries. The tree may change
+while it is being visited or removed. A later error can leave a
+partially removed tree.
+
+## Buffered input
+
+Keep a `BufferedReader` across line reads for block input. It reads
+directly into its fixed buffer and scans the buffered span for the
+delimiter. The convenience overload taking an unbuffered Reader reads
+only through the delimiter so it never consumes the next line. Scanner
+defaults to ASCII whitespace. Select a byte delimiter with
+`setSplitMode` and use `nextBytes` to read non-UTF-8 tokens. Both
+scanner modes skip empty tokens and honor `setMaxToken`. `next`
+validates UTF-8. Token offsets are byte offsets.

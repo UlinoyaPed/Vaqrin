@@ -147,8 +147,10 @@ pub func copyN(reader: *Reader, writer: *Writer, n: u64, scratch: []u8) !u64 {
     copied
 }
 pub func copyAll(reader: *Reader, writer: *Writer) !u64 {
-    var scratch = mem.zeroedBytes<256>();
-    copy(reader, writer, scratch[:])
+    var storage = __vqr_uninitialized<[8192]u8>();
+    var scratch = unsafe { (*__vqr_raw_address(&storage))[:] };
+    mem.zeroBytes(scratch);
+    copy(reader, writer, scratch)
 }
 pub func discard(reader: *Reader, n: u64, scratch: []u8) !u64 {
     if n != 0 && scratch.len() == 0 { return IoError.InvalidCount; }

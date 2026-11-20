@@ -349,6 +349,131 @@ class IoV2Acceptance(CompilerCase):
                 if app.poll() is None:
                     app.kill()
 
+    def test_atomic_write_walk_and_temporary_resources(self):
+        old = self.root / "atomic"
+        old.write_bytes(b"old")
+        os.link(old, self.root / "old-link")
+        (self.root / "external").mkdir()
+        (self.root / "external" / "sentinel").write_bytes(b"untouched")
+        (self.root / "external-link").symlink_to("external/sentinel")
+        (self.root / "directory").mkdir()
+        denied = self.root / "unreadable"
+        denied.mkdir()
+        denied.chmod(0)
+        try:
+            self.hosted(r"""
+                import (fs, path, result)
+
+                class Visitor {
+                    #implements: fs.WalkVisitor
+                    pub var count: usize;
+                    pub var links: usize;
+                    pub var lowest: usize;
+                    pub func visit(entry: fs.DirectoryEntry, depth: usize) !void {
+                        count++;
+                        if entry.fileType() == fs.FileType.Symlink { links++; }
+                        if depth > lowest { lowest = depth; }
+                    }
+                }
+
+                func temporaryFile() !path.Path {
+                    var file = fs.TempFile.inDir(".")!;
+                    io.writeString(&file, "temp")!;
+                    file.location()
+                }
+
+                func temporaryDirectory() !path.Path {
+                    var dir = fs.TempDir.inDir(".")!;
+                    var location = dir.location()!;
+                    var child = path.join(location, path.fromString("deep/sub")!)!;
+                    fs.mkdirAll(child)!;
+                    var file = path.join(child, path.fromString("file")!)!;
+                    fs.writeFile(file, "data".asBytes())!;
+                    location
+                }
+
+                func main() !void {
+                    fs.atomicWrite("atomic", "new".asBytes())!;
+                    fs.atomicWrite("external-link", "replacement".asBytes())!;
+                    var failed = fs.atomicWrite("directory", "invalid".asBytes());
+                    io.println(result.errorOf(&failed).unwrap() == io.systemError(21))!;
+
+                    var unreadable = fs.atomicWrite("unreadable/file", "invalid".asBytes());
+                    io.println(result.errorOf(&unreadable).unwrap() == io.systemError(13))!;
+                    var slash = fs.atomicWrite("atomic/", "invalid".asBytes());
+                    io.println(result.errorOf(&slash).unwrap() == fs.FsError.InvalidPath)!;
+                    var file = temporaryFile()!;
+                    io.println(!fs.tryExists(file)!)!;
+                    var dir = temporaryDirectory()!;
+                    io.println(!fs.tryExists(dir)!)!;
+
+                    fs.mkdirAll("tree/nested/deep")!;
+                    fs.mkdirAll("tree/nested/deep")!;
+                    fs.writeFile("tree/nested/value", "test".asBytes())!;
+                    fs.symlink("../external", "tree/out")!;
+                    fs.symlink("..", "tree/nested/cycle")!;
+                    var link = fs.readLink("tree/out")!;
+                    io.println(link.asString() == "../external")!;
+
+                    var visitor = Visitor{count: 0, links: 0, lowest: 0};
+                    fs.walkDir("tree", fs.WalkLimits(), &visitor)!;
+                    io.println(visitor.count == 5 && visitor.links == 2 && visitor.lowest == 2)!;
+                    var limits = fs.WalkLimits();
+                    limits.maxEntries = 1;
+                    var over = fs.walkDir("tree", limits, &visitor);
+                    io.println(result.errorOf(&over).unwrap() == fs.FsError.WalkLimit)!;
+                    var noAccess = fs.walkDir("unreadable", fs.WalkLimits(), &visitor);
+                    io.println(result.errorOf(&noAccess).unwrap() == io.systemError(13))!;
+                    fs.removeAll("tree/out/")!;
+                    io.println(fs.tryExists("external/sentinel")!)!;
+                    fs.removeAll("tree")!;
+                    fs.removeAll("tree")!;
+                    io.println(!fs.tryExists("tree")!)!;
+                }
+            """, "true\n" * 11)
+        finally:
+            denied.chmod(0o700)
+        self.assertEqual(old.read_bytes(), b"new")
+        self.assertEqual((self.root / "old-link").read_bytes(), b"old")
+        self.assertEqual((self.root / "external-link").read_bytes(), b"replacement")
+        self.assertFalse((self.root / "external-link").is_symlink())
+        self.assertEqual((self.root / "external" / "sentinel").read_bytes(), b"untouched")
+        self.assertFalse(list(self.root.glob(".vaqrin-*")))
+
+    def test_buffered_lines_and_binary_scanner(self):
+        self.hosted(r"""
+            import (bufio, bytes, result)
+
+            func main() !void {
+                var raw = io.MemoryReader("first\r\nsecond\nlast".asBytes());
+                var one = bufio.readLine(&raw, 6)!.unwrap();
+                io.println(one == "first")!;
+                var two = bufio.readLine(&raw, 6)!.unwrap();
+                io.println(two == "second")!;
+                var tail = [4]u8{0, 0, 0, 0};
+                io.readExact(&raw, tail[:])!;
+                io.println(bytes.equal(tail[:], "last".asBytes()))!;
+
+                var source = io.MemoryReader("abc世界\r\n\nlast".asBytes());
+                var reader = bufio.BufferedReader(&source, 4)!;
+                var unicode = bufio.readLine(&reader, 10)!.unwrap();
+                var empty = reader.readLine(0)!.unwrap();
+                var line = reader.readLine(4)!.unwrap();
+                io.println(unicode == "abc世界" && empty == "" && line == "last")!;
+                io.println(reader.readLine(4)! == null)!;
+
+                var wire = [6]u8{255, 0, 44, 44, 65, 66};
+                var input = io.MemoryReader(wire[:]);
+                var scanner = bufio.Scanner(&input)!;
+                scanner.setSplitMode(bufio.SplitMode.Delimiter(44));
+                var first = scanner.nextBytes()!.unwrap();
+                io.println(first.start == 0 && first.end == 2 && bytes.equal(first.bytes(), wire[0..2]))!;
+                scanner.setMaxToken(1);
+                var tooLong = scanner.nextBytes();
+                io.println(result.errorOf(&tooLong).unwrap() == bufio.BufferError.TokenTooLong)!;
+            }
+        """, "true\n" * 7)
+
 
 if __name__ == "__main__":
     unittest.main()

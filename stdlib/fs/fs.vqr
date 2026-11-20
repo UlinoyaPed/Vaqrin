@@ -1,7 +1,7 @@
 package fs
 import (io, path, text, coll)
 
-pub error FsError { InvalidOptions, NotFound, NotDirectory, IsDirectory, SameFile }
+pub error FsError { InvalidOptions, NotFound, NotDirectory, IsDirectory, SameFile, InvalidPath, WalkLimit }
 pub enum FileType { File, Directory, Symlink, Device, Socket, Other }
 
 func fileTypeFromCode(code: i32) FileType {

@@ -39,7 +39,7 @@
 | `parse` | 整串及前缀整数和浮点解析、布尔值、Unicode 标量、UTF-8 字节偏移游标和空白分词 |
 | `io` | Reader/Writer/Seeker/Closer、内存流、组合适配器、标准流、宿主文件描述符及原生错误码 |
 | `path` | UTF-8 词法路径、父目录/文件名/扩展名、组件迭代与规范化 |
-| `fs` | File、OpenOptions、Metadata、Permissions、目录读取及文件系统操作 |
+| `fs` | 文件身份、原子写入、目录遍历与清理、符号链接、临时文件和临时目录 |
 | `env` | 读写进程环境、独立的环境快照、当前目录与可执行文件路径 |
 | `process` | POSIX 命令、子进程句柄、环境与标准流配置、有上限的输出捕获 |
 | `http` | [HTTP/1.x 报文读写、带证书验证的 HTTPS 客户端、单连接 HTTP 服务端](http/README.md) |

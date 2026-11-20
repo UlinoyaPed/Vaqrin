@@ -1,0 +1,118 @@
+name: Multi-platform build and release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths:
+      - 'compiler/**'
+      - 'stdlib/**'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: linux-x86_64, runner: ubuntu-24.04 }
+          - { platform: linux-aarch64, runner: ubuntu-24.04-arm }
+          - { platform: macos-x86_64, runner: macos-15-intel }
+          - { platform: macos-aarch64, runner: macos-15 }
+          - { platform: windows-x86_64, runner: windows-2025, msvc: amd64 }
+          - { platform: windows-aarch64, runner: windows-11-arm, msvc: arm64 }
+    env:
+      LLVM_TAG: llvmorg-20.1.8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.msvc }}
+
+      - name: Ensure Ninja is available
+        run: python -m pip install ninja
+
+      - name: Restore LLVM SDK
+        id: sdk
+        uses: actions/cache@v4
+        with:
+          path: build/llvm-sdk
+          key: llvm-sdk-v2-${{ matrix.runner }}-${{ env.LLVM_TAG }}-x86-aarch64-arm
+
+      - if: steps.sdk.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: llvm/llvm-project
+          ref: ${{ env.LLVM_TAG }}
+          path: build/llvm-project
+          persist-credentials: false
+
+      - name: Build LLVM SDK
+        if: steps.sdk.outputs.cache-hit != 'true'
+        run: python compiler/tools/release.py llvm
+
+      - name: Build and smoke-test the installed compiler
+        env:
+          VAQRIN_RELEASE_PLATFORM: ${{ matrix.platform }}
+        run: python compiler/tools/release.py package
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vaqrin-${{ matrix.platform }}
+          path: build/release-assets/*
+          if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: Publish all verified archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+            printf '%s\n' 'Release tags must use vMAJOR.MINOR.PATCH with an optional prerelease suffix.'
+            exit 1
+          fi
+          git fetch origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$(git rev-parse "$GITHUB_REF^{}")" origin/main
+          cd assets
+          sha256sum vaqrin-*.tar.gz vaqrin-*.zip > SHA256SUMS
+          args=(--verify-tag --generate-notes)
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            args+=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" "${args[@]}" -- vaqrin-*.tar.gz vaqrin-*.zip SHA256SUMS

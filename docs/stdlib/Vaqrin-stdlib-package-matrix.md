@@ -29,7 +29,7 @@
 | `math` | 4 | 22 | 75 | 0 | 部分实现，已运行代表用例 | IEEE 754 分类、舍入及 C 数学入口；区间向外舍入与其余数学合同待补 | `cmp`, `convert`, `math_ffi`, `meta` |
 | `random` | 12 | 30 | 16 | 0 | 部分实现，已运行代表用例 | 可复现 PCG64、xoshiro256**、基础分布；OS 熵源及各分布统计验收待补 | `coll`, `convert`, `math`, `meta`, `text` |
 | `simd` | 2 | 25 | 14 | 0 | 部分实现，已运行代表用例 | 定宽标量回退，硬件向量加速和多目标验收待补 | `mem` |
-| `linalg` | 8 | 64 | 18 | 0 | 未实现 | 暂无标准包源码 | — |
+| `linalg` | 8 | 64 | 18 | 0 | 部分实现 | 稠密向量、矩阵、范数、LU 和线性求解。张量、步幅视图、QR、SVD 与特征值待补 | `coll`, `math` |
 | `units` | 5 | 10 | 7 | 0 | 未实现 | 暂无标准包源码 | — |
 | `io` | 21 | 38 | 26 | 0 | 部分实现，已运行代表用例 | 流协议、内存流、组合流、POSIX 标准流、定位 I/O 与错误传播。非阻塞轮询和异步流待补 | `bytes`, `coll`, `mem`, `text` |
 | `bufio` | 7 | 35 | 7 | 0 | 部分实现，已运行代表用例 | 缓冲读写及 ASCII 扫描，含整数和浮点 Token。完整分词策略和高级视图待补 | `coll`, `io`, `mem`, `parse`, `text` |
@@ -39,7 +39,7 @@
 | `env` | 3 | 8 | 17 | 0 | 部分实现，已运行代表用例 | 进程环境读写、独立快照和路径查询。参数、主机信息、原生字节与变量展开待补 | `coll`, `io`, `path`, `text` |
 | `process` | 6 | 31 | 10 | 0 | 部分实现，已运行代表用例 | POSIX 命令执行和子进程句柄、环境覆盖、工作目录、标准流与文件重定向、退出状态和有上限的双流捕获 | `coll`, `env`, `fs`, `io`, `path`, `text` |
 | `net` | 14 | 58 | 14 | 0 | 部分实现，已运行代表用例 | IPv4/IPv6、TCP 与 UDP、正向系统解析、网络字节序、连接及 I/O 超时。Unix 域、多播、反向解析与异步 I/O 待补 | `binary`, `coll`, `fmt`, `io`, `mem`, `parse`, `text`, `time` |
-| `http` | 15 | 55 | 12 | 0 | 未实现 | 暂无标准包源码 | — |
+| `http` | 15 | 55 | 12 | 0 | 部分实现 | HTTP/1.x 报文读写、有界 body、TCP 客户端和单连接服务端。TLS、流式 body 与连接池待补 | `bufio`, `coll`, `fmt`, `io`, `net`, `parse`, `text`, `time`, `url` |
 | `json` | 12 | 45 | 13 | 0 | 部分实现，已运行代表用例 | 嵌套 DOM、精确数字词法、代理对、指针及 Codec。编码支持递归键排序、非 ASCII 转义和 f64 转换；完整 RFC 向量待补 | `algo`, `bytes`, `cmp`, `coll`, `convert`, `core`, `fmt`, `io`, `iter`, `math`, `opt`, `parse`, `serde`, `text` |
 | `log` | 10 | 33 | 10 | 0 | 部分实现，已运行代表用例 | 级别、结构化属性、同步多 Handler；异步、系统和 JSON Handler 待补 | `coll`, `io`, `iter`, `text`, `time` |
 | `atomic` | 5 | 23 | 7 | 0 | 部分实现，已运行代表用例 | 目标受支持位宽上的原子操作，完整硬件目标矩阵待验 | — |
@@ -68,7 +68,7 @@ v0.1.4 的安全容器查询覆盖 Vec、HashMap 和 BTreeMap。引用来源与�
 
 ## 当前源码的依赖顺序
 
-标准库包含 46 个有公开源码的包，以及供 `math` 使用的内部 `math_ffi` 包。内部包声明目标 C ABI 的数学符号。以下依赖图无环。
+标准库包含 48 个有公开源码的包，以及供 `math` 使用的内部 `math_ffi` 包。内部包声明目标 C ABI 的数学符号。以下依赖图无环。
 
 ```text
 atomic, binary, cmp, convert, core, hash, iter, math_ffi, meta
@@ -78,8 +78,8 @@ coll, simd
 bytes, opt, result, text
 cell, encoding, io, num, parse, path, random, task, thread, unicode
 bufio, csv, fmt, fs, log, regex, serde, sync, url
-channel, env, errors, json, net, toml
-process
+channel, env, errors, json, linalg, net, toml
+http, process
 ```
 
 容器和 I/O 的具体入口与验证边界见[容器实现](coll-container-implementation.md)和[I/O 实现](io-stack.md)。[全量 API 设计清单](Vaqrin-stdlib-API-complete-draft.md)及其 CSV/JSON 保留目标合同。

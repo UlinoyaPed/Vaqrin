@@ -9,6 +9,25 @@ from acceptance import CompilerCase, REPOSITORY, VAQC
 
 
 class EditorAcceptance(CompilerCase):
+    def test_formatter_and_syntax_only(self):
+        source = self.source("tooling.vqr", "import (unavailable)\nfunc main() i32 {\n\treturn 0;  \n}\n")
+        form = "import (unavailable)\nfunc main() i32 {\n    return 0;\n}\n"
+        self.assertEqual(self.process(VAQC, "fmt", source).stdout.decode(), form)
+        self.process(VAQC, "fmt", "--check", source, good=False)
+        self.process(VAQC, "fmt", "--write", source)
+        self.assertEqual(source.read_text(encoding="utf-8"), form)
+        self.process(VAQC, "fmt", "--check", source)
+        self.process(VAQC, "check", "--syntax-only", source)
+        self.process(VAQC, "check", source, good=False)
+        source.write_text('func f() void { var text = "📚"; @ }', encoding="utf-8")
+        failure = self.process(VAQC, "check", "--syntax-only", "--diagnostics=json",
+                               source, good=False)
+        diagnostic = json.loads(failure.stderr)
+        self.assertTrue(diagnostic["code"].startswith("E1"))
+        self.assertEqual(diagnostic["path"], str(source))
+        self.assertEqual(diagnostic["range"]["start"]["character"],
+                         len('func f() void { var text = "📚"; '.encode("utf-16-le")) // 2)
+
     def test_editor_features_on_unsaved_source(self):
         original = self.source("main.vqr", "func f() void {}\n")
         source = "import (parse as reader)\nfunc f() void {\n    var value = 10;\n    reader.\n}\n"
@@ -40,7 +59,7 @@ class EditorAcceptance(CompilerCase):
             capabilities = receive()["result"]["capabilities"]
             self.assertEqual(capabilities["positionEncoding"], "utf-16")
             for name in ("hover", "definition", "declaration", "implementation", "typeDefinition", "inlayHint",
-                         "signatureHelp"):
+                         "signatureHelp", "documentFormatting"):
                 self.assertTrue(capabilities[name + "Provider"])
             doc = {"uri": uri, "version": 1, "text": source}
             send("textDocument/didOpen", {"textDocument": doc})

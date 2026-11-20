@@ -1,6 +1,6 @@
 # Vaqrin 标准包
 
-可用 `import (core, coll, iter, opt, result, cmp, convert, meta, mem, hash, mmio, bits, algo, atomic, binary, bytes, cell, encoding, simd, text, parse, io, path, fs, env, process, net, bufio, fmt, thread, sync, time, channel, task, num, math, random, json, csv, toml, serde, unicode, regex, url, log, errors)` 导入标准包，也可使用 `std/` 前缀。CMake 在构建目录生成 `share/vaqrin/stdlib`，安装时将标准包源码复制到安装前缀下。编译器按使用情况实例化泛型声明。完整的目标接口见[标准包 API 清单](../docs/stdlib/Vaqrin-stdlib-API-complete-draft.md)。
+可用 `import (core, coll, iter, opt, result, cmp, convert, meta, mem, hash, mmio, bits, algo, atomic, binary, bytes, cell, encoding, simd, text, parse, io, path, fs, env, process, net, http, bufio, fmt, thread, sync, time, channel, task, num, math, linalg, random, json, csv, toml, serde, unicode, regex, url, log, errors)` 导入标准包，也可使用 `std/` 前缀。CMake 在构建目录生成 `share/vaqrin/stdlib`，安装时将标准包源码复制到安装前缀下。编译器按使用情况实例化泛型声明。完整的目标接口见[标准包 API 清单](../docs/stdlib/Vaqrin-stdlib-API-complete-draft.md)。
 
 | 包 | 当前接口 |
 | --- | --- |
@@ -42,6 +42,8 @@
 | `fs` | File、OpenOptions、Metadata、Permissions、目录读取及文件系统操作 |
 | `env` | 读写进程环境、独立的环境快照、当前目录与可执行文件路径 |
 | `process` | POSIX 命令、子进程句柄、环境与标准流配置、有上限的输出捕获 |
+| `http` | HTTP/1.x 报文读写、大小限制和 TCP 客户端、单连接服务端 |
+| `linalg` | 稠密向量与矩阵、矩阵积、范数、带主元 LU 分解和线性系统求解 |
 | `net` | IPv4/IPv6 地址、系统名称解析、TCP 流与监听、UDP 数据报和超时 |
 | `bufio` | BufferedReader/Writer、Scanner、Token、peek/unread、按行和分隔符读取 |
 | `fmt` | Writer 格式化、整数/浮点/布尔/字符/字符串、宽度/精度/进制/填充 |

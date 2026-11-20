@@ -1,31 +1,57 @@
 package json
-import (coll, io, parse, text)
+import (algo, bytes, cmp, coll, convert, io, text)
 
-pub func escapeString(value: str) !string {
+func appendUnicodeEscape(output: *coll.Vec<u8>, code: u32) !void {
+    var digits = "0123456789abcdef".asBytes();
+    output.push(92)!;
+    output.push(117)!;
+    output.push(digits[usize((code >> 12) & 15)])!;
+    output.push(digits[usize((code >> 8) & 15)])!;
+    output.push(digits[usize((code >> 4) & 15)])!;
+    output.push(digits[usize(code & 15)])!;
+}
+
+func appendEscapedByte(output: *coll.Vec<u8>, byte: u8) !void {
+    switch byte {
+        34 => { output.push(92)!; output.push(34)!; },
+        92 => { output.push(92)!; output.push(92)!; },
+        8 => { output.push(92)!; output.push(98)!; },
+        9 => { output.push(92)!; output.push(116)!; },
+        10 => { output.push(92)!; output.push(110)!; },
+        12 => { output.push(92)!; output.push(102)!; },
+        13 => { output.push(92)!; output.push(114)!; },
+        _ => {
+            if byte < 0x20 { appendUnicodeEscape(output, u32(byte))!; }
+            else { output.push(byte)!; }
+        },
+    }
+}
+
+func escapeQuoted(value: str, escapeNonAscii: bool) !string {
     var output = coll.Vec<u8>();
     output.push(34)!;
-    for byte in value.asBytes() {
-        switch byte {
-            34 => { output.push(92)!; output.push(34)!; },
-            92 => { output.push(92)!; output.push(92)!; },
-            8 => { output.push(92)!; output.push(98)!; },
-            9 => { output.push(92)!; output.push(116)!; },
-            10 => { output.push(92)!; output.push(110)!; },
-            12 => { output.push(92)!; output.push(102)!; },
-            13 => { output.push(92)!; output.push(114)!; },
-            _ => {
-                if byte < 0x20 {
-                    var digits = "0123456789abcdef".asBytes();
-                    output.push(92)!; output.push(117)!; output.push(48)!; output.push(48)!;
-                    output.push(digits[usize(byte >> 4)!])!;
-                    output.push(digits[usize(byte & 15)!])!;
-                } else { output.push(byte)!; }
-            },
+    if escapeNonAscii {
+        for scalar in text.chars(value) {
+            var code = convert.fromChar(scalar);
+            if code < 0x80 {
+                appendEscapedByte(&output, u8(code)!)!;
+            } else if code <= 0xffff {
+                appendUnicodeEscape(&output, code)!;
+            } else {
+                // Supplementary scalars require two UTF-16 code units.
+                var offset = code - 0x10000;
+                appendUnicodeEscape(&output, 0xd800 + (offset >> 10))!;
+                appendUnicodeEscape(&output, 0xdc00 + (offset & 0x3ff))!;
+            }
         }
+    } else {
+        for byte in value.asBytes() { appendEscapedByte(&output, byte)!; }
     }
     output.push(34)!;
     text.fromBytes(output.asConstSlice())
 }
+
+pub func escapeString(value: str) !string { escapeQuoted(value, false) }
 
 pub func unescapeString(value: str) !string {
     var source = coll.Vec<u8>();
@@ -40,65 +66,87 @@ pub func unescapeString(value: str) !string {
     }
 }
 
+class ObjectKey {
+    pub var key: str;
+    pub var index: usize;
+}
+
 pub class Encoder {
     var writer: *io.Writer;
     var options: EncodeOptions;
-    var depth: usize;
 public:
     func init(writer: *io.Writer, options: EncodeOptions)
-        : writer(writer), options(move(options)), depth(0) {}
-    func encodeValue(value: *const Value) !void { writeValue(value) }
+        : writer(writer), options(move(options)) {}
+    func encodeValue(value: *const Value) !void { writeValue(value, 0) }
     func flush() !void { writer.flush() }
 private:
-    func writeIndent() !void {
+    func writeIndent(depth: usize) !void {
         if depth != 0 && options.indent > ~usize(0) / depth { return JsonError.SizeLimit; }
+        io.writeString(writer, "\n")!;
         var count = depth * options.indent;
         for i in usize(0)..count { io.writeAll(writer, " ".asBytes())!; }
     }
-    func writeValue(value: *const Value) !void {
+
+    func writeItemPrefix(index: usize, depth: usize) !void {
+        if index != 0 { io.writeString(writer, ",")!; }
+        if options.indent != 0 { writeIndent(depth)!; }
+    }
+
+    func writeQuoted(value: str) !void {
+        var encoded = escapeQuoted(value, options.escapeNonAscii)!;
+        io.writeString(writer, encoded)
+    }
+
+    func writeObject(items: *const JsonObject, depth: usize) !void {
+        var keys = coll.Vec<ObjectKey>();
+        var count = items.len();
+        if options.sortKeys && count > 1 {
+            keys.reserve(count)!;
+            for index in usize(0)..count {
+                keys.push(ObjectKey{key: items.keyAt(index).unwrap(), index: index})!;
+            }
+            var less = (a, b: *const ObjectKey) bool =>
+                bytes.compare(a.key.asBytes(), b.key.asBytes()) == cmp.Ordering.Less;
+            algo.sortBy(keys.asSlice(), less);
+        }
+
+        io.writeString(writer, "{")!;
+        for index in usize(0)..count {
+            writeItemPrefix(index, depth + 1)!;
+            var entry = if keys.isEmpty() { index } else { keys.getPtr(index).unwrap().index };
+            writeQuoted(items.keyAt(entry).unwrap())!;
+            io.writeString(writer, if options.indent == 0 { ":" } else { ": " })!;
+            writeValue(items.valueAt(entry).unwrap(), depth + 1)!;
+        }
+        if count != 0 && options.indent != 0 { writeIndent(depth)!; }
+        io.writeString(writer, "}")
+    }
+
+    func writeValue(value: *const Value, depth: usize) !void {
         switch *value {
             Value.Null => io.writeString(writer, "null"),
             Value.Bool(item) => io.writeString(writer, if item { "true" } else { "false" }),
             Value.Number(ref item) => io.writeString(writer, item.text()),
-            Value.String(item) => {
-                var encoded = escapeString(item)!;
-                io.writeString(writer, encoded)
-            },
+            Value.String(item) => writeQuoted(item),
             Value.Array(ref items) => {
                 if depth >= options.maxDepth { return JsonError.DepthLimit; }
                 io.writeString(writer, "[")!;
-                depth++;
                 for index in usize(0)..items.len() {
-                    if index != 0 { io.writeString(writer, ",")!; }
-                    if options.indent != 0 { io.writeString(writer, "\n")!; writeIndent()!; }
-                    writeValue(items.get(index).unwrap())!;
+                    writeItemPrefix(index, depth + 1)!;
+                    writeValue(items.get(index).unwrap(), depth + 1)!;
                 }
-                depth--;
-                if items.len() != 0 && options.indent != 0 { io.writeString(writer, "\n")!; writeIndent()!; }
+                if items.len() != 0 && options.indent != 0 { writeIndent(depth)!; }
                 io.writeString(writer, "]")
             },
             Value.Object(ref items) => {
                 if depth >= options.maxDepth { return JsonError.DepthLimit; }
-                io.writeString(writer, "{")!;
-                depth++;
-                for index in usize(0)..items.len() {
-                    if index != 0 { io.writeString(writer, ",")!; }
-                    if options.indent != 0 { io.writeString(writer, "\n")!; writeIndent()!; }
-                    var encoded = escapeString(items.keyAt(index).unwrap())!;
-                    io.writeString(writer, encoded)!;
-                    io.writeString(writer, if options.indent == 0 { ":" } else { ": " })!;
-                    writeValue(items.valueAt(index).unwrap())!;
-                }
-                depth--;
-                if items.len() != 0 && options.indent != 0 { io.writeString(writer, "\n")!; writeIndent()!; }
-                io.writeString(writer, "}")
+                writeObject(&items, depth)
             },
         }
     }
 }
 
 pub func write(writer: *io.Writer, value: *const Value, options: EncodeOptions) !void {
-    if options.escapeNonAscii || options.sortKeys { return JsonError.UnsupportedOption; }
     var encoder = Encoder(writer, options);
     encoder.encodeValue(value)!;
     encoder.flush()

@@ -1,0 +1,54 @@
+package algo
+import (core)
+
+pub func partition<T: Movable, F: Movable>(values: []T, predicate: F) usize {
+    var boundary: usize = 0;
+    for index in usize(0)..values.len() {
+        if predicate(&values[index]) {
+            if index != boundary { core.swap<T>(&values[boundary], &values[index]); }
+            boundary++;
+        }
+    }
+    boundary
+}
+
+func stablePartitionRange<T: Movable, F>(values: []T, predicate: *F) usize {
+    if values.len() == 0 { return 0; }
+    if values.len() == 1 { return if (*predicate)(&values[0]) { 1 } else { 0 }; }
+
+    var middle = values.len() / 2;
+    var left = stablePartitionRange<T, F>(values[0..middle], predicate);
+    var right = stablePartitionRange<T, F>(values[middle..values.len()], predicate);
+    // Move the accepted right prefix before the rejected left suffix.
+    if left < middle && right != 0 {
+        rotate<T>(values[left..middle + right], middle - left);
+    }
+    left + right
+}
+
+pub func stablePartition<T: Movable, F: Movable>(values: []T, predicate: F) !usize {
+    stablePartitionRange<T, F>(values, &predicate)
+}
+
+pub func isPartitioned<T, F: Movable>(values: []const T, predicate: F) bool {
+    var seenRejected = false;
+    for index in usize(0)..values.len() {
+        if predicate(&values[index]) {
+            if seenRejected { return false; }
+        } else {
+            seenRejected = true;
+        }
+    }
+    true
+}
+
+pub func partitionPoint<T, F: Movable>(values: []const T, predicate: F) usize {
+    var low: usize = 0;
+    var high = values.len();
+    for low < high {
+        var middle = low + (high - low) / 2;
+        if predicate(&values[middle]) { low = middle + 1; }
+        else { high = middle; }
+    }
+    low
+}

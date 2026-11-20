@@ -42,6 +42,37 @@ class StandardLibraryAcceptance(CompilerCase):
         ''')
         self.assertEqual(self.run_program(program), "true\n3\n2\n6\n72\n")
 
+    def test_slice_partition(self):
+        self.hosted('''
+            import (algo)
+
+            class Entry {
+                #copy: disabled
+                pub var id: i32;
+            }
+
+            func main() !void {
+                var values = [5]Entry{
+                    Entry{id: 1}, Entry{id: 2}, Entry{id: 3}, Entry{id: 4}, Entry{id: 5}
+                };
+                var even = (entry: *const Entry) bool => entry.id % 2 == 0;
+                io.println(algo.isPartitioned(values[:], even))!;
+                io.println(algo.stablePartition(values[:], even)!)!;
+                io.println(algo.isPartitioned(values[:], even))!;
+                io.println(algo.partitionPoint(values[:], even))!;
+                for index in usize(0)..values.len() { io.println(values[index].id)!; }
+
+                var odd = (entry: *const Entry) bool => entry.id % 2 != 0;
+                io.println(algo.partition(values[:], odd))!;
+                io.println(algo.isPartitioned(values[:], odd))!;
+                io.println(algo.partitionPoint(values[0..0], odd))!;
+                io.println(algo.partitionPoint(values[0..3], odd))!;
+                io.println(algo.partitionPoint(values[3..5], odd))!;
+                io.println(algo.stablePartition(values[0..0], odd)!)!;
+                io.println(algo.partition(values[0..0], odd))!;
+            }
+        ''', "false\n2\ntrue\n2\n2\n4\n1\n3\n5\n3\ntrue\n0\n3\n0\n0\n0\n")
+
     def test_recursive_layout_rejects_invalid_types(self):
         direct = self.source("direct.vqr", "class Node { var child: Node; }\nfunc f(x: Node) void {}")
         result = self.process(VAQC, "check", direct, good=False)
@@ -82,6 +113,67 @@ class StandardLibraryAcceptance(CompilerCase):
         self.assertEqual(json.loads(lines[1]), expected)
         self.assertEqual(json.loads("\n".join(lines[2:-5])), expected)
         self.assertEqual(lines[-5:], ["true", "true", "1", "true", "true"])
+
+    def test_json_encoder_options(self):
+        expected = "\n".join([
+            r'{"z":[{"\ud83d\ude80":"\u00e9\ud83d\ude00\n\u0001","b":2}],"\u00e9":0,"aa":1,"a":2}',
+            "{",
+            '  "a": 2,',
+            '  "aa": 1,',
+            '  "z": [',
+            "    {",
+            '      "b": 2,',
+            r'      "\ud83d\ude80": "\u00e9\ud83d\ude00\n\u0001"',
+            "    }",
+            "  ],",
+            r'  "\u00e9": 0',
+            "}",
+            r'{"z":[{"🚀":"é😀\n\u0001","b":2}],"é":0,"aa":1,"a":2}',
+            "",
+        ])
+        self.hosted(r'''
+            import (json, text)
+
+            func main() !void {
+                var value = json.parse(
+                    "{\"z\":[{\"🚀\":\"é😀\\n\\u0001\",\"b\":2}],\"é\":0,\"aa\":1,\"a\":2}"
+                )!;
+                var options = json.EncodeOptions();
+                options.escapeNonAscii = true;
+                var compact = io.MemoryWriter();
+                json.write(&compact, &value, options)!;
+                io.println(text.fromBytes(compact.asSlice())!)!;
+
+                options.sortKeys = true;
+                options.indent = 2;
+                var pretty = io.MemoryWriter();
+                var encoder = json.Encoder(&pretty, options);
+                encoder.encodeValue(&value)!;
+                encoder.flush()!;
+                io.println(text.fromBytes(pretty.asSlice())!)!;
+                io.println(json.stringify(&value)!)!;
+            }
+        ''', expected)
+
+    def test_json_encoder_reuse_after_depth_error(self):
+        self.hosted('''
+            import (json, text)
+
+            func main() !void {
+                var options = json.EncodeOptions();
+                options.maxDepth = 1;
+                var output = io.MemoryWriter();
+                var encoder = json.Encoder(&output, options);
+                var nested = json.parse("[[]]")!;
+                encoder.encodeValue(&nested) catch (reason) {
+                    if reason != json.JsonError.DepthLimit { return reason; }
+                    io.println("depth limit")!;
+                };
+                var shallow = json.parse("[]")!;
+                encoder.encodeValue(&shallow)!;
+                io.println(text.fromBytes(output.asSlice())!)!;
+            }
+        ''', "depth limit\n[[]\n")
 
     def test_csv(self):
         lines = self.example("stdlib/csv/examples/csv_smoke.vqr").splitlines()

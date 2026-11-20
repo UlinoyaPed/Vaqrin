@@ -15,7 +15,7 @@
 | `num` | 定宽整数边界与检查/回绕/饱和运算、BigUint、BigInt、有理数 |
 | `math` | IEEE 754 分类、f32/f64 数学函数、复数与基础区间运算 |
 | `random` | PCG64 XSL-RR 128/64、xoshiro256**、均匀分布、洗牌与抽样 |
-| `json` | JSON DOM、指针、严格数字词法和 Codec |
+| `json` | JSON DOM、指针、严格数字词法、键排序、非 ASCII 转义和 Codec |
 | `csv` | 引号、换行、带表头的记录读写 |
 | `toml` | 基本类型、数组、嵌套表和 Codec |
 | `serde` | 显式序列化协议和 Codec |
@@ -28,7 +28,7 @@
 | `mem` | 布局、字节操作、原始槽、手动析构、作用域守卫、强弱共享所有权和默认或固定缓冲分配器 |
 | `mmio` | 带边界和对齐检查的寄存器、宽度受限的 volatile 访问、编译器屏障及 ARM 指令屏障 |
 | `bits` | 定宽整数位操作、对齐及可指定顺序的位流读写 |
-| `algo` | 切片查找、二分、堆操作、排序、翻转和旋转 |
+| `algo` | 切片查找、二分、堆操作、排序、翻转、旋转和原地分区 |
 | `atomic` | 原生标量、可空指针、原子标志、比较交换、读改写和内存栅栏 |
 | `binary` | 定宽端序转换、带位置的读写游标、VarUint 和 ZigZag |
 | `bytes` | 切片查找、预处理字节模式、分割及可增长缓冲区 |
@@ -74,6 +74,8 @@ LinkedList 使用双向节点和独立 Box 所有权表，节点地址在插入�
 按裸指针遍历时使用 `iterRef()` 或 `iterMut()`，后者可配合 `for &item in ...` 修改原位置。
 
 文本按字节比较，`chars` 按 Unicode 标量遍历。`fromBytes` 验证 UTF-8 后复制成不可变字符串，`StringBuilder.build()` 生成可独立持有的快照。拥有型 `string` 的副本共享不可变存储，`str` 与字节视图遵守来源的生命周期。
+
+`algo.partition` 将满足谓词的元素移到切片前部，返回前部长度。`stablePartition` 保持两组元素各自的原始顺序，最坏 O(n log n) 时间、O(log n) 栈空间。两者均支持仅可移动的元素，且不分配堆内存。`isPartitioned` 检查分区顺序，`partitionPoint` 在已分区的切片上二分查找分界位置。
 
 默认堆分配器目前面向 Linux 宿主。Vec、VecDeque、LinkedList 和 HashMap 可绑定 `mem.AllocatorRef`；FixedVec / FixedDeque 不需要堆分配。BTree 节点目前使用默认 Box 分配器。裸机上的 Vec、VecDeque、LinkedList 和 HashMap 可以用显式分配器增长。缺少默认堆且未指定分配器时，支持两种分配方式的容器返回 `AllocatorUnavailable`。Vec 可能持有借用的分配器，因而类型能力检查禁止将其跨线程移交。
 

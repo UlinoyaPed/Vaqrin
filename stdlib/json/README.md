@@ -21,9 +21,17 @@ container elements are bounded.
 JsonNumber preserves the exact source lexeme. Integer conversion is checked.
 The current asF64 deliberately accepts only integer lexemes within the exact
 binary64 integer range; decimal and exponent conversion is not implemented.
-JSON serde writeF64 is currently unsupported. escapeNonAscii and sortKeys are
-reserved options and return UnsupportedOption rather than being ignored.
+JSON serde writeF64 is currently unsupported.
 
-parseReader currently reads a bounded document before parsing; it is not a
-token-streaming parser. The parser and encoder have not been compiled or run
-locally; use the acceptance examples after building Vaqrin.
+Both write and Encoder.encodeValue apply the encoding options to the entire
+value. By default, object keys follow insertion order and non-ASCII text is
+written as UTF-8. sortKeys puts each object's keys in lexicographic order by
+their original UTF-8 bytes. escapeNonAscii emits lowercase \uXXXX escapes in
+keys and string values, using UTF-16 surrogate pairs for supplementary scalars.
+The two options can be combined with indentation.
+
+Each encodeValue call starts at depth zero. If encoding fails, the writer may
+already contain a partial value. The caller is responsible for handling those
+bytes before writing another document to the same destination.
+
+parseReader reads a bounded document into memory before parsing it.

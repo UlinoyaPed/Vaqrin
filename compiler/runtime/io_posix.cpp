@@ -4,6 +4,7 @@
 #define _DEFAULT_SOURCE
 #define _FILE_OFFSET_BITS 64
 
+#include "reactor_linux.h"
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -69,6 +70,51 @@ void free_environment(char **entries, size_t count) {
 } // namespace
 
 extern "C" {
+
+int32_t __vqr_io_reactor_open(int32_t *out_error) {
+    const int fd = epoll_create1(EPOLL_CLOEXEC);
+    set_error(out_error, fd < 0 ? errno : 0);
+    return fd;
+}
+
+int32_t __vqr_io_reactor_add(int32_t epoll, int32_t fd, uint64_t token, uint32_t interests,
+                            int32_t *out_error) {
+    const int watched = retry_interrupted([&] { return fcntl(fd, F_DUPFD_CLOEXEC, 0); });
+    if (watched < 0) {
+        set_error(out_error, errno);
+        return -1;
+    }
+    if (vqr_epoll_set(epoll, EPOLL_CTL_ADD, watched, token, interests, 0) != 0) {
+        const int reason = errno;
+        close(watched);
+        set_error(out_error, reason);
+        return -1;
+    }
+    set_error(out_error, 0);
+    return watched;
+}
+
+int32_t __vqr_io_reactor_update(int32_t epoll, int32_t fd, uint64_t token, uint32_t interests) {
+    return vqr_epoll_set(epoll, EPOLL_CTL_MOD, fd, token, interests, 0) == 0 ? 0 : errno;
+}
+
+int32_t __vqr_io_reactor_remove(int32_t epoll, int32_t fd) {
+    return epoll_ctl(epoll, EPOLL_CTL_DEL, fd, nullptr) == 0 ? 0 : errno;
+}
+
+void __vqr_io_reactor_close(int32_t fd) { close(fd); }
+
+int32_t __vqr_io_reactor_wait(int32_t epoll, int32_t millis, uint64_t *token,
+                             uint32_t *ready, int32_t *out_error) {
+    struct epoll_event event{};
+    const int count = epoll_wait(epoll, &event, 1, millis);
+    set_error(out_error, count < 0 ? errno : 0);
+    if (count > 0) {
+        *token = event.data.u64;
+        *ready = vqr_epoll_ready(event.events);
+    }
+    return count;
+}
 
 int32_t __vqr_io_open(const char *path, uint32_t flags, uint32_t mode, int32_t *out_error) {
     int native_flags = O_CLOEXEC;

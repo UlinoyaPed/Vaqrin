@@ -1,0 +1,139 @@
+package reactor
+import (coll, io, time)
+
+pub error ReactorError { InvalidInterest, UnknownWatch, WatchLimit, InvalidTimeout }
+
+pub class Interest {
+    pub var readable: bool;
+    pub var writable: bool;
+    pub static func read() Interest { Interest{readable: true, writable: false} }
+    pub static func write() Interest { Interest{readable: false, writable: true} }
+    pub static func both() Interest { Interest{readable: true, writable: true} }
+}
+
+pub class WatchId {
+    pub var value: u64;
+}
+
+pub class Event {
+    pub var watch: WatchId;
+    pub var readable: bool;
+    pub var writable: bool;
+    pub var hangup: bool;
+    pub var failed: bool;
+}
+
+class Watch {
+    pub var identity: u64;
+    pub var descriptor: i32;
+}
+
+extern "C" func __vqr_io_reactor_open(reason: *i32) i32;
+extern "C" func __vqr_io_reactor_add(epoll: i32, fd: i32, token: u64, interests: u32, reason: *i32) i32;
+extern "C" func __vqr_io_reactor_update(epoll: i32, fd: i32, token: u64, interests: u32) i32;
+extern "C" func __vqr_io_reactor_remove(epoll: i32, fd: i32) i32;
+extern "C" func __vqr_io_reactor_close(fd: i32) void;
+extern "C" func __vqr_io_reactor_wait(epoll: i32, millis: i32, token: *u64, ready: *u32, reason: *i32) i32;
+
+func encode(interest: Interest) !u32 {
+    if !interest.readable && !interest.writable { return ReactorError.InvalidInterest; }
+    (if interest.readable { 1u32 } else { 0u32 }) | (if interest.writable { 2u32 } else { 0u32 })
+}
+func milliseconds(timeout: time.Duration) !i32 {
+    if timeout.seconds() > 2147483 { return 2147483647; }
+    var millis = timeout.seconds() * 1000 + (i64(timeout.nanosPart()) + 999999) / 1000000;
+    if millis > 2147483647 { return 2147483647; }
+    i32(millis)
+}
+
+pub class Reactor {
+    #copy: disabled
+    var epoll: i32;
+    var watches: coll.Vec<Watch>;
+    var generation: u64;
+    func init(fd: i32) : epoll(fd), watches(coll.Vec<Watch>()), generation(0) {}
+    func deinit() void { close(); }
+public:
+    static func open() !Self {
+        var reason: i32 = 0;
+        var fd = unsafe { __vqr_io_reactor_open(&reason) };
+        if fd < 0 { return io.systemError(reason); }
+        Reactor(fd)
+    }
+    func register(descriptor: i32, interest: Interest) !WatchId {
+        if epoll < 0 { return io.IoError.Closed; }
+        if generation == ~u64(0) { return ReactorError.WatchLimit; }
+        var mask = encode(interest)!;
+        generation++;
+        var reason: i32 = 0;
+        var watched = unsafe { __vqr_io_reactor_add(epoll, descriptor, generation, mask, &reason) };
+        if watched < 0 { return io.systemError(reason); }
+        watches.push(Watch{identity: generation, descriptor: watched}) catch (failure) {
+            unsafe {
+                __vqr_io_reactor_remove(epoll, watched);
+                __vqr_io_reactor_close(watched);
+            }
+            return failure;
+        };
+        WatchId{value: generation}
+    }
+    func update(watch: WatchId, interest: Interest) !void {
+        if epoll < 0 { return io.IoError.Closed; }
+        var index = locate(watch) ?? { return ReactorError.UnknownWatch; };
+        var mask = encode(interest)!;
+        var descriptor = watches[index].descriptor;
+        var reason = unsafe { __vqr_io_reactor_update(epoll, descriptor, watch.value, mask) };
+        if reason != 0 { return io.systemError(reason); }
+    }
+    func remove(watch: WatchId) !void {
+        if epoll < 0 { return io.IoError.Closed; }
+        var index = locate(watch) ?? { return ReactorError.UnknownWatch; };
+        var descriptor = watches[index].descriptor;
+        var reason = unsafe { __vqr_io_reactor_remove(epoll, descriptor) };
+        if reason != 0 { return io.systemError(reason); }
+        watches.swapRemove(index);
+        unsafe { __vqr_io_reactor_close(descriptor); }
+    }
+    func wait(timeout: ?time.Duration) !?Event {
+        if epoll < 0 { return io.IoError.Closed; }
+        var deadline: ?time.Deadline = null;
+        if timeout != null {
+            var duration = timeout.unwrap();
+            if duration.isNegative() { return ReactorError.InvalidTimeout; }
+            deadline = some(time.Deadline.after(duration)!);
+        }
+        for {
+            var millis: i32 = -1;
+            if deadline != null { millis = milliseconds(deadline.unwrap().remaining()!)!; }
+            var identity: u64 = 0;
+            var flags: u32 = 0;
+            var reason: i32 = 0;
+            var ready = unsafe { __vqr_io_reactor_wait(epoll, millis, &identity, &flags, &reason) };
+            if ready < 0 && !io.isInterrupted(io.systemError(reason)) { return io.systemError(reason); }
+            if ready > 0 {
+                var watch = WatchId{value: identity};
+                if locate(watch) != null {
+                    return some(Event{watch: watch, readable: (flags & 1) != 0,
+                        writable: (flags & 2) != 0, hangup: (flags & 4) != 0, failed: (flags & 8) != 0});
+                }
+            }
+            if deadline != null && deadline.unwrap().expired()! { return null; }
+        }
+    }
+    func close() void {
+        if epoll < 0 { return; }
+        unsafe { __vqr_io_reactor_close(epoll); }
+        epoll = -1;
+        for watch in watches.asConstSlice() {
+            unsafe { __vqr_io_reactor_close(watch.descriptor); }
+        }
+        watches.clear();
+    }
+private:
+    const func locate(watch: WatchId) ?usize {
+        for index in usize(0)..watches.len() {
+            if watches[index].identity == watch.value { return some(index); }
+        }
+        null
+    }
+}

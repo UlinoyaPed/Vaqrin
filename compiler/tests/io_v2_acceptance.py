@@ -1,9 +1,11 @@
 """Run I/O v2 failure injection, file identity, and resumable I/O cases."""
 import errno
 import os
+import resource
+import subprocess
 import unittest
 
-from acceptance import CompilerCase
+from acceptance import CompilerCase, VAQC
 
 
 class IoV2Acceptance(CompilerCase):
@@ -158,6 +160,57 @@ class IoV2Acceptance(CompilerCase):
                 io.println(bytes.equal(replacement.asSlice(), "next".asBytes()))!;
             }
         """, "true\n" * 5)
+
+    def test_reactor_update_timeout_fd_reuse_and_close(self):
+        first_read, first_write = os.pipe()
+        next_read, next_write = os.pipe()
+        try:
+            os.write(first_write, b"x")
+            source = self.source("main.vqr", f"""
+                import (io, reactor, result, time)
+                extern "C" func dup2(source: i32, target: i32) i32;
+                extern "C" func write(fd: i32, data: *const u8, length: usize) isize;
+                func main() !void {{
+                    var r = reactor.Reactor.open()!;
+                    var old = r.register({first_read}, reactor.Interest.read())!;
+                    io.println(unsafe {{ dup2({next_read}, {first_read}) }} == {first_read})!;
+                    var replacement = r.register({first_read}, reactor.Interest.read())!;
+                    var event = r.wait(some(time.Duration.zero()))!.unwrap();
+                    io.println(event.watch.value == old.value && event.readable)!;
+                    r.remove(old)!;
+                    var missing = r.update(old, reactor.Interest.read());
+                    io.println(result.errorOf(&missing).unwrap() == reactor.ReactorError.UnknownWatch)!;
+                    io.println(r.wait(some(time.Duration.fromMillis(10)))! == null)!;
+                    var writer = r.register({next_write}, reactor.Interest.write())!;
+                    var ready = r.wait(some(time.Duration.zero()))!.unwrap();
+                    io.println(ready.watch.value == writer.value && ready.writable)!;
+                    r.update(writer, reactor.Interest.read())!;
+                    var byte: u8 = 65;
+                    io.println(unsafe {{ write({next_write}, &byte, 1) }} == 1)!;
+                    var next = r.wait(some(time.Duration.fromMillis(50)))!.unwrap();
+                    io.println(next.watch.value == replacement.value && next.readable)!;
+                    r.close();
+                    r.close();
+                    var closed = r.wait(null);
+                    io.println(result.errorOf(&closed).unwrap() == io.IoError.Closed)!;
+
+                    for iteration in 0..256 {{
+                        var cleanup = reactor.Reactor.open()!;
+                        cleanup.register({next_read}, reactor.Interest.read())!;
+                    }}
+                }}
+            """)
+            self.process(VAQC, source, "-o", "probe")
+            proc = subprocess.run(
+                [self.root / "probe"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5,
+                pass_fds=(first_read, next_read, next_write),
+                preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64)),
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(proc.stdout, b"true\n" * 8)
+        finally:
+            for fd in (first_read, first_write, next_read, next_write):
+                os.close(fd)
 
 
 if __name__ == "__main__":

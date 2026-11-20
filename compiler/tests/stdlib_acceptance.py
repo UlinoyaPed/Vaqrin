@@ -2,7 +2,11 @@
 from concurrent.futures import ThreadPoolExecutor
 from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, HTTPServer
+import errno
 import json
+import os
+import socket
+import ssl
 import subprocess
 import unittest
 
@@ -481,6 +485,129 @@ class StandardLibraryAcceptance(CompilerCase):
                     }}
                 """, "200\n/value?x=1\n")
                 handled.result(timeout=10)
+
+    def test_https_client(self):
+        def create_certificate(name, alternative_names):
+            cert = self.root / f"{name}.pem"
+            key = self.root / f"{name}.key"
+            self.process(
+                "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+                "-subj", f"/CN=Vaqrin {name} test", "-addext", f"subjectAltName={alternative_names}",
+                "-keyout", key, "-out", cert,
+            )
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(cert, key)
+            return context, cert
+
+        dns, dns_cert = create_certificate("dns", "DNS:localhost")
+        ip, ip_cert = create_certificate("ip", "IP:127.0.0.1")
+        ca_bundle = self.root / "trust.pem"
+        ca_bundle.write_bytes(dns_cert.read_bytes() + ip_cert.read_bytes())
+        empty_certs = self.root / "empty-certs"
+        empty_certs.mkdir()
+        names = []
+        dns.set_servername_callback(lambda _, name, __: names.append(name))
+        ip.set_servername_callback(lambda _, name, __: names.append(name))
+
+        with socket.create_server(("127.0.0.1", 0)) as server:
+            server.settimeout(8)
+            port = server.getsockname()[1]
+
+            def serve(context, response, expected_request=None, clean_close=True):
+                connection, _ = server.accept()
+                with connection:
+                    connection.settimeout(5)
+                    if response is None:
+                        with self.assertRaises(ssl.SSLError):
+                            with context.wrap_socket(connection, server_side=True):
+                                pass
+                        return
+                    with context.wrap_socket(connection, server_side=True) as tls:
+                        with tls.makefile("rb") as request:
+                            self.assertEqual(request.readline(), expected_request)
+                            headers = {}
+                            for line in iter(request.readline, b"\r\n"):
+                                name, value = line.rstrip(b"\r\n").split(b":", 1)
+                                headers[name.lower()] = value.strip()
+                            host = b"127.0.0.1" if context is ip else b"localhost"
+                            self.assertEqual(headers[b"host"], host + f":{port}".encode())
+                            self.assertEqual(headers[b"connection"], b"close")
+                            body = request.read(int(headers.get(b"content-length", b"0")))
+                            if expected_request.startswith(b"PATCH "):
+                                self.assertEqual(body, b"update")
+                            elif expected_request.startswith(b"POST "):
+                                self.assertEqual(headers[b"x-probe"], b"custom")
+                                self.assertEqual(body, b"example")
+                        tls.sendall(response)
+                        if clean_close:
+                            tls.unwrap().close()
+
+            program = self.source("https.vqr", f"""
+                import (env, http, io, result, text, time)
+                func main() !void {{
+                    var client = http.Client();
+                    if env.contains("VAQRIN_TEST_UNTRUSTED")! {{
+                        var rejected = client.get("https://localhost:{port}/");
+                        io.println(result.errorOf(&rejected).unwrap() == http.TlsError.Certificate)!;
+                        return;
+                    }}
+                    var fetched = http.get("https://localhost:{port}/probe?name=vqr#fragment")!;
+                    io.println(text.fromBytes(fetched.bodyBytes())!)!;
+                    var body = http.Body.fromBytes("update".asBytes())!;
+                    var patched = client.request("https://localhost:{port}/record", http.Method.PATCH, move(body))!;
+                    io.println(text.fromBytes(patched.bodyBytes())!)!;
+                    var head = http.head("https://127.0.0.1:{port}/")!;
+                    io.println(head.bodyBytes().len())!;
+                    var message = http.Request.new(http.Method.POST, "/custom")!;
+                    message.headers().set("X-Probe", "custom")!;
+                    message.setBody(http.Body.fromBytes("example".asBytes())!);
+                    var sent = client.send("https://localhost:{port}/", &message)!;
+                    io.println(sent.status().value())!;
+                    var truncated = client.get("https://localhost:{port}/");
+                    io.println(result.errorOf(&truncated).unwrap() == http.TlsError.Protocol)!;
+                    var mismatch = client.get("https://127.0.0.1:{port}/");
+                    io.println(result.errorOf(&mismatch).unwrap() == http.TlsError.Certificate)!;
+                    client.setTimeout(time.Duration.fromMillis(250));
+                    var stalled = client.get("https://localhost:{port}/");
+                    io.println(result.errorOf(&stalled).unwrap() == io.systemError({errno.ETIMEDOUT}))!;
+                }}
+            """)
+            executable = self.root / "https-client"
+            self.process(VAQC, program, "-o", executable)
+
+            def serve_trusted_requests():
+                serve(dns, b"HTTP/1.0 200 OK\r\n\r\nclose-delimited",
+                      b"GET /probe?name=vqr HTTP/1.1\r\n")
+                serve(dns, b"HTTP/1.1 103 Early Hints\r\n\r\n"
+                           b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n7\r\npatched\r\n0\r\n\r\n",
+                      b"PATCH /record HTTP/1.1\r\n")
+                serve(ip, b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n", b"HEAD / HTTP/1.1\r\n")
+                serve(dns, b"HTTP/1.1 201 Created\r\nContent-Length: 0\r\n\r\n", b"POST /custom HTTP/1.1\r\n")
+                serve(dns, b"HTTP/1.0 200 OK\r\n\r\npartial", b"GET / HTTP/1.1\r\n", clean_close=False)
+                serve(dns, None)
+                connection, _ = server.accept()
+                with connection:
+                    connection.settimeout(5)
+                    # Read the ClientHello and let the client time out waiting for a reply.
+                    while connection.recv(4096):
+                        pass
+
+            environment = {**os.environ, "SSL_CERT_DIR": str(empty_certs), "SSL_CERT_FILE": str(ca_bundle)}
+            environment.pop("VAQRIN_TEST_UNTRUSTED", None)
+            with ThreadPoolExecutor(max_workers=1) as thread:
+                handled = thread.submit(serve_trusted_requests)
+                client = subprocess.run([executable], env=environment, capture_output=True, timeout=15)
+                self.assertEqual(client.returncode, 0, client.stderr.decode(errors="replace"))
+                self.assertEqual(client.stdout, b"close-delimited\npatched\n0\n201\ntrue\ntrue\ntrue\n")
+                handled.result(timeout=10)
+                handled = thread.submit(serve, dns, None)
+                environment.update(SSL_CERT_FILE=str(ip_cert), VAQRIN_TEST_UNTRUSTED="1")
+                client = subprocess.run([executable], env=environment, capture_output=True, timeout=15)
+                self.assertEqual(client.returncode, 0, client.stderr.decode(errors="replace"))
+                self.assertEqual(client.stdout, b"true\n")
+                handled.result(timeout=10)
+
+        self.assertEqual(names, ["localhost", "localhost", None, "localhost", "localhost", None, "localhost"])
 
     def test_http_tcp_server(self):
         program = self.source("server.vqr", r"""

@@ -279,6 +279,8 @@ public:
     func close() !void { socket.close() }
     func shutdownRead() !void { checkStatus(unsafe { __vqr_net_shutdown(socket.fd()!, 0) }) }
     func shutdownWrite() !void { checkStatus(unsafe { __vqr_net_shutdown(socket.fd()!, 1) }) }
+    // The stream retains ownership of this descriptor.
+    const func systemDescriptor() !i32 { socket.fd() }
     const func localAddr() !SocketAddr { socket.address(0) }
     const func peerAddr() !SocketAddr { socket.address(1) }
     func setNoDelay(value: bool) !void { socket.option(1, value) }

@@ -422,6 +422,7 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
     };
     const bool usesProcessRuntime = usesRuntime("__vqr_process_");
     const bool usesNetRuntime = usesRuntime("__vqr_net_");
+    const bool usesTlsRuntime = usesRuntime("__vqr_tls_");
     const bool usesIoRuntime = usesProcessRuntime || usesRuntime("__vqr_io_");
     const bool usesDecimalRuntime = usesRuntime("__vqr_decimal_");
     const bool supportsHostRuntime =
@@ -432,6 +433,8 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
       fail({}, "process execution requires hosted GNU/Linux x86-64 or AArch64", "E290");
     if (usesNetRuntime && !supportsHostRuntime)
       fail({}, "host networking requires hosted GNU/Linux x86-64 or AArch64", "E290");
+    if (usesTlsRuntime && !supportsHostRuntime)
+      fail({}, "TLS requires hosted GNU/Linux x86-64 or AArch64", "E290");
     if (usesIoRuntime && !supportsHostRuntime)
       fail({}, "host I/O currently requires hosted GNU/Linux x86-64 or AArch64", "E290");
     if (usesDecimalRuntime && !supportsHostRuntime)
@@ -465,6 +468,8 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
     if (usesProcessRuntime) compileCppRuntime(inputs.processRuntimeSource(), processRuntime, true);
     auto netRuntime = intermediates / "vaqrin-net-runtime.o";
     if (usesNetRuntime) compileCppRuntime(inputs.netRuntimeSource(), netRuntime, false);
+    auto tlsRuntime = intermediates / "vaqrin-tls-runtime.o";
+    if (usesTlsRuntime) compileCppRuntime(inputs.tlsRuntimeSource(), tlsRuntime, true);
     auto decimalRuntime = intermediates / "vaqrin-decimal-runtime.o";
     if (usesDecimalRuntime) compileCppRuntime(inputs.decimalRuntimeSource(), decimalRuntime, false);
     if (kind == "staticlib") {
@@ -475,6 +480,7 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
       if (usesIoRuntime) args.push_back(ioRuntime.string());
       if (usesProcessRuntime) args.push_back(processRuntime.string());
       if (usesNetRuntime) args.push_back(netRuntime.string());
+      if (usesTlsRuntime) args.push_back(tlsRuntime.string());
       if (usesDecimalRuntime) args.push_back(decimalRuntime.string());
       execute(r.archiver.empty() ? "llvm-ar" : r.archiver, args);
     } else {
@@ -496,12 +502,15 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
       if (usesIoRuntime) args.push_back(ioRuntime.string());
       if (usesProcessRuntime) args.push_back(processRuntime.string());
       if (usesNetRuntime) args.push_back(netRuntime.string());
+      if (usesTlsRuntime) args.push_back(tlsRuntime.string());
       if (usesDecimalRuntime) args.push_back(decimalRuntime.string());
       for (const auto &input : r.linkInputs)
         args.push_back(fs::absolute(input).string());
       if (usesDecimalRuntime) args.push_back("-lstdc++");
+      if (usesTlsRuntime) args.push_back("-ldl");
       if (r.options.profile == "hosted" && target.isOSLinux() &&
-          (usesTasks || usesIoRuntime || module.getFunction("pthread_create") || module.getFunction("pthread_self")))
+          (usesTasks || usesIoRuntime || usesTlsRuntime || module.getFunction("pthread_create") ||
+           module.getFunction("pthread_self")))
         args.push_back("-pthread");
       if (r.options.profile == "hosted" && target.isOSLinux() &&
           std::ranges::any_of(module, [](const llvm::Function &function) {

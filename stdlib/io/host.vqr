@@ -10,9 +10,9 @@ extern "C" func __vqr_io_file_seek(fd: i32, offset: i64, origin: i32, status: *i
 extern "C" func __vqr_io_file_close(fd: i32, status: *i32) i32;
 extern "C" func __vqr_io_file_sync(fd: i32, dataOnly: i32, status: *i32) i32;
 extern "C" func __vqr_io_file_truncate(fd: i32, size: u64, status: *i32) i32;
-extern "C" func __vqr_io_file_metadata(fd: i32, size: *u64, mode: *u32, modified: *i64, kind: *i32, status: *i32) i32;
+extern "C" func __vqr_io_file_metadata(fd: i32, size: *u64, mode: *u32, modified: *i64, kind: *i32, device: *u64, inode: *u64, status: *i32) i32;
 extern "C" func __vqr_io_file_set_mode(fd: i32, mode: u32, status: *i32) i32;
-extern "C" func __vqr_io_stat(path: *const u8, follow: i32, size: *u64, mode: *u32, modified: *i64, kind: *i32, status: *i32) i32;
+extern "C" func __vqr_io_stat(path: *const u8, follow: i32, size: *u64, mode: *u32, modified: *i64, kind: *i32, device: *u64, inode: *u64, status: *i32) i32;
 extern "C" func __vqr_io_mkdir(path: *const u8, mode: u32, status: *i32) i32;
 extern "C" func __vqr_io_remove(path: *const u8, status: *i32) i32;
 extern "C" func __vqr_io_remove_dir(path: *const u8, status: *i32) i32;
@@ -56,18 +56,30 @@ pub func isWouldBlock(reason: ErrorId) bool {
     switch systemErrorCode(reason) { some(code) => code == 11, null => false }
 }
 
+pub class FileIdentity {
+    pub var device: u64;
+    pub var inode: u64;
+    pub const func matches(other: FileIdentity) bool {
+        device == other.device && inode == other.inode
+    }
+}
+
 pub class HostMetadata {
     var fileSize: u64;
     var permissionMode: u32;
     var modified: i64;
     var kind: i32;
+    var fileId: ?FileIdentity;
 public:
     func init(size: u64, mode: u32, modified: i64, kind: i32)
-        : fileSize(size), permissionMode(mode), modified(modified), kind(kind) {}
+        : self(size, mode, modified, kind, null) {}
+    func init(size: u64, mode: u32, modified: i64, kind: i32, fileId: ?FileIdentity)
+        : fileSize(size), permissionMode(mode), modified(modified), kind(kind), fileId(fileId) {}
     const func size() u64 { fileSize }
     const func mode() u32 { permissionMode }
     const func modifiedUnixSeconds() i64 { modified }
     const func kindCode() i32 { kind }
+    const func identity() ?FileIdentity { fileId }
 }
 
 pub class HostFile {
@@ -186,11 +198,13 @@ public:
         var mode: u32 = 0;
         var modified: i64 = 0;
         var kind: i32 = 0;
+        var device: u64 = 0;
+        var inode: u64 = 0;
         var errorCode: i32 = 0;
-        if unsafe { __vqr_io_file_metadata(descriptor, &size, &mode, &modified, &kind, &errorCode) } != 0 {
+        if unsafe { __vqr_io_file_metadata(descriptor, &size, &mode, &modified, &kind, &device, &inode, &errorCode) } != 0 {
             return systemError(errorCode);
         }
-        HostMetadata(size, mode, modified, kind)
+        HostMetadata(size, mode, modified, kind, some(FileIdentity{device: device, inode: inode}))
     }
 
     func setMode(mode: u32) !void {
@@ -272,11 +286,13 @@ pub func hostStat(path: []const u8, follow: bool) !HostMetadata {
     var mode: u32 = 0;
     var modified: i64 = 0;
     var kind: i32 = 0;
+    var device: u64 = 0;
+    var inode: u64 = 0;
     var errorCode: i32 = 0;
-    if unsafe { __vqr_io_stat(&name[0], if follow { 1 } else { 0 }, &size, &mode, &modified, &kind, &errorCode) } != 0 {
+    if unsafe { __vqr_io_stat(&name[0], if follow { 1 } else { 0 }, &size, &mode, &modified, &kind, &device, &inode, &errorCode) } != 0 {
         return systemError(errorCode);
     }
-    HostMetadata(size, mode, modified, kind)
+    HostMetadata(size, mode, modified, kind, some(FileIdentity{device: device, inode: inode}))
 }
 
 pub func hostMkdir(path: []const u8, mode: u32) !void {

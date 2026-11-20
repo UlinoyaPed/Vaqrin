@@ -40,11 +40,14 @@ static int file_kind(mode_t mode) {
 }
 
 static void write_metadata(const struct stat *value, uint64_t *size, uint32_t *mode,
-                           int64_t *modified, int32_t *kind) {
+                           int64_t *modified, int32_t *kind,
+                           uint64_t *device, uint64_t *inode) {
     if (size) *size = value->st_size < 0 ? 0u : (uint64_t)value->st_size;
     if (mode) *mode = (uint32_t)(value->st_mode & 07777);
     if (modified) *modified = (int64_t)value->st_mtim.tv_sec;
     if (kind) *kind = (int32_t)file_kind(value->st_mode);
+    if (device) *device = static_cast<uint64_t>(value->st_dev);
+    if (inode) *inode = static_cast<uint64_t>(value->st_ino);
 }
 
 namespace {
@@ -201,13 +204,14 @@ int32_t __vqr_io_file_truncate(int32_t descriptor, uint64_t size, int32_t *out_e
 }
 
 int32_t __vqr_io_file_metadata(int32_t descriptor, uint64_t *size, uint32_t *mode,
-                               int64_t *modified, int32_t *kind, int32_t *out_error) {
+                               int64_t *modified, int32_t *kind, uint64_t *device,
+                               uint64_t *inode, int32_t *out_error) {
     struct stat value;
     if (fstat(descriptor, &value) != 0) {
         set_error(out_error, errno);
         return -1;
     }
-    write_metadata(&value, size, mode, modified, kind);
+    write_metadata(&value, size, mode, modified, kind, device, inode);
     set_error(out_error, 0);
     return 0;
 }
@@ -222,14 +226,15 @@ int32_t __vqr_io_file_set_mode(int32_t descriptor, uint32_t mode, int32_t *out_e
 }
 
 int32_t __vqr_io_stat(const char *path, int32_t follow, uint64_t *size, uint32_t *mode,
-                      int64_t *modified, int32_t *kind, int32_t *out_error) {
+                      int64_t *modified, int32_t *kind, uint64_t *device,
+                               uint64_t *inode, int32_t *out_error) {
     struct stat value;
     int result = follow ? stat(path, &value) : lstat(path, &value);
     if (result != 0) {
         set_error(out_error, errno);
         return -1;
     }
-    write_metadata(&value, size, mode, modified, kind);
+    write_metadata(&value, size, mode, modified, kind, device, inode);
     set_error(out_error, 0);
     return 0;
 }

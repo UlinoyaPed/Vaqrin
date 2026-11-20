@@ -179,3 +179,29 @@ in one executable. x86-64 is the executed host target in this integration.
 `Scanner.readInt<T>() !T` 把 EOF 转换为 `io.IoError.UnexpectedEof`。
 两者原样传播输入错误和溢出。包级 `bufio.readLine` 每次只消费一行；
 连续高吞吐读取可复用同一 `BufferedReader`。
+
+## Recoverable transfers and file identity
+
+`readExactProgress` and `writeAllProgress` report the confirmed byte count
+and the stop reason together, including cancellation, deadline expiry,
+interruption, would-block, EOF, and other errors. Start again at the
+first unprocessed byte. The overloads of `readExact` and `writeAll` that
+take `*usize` update the cursor before returning any error. Pass the
+same original slice and cursor for each retry. The two-argument overloads
+are convenient for operations where the caller discards the stream or
+has another way to recover its position on failure.
+
+`BufferedWriter.flush()` drains the buffer and flushes the underlying
+writer. If a write fails, it retains the uncommitted suffix. If only the
+underlying flush fails, retrying does not resend bytes. `finish()` seals
+the writer on success and can be retried after failure. Destruction
+attempts to finish and has no error return. Successful flush and finish
+do not imply disk synchronization. A file can be synced separately.
+`reset` drains the current target before switching to the next one.
+
+`fs.sameFile` compares device and inode, following symbolic links.
+`fs.copy` checks the identities of the open descriptors before truncating
+the destination. An alias returns `FsError.SameFile`. A separate
+destination can contain partial data after a later I/O failure.
+`fs.tryExists` returns false on absent paths and propagates other system
+errors. `fs.exists` is the best-effort boolean convenience wrapper.

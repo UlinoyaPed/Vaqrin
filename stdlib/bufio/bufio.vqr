@@ -140,12 +140,14 @@ public:
 
 pub class BufferedWriter {
     #copy: disabled
+    #implements: io.Writer
     var target: *io.Writer;
     var data: coll.Vec<u8>;
     var capacity: usize;
+    var finished: bool;
 public:
     func init(writer: *io.Writer, size: usize) !void
-        : target(writer), data(coll.Vec<u8>()), capacity(size) {
+        : target(writer), data(coll.Vec<u8>()), capacity(size), finished(false) {
         if size == 0 { return BufferError.InvalidCapacity; }
         data.reserve(size)!
     }
@@ -156,6 +158,7 @@ public:
         data.truncate(pending);
     }
     func write(src: []const u8) !usize {
+        if finished { return io.IoError.Closed; }
         var total: usize = 0;
         for total < src.len() {
             if data.len() == capacity {
@@ -190,28 +193,23 @@ public:
     const func buffered() usize { data.len() }
     const func available() usize { capacity - data.len() }
     func flush() !void {
-        var offset: usize = 0;
-        for offset < data.len() {
-            var count = target.write(data.asConstSlice()[offset..data.len()]) catch (reason) {
-                retainPending(offset);
-                return reason;
-            };
-            if count > data.len() - offset {
-                retainPending(offset);
-                return io.IoError.InvalidCount;
-            }
-            if count == 0 {
-                retainPending(offset);
-                return io.IoError.NoProgress;
-            }
-            offset += count;
-        }
-        data.clear();
+        if finished { return; }
+        var progress = io.writeAllProgress(target, data.asConstSlice())!;
+        retainPending(progress.processed);
+        if progress.reason != null { return progress.reason.unwrap(); }
         target.flush()
     }
-    func finish() !void { flush()!; }
-    func reset(writer: *io.Writer) !void { flush()!; target = writer; }
-    func deinit() void { flush() catch {}; }
+    func finish() !void {
+        if finished { return; }
+        flush()!;
+        finished = true;
+    }
+    func reset(writer: *io.Writer) !void {
+        flush()!;
+        target = writer;
+        finished = false;
+    }
+    func deinit() void { finish() catch {}; }
 }
 
 pub class Token {

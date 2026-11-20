@@ -279,6 +279,16 @@ public:
     func readInt<T>() !T {
         nextInt<T>()! ?? { return io.IoError.UnexpectedEof; }
     }
+    func nextFloat<T>() !?T {
+        var item = next()!;
+        switch move(item) {
+            null => null,
+            some(token) => some(parse.parseFloat<T>(token.text())!),
+        }
+    }
+    func readFloat<T>() !T {
+        nextFloat<T>()! ?? { return io.IoError.UnexpectedEof; }
+    }
     func reset(source: *io.Reader) void {
         reader.reset(source);
         consumed = 0;

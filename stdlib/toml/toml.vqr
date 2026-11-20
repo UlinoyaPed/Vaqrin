@@ -1,5 +1,5 @@
 package toml
-import (bytes, coll, io, parse as numberParser, text)
+import (bytes, coll, convert, io, math, parse as numberParser, text)
 
 pub error TomlError {
     InvalidSyntax, InvalidKey, DuplicateKey, DuplicateTable, TypeConflict,
@@ -10,6 +10,30 @@ pub error TomlError {
 pub enum Value {
     String(string), Integer(i64), Float(string), Bool(bool),
     DateTime(string), Array(coll.Vec<Value>), Table(Document),
+}
+
+pub func asF64(value: *const Value) !f64 {
+    switch *value {
+        Value.Integer(item) => convert.toFloat<f64>(item),
+        Value.Float(item) => {
+            if text.equal(item, "inf") || text.equal(item, "+inf") { return math.inf<f64>(); }
+            if text.equal(item, "-inf") { return -math.inf<f64>(); }
+            if text.equal(item, "nan") || text.equal(item, "+nan") { return math.nan<f64>(); }
+            if text.equal(item, "-nan") { return -math.nan<f64>(); }
+            var source = item.asBytes();
+            for byte in source {
+                if byte != 95 { continue; }
+                var cleaned = coll.Vec<u8>.withCapacity(source.len())!;
+                for digit in source {
+                    if digit != 95 { cleaned.push(digit)!; }
+                }
+                var raw = text.fromBytes(cleaned.asConstSlice())!;
+                return numberParser.parseFloat<f64>(raw);
+            }
+            numberParser.parseFloat<f64>(item)
+        },
+        _ => TomlError.TypeMismatch,
+    }
 }
 
 pub class TomlOptions {

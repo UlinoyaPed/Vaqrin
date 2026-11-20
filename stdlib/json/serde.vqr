@@ -1,5 +1,5 @@
 package json
-import (core, coll, convert, opt, serde, text)
+import (core, coll, convert, fmt, math, opt, serde, text)
 
 pub error JsonSerdeError { InvalidState, TypeMismatch, UnsupportedNumber, MissingRoot }
 
@@ -31,7 +31,11 @@ public:
         var raw = integerText(value, false)!;
         appendValue(Value.Number(JsonNumber.parse(raw)!))
     }
-    func writeF64(value: f64) !void { return serde.SerdeError.Unsupported; }
+    func writeF64(value: f64) !void {
+        if !math.isFinite(value) { return JsonSerdeError.UnsupportedNumber; }
+        var raw = fmt.formatShortestScientific(value)!;
+        writeNumber(raw)
+    }
     func writeNumber(value: str) !void {
         var number = JsonNumber.parse(value)!;
         appendValue(Value.Number(move(number)))

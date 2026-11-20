@@ -19,9 +19,10 @@ and KeepLast are explicit options. Input bytes, nesting depth and aggregate
 container elements are bounded.
 
 JsonNumber preserves the exact source lexeme. Integer conversion is checked.
-The current asF64 deliberately accepts only integer lexemes within the exact
-binary64 integer range; decimal and exponent conversion is not implemented.
-JSON serde writeF64 is currently unsupported.
+asF64 parses decimal and exponent lexemes as binary64 and retains the existing
+integer-lexeme guard for values outside ±2^53. JSON serde writeF64 uses a
+round-trippable scientific decimal representation and rejects NaN and
+infinities.
 
 Both write and Encoder.encodeValue apply the encoding options to the entire
 value. By default, object keys follow insertion order and non-ASCII text is

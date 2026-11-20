@@ -9,6 +9,8 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <locale.h>
+#include <pthread.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -44,6 +46,24 @@ static void write_metadata(const struct stat *value, uint64_t *size, uint32_t *m
     if (modified) *modified = (int64_t)value->st_mtim.tv_sec;
     if (kind) *kind = (int32_t)file_kind(value->st_mode);
 }
+
+namespace {
+
+pthread_mutex_t environment_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+struct EnvironmentLock {
+    const int status = pthread_mutex_lock(&environment_mutex);
+    ~EnvironmentLock() {
+        if (status == 0) pthread_mutex_unlock(&environment_mutex);
+    }
+};
+
+void free_environment(char **entries, size_t count) {
+    for (size_t index = 0; index < count; ++index) free(entries[index]);
+    free(entries);
+}
+
+} // namespace
 
 extern "C" {
 
@@ -378,6 +398,78 @@ int32_t __vqr_io_format_float(double value, int32_t style, int32_t precision,
     if (length) *length = (size_t)count;
     set_error(out_error, 0);
     return 0;
+}
+
+uintptr_t __vqr_io_env_get(const char *key, size_t *length, int32_t *out_error) {
+    EnvironmentLock lock;
+    set_error(out_error, lock.status);
+    if (lock.status != 0) return 0;
+    const char *value = getenv(key);
+    if (!value) return 0;
+    char *copy = strdup(value);
+    if (!copy) {
+        set_error(out_error, errno);
+        return 0;
+    }
+    *length = strlen(copy);
+    return reinterpret_cast<uintptr_t>(copy);
+}
+
+void __vqr_io_env_free_string(uintptr_t address) {
+    free(reinterpret_cast<void *>(address));
+}
+
+int32_t __vqr_io_env_set(const char *key, const char *value) {
+    EnvironmentLock lock;
+    if (lock.status != 0) return lock.status;
+    return setenv(key, value, 1) == 0 ? 0 : errno;
+}
+
+int32_t __vqr_io_env_remove(const char *key) {
+    EnvironmentLock lock;
+    if (lock.status != 0) return lock.status;
+    return unsetenv(key) == 0 ? 0 : errno;
+}
+
+uintptr_t __vqr_io_env_snapshot(size_t *length, int32_t *out_error) {
+    EnvironmentLock lock;
+    set_error(out_error, lock.status);
+    if (lock.status != 0) return 0;
+    size_t count = 0;
+    while (environ && environ[count]) ++count;
+    auto **copy = static_cast<char **>(calloc(count == 0 ? 1 : count, sizeof(char *)));
+    if (!copy) {
+        set_error(out_error, errno);
+        return 0;
+    }
+    for (size_t index = 0; index < count; ++index) {
+        copy[index] = strdup(environ[index]);
+        if (!copy[index]) {
+            set_error(out_error, errno);
+            free_environment(copy, index);
+            return 0;
+        }
+    }
+    *length = count;
+    return reinterpret_cast<uintptr_t>(copy);
+}
+
+char *__vqr_io_env_entry(uintptr_t entries, size_t index, size_t *length) {
+    char *entry = reinterpret_cast<char **>(entries)[index];
+    *length = strlen(entry);
+    return entry;
+}
+
+void __vqr_io_env_free_snapshot(uintptr_t entries, size_t count) {
+    free_environment(reinterpret_cast<char **>(entries), count);
+}
+
+intptr_t __vqr_io_env_current_exe(uint8_t *buffer, size_t capacity, int32_t *out_error) {
+    auto size = retry_interrupted([&] {
+        return readlink("/proc/self/exe", reinterpret_cast<char *>(buffer), capacity);
+    });
+    set_error(out_error, size < 0 ? errno : 0);
+    return size;
 }
 
 } // extern "C"

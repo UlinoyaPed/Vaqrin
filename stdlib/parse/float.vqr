@@ -1,0 +1,30 @@
+package parse
+
+extern "C" func __vqr_decimal_parse_f32(data: *const u8, length: usize, value: *f32, consumed: *usize) i32;
+extern "C" func __vqr_decimal_parse_f64(data: *const u8, length: usize, value: *f64, consumed: *usize) i32;
+
+pub func parseFloatPrefix<T>(value: str) !Parsed<T> {
+    var source = value.asBytes();
+    if source.len() == 0 { return ParseError.InvalidSyntax; }
+    var parsed: T = T(0);
+    var consumed: usize = 0;
+    var status: i32 = 0;
+    if __vqr_decimal_width<T>() == 32 {
+        var narrowed: f32 = 0.0;
+        status = unsafe { __vqr_decimal_parse_f32(&source[0], source.len(), &narrowed, &consumed) };
+        parsed = T(narrowed);
+    } else {
+        var wide: f64 = 0.0;
+        status = unsafe { __vqr_decimal_parse_f64(&source[0], source.len(), &wide, &consumed) };
+        parsed = T(wide);
+    }
+    if status == 2 { return ParseError.OutOfRange; }
+    if status != 0 { return ParseError.InvalidSyntax; }
+    Parsed<T>(parsed, consumed)
+}
+
+pub func parseFloat<T>(value: str) !T {
+    var parsed = parseFloatPrefix<T>(value)!;
+    if parsed.consumed != value.byteLen() { return ParseError.TrailingInput; }
+    parsed.value
+}

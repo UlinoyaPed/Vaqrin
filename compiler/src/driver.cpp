@@ -409,11 +409,18 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
       return function.getName().starts_with("__vqr_io_") && !function.hasExternalWeakLinkage() &&
              !function.use_empty();
     });
-    if (usesIoRuntime &&
-        (r.options.profile != "hosted" || !target.isOSLinux() || !target.isGNUEnvironment() ||
-         module.getDataLayout().getPointerSizeInBits() != 64 ||
-         (target.getArch() != llvm::Triple::x86_64 && target.getArch() != llvm::Triple::aarch64)))
+    bool usesDecimalRuntime = std::ranges::any_of(module, [](const llvm::Function &function) {
+      return function.getName().starts_with("__vqr_decimal_") && !function.hasExternalWeakLinkage() &&
+             !function.use_empty();
+    });
+    const bool supportsHostRuntime =
+        r.options.profile == "hosted" && target.isOSLinux() && target.isGNUEnvironment() &&
+        module.getDataLayout().getPointerSizeInBits() == 64 &&
+        (target.getArch() == llvm::Triple::x86_64 || target.getArch() == llvm::Triple::aarch64);
+    if (usesIoRuntime && !supportsHostRuntime)
       fail({}, "host I/O currently requires hosted GNU/Linux x86-64 or AArch64", "E290");
+    if (usesDecimalRuntime && !supportsHostRuntime)
+      fail({}, "decimal conversion requires hosted GNU/Linux x86-64 or AArch64", "E290");
     const auto codegen = std::chrono::steady_clock::now();
     emit(module, machine, object, "obj");
     if (r.timings)
@@ -434,8 +441,17 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
       if (!fs::is_regular_file(source)) fail({}, "the Vaqrin host I/O runtime source is missing", "E302");
       auto args = targetFlags(r, target, driver);
       args.insert(args.end(), {"-x", "c++", "-std=c++20", "-O2", "-fPIC", "-fvisibility=hidden",
-                               "-fno-exceptions", "-fno-rtti"});
+                               "-fno-exceptions", "-fno-rtti", "-pthread"});
       compileRuntime(driver, std::move(args), source, ioRuntime, target.isOSLinux(), r.timings);
+    }
+    auto decimalRuntime = intermediates / "vaqrin-decimal-runtime.o";
+    if (usesDecimalRuntime) {
+      auto source = inputs.decimalRuntimeSource();
+      if (!fs::is_regular_file(source)) fail({}, "the Vaqrin decimal runtime source is missing", "E302");
+      auto args = targetFlags(r, target, driver);
+      args.insert(args.end(), {"-x", "c++", "-std=c++20", "-O2", "-fPIC", "-fvisibility=hidden",
+                               "-fno-exceptions", "-fno-rtti"});
+      compileRuntime(driver, std::move(args), source, decimalRuntime, target.isOSLinux(), r.timings);
     }
     if (kind == "staticlib") {
       if (!r.linkInputs.empty())
@@ -443,6 +459,7 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
       std::vector<std::string> args{"rcsD", product.string(), object.string()};
       if (usesTasks) args.push_back(runtime.string());
       if (usesIoRuntime) args.push_back(ioRuntime.string());
+      if (usesDecimalRuntime) args.push_back(decimalRuntime.string());
       execute(r.archiver.empty() ? "llvm-ar" : r.archiver, args);
     } else {
       auto args = targetFlags(r, target, driver);
@@ -461,10 +478,12 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
       args.push_back(object.string());
       if (usesTasks) args.push_back(runtime.string());
       if (usesIoRuntime) args.push_back(ioRuntime.string());
+      if (usesDecimalRuntime) args.push_back(decimalRuntime.string());
       for (const auto &input : r.linkInputs)
         args.push_back(fs::absolute(input).string());
+      if (usesDecimalRuntime) args.push_back("-lstdc++");
       if (r.options.profile == "hosted" && target.isOSLinux() &&
-          (usesTasks || module.getFunction("pthread_create") || module.getFunction("pthread_self")))
+          (usesTasks || usesIoRuntime || module.getFunction("pthread_create") || module.getFunction("pthread_self")))
         args.push_back("-pthread");
       if (r.options.profile == "hosted" && target.isOSLinux() &&
           std::ranges::any_of(module, [](const llvm::Function &function) {

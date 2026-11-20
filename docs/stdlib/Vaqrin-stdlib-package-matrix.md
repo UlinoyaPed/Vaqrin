@@ -23,7 +23,7 @@
 | `unicode` | 8 | 8 | 28 | 0 | 部分实现，已运行代表用例 | Unicode 17 属性、四种规范化和字素簇；完整官方规范化及字素边界测试待跑 | `coll`, `convert`, `core`, `text` |
 | `encoding` | 10 | 23 | 18 | 0 | 部分实现，已运行代表用例 | Hex、Base64、百分号、ASCII、Latin-1、UTF-8、UTF-16，完整流式编码套件待补 | `bytes`, `coll`, `convert`, `core`, `meta`, `text` |
 | `binary` | 3 | 34 | 22 | 0 | 部分实现，已运行代表用例 | 端序游标与 VarUint/ZigZag，其余协议和类型待补 | — |
-| `parse` | 6 | 16 | 18 | 0 | 部分实现，已运行代表用例 | 整数、布尔、标量和扫描，浮点、结构化解析错误和日期解析待补 | `bytes`, `convert`, `core`, `text` |
+| `parse` | 6 | 16 | 18 | 0 | 部分实现，已运行代表用例 | 整数、f32/f64 整串和前缀解析、布尔、标量和扫描。结构化解析错误和日期解析待补 | `bytes`, `convert`, `core`, `text` |
 | `fmt` | 9 | 14 | 15 | 0 | 部分实现，已运行代表用例 | Writer、字串、整数、浮点、宽度精度及位置参数。通用 Display/Debug 与编译期格式计划待补 | `coll`, `convert`, `io`, `mem`, `text` |
 | `regex` | 7 | 32 | 6 | 0 | 部分实现，已运行代表用例 | Thompson NFA、分组、分支、重复及资源上限；命名捕获、环视等未实现 | `coll`, `convert`, `core`, `text`, `unicode` |
 | `math` | 4 | 22 | 75 | 0 | 部分实现，已运行代表用例 | IEEE 754 分类、舍入及 C 数学入口；区间向外舍入与其余数学合同待补 | `cmp`, `convert`, `math_ffi`, `meta` |
@@ -32,15 +32,15 @@
 | `linalg` | 8 | 64 | 18 | 0 | 未实现 | 暂无标准包源码 | — |
 | `units` | 5 | 10 | 7 | 0 | 未实现 | 暂无标准包源码 | — |
 | `io` | 21 | 38 | 26 | 0 | 部分实现，已运行代表用例 | 流协议、内存流、组合流、POSIX 标准流、定位 I/O 与错误传播。非阻塞轮询和异步流待补 | `bytes`, `coll`, `mem`, `text` |
-| `bufio` | 7 | 35 | 7 | 0 | 部分实现，已运行代表用例 | 缓冲读写及 ASCII 扫描，完整分词策略和高级视图待补 | `coll`, `io`, `mem`, `parse`, `text` |
+| `bufio` | 7 | 35 | 7 | 0 | 部分实现，已运行代表用例 | 缓冲读写及 ASCII 扫描，含整数和浮点 Token。完整分词策略和高级视图待补 | `coll`, `io`, `mem`, `parse`, `text` |
 | `path` | 5 | 26 | 18 | 0 | 部分实现，已运行代表用例 | 拥有型 POSIX UTF-8 词法路径，原生非 UTF-8、Windows 路径和更多相对路径运算待补 | `coll`, `text` |
 | `fs` | 16 | 53 | 31 | 0 | 部分实现，已运行代表用例 | POSIX 文件、目录、定位和元数据，MemFS、递归遍历、链接及其他系统端口待补 | `coll`, `io`, `path`, `text` |
 | `time` | 17 | 79 | 17 | 0 | 部分实现，已运行代表用例 | 时长、单调时钟、定时和公历，时区数据库和格式化待补 | `cmp` |
-| `env` | 3 | 8 | 17 | 0 | 未实现 | 暂无标准包源码 | — |
+| `env` | 3 | 8 | 17 | 0 | 部分实现，已运行代表用例 | 进程环境读写、独立快照和路径查询。参数、主机信息、原生字节与变量展开待补 | `coll`, `io`, `path`, `text` |
 | `process` | 6 | 31 | 10 | 0 | 未实现 | 暂无标准包源码 | — |
 | `net` | 14 | 58 | 14 | 0 | 未实现 | 暂无标准包源码 | — |
 | `http` | 15 | 55 | 12 | 0 | 未实现 | 暂无标准包源码 | — |
-| `json` | 12 | 45 | 13 | 0 | 部分实现，已运行代表用例 | 嵌套 DOM、精确数字词法、代理对、指针及 Codec。编码支持递归键排序和非 ASCII 转义；小数和指数的 f64 转换及浮点序列化待补 | `algo`, `bytes`, `cmp`, `coll`, `convert`, `core`, `io`, `iter`, `opt`, `parse`, `serde`, `text` |
+| `json` | 12 | 45 | 13 | 0 | 部分实现，已运行代表用例 | 嵌套 DOM、精确数字词法、代理对、指针及 Codec。编码支持递归键排序、非 ASCII 转义和 f64 转换；完整 RFC 向量待补 | `algo`, `bytes`, `cmp`, `coll`, `convert`, `core`, `fmt`, `io`, `iter`, `math`, `opt`, `parse`, `serde`, `text` |
 | `log` | 10 | 33 | 10 | 0 | 部分实现，已运行代表用例 | 级别、结构化属性、同步多 Handler；异步、系统和 JSON Handler 待补 | `coll`, `io`, `iter`, `text`, `time` |
 | `atomic` | 5 | 23 | 7 | 0 | 部分实现，已运行代表用例 | 目标受支持位宽上的原子操作，完整硬件目标矩阵待验 | — |
 | `sync` | 19 | 76 | 6 | 0 | 部分实现，已运行代表用例 | 互斥锁、条件变量、等待组、单次初始化，读写锁与信号量等待补 | `atomic`, `cell`, `core`, `opt`, `time` |
@@ -53,7 +53,7 @@
 | `testing` | 11 | 38 | 17 | 0 | 未实现 | 暂无标准包源码 | — |
 | `serde` | 6 | 16 | 4 | 0 | 部分实现，已运行代表用例 | 显式序列化协议、Codec 与 JSON/TOML 适配；自动派生及其他后端待补 | `coll`, `convert`, `opt`, `parse`, `text` |
 | `csv` | 3 | 10 | 4 | 0 | 部分实现，已运行代表用例 | 带引号换行、双引号、可选表头及 Reader/Writer；更大方言组合待验 | `coll`, `io`, `text` |
-| `toml` | 3 | 5 | 5 | 0 | 部分实现，已运行代表用例 | 基本值、嵌套表、重复键、日期时间和 Codec；完整 TOML 规范覆盖待补 | `bytes`, `coll`, `convert`, `core`, `io`, `opt`, `parse`, `serde`, `text` |
+| `toml` | 3 | 5 | 5 | 0 | 部分实现，已运行代表用例 | 基本值、嵌套表、重复键、日期时间和 f64 Codec。多行字符串、表数组和其余 TOML 合同待补 | `bytes`, `coll`, `convert`, `core`, `fmt`, `io`, `math`, `opt`, `parse`, `serde`, `text` |
 | `url` | 4 | 27 | 9 | 0 | 部分实现，已运行代表用例 | URI 组件、百分号、IPv6 和重复查询键；IDNA、IRI、zone identifier 待补 | `coll`, `encoding`, `text` |
 | `compress` | 4 | 8 | 6 | 0 | 未实现 | 暂无标准包源码 | — |
 | `crypto` | 5 | 19 | 8 | 0 | 未实现 | 暂无标准包源码 | — |
@@ -68,7 +68,7 @@ v0.1.4 的安全容器查询覆盖 Vec、HashMap 和 BTreeMap。引用来源与�
 
 ## 当前源码的依赖顺序
 
-标准库包含 43 个有公开源码的包，以及供 `math` 使用的内部 `math_ffi` 包。内部包声明目标 C ABI 的数学符号。以下依赖图无环。
+标准库包含 44 个有公开源码的包，以及供 `math` 使用的内部 `math_ffi` 包。内部包声明目标 C ABI 的数学符号。以下依赖图无环。
 
 ```text
 atomic, binary, cmp, convert, core, hash, iter, math_ffi, meta
@@ -78,7 +78,7 @@ coll, simd
 bytes, opt, result, text
 cell, encoding, io, num, parse, path, random, task, thread, unicode
 bufio, csv, fmt, fs, log, regex, serde, sync, url
-channel, errors, json, toml
+channel, env, errors, json, toml
 ```
 
 容器和 I/O 的具体入口与验证边界见[容器实现](coll-container-implementation.md)和[I/O 实现](io-stack.md)。[全量 API 设计清单](Vaqrin-stdlib-API-complete-draft.md)及其 CSV/JSON 保留目标合同。

@@ -1,6 +1,6 @@
 # Vaqrin 标准包
 
-可用 `import (core, coll, iter, opt, result, cmp, convert, meta, mem, hash, mmio, bits, algo, atomic, binary, bytes, cell, encoding, simd, text, parse, io, path, fs, bufio, fmt, thread, sync, time, channel, task, num, math, random, json, csv, toml, serde, unicode, regex, url, log, errors)` 导入标准包，也可使用 `std/` 前缀。CMake 在构建目录生成 `share/vaqrin/stdlib`，安装时将标准包源码复制到安装前缀下。编译器按使用情况实例化泛型声明。完整的目标接口见[标准包 API 清单](../docs/stdlib/Vaqrin-stdlib-API-complete-draft.md)。
+可用 `import (core, coll, iter, opt, result, cmp, convert, meta, mem, hash, mmio, bits, algo, atomic, binary, bytes, cell, encoding, simd, text, parse, io, path, fs, env, bufio, fmt, thread, sync, time, channel, task, num, math, random, json, csv, toml, serde, unicode, regex, url, log, errors)` 导入标准包，也可使用 `std/` 前缀。CMake 在构建目录生成 `share/vaqrin/stdlib`，安装时将标准包源码复制到安装前缀下。编译器按使用情况实例化泛型声明。完整的目标接口见[标准包 API 清单](../docs/stdlib/Vaqrin-stdlib-API-complete-draft.md)。
 
 | 包 | 当前接口 |
 | --- | --- |
@@ -15,9 +15,9 @@
 | `num` | 定宽整数边界与检查/回绕/饱和运算、BigUint、BigInt、有理数 |
 | `math` | IEEE 754 分类、f32/f64 数学函数、复数与基础区间运算 |
 | `random` | PCG64 XSL-RR 128/64、xoshiro256**、均匀分布、洗牌与抽样 |
-| `json` | JSON DOM、指针、严格数字词法、键排序、非 ASCII 转义和 Codec |
+| `json` | JSON DOM、指针、严格数字词法、浮点转换、键排序、非 ASCII 转义和 Codec |
 | `csv` | 引号、换行、带表头的记录读写 |
-| `toml` | 基本类型、数组、嵌套表和 Codec |
+| `toml` | 基本类型、数组、嵌套表、浮点转换和 Codec |
 | `serde` | 显式序列化协议和 Codec |
 | `unicode` | Unicode 17 属性、规范化和字素簇 |
 | `regex` | Thompson NFA、分组与有界执行 |
@@ -36,10 +36,11 @@
 | `encoding` | Hex、Base64、百分号编码、ASCII、Latin-1、UTF-8 和 UTF-16，含跨块 UTF 校验与解码 |
 | `simd` | 定宽标量通道、掩码、载入与存储、重排和归约 |
 | `text` | UTF-8 字节相等比较 `equal`、`byteLen`、`scalarCount`、`chars`、`fromBytes`、`StringBuilder` |
-| `parse` | 整串及前缀整数解析、布尔值、Unicode 标量、UTF-8 字节偏移游标和空白分词 |
+| `parse` | 整串及前缀整数和浮点解析、布尔值、Unicode 标量、UTF-8 字节偏移游标和空白分词 |
 | `io` | Reader/Writer/Seeker/Closer、内存流、组合适配器、标准流、宿主文件描述符及原生错误码 |
 | `path` | UTF-8 词法路径、父目录/文件名/扩展名、组件迭代与规范化 |
 | `fs` | File、OpenOptions、Metadata、Permissions、目录读取及文件系统操作 |
+| `env` | 读写进程环境、独立的环境快照、当前目录与可执行文件路径 |
 | `bufio` | BufferedReader/Writer、Scanner、Token、peek/unread、按行和分隔符读取 |
 | `fmt` | Writer 格式化、整数/浮点/布尔/字符/字符串、宽度/精度/进制/填充 |
 | `thread` | GNU/Linux 原生线程、一次性领取结果、分离、协作停止、当前线程 ID 及 CPU 数 |
@@ -110,3 +111,15 @@ LinkedList 使用双向节点和独立 Box 所有权表，节点地址在插入�
 `math` 通过内部 `math_ffi` 包调用目标 C 数学 ABI。它为 f32/f64 分别使用对应的 C 数学入口。Linux 宿主的可执行文件或共享库引用这些数学入口时，`vaqc` 通过目标链接驱动添加 `-lm`。静态库的最终链接仍由调用方提供数学库。区间运算采用普通 IEEE 舍入，不提供向外舍入保证，因此 Interval 目前不构成严格的浮点包络证明。
 
 `random` 的 Pcg64 是 PCG XSL-RR 128/64，Xoshiro256 使用 xoshiro256**。两者都可复现且都不是密码学安全随机源。当前没有 OsRng 或 CryptoRng 实现；`newDefault()` 使用固定种子，不从系统时间伪造熵。随机字符串按 Unicode 标量抽样，不按字素簇抽样。
+
+### 浮点解析
+
+`parse.parseFloat<f32/f64>(value)` 消费整串，`parse.parseFloatPrefix<f32/f64>(value)`
+返回 `Parsed<T>`，保留最长有效十进制前缀的 UTF-8 字节数。允许前导正负号、小数点
+和十进制指数，例如 `+12.5e-2` 和 `.5`。前缀输入 `1e+` 消费 `1`，整串解析
+返回 `TrailingInput`。空串和缺少数字的前缀返回 `InvalidSyntax`，溢出或非零值
+舍入为零返回 `OutOfRange`。识别范围限于有限十进制数，输入不跳过空白。
+`bufio.Scanner.nextFloat<T>()` 在 EOF 时返回 `null`，`readFloat<T>()` 返回
+`IoError.UnexpectedEof`。十进制转换在原生链接时需要 hosted GNU/Linux x86-64
+或 AArch64，以及支持浮点 charconv 的 libstdc++。链接静态库的外部程序需要链接
+libstdc++。

@@ -25,6 +25,13 @@ ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::v
   auto arity = [&](unsigned count) {
     if (n->children.size() != count + 1) fail(n->span, "wrong intrinsic argument count");
   };
+  if (key == "__vqr_decimal_width") {
+    arity(0);
+    if (types.size() != 1) fail(n->span, "floating-point parsing requires one target type");
+    auto *target = parseType(types[0]);
+    if (target->kind != Kind::Float) fail(n->span, "floating-point parsing requires f32 or f64");
+    return {p.integer(32, true), ir.getInt32(target->bits)};
+  }
   if (key == "__vqr_borrow_from_self") {
     arity(1);
     int self = findLocal("self");

@@ -1,5 +1,5 @@
 package toml
-import (core, coll, convert, opt, serde, text)
+import (core, coll, convert, fmt, math, opt, serde, text)
 
 pub error TomlSerdeError { InvalidState, UnsupportedValue, MissingRoot }
 
@@ -26,7 +26,12 @@ public:
         var narrowed = convert.narrow<i64>(value)!;
         appendValue(Value.Integer(narrowed))
     }
-    func writeF64(value: f64) !void { return serde.SerdeError.Unsupported; }
+    func writeF64(value: f64) !void {
+        if math.isNan(value) { return writeNumber(if math.signbit(value) { "-nan" } else { "nan" }); }
+        if math.isInfinite(value) { return writeNumber(if math.signbit(value) { "-inf" } else { "inf" }); }
+        var raw = fmt.formatShortestScientific(value)!;
+        writeNumber(raw)
+    }
     func writeNumber(value: str) !void {
         var options = TomlOptions();
         var parsed = parseValue(value, 0, &options)!;
@@ -132,7 +137,13 @@ public:
             _ => serde.SerdeError.TypeMismatch,
         }
     }
-    func readF64() !f64 { return serde.SerdeError.Unsupported; }
+    func readF64() !f64 {
+        var currentValue = opt.okOr(current, serde.SerdeError.InvalidState)!;
+        switch *currentValue {
+            Value.Integer(_), Value.Float(_) => asF64(currentValue),
+            _ => serde.SerdeError.TypeMismatch,
+        }
+    }
     func readNumber() !string {
         var currentValue = opt.okOr(current, serde.SerdeError.InvalidState)!;
         switch *currentValue {

@@ -120,6 +120,14 @@ pub func writeChar(writer: *io.Writer, value: char, options: FormatOptions) !voi
 }
 
 extern "C" func __vqr_io_format_float(value: f64, style: i32, precision: i32, buffer: *u8, capacity: usize, length: *usize, status: *i32) i32;
+extern "C" func __vqr_decimal_format_f64(value: f64, buffer: *u8, capacity: usize) usize;
+
+pub func formatShortestScientific(value: f64) !string {
+    var buffer = mem.zeroedBytes<32>();
+    var length = unsafe { __vqr_decimal_format_f64(value, &buffer[0], buffer.len()) };
+    if length == 0 { return FormatError.InvalidFormat; }
+    text.fromBytes(buffer[0..length])
+}
 
 pub func formatFloat(value: f64, style: FloatStyle, precision: ?usize) !string {
     var styleCode = switch style {

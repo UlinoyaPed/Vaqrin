@@ -106,6 +106,113 @@ class StandardLibraryAcceptance(CompilerCase):
         ''')
         self.assertEqual(self.run_program(program), "true\ntrue\n")
 
+    def test_float_parsing_and_scanning(self):
+        self.hosted(r"""
+            import (bufio, convert, parse)
+            func main() !void {
+                var prefix = parse.parseFloatPrefix<f64>("+1.25e2制")!;
+                io.println(prefix.value == 125.0 && prefix.consumed == 7)!;
+                var incomplete = parse.parseFloatPrefix<f64>("1e+")!;
+                io.println(incomplete.value == 1.0 && incomplete.consumed == 1)!;
+                var directlyRounded = parse.parseFloat<f32>("1.0000000596046448")!;
+                io.println(convert.bitCast<u32>(directlyRounded) == 1065353217)!;
+                var negativeZero = parse.parseFloat<f64>("-0")!;
+                io.println(convert.bitCast<u64>(negativeZero) == 0x8000000000000000u64)!;
+                var subnormal = parse.parseFloat<f64>("5e-324")!;
+                io.println(convert.bitCast<u64>(subnormal) == 1)!;
+                var invalidInputs = [4]str{"nan", " .5", ".", "+-1"};
+                for bad in invalidInputs {
+                    var invalid = parse.parseFloat<f64>(bad) catch (reason) {
+                        io.println(reason == parse.ParseError.InvalidSyntax)!;
+                        continue;
+                    };
+                    io.println(false)!;
+                }
+                parse.parseFloat<f64>("1.5px") catch (reason) {
+                    io.println(reason == parse.ParseError.TrailingInput)!;
+                    0.0
+                };
+                parse.parseFloat<f32>("1e39") catch (reason) {
+                    io.println(reason == parse.ParseError.OutOfRange)!;
+                    0.0f32
+                };
+                var input = io.MemoryReader(" .5 -2.5e1 ".asBytes());
+                var scanner = bufio.newScanner(&input)!;
+                io.println(scanner.readFloat<f32>()! == 0.5f32)!;
+                io.println(scanner.readFloat<f64>()! == -25.0)!;
+                io.println(scanner.nextFloat<f64>()! == null)!;
+            }
+        """, "true\n" * 14)
+
+    def test_json_and_toml_float_round_trip(self):
+        self.hosted(r"""
+            import (convert, json, math, toml)
+            func main() !void {
+                var decimal = json.JsonNumber.parse("1.25e2")!;
+                io.println(decimal.asF64()! == 125.0)!;
+                var integer = json.JsonNumber.parse("9007199254740993")!;
+                integer.asF64() catch (reason) {
+                    io.println(reason == json.JsonError.InexactNumber)!;
+                    0.0
+                };
+                var jsonWriter = json.JsonDomSerializer();
+                jsonWriter.writeF64(-0.0)!;
+                var jsonValue = jsonWriter.takeValue()!;
+                var wire = json.stringify(&jsonValue)!;
+                var jsonReader = json.JsonDomDeserializer(json.parse(wire)!);
+                var signedZero = jsonReader.readF64()!;
+                io.println(convert.bitCast<u64>(signedZero) == 0x8000000000000000u64)!;
+                jsonWriter.writeF64(math.inf<f64>()) catch (reason) {
+                    io.println(reason == json.JsonSerdeError.UnsupportedNumber)!;
+                };
+
+                var table = toml.parse("amount = 1_000.25\n")!;
+                io.println(toml.asF64(table.get("amount").unwrap())! == 1000.25)!;
+                var tomlWriter = toml.TomlDomSerializer();
+                tomlWriter.writeF64(5e-324)!;
+                var tomlReader = toml.TomlDomDeserializer(tomlWriter.takeValue()!);
+                var subnormal = tomlReader.readF64()!;
+                io.println(convert.bitCast<u64>(subnormal) == 1)!;
+                tomlWriter.writeF64(-math.inf<f64>())!;
+                var infinity = tomlWriter.takeValue()!;
+                io.println(toml.asF64(&infinity)! == -math.inf<f64>())!;
+            }
+        """, "true\n" * 7)
+
+    def test_environment_snapshot(self):
+        self.hosted(r"""
+            import (env, text)
+            func main() !void {
+                var key: str = "VAQRIN_TEST_SNAPSHOT";
+                env.remove(key)!;
+                io.println(!env.contains(key)!)!;
+                var fallback = env.getOr(key, "missing")!;
+                io.println(text.equal(fallback, "missing"))!;
+                env.set(key, "")!;
+                io.println(env.contains(key)!)!;
+                var empty = env.get(key)!.unwrap();
+                io.println(empty.byteLen() == 0)!;
+                env.set(key, "有=值")!;
+                var snapshot = env.snapshot()!;
+                var previous = snapshot.get(key)!.unwrap();
+                io.println(text.equal(previous, "有=值"))!;
+                snapshot.set(key, "owned")!;
+                var cloned = snapshot.clone()!;
+                snapshot.remove(key)!;
+                io.println(!snapshot.contains(key))!;
+                var clonedValue = cloned.get(key)!.unwrap();
+                var liveValue = env.getOr(key, "missing")!;
+                io.println(text.equal(clonedValue, "owned"))!;
+                io.println(text.equal(liveValue, "有=值"))!;
+                env.remove(key)!;
+                env.set("bad=key", "value") catch (reason) {
+                    io.println(reason == env.EnvError.InvalidKey)!;
+                };
+                var executable = env.currentExe()!;
+                io.println(executable.isAbsolute())!;
+            }
+        """, "true\n" * 10)
+
     def test_json(self):
         lines = self.example("stdlib/json/examples/json_smoke.vqr").splitlines()
         self.assertEqual(lines[0], "true")

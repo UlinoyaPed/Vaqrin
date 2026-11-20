@@ -1,5 +1,5 @@
 package json
-import (coll, core, convert, iter as iterator, parse, text)
+import (coll, core, iter as iterator, parse, text)
 
 pub error JsonError {
     UnexpectedEnd, TrailingInput, InvalidSyntax, InvalidNumber, InvalidEscape,
@@ -52,12 +52,13 @@ public:
         parse.parseUint<u64>(raw, 10)
     }
     const func asF64() !f64 {
-        if !isInteger() { return JsonError.InexactNumber; }
-        var integer = parse.parseInt<i64>(raw, 10)!;
-        if integer < -9007199254740992 || integer > 9007199254740992 {
-            return JsonError.InexactNumber;
+        if isInteger() {
+            var integer = parse.parseInt<i64>(raw, 10)!;
+            if integer < -9007199254740992 || integer > 9007199254740992 {
+                return JsonError.InexactNumber;
+            }
         }
-        convert.toFloat<f64>(integer)
+        parse.parseFloat<f64>(raw)
     }
 }
 

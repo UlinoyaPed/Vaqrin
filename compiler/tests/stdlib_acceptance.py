@@ -1,5 +1,6 @@
 """Run the examples for the numeric, data, Unicode and utility packages."""
 from concurrent.futures import ThreadPoolExecutor
+from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import subprocess
@@ -399,6 +400,34 @@ class StandardLibraryAcceptance(CompilerCase):
             }
         """, "true\n" * 4)
 
+    def test_qr_least_squares(self):
+        self.hosted(r"""
+            import (linalg, math, result)
+            func main() !void {
+                var design = [6]f64{1.0, 0.0, 1.0, 1.0, 1.0, 2.0};
+                var measurements = [3]f64{1.0, 2.0, 2.0};
+                var matrix = linalg.Matrix<f64>.fromFlat(3, 2, design[:])!;
+                var rhs = linalg.Vector<f64>.fromSlice(measurements[:])!;
+                var factor = linalg.qr<f64>(&matrix)!;
+                var coeff = factor.solveLeastSquares(&rhs)!;
+                io.println(math.abs<f64>(*coeff.get(0).unwrap() - 7.0 / 6.0) < 0.000001)!;
+                io.println(math.abs<f64>(*coeff.get(1).unwrap() - 0.5) < 0.000001)!;
+                var q = factor.q()!;
+                var r = factor.r()!;
+                var reconstructed = q.matmul(&r)!;
+                var transpose = q.transposeCopy()!;
+                var gram = transpose.matmul(&q)!;
+                io.println(linalg.distance<f64>(reconstructed.asSlice(), matrix.asSlice())! < 0.000001)!;
+                io.println(math.abs<f64>(gram.at(0, 0) - 1.0) < 0.000001 &&
+                           math.abs<f64>(gram.at(1, 1) - 1.0) < 0.000001 &&
+                           math.abs<f64>(gram.at(0, 1)) < 0.000001)!;
+                var rankZero = linalg.Matrix<f64>.zeros(3, 2)!;
+                var deficient = linalg.qr<f64>(&rankZero)!;
+                var rejected = deficient.solveLeastSquares(&rhs);
+                io.println(result.errorOf(&rejected).unwrap() == linalg.LinalgError.Singular)!;
+            }
+        """, "true\n" * 5)
+
     def test_http_wire_and_message_boundaries(self):
         self.hosted(r"""
             import (http, result)
@@ -444,11 +473,7 @@ class StandardLibraryAcceptance(CompilerCase):
             with ThreadPoolExecutor(max_workers=1) as thread:
                 handled = thread.submit(server.handle_request)
                 self.hosted(f"""
-                    import (http, net, text)
-                    func checkServer(handler: *http.Handler) !void {{
-                        var server = http.Server.bind(net.parseSocketAddr("127.0.0.1:0")!)!;
-                        server.serveOne(handler)
-                    }}
+                    import (http, text)
                     func main() !void {{
                         var response = http.get("http://127.0.0.1:{server.server_port}/value?x=1")!;
                         io.println(response.status().value())!;
@@ -456,6 +481,51 @@ class StandardLibraryAcceptance(CompilerCase):
                     }}
                 """, "200\n/value?x=1\n")
                 handled.result(timeout=10)
+
+    def test_http_tcp_server(self):
+        program = self.source("server.vqr", r"""
+            import (fmt, http, io, net)
+
+            class Echo {
+                #implements: http.Handler
+                pub func handle(request: http.Request) !http.Response {
+                    var response = http.Response.new(201)!;
+                    response.setBody(http.Body.fromBytes(request.bodyBytes())!);
+                    move(response)
+                }
+            }
+
+            func main() !void {
+                var endpoint = net.parseSocketAddr("127.0.0.1:0")!;
+                var server = http.Server.bind(endpoint)!;
+                var address = server.localAddr()!;
+                var port: u16 = address.port();
+                var digits = fmt.formatUint(port, 10)!;
+                io.print(digits)!;
+                io.print("\n")!;
+                var handler = Echo{};
+                server.serveOne(&handler)
+            }
+        """)
+        executable = self.root / "http-server"
+        self.process(VAQC, program, "-o", executable)
+        with subprocess.Popen([executable], stdout=subprocess.PIPE, stderr=subprocess.PIPE) as server:
+            with ThreadPoolExecutor(max_workers=1) as thread:
+                port_result = thread.submit(server.stdout.readline)
+                try:
+                    port = int(port_result.result(timeout=5))
+                    connection = HTTPConnection("127.0.0.1", port, timeout=5)
+                    try:
+                        connection.request("POST", "/echo", body=b"Vaqrin")
+                        response = connection.getresponse()
+                        self.assertEqual(response.status, 201)
+                        self.assertEqual(response.read(), b"Vaqrin")
+                    finally:
+                        connection.close()
+                    self.assertEqual(server.wait(timeout=5), 0)
+                finally:
+                    if server.poll() is None:
+                        server.kill()
 
     def test_json(self):
         lines = self.example("stdlib/json/examples/json_smoke.vqr").splitlines()

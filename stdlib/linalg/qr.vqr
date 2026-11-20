@@ -1,0 +1,117 @@
+package linalg
+import (math, num)
+
+func applyReflector<T: Copyable>(matrix: *Matrix<T>, reflectors: *const Matrix<T>,
+                                column: usize, firstColumn: usize) !void {
+    for j in firstColumn..matrix.cols() {
+        var projection = T(0);
+        for i in column..matrix.rows() {
+            projection += reflectors.at(i, column) * matrix.at(i, j);
+        }
+        if !math.isFinite<T>(projection) { return LinalgError.NonFinite; }
+        for i in column..matrix.rows() {
+            var correction = projection * reflectors.at(i, column);
+            var value = matrix.at(i, j) - correction - correction;
+            if !math.isFinite<T>(value) { return LinalgError.NonFinite; }
+            matrix.set(i, j, value);
+        }
+    }
+}
+
+// Thin Householder QR. Q is rows-by-cols and R is square.
+pub class QR<T: Copyable> {
+    #copy: disabled
+    var orthogonal: Matrix<T>;
+    var triangular: Matrix<T>;
+    func init(q: Matrix<T>, r: Matrix<T>) : orthogonal(move(q)), triangular(move(r)) {}
+public:
+    static func factor(matrix: *const Matrix<T>) !Self {
+        var rows = matrix.rows();
+        var cols = matrix.cols();
+        if rows < cols { return LinalgError.ShapeMismatch; }
+        for value in matrix.asSlice() {
+            if !math.isFinite<T>(value) { return LinalgError.NonFinite; }
+        }
+
+        var factors = matrix.clone()!;
+        var reflectors = Matrix<T>.zeros(rows, cols)!;
+        for k in usize(0)..cols {
+            var norm = T(0);
+            for i in k..rows { norm = math.hypot<T>(norm, factors.at(i, k)); }
+            if !math.isFinite<T>(norm) { return LinalgError.NonFinite; }
+            if norm == T(0) { continue; }
+
+            var sign = if factors.at(k, k) < T(0) { T(-1) } else { T(1) };
+            var length = T(0);
+            for i in k..rows {
+                var component = factors.at(i, k) / norm;
+                if i == k { component += sign; }
+                reflectors.set(i, k, component);
+                length = math.hypot<T>(length, component);
+            }
+            for i in k..rows {
+                reflectors.set(i, k, reflectors.at(i, k) / length);
+            }
+            factors.set(k, k, -sign * norm);
+            applyReflector<T>(&factors, &reflectors, k, k + 1)!;
+        }
+
+        var q = Matrix<T>.zeros(rows, cols)!;
+        var r = Matrix<T>.zeros(cols, cols)!;
+        for i in usize(0)..cols {
+            q.set(i, i, T(1));
+            for j in i..cols { r.set(i, j, factors.at(i, j)); }
+        }
+        var k = cols;
+        for k != 0 {
+            k--;
+            if reflectors.at(k, k) != T(0) {
+                applyReflector<T>(&q, &reflectors, k, 0)!;
+            }
+        }
+        QR<T>(move(q), move(r))
+    }
+
+    const func q() !Matrix<T> { orthogonal.clone() }
+    const func r() !Matrix<T> { triangular.clone() }
+
+    const func solveLeastSquares(rhs: *const Vector<T>) !Vector<T> {
+        var rows = orthogonal.rows();
+        var cols = triangular.cols();
+        if rhs.len() != rows { return LinalgError.ShapeMismatch; }
+        var input = rhs.asSlice();
+        for value in input {
+            if !math.isFinite<T>(value) { return LinalgError.NonFinite; }
+        }
+        var output = Vector<T>.zeros(cols)!;
+        var values = output.asMutSlice();
+        var largest = T(0);
+        for j in usize(0)..cols {
+            var diagonal = math.abs<T>(triangular.at(j, j));
+            if diagonal > largest { largest = diagonal; }
+            var product = T(0);
+            for i in usize(0)..rows { product += orthogonal.at(i, j) * input[i]; }
+            if !math.isFinite<T>(product) { return LinalgError.NonFinite; }
+            values[j] = product;
+        }
+
+        var epsilon = num.floatInfo<T>().epsilon;
+        var tolerance = epsilon * T(rows);
+        var i = cols;
+        for i != 0 {
+            i--;
+            var diagonal = triangular.at(i, i);
+            if largest == T(0) || math.abs<T>(diagonal) / largest <= tolerance {
+                return LinalgError.Singular;
+            }
+            var value = values[i];
+            for j in i + 1..cols { value -= triangular.at(i, j) * values[j]; }
+            var solved = value / diagonal;
+            if !math.isFinite<T>(solved) { return LinalgError.NonFinite; }
+            values[i] = solved;
+        }
+        move(output)
+    }
+}
+
+pub func qr<T: Copyable>(matrix: *const Matrix<T>) !QR<T> { QR<T>.factor(matrix) }

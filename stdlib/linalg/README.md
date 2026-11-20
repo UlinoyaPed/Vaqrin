@@ -11,4 +11,9 @@ reuse one factorization across several right-hand sides. A zero pivot reports
 `determinant` returns zero for a singular matrix. `solve` and `inverse` return
 `Singular`.
 
-Tensor and strided view types and QR, SVD and eigenvalue methods remain pending.
+Thin Householder QR supports matrices with at least as many rows as columns.
+Use `solveLeastSquares` for full-column-rank systems. It checks diagonal
+magnitudes relative to the largest diagonal, scaled by the row count and
+the element type’s machine epsilon.
+
+Tensor and strided view types, SVD and eigenvalue methods remain pending.

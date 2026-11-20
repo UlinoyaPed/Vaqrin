@@ -55,7 +55,7 @@ pub class FloatInfo<T> {
     pub var hasInfinity: bool;
     pub var hasNaN: bool;
 
-    func init()
+    pub func init()
         : bits(meta.bitWidth<T>()),
           precision(if meta.bitWidth<T>() == 32 { 24 } else { 53 }),
           exponentBits(if meta.bitWidth<T>() == 32 { 8 } else { 11 }),

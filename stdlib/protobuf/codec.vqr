@@ -1,0 +1,28 @@
+package protobuf
+import (coll)
+
+pub interface Codec<T> {
+    func newValue() !T;
+    func encode(value: *const T, writer: *Writer) !void;
+    func merge(value: *T, reader: *Reader) !void;
+}
+
+pub func encode<T>(value: *const T, codec: *Codec<T>, maxBytes: usize) !coll.Vec<u8> {
+    var writer = Writer(maxBytes);
+    codec.encode(value, &writer)!;
+    writer.takeBytes()
+}
+
+pub func decode<T>(input: []const u8, codec: *Codec<T>, limits: DecodeLimits) !T {
+    var reader = Reader.open(input, limits)!;
+    var value = codec.newValue()!;
+    codec.merge(&value, &reader)!;
+    if reader.remaining() != 0 { return DecodeError.TrailingData; }
+    move(value)
+}
+
+pub func mergeMessage<T>(field: Field, value: *T, codec: *Codec<T>) !void {
+    var reader = field.asMessage()!;
+    codec.merge(value, &reader)!;
+    if reader.remaining() != 0 { return DecodeError.TrailingData; }
+}

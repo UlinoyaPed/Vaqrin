@@ -1,0 +1,19 @@
+package main
+import (io, protobuf)
+
+func main() !void {
+    var address = protobuf.Writer(256);
+    address.writeString(1, "Vaqrin")!;
+    address.writeUint32(2, 42)!;
+    var bytes = address.takeBytes();
+
+    var reader = protobuf.Reader.open(bytes.asConstSlice(), protobuf.DecodeLimits())!;
+    for {
+        var field = reader.next()! ?? { break; };
+        switch field.number() {
+            1 => { io.println(field.asString()!)!; },
+            2 => { io.println(field.asUint32()!)!; },
+            _ => {},
+        };
+    }
+}

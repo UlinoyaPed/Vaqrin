@@ -1,0 +1,326 @@
+package protobuf
+import (binary, coll, core, mem, text)
+
+pub enum WireType { Varint, Fixed64, LengthDelimited, StartGroup, EndGroup, Fixed32 }
+pub error DecodeError { Truncated, InvalidVarint, InvalidTag, InvalidGroup, WrongWireType, SizeLimit, DepthLimit, TrailingData, InvalidUtf8 }
+pub error EncodeError { InvalidTag, SizeLimit }
+
+pub class DecodeLimits {
+    pub var maxBytes: usize;
+    pub var maxDepth: usize;
+    pub func init() : maxBytes(16 * 1024 * 1024), maxDepth(64) {}
+}
+
+func wireType(tag: u64) !WireType {
+    switch tag & 7 {
+        0 => WireType.Varint, 1 => WireType.Fixed64, 2 => WireType.LengthDelimited,
+        3 => WireType.StartGroup, 4 => WireType.EndGroup, 5 => WireType.Fixed32,
+        _ => { return DecodeError.InvalidTag; },
+    }
+}
+
+func numberOf(tag: u64) !u32 {
+    var number = tag >> 3;
+    if number == 0 || number > 536870911 { return DecodeError.InvalidTag; }
+    u32(number)
+}
+
+func tagFor(field: u32, wire: WireType) !u64 {
+    if field == 0 || field > 536870911 { return EncodeError.InvalidTag; }
+    var id: u64 = switch wire {
+        WireType.Varint => 0, WireType.Fixed64 => 1, WireType.LengthDelimited => 2,
+        WireType.StartGroup => 3, WireType.EndGroup => 4, WireType.Fixed32 => 5,
+    };
+    (u64(field) << 3) | id
+}
+
+// Protobuf permits non-minimal value varints. binary.Reader requires a minimal encoding.
+class Cursor {
+    pub var source: []const u8;
+    pub var position: usize;
+public:
+    func init(data: []const u8) : source(data), position(0) {}
+    const func remaining() usize { source.len() - position }
+    func take(count: usize) ![]const u8 {
+        if count > remaining() { return DecodeError.Truncated; }
+        var start = position;
+        position += count;
+        source[start..position]
+    }
+    func varint() !u64 {
+        var value: u64 = 0;
+        for index in usize(0)..10 {
+            var byte = take(1)![0];
+            if index == 9 && byte > 1 { return DecodeError.InvalidVarint; }
+            value |= (u64(byte) & 127u64) << (index * 7);
+            if byte < 128 { return value; }
+        }
+        DecodeError.InvalidVarint
+    }
+    func readNumber(wire: WireType) !u64 {
+        switch wire {
+            WireType.Varint => varint()!,
+            WireType.Fixed32 => u64(binary.readU32(take(4)!, binary.Endian.Little)!),
+            WireType.Fixed64 => binary.readU64(take(8)!, binary.Endian.Little)!,
+            _ => { return DecodeError.WrongWireType; },
+        }
+    }
+    func delimited() ![]const u8 {
+        var count = varint()!;
+        if count > 0x7fffffffu64 { return DecodeError.SizeLimit; }
+        var converted: !usize = usize(count);
+        take(converted!)
+    }
+    func skipGroup(expected: u32, levels: usize) !void {
+        if levels == 0 { return DecodeError.DepthLimit; }
+        for {
+            var tag = varint()!;
+            var number = numberOf(tag)!;
+            var kind = wireType(tag)!;
+            switch kind {
+                WireType.EndGroup => {
+                    if number != expected { return DecodeError.InvalidGroup; }
+                    return;
+                },
+                WireType.StartGroup => { skipGroup(number, levels - 1)!; },
+                WireType.LengthDelimited => { delimited()!; },
+                _ => { readNumber(kind)!; },
+            };
+        }
+    }
+}
+
+func decodeUint64(raw: u64) !u64 { raw }
+func decodeUint32(raw: u64) !u32 { u32(raw & 0xffffffffu64)! }
+func decodeInt64(raw: u64) !i64 { bitCast<i64>(raw) }
+func decodeInt32(raw: u64) !i32 { bitCast<i32>(u32(raw & 0xffffffffu64)!) }
+func decodeSint64(raw: u64) !i64 { binary.zigZagDecode(raw) }
+func decodeSint32(raw: u64) !i32 { i32(binary.zigZagDecode(raw & 0xffffffffu64))! }
+func decodeBool(raw: u64) !bool { raw != 0 }
+func decodeEnum(raw: u64) !i32 { bitCast<i32>(u32(raw & 0xffffffffu64)!) }
+func decodeFixed32(raw: u64) !u32 { u32(raw)! }
+func decodeFixed64(raw: u64) !u64 { raw }
+func decodeSfixed32(raw: u64) !i32 { bitCast<i32>(u32(raw)!) }
+func decodeSfixed64(raw: u64) !i64 { bitCast<i64>(raw) }
+func decodeFloat(raw: u64) !f32 { bitCast<f32>(u32(raw)!) }
+func decodeDouble(raw: u64) !f64 { bitCast<f64>(raw) }
+
+pub class Field {
+    var fieldNumber: u32;
+    var wire: WireType;
+    var scalar: u64;
+    var payload: []const u8;
+    var rawBytes: []const u8;
+    var limits: DecodeLimits;
+    var levels: usize;
+public:
+    func init(number: u32, kind: WireType, value: u64, data: []const u8,
+              raw: []const u8, bounds: DecodeLimits, levels: usize)
+        : fieldNumber(number), wire(kind), scalar(value), payload(data),
+          rawBytes(raw), limits(bounds), levels(levels) {}
+    const func number() u32 { fieldNumber }
+    const func wireType() WireType { wire }
+    const func raw() []const u8 { rawBytes }
+    const func asBytes() ![]const u8 {
+        if wire != WireType.LengthDelimited { return DecodeError.WrongWireType; }
+        payload
+    }
+    const func asString() !string {
+        var data = asBytes()!;
+        text.validateUtf8(data) catch { return DecodeError.InvalidUtf8; };
+        text.fromBytes(data)
+    }
+    const func asMessage() !Reader {
+        var data = asBytes()!;
+        if levels == 0 { return DecodeError.DepthLimit; }
+        var bounds = limits;
+        bounds.maxDepth = levels - 1;
+        Reader.open(data, bounds)
+    }
+    const func asPacked() !PackedReader { PackedReader(asBytes()!) }
+    const func asUint64() !u64 { decodeUint64(numberValue(WireType.Varint)!) }
+    const func asUint32() !u32 { decodeUint32(numberValue(WireType.Varint)!) }
+    const func asInt64() !i64 { decodeInt64(numberValue(WireType.Varint)!) }
+    const func asInt32() !i32 { decodeInt32(numberValue(WireType.Varint)!) }
+    const func asSint64() !i64 { decodeSint64(numberValue(WireType.Varint)!) }
+    const func asSint32() !i32 { decodeSint32(numberValue(WireType.Varint)!) }
+    const func asBool() !bool { decodeBool(numberValue(WireType.Varint)!) }
+    const func asEnum() !i32 { decodeEnum(numberValue(WireType.Varint)!) }
+    const func asFixed32() !u32 { decodeFixed32(numberValue(WireType.Fixed32)!) }
+    const func asFixed64() !u64 { decodeFixed64(numberValue(WireType.Fixed64)!) }
+    const func asSfixed32() !i32 { decodeSfixed32(numberValue(WireType.Fixed32)!) }
+    const func asSfixed64() !i64 { decodeSfixed64(numberValue(WireType.Fixed64)!) }
+    const func asFloat() !f32 { decodeFloat(numberValue(WireType.Fixed32)!) }
+    const func asDouble() !f64 { decodeDouble(numberValue(WireType.Fixed64)!) }
+private:
+    const func numberValue(kind: WireType) !u64 {
+        if wire != kind { return DecodeError.WrongWireType; }
+        scalar
+    }
+}
+
+pub class Reader {
+    var cursor: Cursor;
+    var limits: DecodeLimits;
+    func init(data: []const u8, bounds: DecodeLimits) : cursor(Cursor(data)), limits(bounds) {}
+public:
+    static func open(data: []const u8, limits: DecodeLimits) !Self {
+        if data.len() > limits.maxBytes || data.len() > 0x7fffffff { return DecodeError.SizeLimit; }
+        if limits.maxDepth > 128 { return DecodeError.DepthLimit; }
+        Reader(data, limits)
+    }
+    const func remaining() usize { cursor.remaining() }
+    func next() !?Field {
+        if remaining() == 0 { return null; }
+        var start = cursor.position;
+        var tag = cursor.varint()!;
+        var number = numberOf(tag)!;
+        var kind = wireType(tag)!;
+        var numeric: u64 = 0;
+        var data = cursor.source[start..start];
+        switch kind {
+            WireType.StartGroup => { cursor.skipGroup(number, limits.maxDepth)!; },
+            WireType.EndGroup => { return DecodeError.InvalidGroup; },
+            WireType.LengthDelimited => { data = cursor.delimited()!; },
+            _ => { numeric = cursor.readNumber(kind)!; },
+        };
+        some(Field(number, kind, numeric, data, cursor.source[start..cursor.position], limits, limits.maxDepth))
+    }
+}
+
+pub class PackedReader {
+    var cursor: Cursor;
+public:
+    func init(data: []const u8) : cursor(Cursor(data)) {}
+    const func remaining() usize { cursor.remaining() }
+    func readUint64() !u64 { decodeUint64(cursor.readNumber(WireType.Varint)!) }
+    func readUint32() !u32 { decodeUint32(cursor.readNumber(WireType.Varint)!) }
+    func readInt64() !i64 { decodeInt64(cursor.readNumber(WireType.Varint)!) }
+    func readInt32() !i32 { decodeInt32(cursor.readNumber(WireType.Varint)!) }
+    func readSint64() !i64 { decodeSint64(cursor.readNumber(WireType.Varint)!) }
+    func readSint32() !i32 { decodeSint32(cursor.readNumber(WireType.Varint)!) }
+    func readBool() !bool { decodeBool(cursor.readNumber(WireType.Varint)!) }
+    func readEnum() !i32 { decodeEnum(cursor.readNumber(WireType.Varint)!) }
+    func readFixed32() !u32 { decodeFixed32(cursor.readNumber(WireType.Fixed32)!) }
+    func readFixed64() !u64 { decodeFixed64(cursor.readNumber(WireType.Fixed64)!) }
+    func readSfixed32() !i32 { decodeSfixed32(cursor.readNumber(WireType.Fixed32)!) }
+    func readSfixed64() !i64 { decodeSfixed64(cursor.readNumber(WireType.Fixed64)!) }
+    func readFloat() !f32 { decodeFloat(cursor.readNumber(WireType.Fixed32)!) }
+    func readDouble() !f64 { decodeDouble(cursor.readNumber(WireType.Fixed64)!) }
+}
+
+class Output {
+    var data: coll.Vec<u8>;
+    var limit: usize;
+public:
+    func init(maxBytes: usize) : data(coll.Vec<u8>()), limit(if maxBytes > 0x7fffffff { 0x7fffffff } else { maxBytes }) {}
+    const func written() []const u8 { data.asConstSlice() }
+    func take() coll.Vec<u8> { core.replace<coll.Vec<u8>>(&data, coll.Vec<u8>()) }
+    func append(a: []const u8, b: []const u8, c: []const u8) !void {
+        var remaining = limit - data.len();
+        if a.len() > remaining { return EncodeError.SizeLimit; }
+        remaining -= a.len();
+        if b.len() > remaining { return EncodeError.SizeLimit; }
+        remaining -= b.len();
+        if c.len() > remaining { return EncodeError.SizeLimit; }
+        var needed = data.len() + a.len() + b.len() + c.len();
+        if needed > data.capacity() {
+            var growth = data.capacity() * 2;
+            if growth > limit { growth = limit; }
+            data.reserve(if growth > needed { growth } else { needed })!;
+        }
+        for byte in a { data.push(byte)!; }
+        for byte in b { data.push(byte)!; }
+        for byte in c { data.push(byte)!; }
+    }
+    func appendNumber(wire: WireType, value: u64) !void {
+        var buffer = mem.zeroedBytes<10>();
+        var count = encodeNumber(wire, value, buffer[:])!;
+        append(buffer[0..count], buffer[0..0], buffer[0..0])
+    }
+}
+
+func encodeNumber(wire: WireType, value: u64, buffer: []u8) !usize {
+    switch wire {
+        WireType.Varint => binary.writeVarUint(value, buffer)!,
+        WireType.Fixed32 => {
+            binary.writeU32(buffer, u32(value)!, binary.Endian.Little)!;
+            4
+        },
+        WireType.Fixed64 => {
+            binary.writeU64(buffer, value, binary.Endian.Little)!;
+            8
+        },
+        _ => { return EncodeError.InvalidTag; },
+    }
+}
+
+pub class PackedWriter {
+    #copy: disabled
+    var output: Output;
+public:
+    func init(maxBytes: usize) : output(Output(maxBytes)) {}
+    const func written() []const u8 { output.written() }
+    func writeUint64(value: u64) !void { output.appendNumber(WireType.Varint, value) }
+    func writeUint32(value: u32) !void { output.appendNumber(WireType.Varint, u64(value)) }
+    func writeInt64(value: i64) !void { output.appendNumber(WireType.Varint, bitCast<u64>(value)) }
+    func writeInt32(value: i32) !void { output.appendNumber(WireType.Varint, bitCast<u64>(i64(value))) }
+    func writeSint64(value: i64) !void { output.appendNumber(WireType.Varint, binary.zigZagEncode(value)) }
+    func writeSint32(value: i32) !void { output.appendNumber(WireType.Varint, binary.zigZagEncode(i64(value))) }
+    func writeBool(value: bool) !void { output.appendNumber(WireType.Varint, if value { 1u64 } else { 0u64 }) }
+    func writeEnum(value: i32) !void { output.appendNumber(WireType.Varint, bitCast<u64>(i64(value))) }
+    func writeFixed32(value: u32) !void { output.appendNumber(WireType.Fixed32, u64(value)) }
+    func writeFixed64(value: u64) !void { output.appendNumber(WireType.Fixed64, value) }
+    func writeSfixed32(value: i32) !void { output.appendNumber(WireType.Fixed32, u64(bitCast<u32>(value))) }
+    func writeSfixed64(value: i64) !void { output.appendNumber(WireType.Fixed64, bitCast<u64>(value)) }
+    func writeFloat(value: f32) !void { output.appendNumber(WireType.Fixed32, u64(bitCast<u32>(value))) }
+    func writeDouble(value: f64) !void { output.appendNumber(WireType.Fixed64, bitCast<u64>(value)) }
+}
+
+pub class Writer {
+    #copy: disabled
+    var output: Output;
+public:
+    func init(maxBytes: usize) : output(Output(maxBytes)) {}
+    const func written() []const u8 { output.written() }
+    func takeBytes() coll.Vec<u8> { output.take() }
+    func writeUnknown(field: Field) !void {
+        var raw = field.raw();
+        output.append(raw, raw[0..0], raw[0..0])
+    }
+    func writeBytes(field: u32, value: []const u8) !void {
+        var header = mem.zeroedBytes<10>();
+        var length = mem.zeroedBytes<10>();
+        var tag = binary.writeVarUint(tagFor(field, WireType.LengthDelimited)!, header[:])!;
+        var size = binary.writeVarUint(u64(value.len()), length[:])!;
+        output.append(header[0..tag], length[0..size], value)
+    }
+    func writeString(field: u32, value: str) !void { writeBytes(field, value.asBytes()) }
+    func writeMessage(field: u32, value: *const Writer) !void { writeBytes(field, value.written()) }
+    func writePacked(field: u32, value: *const PackedWriter) !void {
+        var bytes = value.written();
+        if bytes.len() != 0 { writeBytes(field, bytes)!; }
+    }
+    func writeUint64(field: u32, value: u64) !void { writeNumber(field, WireType.Varint, value) }
+    func writeUint32(field: u32, value: u32) !void { writeNumber(field, WireType.Varint, u64(value)) }
+    func writeInt64(field: u32, value: i64) !void { writeNumber(field, WireType.Varint, bitCast<u64>(value)) }
+    func writeInt32(field: u32, value: i32) !void { writeNumber(field, WireType.Varint, bitCast<u64>(i64(value))) }
+    func writeSint64(field: u32, value: i64) !void { writeNumber(field, WireType.Varint, binary.zigZagEncode(value)) }
+    func writeSint32(field: u32, value: i32) !void { writeNumber(field, WireType.Varint, binary.zigZagEncode(i64(value))) }
+    func writeBool(field: u32, value: bool) !void { writeNumber(field, WireType.Varint, if value { 1u64 } else { 0u64 }) }
+    func writeEnum(field: u32, value: i32) !void { writeNumber(field, WireType.Varint, bitCast<u64>(i64(value))) }
+    func writeFixed32(field: u32, value: u32) !void { writeNumber(field, WireType.Fixed32, u64(value)) }
+    func writeFixed64(field: u32, value: u64) !void { writeNumber(field, WireType.Fixed64, value) }
+    func writeSfixed32(field: u32, value: i32) !void { writeNumber(field, WireType.Fixed32, u64(bitCast<u32>(value))) }
+    func writeSfixed64(field: u32, value: i64) !void { writeNumber(field, WireType.Fixed64, bitCast<u64>(value)) }
+    func writeFloat(field: u32, value: f32) !void { writeNumber(field, WireType.Fixed32, u64(bitCast<u32>(value))) }
+    func writeDouble(field: u32, value: f64) !void { writeNumber(field, WireType.Fixed64, bitCast<u64>(value)) }
+private:
+    func writeNumber(field: u32, wire: WireType, value: u64) !void {
+        var header = mem.zeroedBytes<10>();
+        var buffer = mem.zeroedBytes<10>();
+        var tag = binary.writeVarUint(tagFor(field, wire)!, header[:])!;
+        var count = encodeNumber(wire, value, buffer[:])!;
+        output.append(header[0..tag], buffer[0..count], buffer[0..0])
+    }
+}

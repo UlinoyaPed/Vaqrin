@@ -1,0 +1,175 @@
+package main
+import (bytes, coll, fs, protobuf, result)
+
+class Child {
+    pub var left: i32;
+    pub var right: i32;
+}
+
+class ChildCodec {
+    #implements: protobuf.Codec<Child>
+    pub func newValue() !Child { Child{left: 0, right: 0} }
+    pub func encode(value: *const Child, writer: *protobuf.Writer) !void {
+        if value.left != 0 { writer.writeInt32(1, value.left)!; }
+        if value.right != 0 { writer.writeInt32(2, value.right)!; }
+    }
+    pub func merge(value: *Child, reader: *protobuf.Reader) !void {
+        for {
+            var field = reader.next()! ?? { return; };
+            switch field.number() {
+                1 => { value.left = field.asInt32()!; },
+                2 => { value.right = field.asInt32()!; },
+                _ => {},
+            };
+        }
+    }
+}
+
+error TestError { UnexpectedValue }
+
+func require(ok: bool) !void { if !ok { return TestError.UnexpectedValue; } }
+
+func emit() !void {
+    var writer = protobuf.Writer(4096);
+    writer.writeInt32(1, -2147483647 - 1)!;
+    writer.writeInt64(2, -9223372036854775807i64 - 1)!;
+    writer.writeUint32(3, 0xffffffffu32)!;
+    writer.writeUint64(4, 0xffffffffffffffffu64)!;
+    writer.writeSint32(5, -2147483647 - 1)!;
+    writer.writeSint64(6, -9223372036854775807i64 - 1)!;
+    writer.writeFixed32(7, 0xfeabcdefu32)!;
+    writer.writeFixed64(8, 0xfedcba9876543210u64)!;
+    writer.writeSfixed32(9, -42)!;
+    writer.writeSfixed64(10, -43)!;
+    writer.writeBool(11, true)!;
+    writer.writeEnum(12, 23)!;
+    writer.writeFloat(13, 1.25)!;
+    writer.writeDouble(14, -2.5)!;
+    writer.writeString(15, "互操作")!;
+    writer.writeBytes(16, "vaqrin".asBytes())!;
+    var child = Child{left: 5, right: 7};
+    var codec = ChildCodec{};
+    var nested = protobuf.encode<Child>(&child, &codec, 128)!;
+    writer.writeBytes(17, nested.asConstSlice())!;
+    var packed = protobuf.PackedWriter(20);
+    packed.writeSint32(-1)!;
+    packed.writeSint32(0)!;
+    packed.writeSint32(1)!;
+    writer.writePacked(18, &packed)!;
+    var mapEntry = protobuf.Writer(64);
+    mapEntry.writeString(1, "key")!;
+    mapEntry.writeInt32(2, -6)!;
+    writer.writeMessage(19, &mapEntry)!;
+    writer.writeInt64(21, -1)!;
+    writer.writeInt32(22, 0)!;
+    fs.writeFile("vaqrin.bin", writer.written())
+}
+
+func consume() !void {
+    var input = fs.readFile("python.bin", 4096)!;
+    var reader = protobuf.Reader.open(input.asConstSlice(), protobuf.DecodeLimits())!;
+    var codec = ChildCodec{};
+    var child = codec.newValue()!;
+    var values = coll.Vec<i32>();
+    var unknown = protobuf.Writer(64);
+    var code: ?i64 = null;
+    var label: ?string = null;
+    var count: ?i32 = null;
+    var score: i32 = 0;
+    for {
+        var field = reader.next()! ?? { break; };
+        switch field.number() {
+            1 => { require(field.asInt32()! == -2147483647 - 1)!; },
+            2 => { require(field.asInt64()! == -9223372036854775807i64 - 1)!; },
+            3 => { require(field.asUint32()! == 0xffffffffu32)!; },
+            4 => { require(field.asUint64()! == 0xffffffffffffffffu64)!; },
+            5 => { require(field.asSint32()! == -2147483647 - 1)!; },
+            6 => { require(field.asSint64()! == -9223372036854775807i64 - 1)!; },
+            7 => { require(field.asFixed32()! == 0xfeabcdefu32)!; },
+            8 => { require(field.asFixed64()! == 0xfedcba9876543210u64)!; },
+            9 => { require(field.asSfixed32()! == -42)!; },
+            10 => { require(field.asSfixed64()! == -43)!; },
+            11 => { require(field.asBool()!)!; },
+            12 => { require(field.asEnum()! == 23)!; },
+            13 => { require(field.asFloat()! == 1.25)!; },
+            14 => { require(field.asDouble()! == -2.5)!; },
+            15 => { require(field.asString()! == "互操作")!; },
+            16 => { require(bytes.equal(field.asBytes()!, "vaqrin".asBytes()))!; },
+            17 => { protobuf.mergeMessage<Child>(field, &child, &codec)!; },
+            18 => {
+                if field.wireType() == protobuf.WireType.LengthDelimited {
+                    var packed = field.asPacked()!;
+                    for packed.remaining() != 0 { values.push(packed.readSint32()!)!; }
+                } else {
+                    values.push(field.asSint32()!)!;
+                }
+            },
+            19 => {
+                var entry = field.asMessage()!;
+                for {
+                    var member = entry.next()! ?? { break; };
+                    if member.number() == 1 { require(member.asString()! == "key")!; }
+                    if member.number() == 2 { score = member.asInt32()!; }
+                }
+            },
+            20 => { label = some(field.asString()!); code = null; },
+            21 => { code = some(field.asInt64()!); label = null; },
+            22 => { count = some(field.asInt32()!); },
+            _ => { unknown.writeUnknown(field)!; },
+        };
+    }
+    require(child.left == 5 && child.right == 7)!;
+    require(values.len() == 4 && values[0] == -1 && values[1] == 0 && values[2] == 1 && values[3] == -2)!;
+    require(score == -6 && code.unwrap() == -1 && label == null)!;
+    require(count.unwrap() == 0)!;
+    fs.writeFile("unknown.bin", unknown.written())
+}
+
+func boundaries() !void {
+    var raw = [2]u8{0x08, 0x80};
+    var reader = protobuf.Reader.open(raw[:], protobuf.DecodeLimits())!;
+    var invalid = reader.next();
+    require(result.errorOf(&invalid).unwrap() == protobuf.DecodeError.Truncated)!;
+    var long = [11]u8{0x08, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 2};
+    var invalidLong = protobuf.Reader.open(long[:], protobuf.DecodeLimits())!;
+    var overflow = invalidLong.next();
+    require(result.errorOf(&overflow).unwrap() == protobuf.DecodeError.InvalidVarint)!;
+    var tags = [3]u8{0x00, 0x0e, 0x0f};
+    for index in usize(0)..3 {
+        var tagReader = protobuf.Reader.open(tags[index..index + 1], protobuf.DecodeLimits())!;
+        var wrong = tagReader.next();
+        require(result.errorOf(&wrong).unwrap() == protobuf.DecodeError.InvalidTag)!;
+    }
+    var invalidGroup = [2]u8{0x0b, 0x14};
+    var groupReader = protobuf.Reader.open(invalidGroup[:], protobuf.DecodeLimits())!;
+    var unmatched = groupReader.next();
+    require(result.errorOf(&unmatched).unwrap() == protobuf.DecodeError.InvalidGroup)!;
+    var valid = [4]u8{0x08, 0x81, 0x00, 0x00};
+    var nonMinimal = protobuf.Reader.open(valid[0..3], protobuf.DecodeLimits())!;
+    var overlong = nonMinimal.next()!.unwrap();
+    require(overlong.asBool()!)!;
+    var nested = [2]u8{0x0a, 0x00};
+    var limits = protobuf.DecodeLimits();
+    limits.maxDepth = 0;
+    var shallow = protobuf.Reader.open(nested[:], limits)!;
+    var child = shallow.next()!.unwrap();
+    var deep = child.asMessage();
+    require(result.errorOf(&deep).unwrap() == protobuf.DecodeError.DepthLimit)!;
+    limits.maxBytes = 1;
+    var big = protobuf.Reader.open(nested[:], limits);
+    require(result.errorOf(&big).unwrap() == protobuf.DecodeError.SizeLimit)!;
+    var limited = protobuf.Writer(2);
+    var noRoom = limited.writeString(1, "x");
+    require(result.errorOf(&noRoom).unwrap() == protobuf.EncodeError.SizeLimit && limited.written().len() == 0)!;
+    var malformed = [3]u8{0x0a, 0x01, 0xff};
+    var strings = protobuf.Reader.open(malformed[:], protobuf.DecodeLimits())!;
+    var field = strings.next()!.unwrap();
+    var invalidUtf8 = field.asString();
+    require(result.errorOf(&invalidUtf8).unwrap() == protobuf.DecodeError.InvalidUtf8)!;
+}
+
+func main() !void {
+    boundaries()!;
+    emit()!;
+    consume()
+}

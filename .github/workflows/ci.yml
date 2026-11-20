@@ -47,6 +47,11 @@ jobs:
             cmake ninja-build python3 gcc-arm-none-eabi openssl libssl-dev
           printf '/usr/lib/llvm-%s/bin\n' "$LLVM_MAJOR" >> "$GITHUB_PATH"
 
+      - name: Install protocol test dependencies
+        run: |
+          python3 -m pip install --target "$RUNNER_TEMP/vaqrin-python" "grpcio-tools>=1.62,<2"
+          printf 'PYTHONPATH=%s\n' "$RUNNER_TEMP/vaqrin-python" >> "$GITHUB_ENV"
+
       - name: Configure and build
         run: |
           llvm-config --version
@@ -75,6 +80,7 @@ jobs:
           python3 compiler/tests/acceptance.py "$compiler" Acceptance.test_shipped_packages_load_together
           python3 compiler/tests/io_acceptance.py "$compiler" IoAcceptance.test_task_and_io_runtimes_link_together
           python3 compiler/tests/stdlib_acceptance.py "$compiler" StandardLibraryAcceptance.test_https_client
+          python3 compiler/tests/protocol_acceptance.py "$compiler"
           python3 compiler/tools/release.py smoke "$RUNNER_TEMP/vaqrin"
 
       - name: Upload CTest diagnostics

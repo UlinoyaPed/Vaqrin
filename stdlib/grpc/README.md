@@ -38,6 +38,13 @@ and bidirectional calls. Application handlers execute synchronously.
 While a handler reads its stream, events for other streams are deferred
 within a fixed bound and dispatched when the handler returns.
 
+Generate application types with `protoc-gen-vaqrin`. The generated
+client encodes input, invokes the RPC, and decodes the typed result. For
+streaming methods it exposes typed send, receive and half-close operations.
+Implement the generated service interface and keep its generated server
+adapter at a stable address while registered. The adapter owns the
+individual method registrations. See the [Greeter example](../../examples/grpc/README.md).
+
 The transport uses OpenSSL 3 and nghttp2 on hosted GNU/Linux. Reference
 acceptance tests use Python grpcio for both directions plus a Vaqrin-to-Vaqrin
 loopback with real Protobuf messages.

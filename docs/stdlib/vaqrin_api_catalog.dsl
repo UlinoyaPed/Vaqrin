@@ -976,7 +976,7 @@
 #class Field|读取类型化标量、嵌套消息、Packed 序列或未知字段字节
 + number()->u32; wireType()->WireType; raw()->[]const u8; asBytes()->![]const u8; asString()->!string; asMessage()->!Reader; asPacked()->!PackedReader
 #class Writer|带上限的 Protobuf 编码器
-+ init(maxBytes: usize)->Self; written()->[]const u8; takeBytes()->coll.Vec<u8>; writeUnknown(field: Field)->!void; writeBytes(field: u32,value: []const u8)->!void; writeString(field: u32,value: str)->!void; writeMessage(field: u32,value: *const Writer)->!void; writePacked(field: u32,value: *const PackedWriter)->!void
++ init(maxBytes: usize)->Self; written()->[]const u8; takeBytes()->coll.Vec<u8>; writeUnknown(field: Field)->!void; appendUnknown(raw: []const u8)->!void; subMessage()->!Writer; writeBytes(field: u32,value: []const u8)->!void; writeString(field: u32,value: str)->!void; writeMessage(field: u32,value: *const Writer)->!void; writePacked(field: u32,value: *const PackedWriter)->!void
 #interface Codec<T>|构造、编码及按 schema 合并消息
 + newValue()->!T; encode(value: *const T,writer: *Writer)->!void; merge(value: *T,reader: *Reader)->!void
 = encode<T>(value: *const T,codec: *Codec<T>,maxBytes: usize)->!coll.Vec<u8>; decode<T>(input: []const u8,codec: *Codec<T>,limits: DecodeLimits)->!T; mergeMessage<T>(field: Field,value: *T,codec: *Codec<T>)->!void
@@ -994,6 +994,7 @@
 + isOk()->bool
 #class Metadata|ASCII 字段与二进制字段
 + init()->Self; addText(name: str,value: str)->!void; addBinary(name: str,value: []const u8)->!void; get(name: str)->?[]const u8
+#class TypedResponse<T>|生成 Stub 的类型化响应、元数据与状态
 #class ClientConn|一个可复用 HTTP/2 连接
 + unary(path: str,message: []const u8,options: *const CallOptions)->!UnaryResponse; close()->!void
 #interface UnaryHandler|按方法接收一个数据消息并生成响应

@@ -58,9 +58,9 @@
 | `compress` | 4 | 8 | 6 | 0 | 未实现 | 暂无标准包源码 | — |
 | `crypto` | 5 | 19 | 8 | 0 | 未实现 | 暂无标准包源码 | — |
 | `tls` | 4 | 9 | 4 | 0 | 部分实现，已运行代表用例 | OpenSSL 客户端及服务端、ALPN、CA、SNI、超时与加密流。双向认证与会话复用待补 | `coll`, `io`, `mem`, `net`, `text`, `time` |
-| `protobuf` | — | — | — | 0 | 部分实现，已运行代表用例 | Wire Format、标量、子消息、Packed 字段、保留未知字段及 Codec。Schema 代码生成待补 | `binary`, `coll`, `core`, `mem`, `text` |
+| `protobuf` | — | — | — | 0 | 部分实现，已运行代表用例 | Wire Format、标量、子消息、Packed 字段、保留未知字段及 Codec。proto3 schema 代码生成 | `binary`, `coll`, `core`, `mem`, `text` |
 | `http2` | — | — | — | 0 | 部分实现，已运行代表用例 | nghttp2 支持的连接、帧、HPACK、流、窗口和退出事件。TLS ALPN 与显式 h2c | `binary`, `bytes`, `coll`, `io`, `mem`, `text`, `tls` |
-| `grpc` | — | — | — | 0 | 部分实现，已运行代表用例 | 四种 RPC、元数据、状态、消息帧、Deadline 和取消。并发 gRPC 调度与生成器待补 | `binary`, `bytes`, `cmp`, `coll`, `core`, `encoding`, `fmt`, `http2`, `io`, `net`, `parse`, `text`, `time`, `tls`, `url` |
+| `grpc` | — | — | — | 0 | 部分实现，已运行代表用例 | 四种 RPC、元数据、状态、消息帧、Deadline 和取消。生成客户端与服务端适配器。并发应用调度和优雅关闭待补 | `binary`, `bytes`, `cmp`, `coll`, `core`, `encoding`, `fmt`, `http2`, `io`, `net`, `parse`, `text`, `time`, `tls`, `url` |
 | `context` | 3 | 12 | 5 | 0 | 未实现 | 暂无标准包源码 | — |
 | `asyncstream` | 5 | 10 | 9 | 0 | 未实现 | 暂无标准包源码 | — |
 | `persistent` | 5 | 28 | 0 | 0 | 未实现 | 暂无标准包源码 | — |

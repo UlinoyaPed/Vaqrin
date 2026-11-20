@@ -3,7 +3,7 @@ import (binary, coll, core, mem, text)
 
 pub enum WireType { Varint, Fixed64, LengthDelimited, StartGroup, EndGroup, Fixed32 }
 pub error DecodeError { Truncated, InvalidVarint, InvalidTag, InvalidGroup, WrongWireType, SizeLimit, DepthLimit, TrailingData, InvalidUtf8 }
-pub error EncodeError { InvalidTag, SizeLimit }
+pub error EncodeError { InvalidTag, SizeLimit, DepthLimit }
 
 pub class DecodeLimits {
     pub var maxBytes: usize;
@@ -214,6 +214,7 @@ class Output {
     var limit: usize;
 public:
     func init(maxBytes: usize) : data(coll.Vec<u8>()), limit(if maxBytes > 0x7fffffff { 0x7fffffff } else { maxBytes }) {}
+    const func maximum() usize { limit }
     const func written() []const u8 { data.asConstSlice() }
     func take() coll.Vec<u8> { core.replace<coll.Vec<u8>>(&data, coll.Vec<u8>()) }
     func append(a: []const u8, b: []const u8, c: []const u8) !void {
@@ -280,10 +281,25 @@ public:
 pub class Writer {
     #copy: disabled
     var output: Output;
+    var depth: usize;
+    func init(maxBytes: usize, depth: usize) : output(Output(maxBytes)), depth(depth) {}
 public:
-    func init(maxBytes: usize) : output(Output(maxBytes)) {}
+    func init(maxBytes: usize) : self(maxBytes, 64) {}
+    const func maximum() usize { output.maximum() }
+    const func subMessage() !Writer {
+        if depth == 0 { return EncodeError.DepthLimit; }
+        Writer(maximum(), depth - 1)
+    }
     const func written() []const u8 { output.written() }
     func takeBytes() coll.Vec<u8> { output.take() }
+    func appendUnknown(raw: []const u8) !void {
+        var limits = DecodeLimits();
+        limits.maxBytes = maximum();
+        limits.maxDepth = depth;
+        var reader = Reader.open(raw, limits)!;
+        for reader.next()! != null {}
+        output.append(raw, raw[0..0], raw[0..0])
+    }
     func writeUnknown(field: Field) !void {
         var raw = field.raw();
         output.append(raw, raw[0..0], raw[0..0])

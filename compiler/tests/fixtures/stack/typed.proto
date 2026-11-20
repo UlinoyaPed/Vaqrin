@@ -1,0 +1,36 @@
+syntax = "proto3";
+package demo.deep;
+
+import "wire.proto";
+
+message Input {
+  message Part {
+    int32 left = 1;
+    int32 right = 2;
+  }
+  enum Mode {
+    UNSPECIFIED = 0;
+    ENABLED = 1;
+  }
+  optional int32 count = 1;
+  repeated sint32 numbers = 2;
+  map<string, Part> scores = 3;
+  oneof payload {
+    Part nested = 4;
+    bytes raw = 5;
+  }
+  Part child = 6;
+  repeated Part items = 7;
+  interop.Child foreign = 8;
+  Input branch = 9;
+  Mode mode = 10;
+  string type = 11;
+  optional bytes extra = 12;
+}
+
+service Echo {
+  rpc Double(Input) returns (interop.Child);
+  rpc Broadcast(Input) returns (stream interop.Child);
+  rpc Sum(stream Input) returns (interop.Child);
+  rpc Mirror(stream Input) returns (stream interop.Child);
+}

@@ -61,6 +61,7 @@ public:
           path(core.replace<string>(&request.path, "")),
           metadata(core.replace<Metadata>(&request.metadata, Metadata())), deadline(request.deadline),
           initial(Metadata()), trailing(Metadata()) {}
+    const func maxMessageBytes() usize { limit }
     const func checkDeadline() !void {
         if cancelled { return RpcError.Cancelled; }
         if deadline != null && deadline.unwrap().expired()! { return RpcError.DeadlineExceeded; }

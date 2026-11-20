@@ -1,0 +1,42 @@
+package grpc
+import (coll, core, protobuf)
+
+pub class TypedResponse<T> {
+    #copy: disabled
+    pub var initial: Metadata;
+    pub var trailing: Metadata;
+    pub var status: Status;
+    pub var message: ?T;
+}
+
+pub func typedResponse<T>(message: T) TypedResponse<T> {
+    TypedResponse<T>{initial: Metadata(), trailing: Metadata(),
+        status: status(StatusCode.Ok, ""), message: some(move(message))}
+}
+
+pub func typedError<T>(value: Status) TypedResponse<T> {
+    TypedResponse<T>{initial: Metadata(), trailing: Metadata(), status: move(value), message: null}
+}
+
+pub func decodeResponse<T>(value: UnaryResponse, codec: *protobuf.Codec<T>,
+                           limits: protobuf.DecodeLimits) !TypedResponse<T> {
+    var message: ?T = null;
+    switch value.body {
+        some(ref bytes) => { message = some(protobuf.decode<T>(bytes.asConstSlice(), codec, limits)!); },
+        null => {},
+    };
+    TypedResponse<T>{initial: core.replace<Metadata>(&value.initial, Metadata()),
+        trailing: core.replace<Metadata>(&value.trailing, Metadata()),
+        status: core.replace<Status>(&value.status, status(StatusCode.Unknown, "")), message: move(message)}
+}
+
+pub func encodeResponse<T>(value: TypedResponse<T>, codec: *protobuf.Codec<T>, maxBytes: usize) !UnaryResponse {
+    var data: ?coll.Vec<u8> = null;
+    switch value.message {
+        some(ref message) => { data = some(protobuf.encode<T>(&message, codec, maxBytes)!); },
+        null => {},
+    };
+    UnaryResponse{initial: core.replace<Metadata>(&value.initial, Metadata()),
+        trailing: core.replace<Metadata>(&value.trailing, Metadata()),
+        status: core.replace<Status>(&value.status, status(StatusCode.Unknown, "")), body: move(data)}
+}

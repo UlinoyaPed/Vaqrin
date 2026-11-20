@@ -52,6 +52,7 @@ public:
     func init(wire: Transport, session: http2.Connection, authority: string, secure: bool, options: DialOptions)
         : wire(move(wire)), connection(move(session)), authority(move(authority)), secure(secure),
           timeout(options.timeout), limit(options.maxMessageBytes), active(0), goingAway(false), serial(0) {}
+    const func maxMessageBytes() usize { limit }
     func close() !void {
         goingAway = true;
         connection.goAway(0) catch {};

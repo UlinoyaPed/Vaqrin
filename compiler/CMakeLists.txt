@@ -58,6 +58,7 @@ install(FILES runtime/tasks.c runtime/io_posix.cpp runtime/decimal.cpp runtime/p
     runtime/net_posix.cpp runtime/tls_openssl.cpp runtime/http2_nghttp2.cpp DESTINATION share/vaqrin/runtime)
 
 install(TARGETS vaqc RUNTIME DESTINATION bin)
+install(PROGRAMS tools/protoc-gen-vaqrin DESTINATION bin)
 install(FILES UNICODE-LICENSE DESTINATION share/licenses/vaqc)
 
 include(CTest)

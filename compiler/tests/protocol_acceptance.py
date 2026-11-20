@@ -569,6 +569,69 @@ class ProtocolAcceptance(CompilerCase):
                 if server.poll() is None:
                     server.kill()
 
+    def test_protoc_vaqrin_plugin(self):
+        self.process(sys.executable, "-m", "grpc_tools.protoc",
+                     f"-I{FIXTURES}", "--python_out=.", "wire.proto", "typed.proto")
+        sys.path.insert(0, str(self.root))
+        try:
+            spec = importlib.util.spec_from_file_location("typed_pb2", self.root / "typed_pb2.py")
+            schema = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(schema)
+        finally:
+            sys.path.pop(0)
+        initial = schema.Input(count=12, numbers=[-1, 0, 40], mode=99, type="keyword", extra=b"")
+        initial.scores["key"].left = 100
+        initial.raw = b"replaced"
+        initial.child.left = 50
+        initial.items.add(right=80)
+        initial.foreign.left = -1
+        initial.branch.count = 3
+        middle = schema.Input(count=0)
+        middle.scores["key"].left = 200
+        middle.nested.left = 3
+        final = schema.Input()
+        final.nested.right = 4
+        # A wrong wire type for field 1 and one unknown fixed32 field remain opaque.
+        opaque = bytes.fromhex("0a017fa506ffffffff")
+        raw = initial.SerializeToString() + middle.SerializeToString() + final.SerializeToString() + opaque
+        (self.root / "generated-input.bin").write_bytes(raw)
+        plugin = VAQC.parent / "protoc-gen-vaqrin"
+        if not plugin.is_file():
+            plugin = REPOSITORY / "compiler/tools/protoc-gen-vaqrin"
+        options = (sys.executable, "-m", "grpc_tools.protoc", f"-I{FIXTURES}",
+                   f"--plugin=protoc-gen-vaqrin={plugin}")
+        self.process(*options, "--vaqrin_out=.", "wire.proto", "typed.proto")
+        repeat = self.root / "repeat"
+        repeat.mkdir()
+        self.process(*options, "--vaqrin_out=repeat", "typed.proto", "wire.proto")
+        for subpath in ("pb_interop/wire_pb.vqr", "pb_demo_ddeep/typed_pb.vqr"):
+            self.assertEqual((self.root / subpath).read_bytes(), (repeat / subpath).read_bytes())
+        test = self.source("main.vqr", (FIXTURES / "typed.vqr").read_text(encoding="utf-8"))
+        self.process(VAQC, test, "--package-path", self.root, "-o", "typed")
+        self.process("./typed")
+        output = (self.root / "generated-output.bin").read_bytes()
+        self.assertEqual(schema.Input.FromString(output), schema.Input.FromString(raw))
+        self.assertTrue(output.endswith(opaque))
+
+        cert, key = self.make_certificate()
+        environment = {**os.environ, "VAQRIN_RPC_CERT": str(cert), "VAQRIN_RPC_KEY": str(key)}
+        executable = self.root / "typed"
+        with subprocess.Popen([executable], env={**environment, "VAQRIN_RPC_SERVER": "1"},
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE) as server:
+            try:
+                with ThreadPoolExecutor(max_workers=1) as worker:
+                    port = int(worker.submit(server.stdout.readline).result(timeout=5))
+                process = subprocess.run(
+                    [executable], capture_output=True, timeout=15,
+                    env={**environment, "VAQRIN_RPC_ADDRESS": f"https://localhost:{port}"},
+                )
+                self.assertEqual(process.returncode, 0, (process.stdout, process.stderr))
+                out, err = server.communicate(timeout=5)
+                self.assertEqual(server.returncode, 0, (out, err))
+            finally:
+                if server.poll() is None:
+                    server.kill()
+
     def test_grpc_message_boundaries(self):
         self.hosted(r"""
             import (bytes, grpc, result)

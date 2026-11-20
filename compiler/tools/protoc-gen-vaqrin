@@ -1,0 +1,541 @@
+#!/usr/bin/env python3
+"""Protocol Buffers compiler plugin for the Vaqrin standard library."""
+from collections import defaultdict
+from pathlib import PurePosixPath
+import sys
+
+from google.protobuf import descriptor_pb2
+from google.protobuf.compiler import plugin_pb2
+
+
+Field = descriptor_pb2.FieldDescriptorProto
+SCALARS = {
+    Field.TYPE_DOUBLE: ("f64", "Double", "0.0", "Fixed64"),
+    Field.TYPE_FLOAT: ("f32", "Float", "0.0", "Fixed32"),
+    Field.TYPE_INT64: ("i64", "Int64", "0", "Varint"),
+    Field.TYPE_UINT64: ("u64", "Uint64", "0", "Varint"),
+    Field.TYPE_INT32: ("i32", "Int32", "0", "Varint"),
+    Field.TYPE_FIXED64: ("u64", "Fixed64", "0", "Fixed64"),
+    Field.TYPE_FIXED32: ("u32", "Fixed32", "0", "Fixed32"),
+    Field.TYPE_BOOL: ("bool", "Bool", "false", "Varint"),
+    Field.TYPE_STRING: ("string", "String", '""', "LengthDelimited"),
+    Field.TYPE_BYTES: ("coll.Vec<u8>", "Bytes", "coll.Vec<u8>()", "LengthDelimited"),
+    Field.TYPE_UINT32: ("u32", "Uint32", "0", "Varint"),
+    Field.TYPE_ENUM: ("i32", "Enum", "0", "Varint"),
+    Field.TYPE_SFIXED32: ("i32", "Sfixed32", "0", "Fixed32"),
+    Field.TYPE_SFIXED64: ("i64", "Sfixed64", "0", "Fixed64"),
+    Field.TYPE_SINT32: ("i32", "Sint32", "0", "Varint"),
+    Field.TYPE_SINT64: ("i64", "Sint64", "0", "Varint"),
+}
+
+
+def escape(name):
+    return name.replace("_", "_u")
+
+
+def package_name(name):
+    return "pb_" + ("_d".join(map(escape, name.split("."))) if name else "_root")
+
+
+def repeated(field):
+    return field.label == Field.LABEL_REPEATED
+
+
+def boxed(field):
+    return field.type == Field.TYPE_MESSAGE and not repeated(field)
+
+
+def packable(field):
+    return field.type in SCALARS and SCALARS[field.type][3] != "LengthDelimited"
+
+
+def wire_type(field):
+    return "LengthDelimited" if field.type == Field.TYPE_MESSAGE else SCALARS[field.type][3]
+
+
+def qualified(package, names):
+    return "." + ".".join(([package] if package else []) + names)
+
+
+class Printer:
+    def __init__(self):
+        self.lines = []
+        self.indent = 0
+
+    def line(self, value=""):
+        self.lines.append("    " * self.indent + value if value else "")
+
+    def start(self, value):
+        self.line(value + " {")
+        self.indent += 1
+
+    def end(self, suffix=""):
+        self.indent -= 1
+        self.line("}" + suffix)
+
+    def render(self):
+        return "\n".join(self.lines) + "\n"
+
+
+class Registry:
+    def __init__(self, files):
+        self.messages = {}
+        self.symbols = {}
+        for file in files:
+            for message in file.message_type:
+                self.message(file.package, [], message)
+            for enum in file.enum_type:
+                self.symbol(file.package, [enum.name])
+
+    def symbol(self, package, names):
+        name = qualified(package, names)
+        self.symbols[name] = (package_name(package), "_n".join(map(escape, names)))
+        return name
+
+    def message(self, package, parents, message):
+        names = parents + [message.name]
+        self.messages[self.symbol(package, names)] = message
+        for nested in message.nested_type:
+            self.message(package, names, nested)
+        for enum in message.enum_type:
+            self.symbol(package, names + [enum.name])
+
+
+class Generator:
+    def __init__(self, file, registry):
+        self.file = file
+        self.registry = registry
+        self.package = package_name(file.package)
+        self.imports = {"coll", "protobuf"}
+        self.out = Printer()
+
+    def symbol(self, name, prefix):
+        package, symbol = self.registry.symbols[name]
+        if package == self.package:
+            return prefix + symbol
+        self.imports.add(package)
+        return package + "." + prefix + symbol
+
+    def message_type(self, name):
+        return self.symbol(name, "Msg_")
+
+    def codec(self, name):
+        return self.symbol(name, "Codec_")
+
+    def base_type(self, field):
+        if field.type == Field.TYPE_MESSAGE:
+            return self.message_type(field.type_name)
+        if field.type not in SCALARS:
+            raise ValueError(f"{self.file.name}: unsupported field type for {field.name}")
+        return SCALARS[field.type][0]
+
+    def value_type(self, field):
+        return ("^" if boxed(field) else "") + self.base_type(field)
+
+    def enum(self, names, definition):
+        prefix = self.symbol(qualified(self.file.package, names), "PbEnum_")
+        for value in definition.value:
+            self.out.line(f"pub const {prefix}_{escape(value.name)}: i32 = {value.number};")
+        self.out.line()
+
+    def parts(self, message, name):
+        singular = []
+        oneofs = defaultdict(list)
+        for field in message.field:
+            if field.HasField("oneof_index") and not field.proto3_optional:
+                oneofs[field.oneof_index].append(field)
+            else:
+                singular.append(field)
+        choices = {}
+        for index, fields in sorted(oneofs.items()):
+            label = escape(message.oneof_decl[index].name)
+            choice = f"Choice_{name}_{label}"
+            member = f"choice_{label}"
+            variants = ", ".join("F_" + f.name + f"({self.value_type(f)})" for f in fields)
+            self.out.line(f"pub enum {choice} {{ Unset, {variants} }}")
+            choices[index] = (choice, member, fields)
+        return singular, choices
+
+    def field_type(self, field):
+        target = self.value_type(field)
+        if repeated(field):
+            return f"coll.Vec<{target}>", f"coll.Vec<{target}>()"
+        if field.proto3_optional or boxed(field):
+            return "?" + target, "null"
+        return target, SCALARS[field.type][2]
+
+    def map_entry(self, field):
+        return (field.type == Field.TYPE_MESSAGE and repeated(field) and
+                self.registry.messages[field.type_name].options.map_entry)
+
+    def encode_field(self, field, source, target="writer"):
+        p = self.out
+        if field.type == Field.TYPE_MESSAGE:
+            p.line(f"var nested = {target}.subMessage()!;")
+            p.line(f"var codec = {self.codec(field.type_name)}{{}};")
+            pointer = source + ".asPtr()" if boxed(field) else "&" + source
+            p.line(f"codec.encode({pointer}, &nested)!;")
+            p.line(f"{target}.writeMessage({field.number}, &nested)!;")
+        else:
+            argument = source + ".asConstSlice()" if field.type == Field.TYPE_BYTES else source
+            p.line(f"{target}.write{SCALARS[field.type][1]}({field.number}, {argument})!;")
+
+    def scalar_read(self, field):
+        if field.type == Field.TYPE_BYTES:
+            return "coll.Vec<u8>.fromSlice(field.asBytes()!)!"
+        return f"field.as{SCALARS[field.type][1]}()!"
+
+    def is_default(self, field, source):
+        if field.type == Field.TYPE_STRING:
+            return source + ".byteLen() == 0"
+        if field.type == Field.TYPE_BYTES:
+            return source + ".len() == 0"
+        if field.type == Field.TYPE_FLOAT:
+            return f"bitCast<u32>({source}) == 0"
+        if field.type == Field.TYPE_DOUBLE:
+            return f"bitCast<u64>({source}) == 0"
+        return f"{source} == {SCALARS[field.type][2]}"
+
+    def encode(self, singular, choices, typename):
+        p = self.out
+        p.start(f"pub func encode(value: *const {typename}, writer: *protobuf.Writer) !void")
+        for field in sorted(singular, key=lambda f: f.number):
+            source = "value.f_" + field.name
+            if repeated(field):
+                if packable(field) and (not field.options.HasField("packed") or field.options.packed):
+                    p.line("var packed_" + field.name + " = protobuf.PackedWriter(writer.maximum());")
+                    p.start(f"for item in {source}.iterRef()")
+                    p.line(f"packed_{field.name}.write{SCALARS[field.type][1]}(*item)!;")
+                    p.end()
+                    p.line(f"writer.writePacked({field.number}, &packed_{field.name})!;")
+                else:
+                    p.start(f"for item in {source}.iterRef()")
+                    argument = "item" if field.type == Field.TYPE_MESSAGE else "(*item)"
+                    if field.type == Field.TYPE_MESSAGE:
+                        p.line("var nested = writer.subMessage()!;")
+                        p.line(f"var codec = {self.codec(field.type_name)}{{}};")
+                        p.line("codec.encode(item, &nested)!;")
+                        p.line(f"writer.writeMessage({field.number}, &nested)!;")
+                    else:
+                        self.encode_field(field, argument)
+                    p.end()
+            elif field.proto3_optional or boxed(field):
+                p.start(f"switch {source}")
+                p.start("some(ref item) =>")
+                self.encode_field(field, "item")
+                p.end(",")
+                p.line("null => {},")
+                p.end(";")
+            else:
+                p.start(f"if !({self.is_default(field, source)})")
+                self.encode_field(field, source)
+                p.end()
+        for choice, member, fields in choices.values():
+            p.start(f"switch value.{member}")
+            for field in fields:
+                p.start(f"{choice}.F_{field.name}(ref item) =>")
+                self.encode_field(field, "item")
+                p.end(",")
+            p.line(f"{choice}.Unset => {{}},")
+            p.end(";")
+        p.start("for raw in value.unknownFields.iterRef()")
+        p.line("writer.appendUnknown(raw.asConstSlice())!;")
+        p.end()
+        p.end()
+
+    def verify_wire(self, field):
+        p = self.out
+        p.start(f"if field.wireType() != protobuf.WireType.{wire_type(field)}")
+        p.line("value.unknownFields.push(coll.Vec<u8>.fromSlice(field.raw())!)!;")
+        p.line("continue;")
+        p.end()
+
+    def parse_message(self, field, source, variant=None):
+        p = self.out
+        target = self.message_type(field.type_name)
+        p.line(f"var codec = {self.codec(field.type_name)}{{}};")
+        if repeated(field):
+            p.line(f"var nested = {target}();")
+            p.line(f"protobuf.mergeMessage<{target}>(field, &nested, &codec)!;")
+            if self.map_entry(field):
+                p.line(f"value.put_{field.name}(move(nested))!;")
+            else:
+                p.line(f"{source}.push(move(nested))!;")
+            return
+        pattern = "some" if variant is None else variant
+        p.start(f"switch {source}")
+        p.start(f"{pattern}(ref nested) =>")
+        p.line(f"protobuf.mergeMessage<{target}>(field, nested.asPtr(), &codec)!;")
+        p.line("continue;")
+        p.end(",")
+        p.line("_ => {},")
+        p.end(";")
+        p.line(f"var nested = new {target}()!;")
+        p.line(f"protobuf.mergeMessage<{target}>(field, nested.asPtr(), &codec)!;")
+        p.line(f"{source} = {pattern}(move(nested));")
+
+    def merge(self, definition, choices, name):
+        p = self.out
+        p.start(f"pub func merge(value: *{name}, reader: *protobuf.Reader) !void")
+        p.start("for")
+        p.line("var field = reader.next()! ?? { return; };")
+        p.start("switch field.number()")
+        for field in sorted(definition.field, key=lambda f: f.number):
+            p.start(f"{field.number} =>")
+            source = "value.f_" + field.name
+            variant = None
+            if field.HasField("oneof_index") and not field.proto3_optional:
+                choice, member, _ = choices[field.oneof_index]
+                source = f"value.{member}"
+                variant = f"{choice}.F_{field.name}"
+            if repeated(field) and packable(field):
+                p.start("if field.wireType() == protobuf.WireType.LengthDelimited")
+                p.line("var packed = field.asPacked()!;")
+                p.start("for packed.remaining() != 0")
+                p.line(f"{source}.push(packed.read{SCALARS[field.type][1]}()!)!;")
+                p.end()
+                p.line("continue;")
+                p.end()
+            self.verify_wire(field)
+            if field.type == Field.TYPE_MESSAGE:
+                self.parse_message(field, source, variant)
+            else:
+                incoming = self.scalar_read(field)
+                if repeated(field):
+                    p.line(f"{source}.push({incoming})!;")
+                elif field.proto3_optional or variant:
+                    p.line(f"{source} = {variant or 'some'}({incoming});")
+                else:
+                    p.line(f"{source} = {incoming};")
+            p.end(",")
+        p.line("_ => { value.unknownFields.push(coll.Vec<u8>.fromSlice(field.raw())!)!; },")
+        p.end(";")
+        p.end()
+        p.end()
+
+    def message(self, names, definition):
+        name = self.symbol(qualified(self.file.package, names), "")
+        typename, codec = "Msg_" + name, "Codec_" + name
+        p = self.out
+        singular, choices = self.parts(definition, name)
+        p.start(f"pub class {typename}")
+        p.line("#copy: disabled")
+        initializers = ["unknownFields(coll.Vec<coll.Vec<u8>>())"]
+        p.line("pub var unknownFields: coll.Vec<coll.Vec<u8>>;")
+        for field in singular:
+            kind, default = self.field_type(field)
+            member = f"f_{field.name}"
+            p.line(f"pub var {member}: {kind};")
+            initializers.append(f"{member}({default})")
+        for choice, member, _ in choices.values():
+            p.line(f"pub var {member}: {choice};")
+            initializers.append(f"{member}({choice}.Unset)")
+        p.line("pub func init() : " + ",\n        ".join(initializers) + " {}")
+        for field in singular:
+            if not self.map_entry(field):
+                continue
+            element = self.message_type(field.type_name)
+            items = f"f_{field.name}"
+            p.start(f"pub func put_{field.name}(entry: {element}) !void")
+            p.start(f"for index in usize(0)..{items}.len()")
+            p.start(f"if {items}.getPtr(index).unwrap().f_key == entry.f_key")
+            p.line(f"{items}[index] = move(entry);")
+            p.line("return;")
+            p.end()
+            p.end()
+            p.line(f"{items}.push(move(entry))")
+            p.end()
+        p.end()
+        p.line()
+        p.start(f"pub class {codec}")
+        p.line(f"#implements: protobuf.Codec<{typename}>")
+        p.line(f"pub func newValue() !{typename} {{ {typename}() }}")
+        self.encode(singular, choices, typename)
+        self.merge(definition, choices, typename)
+        p.end()
+        p.line()
+        for enum in definition.enum_type:
+            self.enum(names + [enum.name], enum)
+        for nested in definition.nested_type:
+            self.message(names + [nested.name], nested)
+
+    def service_path(self, service, method):
+        logical = ".".join(filter(None, [self.file.package, service.name]))
+        return f"/{logical}/{method.name}"
+
+    def service(self, service):
+        p = self.out
+        self.imports.add("grpc")
+        name = escape(service.name)
+        p.start(f"pub class {name}Client")
+        p.line("var connection: *grpc.ClientConn;")
+        p.line("pub func init(connection: *grpc.ClientConn) : connection(connection) {}")
+        for method in service.method:
+            input_type, output_type = self.message_type(method.input_type), self.message_type(method.output_type)
+            path = self.service_path(service, method)
+            method_name = "rpc_" + method.name
+            if method.client_streaming or method.server_streaming:
+                call = f"Call_{name}_{escape(method.name)}"
+                request = "" if method.client_streaming else f"input: *const {input_type}, "
+                p.start(f"pub func {method_name}({request}options: *const grpc.CallOptions) !{call}")
+                p.line(f'var call = connection.start("{path}", options)!;')
+                p.line(f"var typed = {call}(connection, move(call));")
+                if not method.client_streaming:
+                    for operation in ("typed.send(input)", "typed.finishSend()"):
+                        p.line(operation + " catch (reason) { typed.cancel() catch {}; return reason; };")
+                p.line("move(typed)")
+                p.end()
+            else:
+                p.start(f"pub func {method_name}(input: *const {input_type}, options: *const grpc.CallOptions) !grpc.TypedResponse<{output_type}>")
+                p.line(f"var encoder = {self.codec(method.input_type)}{{}};")
+                p.line(f"var decoder = {self.codec(method.output_type)}{{}};")
+                p.line(f"var body = protobuf.encode<{input_type}>(input, &encoder, connection.maxMessageBytes())!;")
+                p.line(f'var result = connection.unary("{path}", body.asConstSlice(), options)!;')
+                p.line(f"grpc.decodeResponse<{output_type}>(move(result), &decoder, protobuf.DecodeLimits())")
+                p.end()
+        p.end()
+        p.line()
+        p.start(f"pub interface {name}Service")
+        for method in service.method:
+            if method.client_streaming or method.server_streaming:
+                p.line(f"func rpc_{method.name}(stream: *Stream_{name}_{escape(method.name)}) !grpc.Status;")
+            else:
+                p.line(f"func rpc_{method.name}(request: {self.message_type(method.input_type)}, context: *const grpc.UnaryRequest) !grpc.TypedResponse<{self.message_type(method.output_type)}>;")
+        p.end()
+        p.line()
+        for method in service.method:
+            self.adapter(name, method)
+        p.start(f"pub class {name}Server")
+        p.line("#copy: disabled")
+        for method in service.method:
+            p.line(f"var handle_{method.name}: Adapter_{name}_{escape(method.name)};")
+        members = ", ".join(f"handle_{m.name}(Adapter_{name}_{escape(m.name)}(service))" for m in service.method)
+        if members:
+            p.line(f"pub func init(service: *{name}Service) : {members} {{}}")
+        else:
+            p.line(f"pub func init(service: *{name}Service) {{}}")
+        p.start("pub func register(server: *grpc.Server) !void")
+        for method in service.method:
+            register = "registerStreaming" if method.client_streaming or method.server_streaming else "register"
+            p.line(f'server.{register}("{self.service_path(service, method)}", &handle_{method.name})!;')
+        p.end()
+        p.end()
+        p.line()
+
+    def adapter(self, service, method):
+        p = self.out
+        suffix = f"{service}_{escape(method.name)}"
+        input_type, output_type = self.message_type(method.input_type), self.message_type(method.output_type)
+        encoder, decoder = self.codec(method.input_type), self.codec(method.output_type)
+        streaming = method.client_streaming or method.server_streaming
+        if streaming:
+            self.stream_types(suffix, input_type, output_type, encoder, decoder)
+        p.start(f"class Adapter_{suffix}")
+        trait = "StreamingHandler" if streaming else "UnaryHandler"
+        p.line(f"#implements: grpc.{trait}")
+        p.line(f"var service: *{service}Service;")
+        p.line(f"pub func init(service: *{service}Service) : service(service) {{}}")
+        if streaming:
+            p.start("pub func handle(stream: *grpc.ServerStream) !grpc.Status")
+            p.line(f"var typed = Stream_{suffix}(stream);")
+            p.line(f"service.rpc_{method.name}(&typed)")
+            p.end()
+        else:
+            p.start("pub func call(request: grpc.UnaryRequest) !grpc.UnaryResponse")
+            p.line(f"var decoder = {encoder}{{}};")
+            p.line(f"var encoder = {decoder}{{}};")
+            p.line(f"var typed = protobuf.decode<{input_type}>(request.body.asConstSlice(), &decoder, protobuf.DecodeLimits()) catch {{")
+            p.line('    return grpc.reply(grpc.status(grpc.StatusCode.InvalidArgument, ""));')
+            p.line("};")
+            p.line(f"var result = service.rpc_{method.name}(move(typed), &request)!;")
+            p.line(f"grpc.encodeResponse<{output_type}>(move(result), &encoder, 4 * 1024 * 1024)")
+            p.end()
+        p.end()
+        p.line()
+
+    def stream_types(self, suffix, input_type, output_type, encoder, decoder):
+        p = self.out
+        p.start(f"pub class Call_{suffix}")
+        p.line("#copy: disabled")
+        p.line("var connection: *grpc.ClientConn;")
+        p.line("var call: grpc.Call;")
+        p.line("pub func init(connection: *grpc.ClientConn, call: grpc.Call) : connection(connection), call(move(call)) {}")
+        p.start(f"pub func send(input: *const {input_type}) !void")
+        p.line(f"var codec = {encoder}{{}};")
+        p.line(f"var message = protobuf.encode<{input_type}>(input, &codec, connection.maxMessageBytes())!;")
+        p.line("connection.sendMessage(&call, message.asConstSlice())")
+        p.end()
+        p.start(f"pub func recv() !?{output_type}")
+        p.line("var raw = connection.recvMessage(&call)! ?? { return null; };")
+        p.line(f"var codec = {decoder}{{}};")
+        p.line(f"some(protobuf.decode<{output_type}>(raw.asConstSlice(), &codec, protobuf.DecodeLimits())!)")
+        p.end()
+        p.line("pub func finishSend() !void { connection.finishSend(&call) }")
+        p.line("pub func cancel() !void { connection.cancel(&call) }")
+        p.line("pub func complete() !grpc.UnaryResponse { call.complete() }")
+        p.end()
+        p.line()
+        p.start(f"pub class Stream_{suffix}")
+        p.line("pub var raw: *grpc.ServerStream;")
+        p.line("pub func init(raw: *grpc.ServerStream) : raw(raw) {}")
+        p.start(f"pub func recv() !?{input_type}")
+        p.line("var bytes = raw.recvMessage()! ?? { return null; };")
+        p.line(f"var codec = {encoder}{{}};")
+        p.line(f"var value = protobuf.decode<{input_type}>(bytes.asConstSlice(), &codec, protobuf.DecodeLimits()) catch {{")
+        p.line("    return grpc.RpcError.Protocol;")
+        p.line("};")
+        p.line("some(move(value))")
+        p.end()
+        p.start(f"pub func send(output: *const {output_type}) !void")
+        p.line(f"var codec = {decoder}{{}};")
+        p.line(f"var bytes = protobuf.encode<{output_type}>(output, &codec, raw.maxMessageBytes())!;")
+        p.line("raw.sendMessage(bytes.asConstSlice())")
+        p.end()
+        p.end()
+        p.line()
+
+    def render(self):
+        if self.file.syntax != "proto3":
+            raise ValueError(f"{self.file.name}: only proto3 input is supported")
+        for enum in self.file.enum_type:
+            self.enum([enum.name], enum)
+        for message in self.file.message_type:
+            self.message([message.name], message)
+        for service in self.file.service:
+            self.service(service)
+        start = f"// Generated by protoc-gen-vaqrin from {ascii(self.file.name)}.\n"
+        imports = ", ".join(sorted(self.imports))
+        return start + f"package {self.package}\nimport ({imports})\n\n" + self.out.render()
+
+
+def generate(request):
+    result = plugin_pb2.CodeGeneratorResponse()
+    result.supported_features = plugin_pb2.CodeGeneratorResponse.FEATURE_PROTO3_OPTIONAL
+    registry = Registry(request.proto_file)
+    files = {file.name: file for file in request.proto_file}
+    if request.parameter:
+        raise ValueError("protoc-gen-vaqrin does not take plugin parameters")
+    for name in sorted(request.file_to_generate):
+        file = files[name]
+        generated = result.file.add()
+        stem = PurePosixPath(name).with_suffix("").parts
+        label = "_s".join(
+            "".join(char if char.isascii() and char.isalnum() else f"_x{ord(char):06x}" for char in part)
+            for part in stem
+        )
+        generated.name = f"{package_name(file.package)}/{label}_pb.vqr"
+        generated.content = Generator(file, registry).render()
+    return result
+
+
+def main():
+    request = plugin_pb2.CodeGeneratorRequest.FromString(sys.stdin.buffer.read())
+    try:
+        output = generate(request)
+    except (KeyError, ValueError) as error:
+        output = plugin_pb2.CodeGeneratorResponse(error=str(error))
+    sys.stdout.buffer.write(output.SerializeToString())
+
+
+if __name__ == "__main__":
+    main()

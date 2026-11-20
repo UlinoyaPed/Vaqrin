@@ -38,4 +38,14 @@ Protobuf compiler via Python's `grpcio-tools`. It compares canonical
 encoding and checks cross-language decoding, merged messages, presence,
 map keys, oneof selection, packed and unpacked values, and unknown groups.
 
+The installed `protoc-gen-vaqrin` plugin reads official proto3 descriptors.
+It generates a package per Protobuf package, `Msg_*` classes, `Codec_*`
+implementations, enum constants and owning oneof variants. Optional scalars
+use `?T` and singular messages use `?^T`, including recursive messages.
+Map entries use an ordered vector with generated `put_*` helpers enforcing
+last-value-wins. Generated decoders retain unknown fields, including fields
+whose wire type differs from the declared type. Pass imported schemas to
+protoc when their generated packages are required. The plugin needs Python
+and the official `protobuf` module.
+
 [Protobuf binary encoding](https://protobuf.dev/programming-guides/encoding/)

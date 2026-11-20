@@ -79,7 +79,7 @@ std::optional<APInt> mathInteger(const Ast &n, bool diagnose) {
   return std::nullopt;
 }
 
-void guard(IRBuilder<> &b, Value *valid) {
+void guard(IRBuilder<> &b, Value *valid, function_ref<void()> report) {
   if (auto *constant = dyn_cast<ConstantInt>(valid); constant && constant->isOne()) return;
   auto *function = b.GetInsertBlock()->getParent();
   auto &context = function->getContext();
@@ -87,6 +87,7 @@ void guard(IRBuilder<> &b, Value *valid) {
   auto *trap = BasicBlock::Create(context, "trap", function);
   b.CreateCondBr(valid, safe, trap);
   b.SetInsertPoint(trap);
+  if (report) report();
   b.CreateCall(Intrinsic::getOrInsertDeclaration(function->getParent(), Intrinsic::trap));
   b.CreateUnreachable();
   b.SetInsertPoint(safe);

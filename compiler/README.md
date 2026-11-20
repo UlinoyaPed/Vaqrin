@@ -1,6 +1,10 @@
 # Vaqrin 编译器
 
-`vaqc` 将 `.vqr` 源文件编译为原生产物。当前实现覆盖 [v0.1.4 语言规范](../docs/language-spec-v0.1.4.md) 的核心语言子集。
+`vaqc` 将 `.vqr` 源文件编译为原生产物。当前实现覆盖 [v0.1.5 语言规范](../docs/language-spec-v0.1.5.md) 的核心语言子集。
+
+`value?` 传播空值，`result!` 传播错误，`lookup()!?` 可依次检查两个通道。
+宿主程序使用 `-g` 构建时，断言式 `.unwrap()` 会在 trap 前输出文件、行号和函数。
+可在 [Optional 示例](../examples/optional.vqr) 中试用传播、后备值和显式错误转换。
 
 ## 构建和运行
 

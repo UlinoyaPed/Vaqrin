@@ -50,6 +50,7 @@ Type *Body::hint(const Ast &n) {
       return t->kind == Kind::Pointer || t->kind == Kind::Box || t->kind == Kind::Reference ? t->parts[0]
                                                                                             : nullptr;
     if (n->text == "post!") return t->kind == Kind::Result ? t->parts[0] : nullptr;
+    if (n->text == "post?") return t->kind == Kind::Optional ? t->parts[0] : nullptr;
     if (n->text == "&" && n->children[0]->kind == NodeKind::Name) {
       int i = findLocal(n->children[0]->text);
       if (i >= 0) return p.pointer(t, !locals[i].writable);
@@ -467,15 +468,41 @@ ValueAt Body::unary(const Ast &n, Type *expected) {
   if (op == "*") {
     return dereference(v, n->span);
   }
-  if (op == "post!") {
-    if (v.type->kind != Kind::Result || !result || result->kind != Kind::Result)
+  if (op == "post!" || op == "post?") {
+    const bool optional = op == "post?";
+    Type *emptyChannel = nullptr;
+    if (optional) {
+      if (v.type->kind != Kind::Optional)
+        fail(n->span, "postfix '?' requires an Optional operand, found '" + v.type->name + "'", "E201");
+      if (!result)
+        fail(n->span, "postfix '?' requires an explicit or contextual Optional return type",
+             evaluating ? "E220" : "E201");
+      emptyChannel = result->kind == Kind::Result ? result->parts[0] : result;
+      if (emptyChannel->kind != Kind::Optional) {
+        if (result->kind == Kind::Result)
+          fail(n->span,
+               "postfix '?' requires '?U' or '!?U'; use 'value ?? { return LookupError.NotFound; }' to map "
+               "absence to an error",
+               "E201");
+        fail(n->span, "postfix '?' requires an Optional return channel ('?U' or '!?U')", "E201");
+      }
+      if (v.borrowed && !p.copyable(v.type->parts[0]))
+        fail(n->span, "cannot copy the Optional payload; use 'move(value)?' to consume a movable owner",
+             "E230");
+    } else if (v.type->kind != Kind::Result || !result || result->kind != Kind::Result) {
       fail(n->span, "error propagation requires a result and a fallible function");
+    }
     auto *raw = read(v, n->span, false);
-    auto *error = ir.CreateExtractValue(raw, 0);
-    auto *success = block("try.ok"), *failure = block("try.error");
-    ir.CreateCondBr(ir.CreateICmpEQ(error, ir.getInt32(0)), success, failure);
+    auto *tag = ir.CreateExtractValue(raw, 0);
+    auto *success = block("try.ok"), *failure = block(optional ? "try.null" : "try.error");
+    ir.CreateCondBr(optional ? tag : ir.CreateICmpEQ(tag, ir.getInt32(0)), success, failure);
     ir.SetInsertPoint(failure);
-    emitReturn({p.errorTy, error}, n->span);
+    if (optional) {
+      auto *empty = Constant::getNullValue(emptyChannel->ir);
+      emitReturn(emptyChannel == result ? ValueAt{result, empty} : wrap(result, empty, true), n->span);
+    } else {
+      emitReturn({p.errorTy, tag}, n->span);
+    }
     ir.SetInsertPoint(success);
     auto out = payload(v, 1, v.type->parts[0]);
     return {out.type, read(out, n->span), nullptr, false, -1, false, out.temporaryBorrow, out.origin};
@@ -807,6 +834,7 @@ ValueAt Body::builtin(std::string_view key, const Ast &n, const std::vector<Ast>
     auto wrapped = wrap(p.aggregate(kind, {value.type}), read(value, n->span), true);
     wrapped.temporaryBorrow = value.temporaryBorrow;
     wrapped.origin = value.origin;
+    wrapped.noPayload = value.noPayload;
     return wrapped;
   }
   if (key == "bitCast") {
@@ -1442,6 +1470,7 @@ ValueAt Body::lambda(const Ast &n, Type *expected) {
                                     GlobalValue::InternalLinkage, name, *p.module);
   function->setDoesNotThrow();
   Body body(p, file, function, result, generics, evaluating);
+  body.functionName = functionName.empty() ? "lambda" : functionName + " (lambda)";
   body.closure = t;
   if (hasCaptures)
     for (const auto &c : captures)
@@ -1799,7 +1828,7 @@ ValueAt Body::call(const Ast &n, Type *expected) {
         return asPointer(dereference(v, n->span), n->span);
       }
       if (v.type->kind == Kind::Optional && member == "unwrap" && n->children.size() == 1) {
-        guard(ir, ir.CreateExtractValue(read(v, n->span, false), 0));
+        checkUnwrap(ir.CreateExtractValue(read(v, n->span, false), 0), callee->span);
         auto out = payload(v, 1, v.type->parts[0]);
         return {out.type, read(out, n->span), nullptr, false, -1, false, out.temporaryBorrow, out.origin};
       }

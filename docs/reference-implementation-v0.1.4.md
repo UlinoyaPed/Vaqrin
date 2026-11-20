@@ -1,6 +1,6 @@
 # Vaqrin v0.1.4 引用实现
 
-[语言规范](language-spec-v0.1.4.md)定义可用语法和生命周期合同。编译器以 LLVM 官方 C++ API 降低语义，构建并测试的入口仍为 CMake、Ninja 和原有 Python 验收。
+[现行语言规范](language-spec-v0.1.5.md)定义可用语法和生命周期合同。编译器以 LLVM 官方 C++ API 降低语义，构建并测试的入口仍为 CMake、Ninja 和原有 Python 验收。
 
 | 层次 | 实现 |
 |---|---|

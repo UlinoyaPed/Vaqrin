@@ -94,6 +94,17 @@ pub func unwrapOr<T: Movable>(value: ?T, fallback: T) T { move(value) ?? move(fa
 pub func unwrapOrElse<T: Movable, F: Movable>(value: ?T, fallback: F) T { move(value) ?? fallback() }
 pub func expect<T: Movable>(value: ?T, message: str) T { move(value) ?? panic(message) }
 
+pub func okOr<T: Movable>(value: ?T, reason: ErrorId) !T {
+    ok(move(value) ?? { return reason; })
+}
+
+pub func okOrElse<T: Movable, F: Movable>(value: ?T, reason: F) !T {
+    ok(move(value) ?? {
+        var failure: ErrorId = reason();
+        return failure;
+    })
+}
+
 pub func contains<T>(value: *const ?T, needle: *const T) bool {
     switch asPtr(value) { null => false, some(ptr) => *ptr == *needle }
 }

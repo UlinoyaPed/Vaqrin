@@ -29,7 +29,7 @@ Program::Program(LLVMContext &c, TargetMachine &target, const Options &o, Inputs
 #endif
   module->setDataLayout(target.createDataLayout());
   module->setSourceFileName(root);
-  module->addModuleFlag(Module::Warning, "Vaqrin language version", MDString::get(c, "0.1.4"));
+  module->addModuleFlag(Module::Warning, "Vaqrin language version", MDString::get(c, "0.1.5"));
   voidTy = add(Kind::Void, llvm::Type::getVoidTy(c), "void");
   neverTy = add(Kind::Never, voidTy->ir, "never");
   boolTy = add(Kind::Bool, llvm::Type::getInt1Ty(c), "bool");
@@ -50,7 +50,7 @@ Program::Program(LLVMContext &c, TargetMachine &target, const Options &o, Inputs
     debug = std::make_unique<DIBuilder>(*module);
     auto *di =
         debug->createFile(std::filesystem::path(files.front().span.source->path).filename().string(), ".");
-    unit = debug->createCompileUnit(0xb001, di, "vaqc 0.1.4", options.optimization != 0, "", 0);
+    unit = debug->createCompileUnit(0xb001, di, "vaqc 0.1.5", options.optimization != 0, "", 0);
   }
   indexFiles();
 }
@@ -130,7 +130,7 @@ int Program::borrowParameter(Definition def, const std::vector<Type *> &params, 
   if (receiver && source == "self") return 0;
   int found = -1;
   for (unsigned i = 0; i < def.decl->params.size(); ++i) {
-    if (params[i + receiver]->kind != Kind::Reference) continue;
+    if (!hasReference(params[i + receiver])) continue;
     if (!source.empty() && def.decl->params[i].name != source) continue;
     if (found >= 0)
       fail(def.decl->span, "reference result requires #return_borrow naming its source", "E230");

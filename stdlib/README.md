@@ -7,7 +7,7 @@
 | `core` | `Box<T>`、可空及错误结果状态检查、`unwrapOr`、`identity`、`drop`、`swap`、`replace`、`unreachable`、`unreachableUnchecked` |
 | `coll` | `Vec<T>`、`FixedVec<T,N>`、`VecDeque<T>`、`FixedDeque<T,N>`、`LinkedList<T>`、`Stack<T>`、`Queue<T>`、`BinaryHeap<T>` / `PriorityQueue<T>`、`HashMap<K,V>` / `HashSet<T>`、`BTreeMap<K,V>` / `BTreeSet<T>` |
 | `iter` | 按值和按指针遍历切片、单项和空游标、映射、过滤、枚举、组合、反向及截取适配器 |
-| `opt` | 可空值的组合、访问、原地替换、容器转换和外层交换 |
+| `opt` | 可空值的组合、访问、原地替换、容器转换和外层交换。`okOr` 与 `okOrElse` 显式将缺失映射为错误 |
 | `result` | 错误结果的组合、恢复、观察、只读载荷访问与收集 |
 | `convert` | 检查转换、整数与浮点舍入、位转换及 Unicode 标量验证 |
 | `cmp` | 标量比较、部分序、浮点总序和上下界助手 |

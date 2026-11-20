@@ -387,19 +387,33 @@ class Server:
             return "bool"
         if match := re.fullmatch(r"[-+]?[0-9][0-9_]*(\.[0-9_]+)?([iuf]\d+|[iu]size)?", value):
             return match[2] or ("f64" if match[1] else "i32")
-        if re.fullmatch(IDENT, value):
-            choices = self.resolve(source, symbol.start, value)
-            return self.type_of(source, choices[0], seen) if choices else ""
+        def after_postfix(result, tail):
+            if "??" in tail or not re.fullmatch(r"(?:[!?]\s*)*(?:\.unwrap\(\))?", tail):
+                return ""
+            operators = tail.removesuffix(".unwrap()")
+            if tail.endswith(".unwrap()"):
+                operators += "?"
+            for operator in operators:
+                if operator.isspace():
+                    continue
+                if not result.startswith(operator):
+                    return ""
+                result = result[1:]
+            return result
+
+        if bare := re.fullmatch(rf"({IDENT})\s*((?:[!?]\s*)*)", value):
+            choices = self.resolve(source, symbol.start, bare[1])
+            return after_postfix(self.type_of(source, choices[0], seen), bare[2]) if choices else ""
         call = re.match(rf"({IDENT}(?:\.{IDENT})*)(?:\s*<([^()]*)>)?\s*[({{]", value)
         if call:
             expression = masked(value)
             opening = call.end() - 1
             close = matching_delimiter(expression, opening, call[0][-1], ")" if call[0][-1] == "(" else "}")
             tail = expression[close + 1:].strip()
-            if close == len(value) or tail not in ("", "!", ".unwrap()", "!.unwrap()"):
+            if close == len(value):
                 return ""
             if call[1] in TYPES:
-                return call[1]
+                return after_postfix(call[1], tail)
             path = call[1].split(".")
             choices = self.resolve(source, symbol.start, path[-1], ".".join(path[:-1]), seen)
             if choices:
@@ -411,11 +425,7 @@ class Server:
                         result += f"<{call[2]}>"
                 elif call[2] and origin.type_parameters:
                     result = self.specialize(origin, arguments=generic_arguments(call[2])).type
-                if tail.startswith("!"):
-                    result = result.removeprefix("!")
-                if tail.endswith(".unwrap()"):
-                    result = result[1:] if result.startswith("?") else ""
-                return result
+                return after_postfix(result, tail)
         return ""
 
     def specialize(self, symbol, receiver="", arguments=()):

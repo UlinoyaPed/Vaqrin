@@ -603,7 +603,7 @@ ValueAt Body::wrap(Type *t, Value *v, bool present) {
   else if (!present)
     out = ir.CreateInsertValue(out, v, 0);
   if (present) out = ir.CreateInsertValue(out, v, 1);
-  return {t, out};
+  return {t, out, nullptr, false, -1, false, false, {}, !present};
 }
 
 ValueAt Body::coerce(ValueAt v, Type *t, Span span) {
@@ -630,6 +630,7 @@ ValueAt Body::coerce(ValueAt v, Type *t, Span span) {
     auto wrapped = wrap(t, read(inner, span), true);
     wrapped.temporaryBorrow = inner.temporaryBorrow;
     wrapped.origin = inner.origin;
+    wrapped.noPayload = inner.noPayload;
     return wrapped;
   }
   fail(span, "expected '" + t->name + "', found '" + v.type->name + "'", "E201");
@@ -696,10 +697,9 @@ ValueAt Body::asPointer(ValueAt v, Span span) {
 void Body::emitReturn(ValueAt value, Span span) {
   if (value.type == p.neverTy) return;
   if (result == p.neverTy) fail(span, "never function cannot return normally");
-  bool error = value.type == p.errorTy && result->kind == Kind::Result;
   value = coerce(value, result, span);
   rejectTemporaryBorrow(value, span);
-  if (p.hasReference(result) && !error &&
+  if (p.hasReference(result) && !value.noPayload &&
       !(isa_and_nonnull<Constant>(value.value) && cast<Constant>(value.value)->isNullValue()) &&
       (returnRoot < 0 || value.origin.root != returnRoot))
     fail(span, "returned reference must borrow from its declared source", "E230");
@@ -719,6 +719,25 @@ void Body::emitReturn(ValueAt value, Span span) {
     ir.CreateRetVoid();
   else
     ir.CreateRet(returned);
+}
+
+void Body::checkUnwrap(Value *present, Span span) {
+  if (!p.options.debug || p.options.profile != "hosted" || evaluating || !span.source) {
+    guard(ir, present);
+    return;
+  }
+  guard(ir, present, [&] {
+    auto line = 1 + std::count(span.source->bytes.begin(), span.source->bytes.begin() + span.begin, '\n');
+    auto *ptr = PointerType::getUnqual(p.context);
+    auto print =
+        p.module->getOrInsertFunction("fprintf", FunctionType::get(ir.getInt32Ty(), {ptr, ptr}, true));
+    auto flush = p.module->getOrInsertFunction("fflush", FunctionType::get(ir.getInt32Ty(), {ptr}, false));
+    auto *stream = p.standardStream(ir, true);
+    auto message = span.source->path + ":" + std::to_string(line) + ": unwrap() called on null";
+    if (!functionName.empty()) message += " in " + functionName;
+    ir.CreateCall(print, {stream, p.bytes("%s\n"), p.bytes(message)});
+    ir.CreateCall(flush, {stream});
+  });
 }
 
 void Body::setDebug(Span span) {
@@ -815,6 +834,7 @@ void Body::debugLocal(int id, Span span, unsigned argument) {
 
 void Body::build(FunctionEntry &entry) {
   const auto &d = *entry.def.decl;
+  functionName = owner ? owner->name + "." + d.name : d.name;
   if (p.debug) {
     std::filesystem::path path(d.span.source->path);
     auto *src = p.debug->createFile(path.filename().string(), path.parent_path().string());
@@ -852,7 +872,7 @@ void Body::build(FunctionEntry &entry) {
       auto *arg = fn->getArg(runtime++);
       arg->setName(param.name);
       auto id = bind(param.name, t, true, arg, param.span);
-      if (t->kind == Kind::Reference) locals[id].origin.root = id;
+      if (p.hasReference(t)) locals[id].origin.root = id;
       if (borrowArgument == static_cast<int>(index) - 1) returnRoot = id;
       debugLocal(id, param.span, runtime);
     }

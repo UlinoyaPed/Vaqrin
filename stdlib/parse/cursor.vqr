@@ -37,7 +37,8 @@ public:
     }
 
     func consumeChar(ch: char) bool {
-        if isEnd() || peek().unwrap() != ch { return false; }
+        var nextChar = peek() ?? { return false; };
+        if nextChar != ch { return false; }
         advanceScalar();
         true
     }

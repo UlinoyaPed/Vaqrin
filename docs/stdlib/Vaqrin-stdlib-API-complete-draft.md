@@ -139,6 +139,8 @@
   unwrapOr<T>(value: ?T,default: T)->T
   unwrapOrElse<T,F>(value: ?T,f: F)->T
   expect<T>(value: ?T,msg: str)->T
+  okOr<T: Movable>(value: ?T,reason: ErrorId)->!T
+  okOrElse<T: Movable,F: Movable>(value: ?T,reason: F)->!T
   contains<T>(value: *const ?T,needle: *const T)->bool
   take<T>(value: *?T)->?T
   replace<T>(slot: *?T,value: T)->?T
@@ -149,6 +151,9 @@
   intoIter<T>(value: ?T)->iter.OnceOptional<T>
   transpose<T>(value: ?!T)->!?T
 ```
+
+`okOr` 用指定错误处理缺失。`okOrElse` 只在缺失时调用 `reason()`，该回调须返回 `ErrorId`。
+两者保留成功载荷的类型和包装层级，引用载荷保留输入的借用来源。
 
 ### `result` — 错误结果 !T 的组合与错误身份，保留错误/成功的层次
 

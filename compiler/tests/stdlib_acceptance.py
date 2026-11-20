@@ -103,6 +103,29 @@ class StandardLibraryAcceptance(CompilerCase):
         self.assertIn("age = 37", lines[3:-2])
         self.assertEqual(lines[-2:], ["Ada", "37"])
 
+    def test_deserializers_report_missing_current_value(self):
+        self.hosted("""
+            import (coll, json, serde, toml)
+            func main() !void {
+                var jsonReader = json.JsonDomDeserializer(json.parse("[]")!);
+                jsonReader.beginSeq()!;
+                io.println(jsonReader.nextElement()!)!;
+                jsonReader.readBool() catch (reason) {
+                    io.println(reason == serde.SerdeError.InvalidState)!;
+                    false
+                };
+                jsonReader.endSeq()!;
+                var tomlReader = toml.TomlDomDeserializer(toml.Value.Array(coll.Vec<toml.Value>()));
+                tomlReader.beginSeq()!;
+                io.println(tomlReader.nextElement()!)!;
+                tomlReader.readString() catch (reason) {
+                    io.println(reason == serde.SerdeError.InvalidState)!;
+                    return;
+                };
+                panic("expected invalid state");
+            }
+        """, "false\ntrue\nfalse\ntrue\n")
+
     def test_unicode(self):
         self.assertEqual(self.example("examples/unicode-basic.vqr"), "é\n17.0.0\n")
 

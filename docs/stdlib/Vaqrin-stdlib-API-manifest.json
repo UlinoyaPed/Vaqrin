@@ -2,7 +2,7 @@
   "schema": "vaqrin-api-catalog-v1",
   "language_baseline": "v0.1.2",
   "draft_date": "2026-11-19",
-  "notes": "API 合同草案，非可直接编译的 Vaqrin 源码；status 指原始归档与未应用补丁",
+  "notes": "API 合同清单，非可直接编译的语言源码。保留历史状态，其中 v0.1.5 已验证的新增接口单独标明。",
   "symbols": [
     {
       "package": "core",
@@ -293,6 +293,26 @@
       "state": "目标设计；未证实实现",
       "target": "目标公开",
       "description": "可空值组合子；不把嵌套 ?T 自动展平"
+    },
+    {
+      "package": "opt",
+      "kind": "function",
+      "owner": "",
+      "symbol": "opt.okOr",
+      "contract": "okOr<T: Movable>(value: ?T,reason: ErrorId)->!T",
+      "state": "v0.1.5 已实现并运行验证",
+      "target": "目标公开",
+      "description": "缺失时返回指定的错误，成功时保留载荷。"
+    },
+    {
+      "package": "opt",
+      "kind": "function",
+      "owner": "",
+      "symbol": "opt.okOrElse",
+      "contract": "okOrElse<T: Movable,F: Movable>(value: ?T,reason: F)->!T",
+      "state": "v0.1.5 已实现并运行验证",
+      "target": "目标公开",
+      "description": "仅缺失时调用 reason() 取得 ErrorId。"
     },
     {
       "package": "opt",

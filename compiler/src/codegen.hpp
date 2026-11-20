@@ -2,6 +2,7 @@
 
 #include "syntax.hpp"
 
+#include <llvm/ADT/STLFunctionalExtras.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/TargetParser/Triple.h>
@@ -43,7 +44,7 @@ std::optional<llvm::APInt> mathInteger(const Ast &node, bool diagnose = false);
 bool fits(const llvm::APInt &signedNumber, unsigned width, bool isSigned);
 llvm::Value *binaryNumber(llvm::IRBuilder<> &builder, std::string_view op, llvm::Value *left,
                           llvm::Value *right, bool isSigned, bool rightSigned);
-void guard(llvm::IRBuilder<> &builder, llvm::Value *valid);
+void guard(llvm::IRBuilder<> &builder, llvm::Value *valid, llvm::function_ref<void()> report = {});
 
 llvm::Constant *interpret(llvm::Function &function, std::vector<llvm::Constant *> args, Span span);
 

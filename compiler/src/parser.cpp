@@ -822,8 +822,8 @@ Ast Parser::postfix(Ast base, bool excludeFields) {
       auto member = (at("new") || at("select") || current().kind == TokenKind::Number) ? take() : name();
       base = make(NodeKind::Member, member.span, member.text, {base});
       if (t.text == "?.") base->names.push_back("optional");
-    } else if (eat("!")) {
-      base = make(NodeKind::Unary, t.span, "post!", {base});
+    } else if (eat("!") || eat("?")) {
+      base = make(NodeKind::Unary, t.span, t.text == "!" ? "post!" : "post?", {base});
     } else if (eat("[")) {
       if (eat(":"))
         base = make(NodeKind::Slice, t.span, "", {base});

@@ -112,16 +112,19 @@ public:
     }
     func readNull() !void { return serde.SerdeError.TypeMismatch; }
     func readBool() !bool {
-        switch *current.unwrap() { Value.Bool(value) => value, _ => serde.SerdeError.TypeMismatch }
+        var currentValue = opt.okOr(current, serde.SerdeError.InvalidState)!;
+        switch *currentValue { Value.Bool(value) => value, _ => serde.SerdeError.TypeMismatch }
     }
     func readI64() !i64 {
-        switch *current.unwrap() {
+        var currentValue = opt.okOr(current, serde.SerdeError.InvalidState)!;
+        switch *currentValue {
             Value.Integer(value) => value,
             _ => serde.SerdeError.TypeMismatch,
         }
     }
     func readU64() !u64 {
-        switch *current.unwrap() {
+        var currentValue = opt.okOr(current, serde.SerdeError.InvalidState)!;
+        switch *currentValue {
             Value.Integer(value) => {
                 if value < 0 { return serde.SerdeError.IntegerOutOfRange; }
                 convert.narrow<u64>(value)
@@ -131,14 +134,16 @@ public:
     }
     func readF64() !f64 { return serde.SerdeError.Unsupported; }
     func readNumber() !string {
-        switch *current.unwrap() {
+        var currentValue = opt.okOr(current, serde.SerdeError.InvalidState)!;
+        switch *currentValue {
             Value.Integer(value) => serdeIntegerText(value),
             Value.Float(value) => text.fromBytes(value.asBytes()),
             _ => serde.SerdeError.TypeMismatch,
         }
     }
     func readString() !string {
-        switch *current.unwrap() {
+        var currentValue = opt.okOr(current, serde.SerdeError.InvalidState)!;
+        switch *currentValue {
             Value.String(value) => text.fromBytes(value.asBytes()),
             Value.DateTime(value) => text.fromBytes(value.asBytes()),
             _ => serde.SerdeError.TypeMismatch,

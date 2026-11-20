@@ -505,7 +505,7 @@ int main(int argc, char **argv) {
     return 0;
   }
   if (argc == 2 && std::string_view(argv[1]) == "--version") {
-    std::cout << "vaqc 0.1.4 (Vaqrin 0.1.4, LLVM " << LLVM_VERSION_STRING << ")\n";
+    std::cout << "vaqc 0.1.5 (Vaqrin 0.1.5, LLVM " << LLVM_VERSION_STRING << ")\n";
     return 0;
   }
   std::unique_ptr<Inputs> inputs;

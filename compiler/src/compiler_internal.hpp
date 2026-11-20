@@ -124,6 +124,7 @@ struct ValueAt {
   bool borrowed = false;
   bool temporaryBorrow = false;
   Borrow origin{};
+  bool noPayload = false;
 };
 
 struct FunctionEntry {
@@ -188,6 +189,7 @@ private:
   Program &p;
   const File &file;
   Function *fn;
+  std::string functionName;
   Type *result;
   Types generics;
   bool evaluating = false;
@@ -223,6 +225,7 @@ private:
   void checkAccess(ValueAt v, bool write, Span span);
   void invalidateOwnedAddresses(ValueAt owner);
   ValueAt dereference(ValueAt v, Span span);
+  void checkUnwrap(Value *present, Span span);
   ValueAt borrow(ValueAt v, Type *t, Span span, bool materialize);
   ValueAt argument(const Ast &n, Type *t);
   ValueAt referenceName(int local, Span span);

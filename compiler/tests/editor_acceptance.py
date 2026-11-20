@@ -179,6 +179,27 @@ func query(scanner: *bufio.Scanner) !void {
             hints = request("inlayHint", range={"start": {"line": 2, "character": 0},
                                                "end": {"line": 6, "character": 0}})
             self.assertIn((5, ":i32"), [(item["position"]["line"], item["label"]) for item in hints])
+
+            source = """func lookup(value: ?i32) !?i32 { value }
+func forward(value: ?i32) !?i32 {
+    var a = value?;
+    var b = lookup(value)!?;
+    a + b
+}
+"""
+            send("textDocument/didChange", {"textDocument": {"uri": uri, "version": 6},
+                                           "contentChanges": [{"text": source}]})
+            self.assertEqual(receive()["params"]["diagnostics"], [])
+            hints = request("inlayHint", range={"start": {"line": 2, "character": 0},
+                                               "end": {"line": 4, "character": 0}})
+            self.assertEqual([(item["position"]["line"], item["label"]) for item in hints],
+                             [(2, ": i32"), (3, ": i32")])
+            source = source.replace("    var a", "    unknownName;\n    var a")
+            send("textDocument/didChange", {"textDocument": {"uri": uri, "version": 7},
+                                           "contentChanges": [{"text": source}]})
+            self.assertIn("unknownName", receive()["params"]["diagnostics"][0]["message"])
+            hover = request("hover", position=position(5, "b"))
+            self.assertIn("b: i32", hover["contents"]["value"])
             send("shutdown", identifier=3)
             self.assertEqual(receive()["id"], 3)
             send("exit")

@@ -725,6 +725,123 @@ class Acceptance(CompilerCase):
             }
         """, "9\n9\n9\n7\n")
 
+    def test_optional_propagation(self):
+        program = """
+            import (opt, coll)
+            error Lookup { Missing, Broken }
+            class Item { pub var id: i32; }
+            class Probe {
+                #copy: disabled
+                pub var id: i32;
+                pub func init(value: i32) : id(value) {}
+                func deinit() void { io.println(id) catch {}; }
+            }
+            func lookup(mode: i32) !?i32 {
+                if mode < 0 { return Lookup.Broken; }
+                if mode == 0 { return null; }
+                mode
+            }
+            func increment(mode: i32) !?i32 { lookup(mode)!? + 1 }
+            func nested(value: ??i32) ??i32 { some(value?) }
+            func peel(value: ??i32) ?i32 { (value?)? }
+            func outside(value: ?!i32) ?!i32 { some(value?) }
+            func field(value: ?Item) ?i32 { (value?).id }
+            func owned(value: ?^Probe) ?i32 {
+                var outer = Probe(90);
+                var inner = move(value)?;
+                inner.id
+            }
+            func record(counter: *i32) ?i32 { (*counter)++; null }
+            func once(counter: *i32) ?i32 { record(counter)? }
+            func borrowed(value: ?&const i32) !?&const i32 { value? }
+            comptime func atCompileTime(value: ?i32) ?i32 { value? + 1 }
+            comptime const answer = atCompileTime(some(40));
+            func main() !void {
+                io.println(increment(4)! ?? 0)!;
+                io.println(increment(0)! ?? 0)!;
+                var failed = increment(-1) catch (reason) {
+                    io.println(reason == Lookup.Broken)!;
+                    null
+                };
+                io.println(failed ?? 0)!;
+                var value: ??i32 = some(null);
+                io.println(nested(value) != null)!;
+                io.println(peel(value) == null)!;
+                var outer: ?!i32 = null;
+                io.println(outside(outer) == null)!;
+                outer = some(ok(42));
+                io.println(outside(outer).unwrap()!)!;
+                var item: ?Item = some(Item{id: 8});
+                io.println(field(item) ?? 0)!;
+                io.println(item?.id ?? 0)!;
+                var callback: func(?i32) ?i32 = (x: ?i32) => x? + 1;
+                io.println(callback(some(7)) ?? 0)!;
+                io.println(callback(null) ?? 0)!;
+                var counter = 0;
+                io.println(once(&counter) ?? counter)!;
+                io.println(owned(some(new Probe(7)!)) ?? 0)!;
+                io.println(owned(null) ?? 0)!;
+                var failure = [&counter]() ErrorId => { counter++; Lookup.Missing };
+                var present: ?i32 = some(21);
+                io.println(opt.okOrElse(present, failure)!)!;
+                var missing: ?i32 = null;
+                io.println(opt.okOrElse(missing, failure) catch (reason) {
+                    if reason != Lookup.Missing { return reason; }
+                    counter
+                })!;
+                var map = coll.i32Map<i32>();
+                map.insert(5, 30)!;
+                {
+                    var r = opt.okOr(map.get(5), Lookup.Missing)!;
+                    io.println(r)!;
+                }
+                switch borrowed(map.get(6))! { null => {}, some(_) => panic("unexpected reference") }
+                var pointer: ?*i32 = some(&counter);
+                var unwrapped = (x: ?*i32) ?*i32 => x?;
+                io.println(*unwrapped(pointer).unwrap())!;
+                io.println(answer.unwrap())!;
+            }
+        """
+        output = "5\n0\ntrue\n0\ntrue\ntrue\ntrue\n42\n8\n8\n8\n0\n1\n7\n90\n7\n90\n0\n21\n2\n30\n2\n41\n"
+        for level in ("-O0", "-O2"):
+            with self.subTest(level=level):
+                self.hosted(program, output, level)
+        for code, message in [
+            ("func f() ?i32 { 2? }", "requires an Optional operand"),
+            ("func f(v: ?i32) i32 { v? }", "requires an Optional return channel"),
+            ("func f(v: ?i32) !i32 { v? }", "LookupError.NotFound"),
+            ("func f(v: ?i32) !!?i32 { v? }", "requires '?U' or '!?U'"),
+            ("func f(v: ?^i32) ?^i32 { v? }", "move(value)?"),
+            ("comptime const n = some(2)?;", "error[E220]"),
+            ("func read(x: in &const i32) ?&const i32 { x } "
+             "func leak() ?i32 { var view = read(5)?; view }", "temporary"),
+            ("import (opt) func f(v: ?i32, wrong: func() i32) !i32 { opt.okOrElse(v, wrong) }", "expected 'ErrorId'"),
+        ]:
+            with self.subTest(code=code):
+                source = self.source("invalid.vqr", code)
+                self.assertIn(message, self.process(VAQC, "check", source, good=False).stderr.decode())
+
+    def test_unwrap_trap_diagnostics(self):
+        source = self.source("unwrap.vqr", "func main() i32 { var absent: ?i32 = null; absent.unwrap() }\n")
+        for flags in [("-O2",), ("-g",)]:
+            self.process(VAQC, *flags, source, "-o", "trap")
+            result = self.process("./trap", good=False)
+            self.assertLess(result.returncode, 0)
+            if "-g" in flags:
+                self.assertIn(b"unwrap.vqr:1: unwrap() called on null in main", result.stderr)
+            else:
+                self.assertEqual(result.stderr, b"")
+        target = self.source("freestanding.vqr", """
+            func unwrap(value: ?i32) i32 { value.unwrap() }
+            func forward(value: ?i32) ?i32 { value? + 1 }
+        """)
+        self.process(VAQC, "build", "--emit=llvm-ir", "--target", "thumbv7m-none-eabi", "--cpu", "cortex-m3",
+                     "--profile", "freestanding", "-g", target, "-o", "bare.ll")
+        ir = (self.root / "bare.ll").read_text()
+        self.assertIn("@llvm.trap", ir)
+        for symbol in ("@fprintf", "@fflush", "@stderr"):
+            self.assertNotIn(symbol, ir)
+
     def test_reference_contracts(self):
         source = REPOSITORY / "examples/references.vqr"
         self.process(VAQC, "build", "-g", "-O2", source, "-o", "references")

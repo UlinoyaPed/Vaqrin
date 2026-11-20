@@ -1,0 +1,27 @@
+import (io, opt)
+
+error LookupError { Unavailable, NotFound }
+
+func lookup(id: i32, available: bool) !?i32 {
+    if !available { return LookupError.Unavailable; }
+    if id < 0 { return null; }
+    id
+}
+
+func nextId(id: i32, available: bool) !?i32 {
+    var current = lookup(id, available)!?;
+    current + 1
+}
+
+func requireId(id: i32) !i32 {
+    opt.okOr(lookup(id, true)!, LookupError.NotFound)
+}
+
+func main() !void {
+    io.println(nextId(41, true)! ?? 0)!;
+    io.println(nextId(-1, true)! ?? 0)!;
+    io.println(requireId(-1) catch (reason) {
+        if reason != LookupError.NotFound { return reason; }
+        i32(-1)
+    })!;
+}

@@ -340,13 +340,13 @@ public:
 
     #return_borrow: self
     const func get(key: in &const K) ?&const V {
-        var index = findIndex(&key, hashKey(&key)) ?? { return null; };
+        var index = findIndex(&key, hashKey(&key))?;
         unsafe { __vqr_borrow_from_self(buckets.getPtr(index).unwrap().valueRef()) }
     }
 
     #return_borrow: self
     func getMut(key: in &const K) ?&V {
-        var index = findIndex(&key, hashKey(&key)) ?? { return null; };
+        var index = findIndex(&key, hashKey(&key))?;
         unsafe { __vqr_borrow_from_self(buckets.getMutPtr(index).unwrap().valueMut()) }
     }
 

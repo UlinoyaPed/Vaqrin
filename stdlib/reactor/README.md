@@ -19,3 +19,10 @@ the watched socket should be closed. Serialize operations on each reactor
 and keep the original descriptor live while registering it.
 
 [Linux epoll](https://man7.org/linux/man-pages/man7/epoll.7.html)
+
+`task.waitDescriptor` integrates readiness with the task scheduler.
+Task cancellation, timer expiry, and readiness share the scheduler lock.
+The one-shot registration and descriptor duplicate are retired before the
+task resumes, and a slot generation rejects late events. A TaskGroup
+stops its readiness thread and releases the epoll and wake descriptors
+after its tasks have exited.

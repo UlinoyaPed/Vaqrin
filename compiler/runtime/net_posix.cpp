@@ -143,13 +143,18 @@ int32_t __vqr_net_open(const uint8_t *wire, int32_t operation, int64_t timeout, 
     }
     const int type = operation == 2 ? SOCK_DGRAM : SOCK_STREAM;
     const bool timed = operation == 0 && timeout >= 0;
-    const int fd = socket(address->sa_family, type | SOCK_CLOEXEC | (timed ? SOCK_NONBLOCK : 0), 0);
+    const bool asynchronous = operation == 3;
+    const int fd = socket(address->sa_family, type | SOCK_CLOEXEC |
+                          ((timed || asynchronous) ? SOCK_NONBLOCK : 0), 0);
     if (fd < 0) {
         *out_error = errno;
         return -1;
     }
     int error = 0;
-    if (operation == 0) {
+    if (asynchronous) {
+        if (connect(fd, address, length) != 0 && errno != EINPROGRESS && errno != EINTR)
+            error = errno;
+    } else if (operation == 0) {
         error = connect_socket(fd, address, length, timeout);
         if (error == 0 && timed) error = set_nonblocking(fd, false);
     } else {
@@ -164,6 +169,12 @@ int32_t __vqr_net_open(const uint8_t *wire, int32_t operation, int64_t timeout, 
     if (error == 0) return fd;
     close(fd);
     return -1;
+}
+
+int32_t __vqr_net_socket_error(int32_t fd) {
+    int error = 0;
+    socklen_t length = sizeof(error);
+    return getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &length) == 0 ? error : errno;
 }
 
 int32_t __vqr_net_connect(int32_t fd, const uint8_t *wire) {

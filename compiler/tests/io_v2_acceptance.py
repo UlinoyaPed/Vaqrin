@@ -4,6 +4,7 @@ import os
 import resource
 import subprocess
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 
 from acceptance import CompilerCase, VAQC
 
@@ -211,6 +212,142 @@ class IoV2Acceptance(CompilerCase):
         finally:
             for fd in (first_read, first_write, next_read, next_write):
                 os.close(fd)
+
+    def test_async_tcp_one_worker_and_deadlines(self):
+        self.hosted(r"""
+            import (bytes, coll, net, result, task, time)
+
+            func main() !void {
+                var listener = net.AsyncTcpListener.bind(net.parseSocketAddr("127.0.0.1:0")!)!;
+                var address = listener.localAddr()!;
+                var group = task.TaskGroup.withWorkers(1)!;
+                var serve = [move(listener)] () !i32 => {
+                    var count: i32 = 0;
+                    for index in 0..32 {
+                        var deadline = time.Deadline.after(time.Duration.fromSeconds(4))!;
+                        socket, _ := listener.accept(some(deadline))!;
+                        socket.setReadDeadline(some(deadline));
+                        var data = [4]u8{0, 0, 0, 0};
+                        io.readExact(&socket, data[:])!;
+                        if bytes.equal(data[:], "ping".asBytes()) { count++; }
+                        io.writeString(&socket, "pong")!;
+                        socket.shutdownWrite()!;
+                    }
+                    count
+                };
+                var server = group.spawn<i32>(move(serve))!;
+                var calls = coll.Vec<task.Task<bool>>();
+                for index in 0..32 {
+                    var call = [address] () !bool => {
+                        var deadline = time.Deadline.after(time.Duration.fromSeconds(4))!;
+                        var socket = net.AsyncTcpStream.connect(address, some(deadline))!;
+                        socket.setReadDeadline(some(deadline));
+                        socket.setWriteDeadline(some(deadline));
+                        io.writeString(&socket, "ping")!;
+                        var result = [4]u8{0, 0, 0, 0};
+                        io.readExact(&socket, result[:])!;
+                        if !bytes.equal(result[:], "pong".asBytes()) { return false; }
+                        socket.read(result[:])! == 0
+                    };
+                    calls.push(group.spawn<bool>(move(call))!)!;
+                }
+                var count: i32 = 0;
+                for calls.len() != 0 {
+                    var current = calls.pop().unwrap();
+                    if current.join()! { count++; }
+                }
+                io.println(count == 32 && server.join()! == 32)!;
+
+                var waiting = net.AsyncTcpListener.bind(net.parseSocketAddr("127.0.0.1:0")!)!;
+                var timeout = [move(waiting)] () !bool => {
+                    var deadline = time.Deadline.after(time.Duration.fromMillis(40))!;
+                    var expired = waiting.accept(some(deadline));
+                    result.errorOf(&expired).unwrap() == io.IoError.DeadlineExceeded
+                };
+                var timer = group.spawn<bool>(move(timeout))!;
+                io.println(timer.join()!)!;
+
+                var outside = net.AsyncTcpListener.bind(net.parseSocketAddr("127.0.0.1:0")!)!;
+                var deadline = time.Deadline.after(time.Duration.fromMillis(10))!;
+                var expired = outside.accept(some(deadline));
+                io.println(result.errorOf(&expired).unwrap() == io.IoError.DeadlineExceeded)!;
+            }
+        """, "true\n" * 3)
+
+    def test_async_tcp_idle_connections_cancel_without_fd_leaks(self):
+        source = self.source("main.vqr", r"""
+            import (coll, io, net, result, task, time)
+
+            func round() !i32 {
+                var listener = net.AsyncTcpListener.bind(net.parseSocketAddr("127.0.0.1:0")!)!;
+                var address = listener.localAddr()!;
+                var group = task.TaskGroup.withWorkers(1)!;
+                var accept = [move(listener)] () !void => {
+                    var peers = coll.Vec<net.AsyncTcpStream>();
+                    for index in 0..64 {
+                        var deadline = time.Deadline.after(time.Duration.fromSeconds(5))!;
+                        peer, _ := listener.accept(some(deadline))!;
+                        var marker = [1]u8{0};
+                        peer.setReadDeadline(some(deadline));
+                        io.readExact(&peer, marker[:])!;
+                        peers.push(move(peer))!;
+                    }
+                    io.println("ready")!;
+                    task.sleep(time.Duration.fromSeconds(20)) catch (reason) {
+                        if reason != task.TaskError.Cancelled { return reason; }
+                    };
+                };
+                var server = group.spawn<void>(move(accept))!;
+                var clients = coll.Vec<task.Task<bool>>();
+                for index in 0..64 {
+                    var wait = [address] () !bool => {
+                        var socket = net.AsyncTcpStream.connect(address, null)!;
+                        io.writeString(&socket, "a")!;
+                        var data = [1]u8{0};
+                        var cancelled = socket.read(data[:]);
+                        result.errorOf(&cancelled).unwrap() == io.IoError.Cancelled
+                    };
+                    clients.push(group.spawn<bool>(move(wait))!)!;
+                }
+                var input = io.stdin();
+                var signal = [1]u8{0};
+                io.readExact(&input, signal[:])!;
+                group.cancel();
+                var count: i32 = 0;
+                for clients.len() != 0 {
+                    var client = clients.pop().unwrap();
+                    if client.join()! { count++; }
+                }
+                server.join()!;
+                count
+            }
+
+            func main() !void {
+                for iteration in 0..6 { io.println(round()! == 64)!; }
+            }
+        """)
+        self.process(VAQC, source, "-o", "async-probe")
+        with subprocess.Popen(
+            [self.root / "async-probe"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_NOFILE, (256, 256)),
+        ) as app:
+            try:
+                with ThreadPoolExecutor(max_workers=1) as worker:
+                    for _ in range(6):
+                        signal = worker.submit(app.stdout.readline)
+                        try:
+                            self.assertEqual(signal.result(timeout=7), b"ready\n")
+                        finally:
+                            if not signal.done():
+                                app.kill()
+                        app.stdin.write(b"x")
+                        app.stdin.flush()
+                        self.assertEqual(worker.submit(app.stdout.readline).result(timeout=7), b"true\n")
+                self.assertEqual(app.wait(timeout=5), 0, app.stderr.read())
+            finally:
+                if app.poll() is None:
+                    app.kill()
 
 
 if __name__ == "__main__":

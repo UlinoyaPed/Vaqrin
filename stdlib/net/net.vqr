@@ -283,6 +283,7 @@ public:
     const func systemDescriptor() !i32 { socket.fd() }
     const func localAddr() !SocketAddr { socket.address(0) }
     const func peerAddr() !SocketAddr { socket.address(1) }
+    func setNonblocking(value: bool) !void { socket.option(0, value) }
     func setNoDelay(value: bool) !void { socket.option(1, value) }
     func setReadTimeout(value: ?time.Duration) !void { setTimeout(value, 0) }
     func setWriteTimeout(value: ?time.Duration) !void { setTimeout(value, 1) }
@@ -316,6 +317,7 @@ public:
         (move(stream), peer)
     }
     const func localAddr() !SocketAddr { socket.address(0) }
+    const func systemDescriptor() !i32 { socket.fd() }
     func setNonblocking(value: bool) !void { socket.option(0, value) }
     func close() !void { socket.close() }
 }

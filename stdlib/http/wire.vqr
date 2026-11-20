@@ -210,7 +210,8 @@ func writeFields(writer: *io.Writer, fields: *const HeaderMap, length: ?usize) !
         io.writeString(writer, "\r\n")!;
     }
     if length != null {
-        var digits = fmt.formatUint(u64(length.unwrap()), 10)!;
+        var number: u64 = u64(length.unwrap());
+        var digits = fmt.formatUint(number, 10)!;
         io.writeString(writer, "Content-Length: ")!;
         io.writeString(writer, digits)!;
         io.writeString(writer, "\r\n")!;

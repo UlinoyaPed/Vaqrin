@@ -117,8 +117,14 @@ class IoV2Acceptance(CompilerCase):
                 io.println(received == 7 && bytes.equal(dst[:], data))!;
                 var eof = io.readExactProgress(&reader, dst[:])!;
                 io.println(eof.processed == 0 && eof.status == io.ReadStatus.Eof)!;
+
+                var atLeast = FaultyReader{source: io.MemoryReader(data), calls: 0};
+                var offset: usize = 0;
+                var partial = io.readAtLeast(&atLeast, dst[:], 4, &offset);
+                io.println(offset == 2 && result.errorOf(&partial).unwrap() == io.IoError.Cancelled)!;
+                io.println(io.readAtLeast(&atLeast, dst[:], 4, &offset)! == 7 && offset == 7)!;
             }
-        """, "true\n" * 9)
+        """, "true\n" * 11)
 
     def test_copy_resumes_its_pending_scratch(self):
         self.hosted(r"""

@@ -80,10 +80,10 @@ pub func readAtLeast(reader: *Reader, dst: []u8, min: usize, processed: *usize) 
     if min > dst.len() || *processed > dst.len() { return IoError.InvalidCount; }
     for *processed < min {
         var count = read(reader, dst[*processed..dst.len()])!;
-        if count == 0 { return IoError.UnexpectedEof; }
+        if count == 0 { return IoError.UnexpectedEof; };
         *processed += count;
     }
-    *processed
+    return *processed;
 }
 pub func readAtLeast(reader: *Reader, dst: []u8, min: usize) !usize {
     var processed: usize = 0;

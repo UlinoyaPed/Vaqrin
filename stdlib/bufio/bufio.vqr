@@ -5,6 +5,7 @@ pub error BufferError { InvalidCapacity, BufferFull, UnreadUnavailable, TokenToo
 
 pub class BufferedReader {
     #copy: disabled
+    #implements: io.Reader
     var source: *io.Reader;
     var data: coll.Vec<u8>;
     var position: usize;

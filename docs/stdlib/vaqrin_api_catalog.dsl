@@ -973,14 +973,52 @@
 #record SecretBytes|尽可能清理的敏感拥有字节，禁隐式复制
 + new(value: []const u8)->!Self; asSlice()->[]const u8; clear()->void; intoBytes()->coll.Vec<u8>
 = sha256(data: []const u8)->[32]u8; sha512(data: []const u8)->[64]u8; hmacSha256(key: []const u8,data: []const u8)->[32]u8; hkdfSha256(ikm: []const u8,salt: []const u8,info: []const u8,out: []u8)->!void; pbkdf2Sha256(password: []const u8,salt: []const u8,rounds: u32,out: []u8)->!void; secureRandom(dst: []u8)->!void; constantTimeEq(a: []const u8,b: []const u8)->bool; verifyTag(expected: []const u8,actual: []const u8)->bool
-@tls|证书校验的安全流；不允许默默关闭验证
-#record TlsConfig|最低协议版本、信任根、SNI 与客户端身份
-#record Certificate|证书编码及经验证的元数据
-#class TlsStream|建立安全连接后的 Reader/Writer
-+ connect(stream: net.TcpStream,serverName: str,config: TlsConfig)->!Self; read(dst: []u8)->!usize; write(src: []const u8)->!usize; flush()->!void; peerCertificates()->[]const Certificate; negotiatedProtocol()->str; close()->!void
-#class TlsAcceptor|服务器端握手
-+ new(config: TlsConfig)->!Self; accept(stream: net.TcpStream)->!TlsStream
-= connect(address: net.SocketAddr,serverName: str,config: TlsConfig)->!TlsStream; defaultClientConfig()->!TlsConfig; systemRoots()->!coll.Vec<Certificate>; verifyCertificate(chain: []const Certificate,hostname: str,when: time.UtcDateTime)->!void
+@tls|证书验证、加密读写与 ALPN
+#enum Version|Tls12 或 Tls13
+#class TlsConfig|最低版本、ALPN 与客户端信任根
++ init()->Self; setRootFile(path: str)->!void; addProtocol(name: []const u8)->!void; connect(socket: net.TcpStream,host: str)->!TlsStream; accept(socket: net.TcpStream,cert: str,key: str)->!TlsStream
+#class TlsStream|持有 TCP 连接的 Reader、Writer 和 Closer
++ connect(socket: net.TcpStream,host: str,config: *const TlsConfig)->!Self; read(dst: []u8)->!usize; write(src: []const u8)->!usize; flush()->!void; negotiatedProtocol()->!?coll.Vec<u8>; close()->!void
+#class TlsAcceptor|从 PEM 服务端身份创建加密流
++ fromPem(cert: str,key: str,options: TlsConfig)->!Self; accept(socket: net.TcpStream)->!TlsStream
+@protobuf|独立的 Protobuf Wire Format
+#enum WireType|Varint、Fixed64、LengthDelimited、StartGroup、EndGroup 和 Fixed32
+#class DecodeLimits|消息字节数和嵌套深度
+#class Reader|借用输入的 Protobuf 字段游标
++ open(data: []const u8,limits: DecodeLimits)->!Self; remaining()->usize; next()->!?Field
+#class Field|读取类型化标量、嵌套消息、Packed 序列或未知字段字节
++ number()->u32; wireType()->WireType; raw()->[]const u8; asBytes()->![]const u8; asString()->!string; asMessage()->!Reader; asPacked()->!PackedReader
+#class Writer|带上限的 Protobuf 编码器
++ init(maxBytes: usize)->Self; written()->[]const u8; takeBytes()->coll.Vec<u8>; writeUnknown(field: Field)->!void; appendUnknown(raw: []const u8)->!void; subMessage()->!Writer; writeBytes(field: u32,value: []const u8)->!void; writeString(field: u32,value: str)->!void; writeMessage(field: u32,value: *const Writer)->!void; writePacked(field: u32,value: *const PackedWriter)->!void
+#interface Codec<T>|构造、编码及按 schema 合并消息
++ newValue()->!T; encode(value: *const T,writer: *Writer)->!void; merge(value: *T,reader: *Reader)->!void
+= encode<T>(value: *const T,codec: *Codec<T>,maxBytes: usize)->!coll.Vec<u8>; decode<T>(input: []const u8,codec: *Codec<T>,limits: DecodeLimits)->!T; mergeMessage<T>(field: Field,value: *T,codec: *Codec<T>)->!void
+@http2|HTTP/2 帧、HPACK、多路复用、流量控制与 GOAWAY
+#class FrameHeader|解码帧标头及 Stream ID
++ parse(wire: []const u8)->!Self
+#class Settings|配置并发、帧队列、HPACK 与流窗口上限
+#class HeaderBlock|按顺序保留伪标头、元数据及敏感字段
++ add(name: str,value: str)->!void; addBytes(name: str,value: []const u8,sensitive: bool)->!void
+#class Connection|由单一 I/O 所有者驱动的 HTTP/2 会话
++ open(role: Role,settings: Settings)->!Self; ingest(data: []const u8)->!void; receive(reader: *io.Reader)->!bool; flush(writer: *io.Writer)->!void; next()->!?Event; request(headers: *const HeaderBlock,end: bool)->!i32; respond(stream: i32,headers: *const HeaderBlock,end: bool)->!void; sendData(stream: i32,data: []const u8,end: bool)->!void; sendTrailers(stream: i32,headers: *const HeaderBlock)->!void; consume(stream: i32,count: usize)->!void; reset(stream: i32,code: u32)->!void; goAway(code: u32)->!void; ping(token: [8]u8)->!void; close()->void
+= openTls(role: Role,stream: *const tls.TlsStream,settings: Settings)->!Connection
+@grpc|gRPC 状态、元数据、消息帧与四种 RPC 调用
+#class Status|远程状态码、消息及二进制详情
++ isOk()->bool
+#class Metadata|ASCII 字段与二进制字段
++ init()->Self; addText(name: str,value: str)->!void; addBinary(name: str,value: []const u8)->!void; get(name: str)->?[]const u8
+#class TypedResponse<T>|生成 Stub 的类型化响应、元数据与状态
+#class ClientConn|一个可复用 HTTP/2 连接
++ unary(path: str,message: []const u8,options: *const CallOptions)->!UnaryResponse; close()->!void
+#interface UnaryHandler|按方法接收一个数据消息并生成响应
++ call(request: UnaryRequest)->!UnaryResponse
+#interface StreamingHandler|接收流并返回最终状态
++ handle(stream: *ServerStream)->!Status
+#class ServerStream|可独立读取或发送消息的服务端流
++ recvMessage()->!?coll.Vec<u8>; sendMessage(message: []const u8)->!void; sendHeaders()->!void; checkDeadline()->!void
+#class Server|TLS 或显式 h2c 连接上的方法分发
++ register(path: str,handler: *UnaryHandler)->!void; registerStreaming(path: str,handler: *StreamingHandler)->!void; serveTls(socket: tls.TlsStream,options: ServeOptions)->!void; serveH2c(socket: net.TcpStream,options: ServeOptions)->!void; acceptTls(listener: *net.TcpListener,acceptor: *const tls.TlsAcceptor,options: ServeOptions)->!void
+= dial(endpoint: str,options: DialOptions)->!ClientConn; frame(message: []const u8,limit: usize)->!coll.Vec<u8>
 @context|跨调用的取消、deadline、键值上下文；与 task.TaskContext 统一适配
 #class Context|父级上下文、取消令牌、deadline、请求元数据
 + background()->Self; child()->Self; withCancel()->(Self,CancelHandle); withTimeout(duration: time.Duration)->!(Self,CancelHandle); withDeadline(deadline: time.Deadline)->(Self,CancelHandle); cancelled()->!void; checkCancelled()->!void; deadline()->?time.Deadline; get<T>(key: ContextKey<T>)->?*const T; withValue<T>(key: ContextKey<T>,value: T)->!Self

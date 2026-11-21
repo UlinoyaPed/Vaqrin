@@ -1,0 +1,8 @@
+package http2
+import (bytes, tls)
+
+pub func openTls(role: Role, stream: *const tls.TlsStream, settings: Settings) !Connection {
+    var selected = stream.negotiatedProtocol()! ?? { return Http2Error.Protocol; };
+    if !bytes.equal(selected.asConstSlice(), "h2".asBytes()) { return Http2Error.Protocol; }
+    Connection.open(role, settings)
+}

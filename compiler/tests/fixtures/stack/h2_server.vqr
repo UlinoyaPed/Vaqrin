@@ -1,0 +1,61 @@
+package main
+import (fmt, http2, io, net, time)
+
+error TestError { Unexpected }
+
+func main() !void {
+    var listener = net.listenTcp(net.parseSocketAddr("127.0.0.1:0")!)!;
+    var digits = fmt.formatUint(listener.localAddr()!.port(), 10)!;
+    io.print(digits)!;
+    io.print("\n")!;
+    socket, _ := listener.accept()!;
+    socket.setReadTimeout(some(time.Duration.fromSeconds(4)))!;
+    socket.setWriteTimeout(some(time.Duration.fromSeconds(4)))!;
+    var options = http2.Settings();
+    options.initialStreamWindow = 4096;
+    var connection = http2.Connection.open(http2.Role.Server, options)!;
+    var stopped = false;
+    var count: usize = 0;
+    var reset = false;
+    var finished = false;
+    for !stopped {
+        connection.flush(&socket)!;
+        if !connection.receive(&socket)! { break; }
+        for {
+            var event = connection.next()! ?? { break; };
+            switch event.kind {
+                http2.EventKind.Headers => {
+                    var reader = event.headers()!;
+                    for {
+                        var field = reader.next()! ?? { break; };
+                        if field.name == "x-reset" { connection.reset(event.stream, 8)!; }
+                    }
+                },
+                http2.EventKind.Data => {
+                    count += event.payload().len();
+                    connection.consume(event.stream, event.payload().len())!;
+                },
+                http2.EventKind.EndStream => {
+                    var headers = http2.HeaderBlock();
+                    headers.add(":status", "200")!;
+                    headers.add("x-server", "Vaqrin")!;
+                    connection.respond(event.stream, &headers, false)!;
+                    connection.sendData(event.stream, "hello from Vaqrin".asBytes(), false)!;
+                    var trailers = http2.HeaderBlock();
+                    trailers.add("x-end", "done")!;
+                    connection.sendTrailers(event.stream, &trailers)!;
+                },
+                http2.EventKind.Closed => {
+                    if event.code == 8 { reset = true; }
+                    if event.code == 0 { finished = true; }
+                },
+                http2.EventKind.GoAway => { stopped = true; },
+                http2.EventKind.InvalidFrame => { return TestError.Unexpected; },
+                _ => {},
+            };
+        }
+    }
+    if count != 82000 || !reset || !finished { return TestError.Unexpected; }
+    connection.close();
+    connection.close();
+}

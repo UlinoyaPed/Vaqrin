@@ -1,0 +1,75 @@
+package grpc
+import (coll)
+
+pub enum StatusCode { Ok, Cancelled, Unknown, InvalidArgument, DeadlineExceeded, NotFound, AlreadyExists, PermissionDenied, ResourceExhausted, FailedPrecondition, Aborted, OutOfRange, Unimplemented, Internal, Unavailable, DataLoss, Unauthenticated }
+
+pub error RpcError {
+    InvalidEndpoint, InvalidMethod, InvalidMetadata, Protocol, UnsupportedEncoding,
+    MessageTooLarge, ConnectionClosed, CallInProgress, CallClosed, DeadlineExceeded, Cancelled,
+}
+
+pub class Status {
+    pub var code: StatusCode;
+    pub var message: string;
+    pub var details: coll.Vec<u8>;
+    pub func isOk() bool { code == StatusCode.Ok }
+}
+
+pub func status(code: StatusCode, message: string) Status {
+    Status{code: code, message: move(message), details: coll.Vec<u8>()}
+}
+
+func statusNumber(code: StatusCode) u64 {
+    switch code {
+        StatusCode.Ok => 0,
+        StatusCode.Cancelled => 1,
+        StatusCode.Unknown => 2,
+        StatusCode.InvalidArgument => 3,
+        StatusCode.DeadlineExceeded => 4,
+        StatusCode.NotFound => 5,
+        StatusCode.AlreadyExists => 6,
+        StatusCode.PermissionDenied => 7,
+        StatusCode.ResourceExhausted => 8,
+        StatusCode.FailedPrecondition => 9,
+        StatusCode.Aborted => 10,
+        StatusCode.OutOfRange => 11,
+        StatusCode.Unimplemented => 12,
+        StatusCode.Internal => 13,
+        StatusCode.Unavailable => 14,
+        StatusCode.DataLoss => 15,
+        StatusCode.Unauthenticated => 16,
+    }
+}
+
+func parseStatus(value: u32) StatusCode {
+    switch value {
+        0 => StatusCode.Ok,
+        1 => StatusCode.Cancelled,
+        2 => StatusCode.Unknown,
+        3 => StatusCode.InvalidArgument,
+        4 => StatusCode.DeadlineExceeded,
+        5 => StatusCode.NotFound,
+        6 => StatusCode.AlreadyExists,
+        7 => StatusCode.PermissionDenied,
+        8 => StatusCode.ResourceExhausted,
+        9 => StatusCode.FailedPrecondition,
+        10 => StatusCode.Aborted,
+        11 => StatusCode.OutOfRange,
+        12 => StatusCode.Unimplemented,
+        13 => StatusCode.Internal,
+        14 => StatusCode.Unavailable,
+        15 => StatusCode.DataLoss,
+        16 => StatusCode.Unauthenticated,
+        _ => StatusCode.Unknown,
+    }
+}
+
+func httpStatus(value: u32) StatusCode {
+    switch value {
+        400 => StatusCode.Internal, 401 => StatusCode.Unauthenticated,
+        403 => StatusCode.PermissionDenied, 404 => StatusCode.Unimplemented,
+        429 => StatusCode.Unavailable, 502 => StatusCode.Unavailable,
+        503 => StatusCode.Unavailable, 504 => StatusCode.Unavailable,
+        _ => StatusCode.Unknown,
+    }
+}

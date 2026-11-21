@@ -1,0 +1,148 @@
+package main
+import (env, fmt, fs, grpc, io, net, time, tls, pb_demo_ddeep as types, pb_interop as interop, protobuf)
+
+error TestError { Unexpected }
+
+func require(ok: bool) !void { if !ok { return TestError.Unexpected; } }
+
+func inputs() !void {
+    var original = fs.readFile("generated-input.bin", 4096)!;
+    var codec = types.Codec_Input{};
+    var input = protobuf.decode<types.Msg_Input>(original.asConstSlice(), &codec, protobuf.DecodeLimits())!;
+    require(input.f_count.unwrap() == 0)!;
+    require(input.f_numbers.len() == 3 && input.f_numbers[0] == -1 && input.f_numbers[2] == 40)!;
+    require(input.f_scores.len() == 1)!;
+    var merge = input.f_scores.getPtr(0).unwrap();
+    require(merge.f_key == "key")!;
+    switch merge.f_value {
+        some(&part) => { require(part.f_left == 200)!; },
+        null => { return TestError.Unexpected; },
+    };
+    switch input.choice_payload {
+        types.Choice_Input_payload.F_nested(ref part) => {
+            var pointer = part.asPtr();
+            require(pointer.f_left == 3 && pointer.f_right == 4)!;
+        },
+        _ => { return TestError.Unexpected; },
+    };
+    switch input.f_branch {
+        some(&branch) => { require(branch.f_count.unwrap() == 3)!; },
+        null => { return TestError.Unexpected; },
+    };
+    require(input.f_mode == 99 && input.f_type == "keyword")!;
+    switch input.f_extra {
+        some(ref data) => { require(data.len() == 0)!; },
+        null => { return TestError.Unexpected; },
+    };
+    var encoded = protobuf.encode<types.Msg_Input>(&input, &codec, 4096)!;
+    fs.writeFile("generated-output.bin", encoded.asConstSlice())
+}
+
+class Handler {
+    #implements: types.EchoService
+    pub func rpc_Double(request: types.Msg_Input, context: *const grpc.UnaryRequest) !grpc.TypedResponse<interop.Msg_Child> {
+        var result = interop.Msg_Child();
+        result.f_left = (request.f_count ?? 0) * 2;
+        grpc.typedResponse<interop.Msg_Child>(move(result))
+    }
+    pub func rpc_Broadcast(stream: *types.Stream_Echo_Broadcast) !grpc.Status {
+        var request = stream.recv()! ?? { return TestError.Unexpected; };
+        var value = interop.Msg_Child();
+        value.f_left = request.f_count ?? 0;
+        stream.send(&value)!;
+        grpc.status(grpc.StatusCode.Ok, "")
+    }
+    pub func rpc_Sum(stream: *types.Stream_Echo_Sum) !grpc.Status {
+        var value = interop.Msg_Child();
+        for {
+            var request = stream.recv()! ?? { break; };
+            value.f_left += request.f_count ?? 0;
+        }
+        stream.send(&value)!;
+        grpc.status(grpc.StatusCode.Ok, "")
+    }
+    pub func rpc_Mirror(stream: *types.Stream_Echo_Mirror) !grpc.Status {
+        for {
+            var request = stream.recv()! ?? { break; };
+            var value = interop.Msg_Child();
+            value.f_left = request.f_count ?? 0;
+            stream.send(&value)!;
+        }
+        grpc.status(grpc.StatusCode.Ok, "")
+    }
+}
+
+func server() !void {
+    var cert = env.get("VAQRIN_RPC_CERT")!.unwrap();
+    var key = env.get("VAQRIN_RPC_KEY")!.unwrap();
+    var config = tls.TlsConfig();
+    config.requireProtocol = true;
+    config.addProtocol("h2".asBytes())!;
+    var acceptor = tls.TlsAcceptor.fromPem(cert, key, move(config))!;
+    var listener = net.listenTcp(net.parseSocketAddr("127.0.0.1:0")!)!;
+    var port = fmt.formatUint(listener.localAddr()!.port(), 10)!;
+    io.print(port)!;
+    io.print("\n")!;
+    var handler = Handler{};
+    var adapter = types.EchoServer(&handler);
+    var host = grpc.Server();
+    adapter.register(&host)!;
+    var options = grpc.ServeOptions();
+    options.timeout = time.Duration.fromSeconds(5);
+    host.acceptTls(&listener, &acceptor, options)
+}
+
+func client() !void {
+    var address = env.get("VAQRIN_RPC_ADDRESS")!.unwrap();
+    var cert = env.get("VAQRIN_RPC_CERT")!.unwrap();
+    var root: str = cert;
+    var dial = grpc.DialOptions();
+    dial.timeout = time.Duration.fromSeconds(5);
+    dial.trustedRoots = some(root);
+    var connection = grpc.dial(address, dial)!;
+    var stub = types.EchoClient(&connection);
+    var options = grpc.CallOptions();
+    var message = types.Msg_Input();
+    message.f_count = some(16);
+    var reply = stub.rpc_Double(&message, &options)!;
+    require(reply.status.isOk())!;
+    switch reply.message {
+        some(ref answer) => { require(answer.f_left == 32)!; },
+        null => { return TestError.Unexpected; },
+    };
+
+    var broadcast = stub.rpc_Broadcast(&message, &options)!;
+    var part = broadcast.recv()! ?? { return TestError.Unexpected; };
+    require(part.f_left == 16 && broadcast.recv()! == null)!;
+    var broadcastStatus = broadcast.complete()!;
+    require(broadcastStatus.status.isOk())!;
+
+    var sum = stub.rpc_Sum(&options)!;
+    sum.send(&message)!;
+    sum.send(&message)!;
+    sum.finishSend()!;
+    var total = sum.recv()! ?? { return TestError.Unexpected; };
+    require(total.f_left == 32 && sum.recv()! == null)!;
+    var sumStatus = sum.complete()!;
+    require(sumStatus.status.isOk())!;
+
+    var mirror = stub.rpc_Mirror(&options)!;
+    mirror.send(&message)!;
+    var first = mirror.recv()! ?? { return TestError.Unexpected; };
+    require(first.f_left == 16)!;
+    message.f_count = some(19);
+    mirror.send(&message)!;
+    var second = mirror.recv()! ?? { return TestError.Unexpected; };
+    require(second.f_left == 19)!;
+    mirror.finishSend()!;
+    require(mirror.recv()! == null)!;
+    var mirrorStatus = mirror.complete()!;
+    require(mirrorStatus.status.isOk())!;
+    connection.close()
+}
+
+func main() !void {
+    if env.contains("VAQRIN_RPC_SERVER")! { return server(); }
+    if env.contains("VAQRIN_RPC_ADDRESS")! { return client(); }
+    inputs()
+}

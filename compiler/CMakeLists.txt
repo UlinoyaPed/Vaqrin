@@ -53,11 +53,13 @@ configure_file(runtime/io_posix.cpp "${CMAKE_CURRENT_BINARY_DIR}/share/vaqrin/ru
 configure_file(runtime/decimal.cpp "${CMAKE_CURRENT_BINARY_DIR}/share/vaqrin/runtime/decimal.cpp" COPYONLY)
 configure_file(runtime/process_posix.cpp "${CMAKE_CURRENT_BINARY_DIR}/share/vaqrin/runtime/process_posix.cpp" COPYONLY)
 configure_file(runtime/net_posix.cpp "${CMAKE_CURRENT_BINARY_DIR}/share/vaqrin/runtime/net_posix.cpp" COPYONLY)
+configure_file(runtime/http2_nghttp2.cpp "${CMAKE_CURRENT_BINARY_DIR}/share/vaqrin/runtime/http2_nghttp2.cpp" COPYONLY)
 configure_file(runtime/tls_openssl.cpp "${CMAKE_CURRENT_BINARY_DIR}/share/vaqrin/runtime/tls_openssl.cpp" COPYONLY)
 install(FILES runtime/reactor_linux.h runtime/tasks.c runtime/io_posix.cpp runtime/decimal.cpp runtime/process_posix.cpp
-    runtime/net_posix.cpp runtime/tls_openssl.cpp DESTINATION share/vaqrin/runtime)
+    runtime/net_posix.cpp runtime/tls_openssl.cpp runtime/http2_nghttp2.cpp DESTINATION share/vaqrin/runtime)
 
 install(TARGETS vaqc RUNTIME DESTINATION bin)
+install(PROGRAMS tools/protoc-gen-vaqrin DESTINATION bin)
 install(FILES UNICODE-LICENSE DESTINATION share/licenses/vaqc)
 
 include(CTest)
@@ -77,6 +79,8 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/coll_static_audit.py)
     add_test(NAME vaqc-stdlib-acceptance COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/stdlib_acceptance.py $<TARGET_FILE:vaqc>)
+    add_test(NAME vaqc-protocol-acceptance COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/protocol_acceptance.py $<TARGET_FILE:vaqc>)
     add_test(NAME vaqc-editor-acceptance COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/editor_acceptance.py $<TARGET_FILE:vaqc>)
     set_tests_properties(vaqc-editor-acceptance PROPERTIES TIMEOUT 40)

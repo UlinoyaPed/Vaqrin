@@ -1,0 +1,57 @@
+package grpc
+import (binary, coll)
+
+pub func frame(message: []const u8, limit: usize) !coll.Vec<u8> {
+    if message.len() > limit || message.len() > 0x7fffffff { return RpcError.MessageTooLarge; }
+    var encoded = coll.Vec<u8>.withCapacity(message.len() + 5)!;
+    encoded.push(0)!;
+    var length = binary.u32ToBytes(u32(message.len())!, binary.Endian.Big);
+    for byte in length[:] { encoded.push(byte)!; }
+    for byte in message { encoded.push(byte)!; }
+    move(encoded)
+}
+
+pub class MessageReader {
+    #copy: disabled
+    var data: coll.Vec<u8>;
+    var offset: usize;
+    var limit: usize;
+public:
+    func init(limit: usize) : data(coll.Vec<u8>()), offset(0),
+        limit(if limit > 0x7fffffff { 0x7fffffff } else { limit }) {}
+    func feed(fragment: []const u8) !void {
+        var unread = data.len() - offset;
+        // A 4 KiB transport read can complete one message and contain several more.
+        var capacity = limit + 5 + 4096;
+        if unread > capacity || fragment.len() > capacity - unread { return RpcError.MessageTooLarge; }
+        if offset != 0 {
+            for index in usize(0)..unread { data[index] = data[offset + index]; }
+            data.truncate(unread);
+            offset = 0;
+        }
+        var needed = unread + fragment.len();
+        if needed > data.capacity() {
+            var target = data.capacity() * 2;
+            if target > capacity { target = capacity; }
+            data.reserve(if needed > target { needed } else { target })!;
+        }
+        for byte in fragment { data.push(byte)!; }
+    }
+    func next() !?coll.Vec<u8> {
+        var available = data.len() - offset;
+        if available < 5 { return null; }
+        if data[offset] == 1 { return RpcError.UnsupportedEncoding; }
+        if data[offset] != 0 { return RpcError.Protocol; }
+        var wire = data.asConstSlice();
+        var size = usize(binary.readU32(wire[offset + 1..offset + 5], binary.Endian.Big)!);
+        if size > limit { return RpcError.MessageTooLarge; }
+        if size > available - 5 { return null; }
+        var end = offset + 5 + size;
+        var message = coll.Vec<u8>.fromSlice(wire[offset + 5..end])!;
+        offset = end;
+        some(move(message))
+    }
+    const func finish() !void {
+        if offset != data.len() { return RpcError.Protocol; }
+    }
+}

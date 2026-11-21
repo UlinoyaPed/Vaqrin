@@ -1,5 +1,5 @@
 package http
-import (bufio, fmt, io, net, text, time)
+import (bufio, fmt, io, net, text, time, tls)
 
 func httpHost(target: *const Url) !str {
     if target.userInfo() != null { return HttpError.InvalidTarget; }
@@ -97,8 +97,13 @@ private:
         stream.setReadTimeout(some(limits.timeout))!;
         stream.setWriteTimeout(some(limits.timeout))!;
         if secure {
-            var tls = TlsStream.connect(host, move(stream))!;
-            return exchange(&tls, &tls, request, limits);
+            var config = tls.TlsConfig();
+            var encrypted = tls.TlsStream.connect(move(stream), host, &config) catch (reason) {
+                return httpTlsError(reason);
+            };
+            return exchange(&encrypted, &encrypted, request, limits) catch (reason) {
+                return httpTlsError(reason);
+            };
         }
         exchange(&stream, &stream, request, limits)
     }

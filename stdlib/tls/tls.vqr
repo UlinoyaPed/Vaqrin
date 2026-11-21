@@ -1,0 +1,161 @@
+package tls
+import (coll, io, mem, net, text, time)
+
+pub error TlsError {
+    Unavailable, SetupFailed, TrustStore, Certificate, Handshake, Protocol,
+    InvalidName, InvalidProtocol, MissingProtocol, ServerIdentity, UnexpectedEof,
+}
+pub enum Version { Tls12, Tls13 }
+
+extern "C" func __vqr_tls_open(fd: i32, host: *const u8, ca: *const u8, cert: *const u8,
+    key: *const u8, protocols: *const u8, size: u32, version: i32,
+    requireProtocol: i32, status: *i32) usize;
+extern "C" func __vqr_tls_alpn(session: usize, dst: *u8) usize;
+extern "C" func __vqr_tls_read(session: usize, dst: *u8, size: usize, status: *i32) usize;
+extern "C" func __vqr_tls_write(session: usize, src: *const u8, size: usize, status: *i32) usize;
+extern "C" func __vqr_tls_close(session: usize) void;
+
+func cString(value: str) !coll.Vec<u8> {
+    if value.byteLen() == 0 { return TlsError.InvalidName; }
+    var result = coll.Vec<u8>();
+    for byte in value.asBytes() {
+        if byte == 0 { return TlsError.InvalidName; }
+        result.push(byte)!;
+    }
+    result.push(0)!;
+    move(result)
+}
+
+func checkStatus(status: i32) !void {
+    if status > 0 { return io.systemError(status); }
+    switch status {
+        0 => {},
+        -1 => { return TlsError.Unavailable; },
+        -2 => { return TlsError.SetupFailed; },
+        -3 => { return TlsError.TrustStore; },
+        -4 => { return TlsError.Certificate; },
+        -5 => { return TlsError.Handshake; },
+        -7 => { return TlsError.MissingProtocol; },
+        -8 => { return TlsError.ServerIdentity; },
+        -9 => { return TlsError.UnexpectedEof; },
+        _ => { return TlsError.Protocol; },
+    };
+}
+
+class NativeSession {
+    #copy: disabled
+    pub var value: usize;
+    pub func init(handle: usize) : value(handle) {}
+}
+
+pub class TlsConfig {
+    #copy: disabled
+    pub var minimumVersion: Version;
+    pub var requireProtocol: bool;
+    var caFile: coll.Vec<u8>;
+    var protocols: coll.Vec<u8>;
+public:
+    func init() : minimumVersion(Version.Tls12), requireProtocol(false),
+        caFile(coll.Vec<u8>()), protocols(coll.Vec<u8>()) {}
+    func setRootFile(path: str) !void { caFile = cString(path)!; }
+    func addProtocol(name: []const u8) !void {
+        if name.len() == 0 || name.len() > 255 || protocols.len() + name.len() + 1 > 65535 {
+            return TlsError.InvalidProtocol;
+        }
+        protocols.reserve(protocols.len() + name.len() + 1)!;
+        protocols.push(u8(name.len())!)!;
+        for byte in name { protocols.push(byte)!; }
+    }
+    const func connect(socket: net.TcpStream, host: str) !TlsStream {
+        var name = cString(host)!;
+        var empty: u8 = 0;
+        open(move(socket), &name[0], &empty, &empty)
+    }
+    const func accept(socket: net.TcpStream, cert: str, key: str) !TlsStream {
+        var certificate = cString(cert)!;
+        var privateKey = cString(key)!;
+        var empty: u8 = 0;
+        open(move(socket), &empty, &certificate[0], &privateKey[0])
+    }
+private:
+    const func open(socket: net.TcpStream, host: *const u8,
+                    cert: *const u8, key: *const u8) !TlsStream {
+        if requireProtocol && protocols.len() == 0 { return TlsError.InvalidProtocol; }
+        var empty: u8 = 0;
+        var roots: *const u8 = if caFile.len() == 0 { &empty } else { &caFile[0] };
+        var offered: *const u8 = if protocols.len() == 0 { &empty } else { &protocols[0] };
+        var size = u32(protocols.len())!;
+        var version = if minimumVersion == Version.Tls12 { 12 } else { 13 };
+        var required = if requireProtocol { 1 } else { 0 };
+        var fd = socket.systemDescriptor()!;
+        var status: i32 = 0;
+        var session = unsafe { __vqr_tls_open(fd, host, roots, cert, key,
+                                             offered, size, version, required, &status) };
+        checkStatus(status)!;
+        TlsStream(move(socket), NativeSession(session))
+    }
+}
+
+pub class TlsAcceptor {
+    #copy: disabled
+    var config: TlsConfig;
+    var certificate: string;
+    var privateKey: string;
+    func init(options: TlsConfig, cert: string, key: string)
+        : config(move(options)), certificate(move(cert)), privateKey(move(key)) {}
+public:
+    static func fromPem(cert: str, key: str, options: TlsConfig) !Self {
+        var certificate = text.fromBytes(cert.asBytes())!;
+        var privateKey = text.fromBytes(key.asBytes())!;
+        TlsAcceptor(move(options), move(certificate), move(privateKey))
+    }
+    const func accept(socket: net.TcpStream) !TlsStream {
+        config.accept(move(socket), certificate, privateKey)
+    }
+}
+
+pub class TlsStream {
+    #copy: disabled
+    #implements: io.Reader, io.Writer, io.Closer
+    var stream: net.TcpStream;
+    var session: usize;
+    func deinit() void { close() catch {}; }
+public:
+    func init(socket: net.TcpStream, native: NativeSession) : stream(move(socket)), session(native.value) {}
+    static func connect(socket: net.TcpStream, host: str, config: *const TlsConfig) !Self {
+        config.connect(move(socket), host)
+    }
+    const func negotiatedProtocol() !?coll.Vec<u8> {
+        if session == 0 { return io.IoError.Closed; }
+        var bytes = mem.zeroedBytes<255>();
+        var count = unsafe { __vqr_tls_alpn(session, &bytes[0]) };
+        if count == 0 { return null; }
+        some(coll.Vec<u8>.fromSlice(bytes[0..count])!)
+    }
+    func setReadTimeout(value: ?time.Duration) !void { stream.setReadTimeout(value) }
+    func setWriteTimeout(value: ?time.Duration) !void { stream.setWriteTimeout(value) }
+    func read(dst: []u8) !usize {
+        if session == 0 { return io.IoError.Closed; }
+        if dst.len() == 0 { return 0; }
+        var status: i32 = 0;
+        var count = unsafe { __vqr_tls_read(session, &dst[0], dst.len(), &status) };
+        checkStatus(status)!;
+        count
+    }
+    func write(src: []const u8) !usize {
+        if session == 0 { return io.IoError.Closed; }
+        if src.len() == 0 { return 0; }
+        var status: i32 = 0;
+        var count = unsafe { __vqr_tls_write(session, &src[0], src.len(), &status) };
+        checkStatus(status)!;
+        count
+    }
+    func flush() !void { if session == 0 { return io.IoError.Closed; } }
+    func close() !void {
+        if session == 0 { return; }
+        var current = session;
+        session = 0;
+        unsafe { __vqr_tls_close(current); }
+        stream.close()
+    }
+}

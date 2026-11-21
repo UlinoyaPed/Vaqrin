@@ -4712,34 +4712,18 @@
   verifyTag(expected: []const u8,actual: []const u8)->bool
 ```
 
-### `tls` — 证书校验的安全流；不允许默默关闭验证
+### `tls` — 证书验证、加密读写与 ALPN
 
-**`record TlsConfig`**：最低协议版本、信任根、SNI 与客户端身份
+`TlsConfig` 管理最低版本、信任根、ALPN 与握手要求。客户端启用证书链及名称验证。
+`TlsStream` 持有 TCP 流并实现 Reader、Writer 和 Closer。
+`TlsAcceptor.fromPem` 配置服务端证书链和私钥。
+详见 [TLS 实现和 API](../../stdlib/tls/README.md)。
 
-**`record Certificate`**：证书编码及经验证的元数据
+### `protobuf` — Protocol Buffers 二进制编码
 
-**`class TlsStream`**：建立安全连接后的 Reader/Writer
-```text
-  connect(stream: net.TcpStream,serverName: str,config: TlsConfig)->!Self
-  read(dst: []u8)->!usize
-  write(src: []const u8)->!usize
-  flush()->!void
-  peerCertificates()->[]const Certificate
-  negotiatedProtocol()->str
-  close()->!void
-```
-**`class TlsAcceptor`**：服务器端握手
-```text
-  new(config: TlsConfig)->!Self
-  accept(stream: net.TcpStream)->!TlsStream
-```
-**包级函数：**
-```text
-  connect(address: net.SocketAddr,serverName: str,config: TlsConfig)->!TlsStream
-  defaultClientConfig()->!TlsConfig
-  systemRoots()->!coll.Vec<Certificate>
-  verifyCertificate(chain: []const Certificate,hostname: str,when: time.UtcDateTime)->!void
-```
+`Reader` 逐字段解析类型、原始字节和消息载荷。`Writer` 限制输出大小并提供全部 Protobuf 原语。
+`PackedReader` 与 `PackedWriter` 读写 Packed 元素。Schema 实现 `Codec<T>` 来决定合并、存在性和未知字段保留策略。
+详见 [Protobuf 实现和 API](../../stdlib/protobuf/README.md)。
 
 ### `context` — 跨调用的取消、deadline、键值上下文；与 task.TaskContext 统一适配
 

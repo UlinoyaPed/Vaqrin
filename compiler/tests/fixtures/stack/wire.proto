@@ -1,0 +1,35 @@
+syntax = "proto3";
+package interop;
+
+message Child {
+  int32 left = 1;
+  int32 right = 2;
+}
+
+message Envelope {
+  int32 signed32 = 1;
+  int64 signed64 = 2;
+  uint32 unsigned32 = 3;
+  uint64 unsigned64 = 4;
+  sint32 zig32 = 5;
+  sint64 zig64 = 6;
+  fixed32 fixed32_value = 7;
+  fixed64 fixed64_value = 8;
+  sfixed32 sfixed32_value = 9;
+  sfixed64 sfixed64_value = 10;
+  bool yes = 11;
+  enum Mode { UNKNOWN = 0; ON = 1; }
+  Mode mode = 12;
+  float float_value = 13;
+  double double_value = 14;
+  string title = 15;
+  bytes payload = 16;
+  Child child = 17;
+  repeated sint32 sequence = 18;
+  map<string, int32> scores = 19;
+  oneof selection {
+    string label = 20;
+    int64 code = 21;
+  }
+  optional int32 count = 22;
+}

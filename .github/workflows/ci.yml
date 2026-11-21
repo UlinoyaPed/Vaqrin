@@ -44,8 +44,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             "clang-$LLVM_MAJOR" "llvm-$LLVM_MAJOR-dev" \
-            cmake ninja-build python3 gcc-arm-none-eabi openssl libssl-dev
+            cmake ninja-build python3 gcc-arm-none-eabi openssl libssl-dev libnghttp2-dev
           printf '/usr/lib/llvm-%s/bin\n' "$LLVM_MAJOR" >> "$GITHUB_PATH"
+
+      - name: Install protocol test dependencies
+        run: |
+          python3 -m pip install --target "$RUNNER_TEMP/vaqrin-python" "grpcio-tools>=1.62,<2" "h2>=4.1,<5"
+          printf 'PYTHONPATH=%s\n' "$RUNNER_TEMP/vaqrin-python" >> "$GITHUB_ENV"
 
       - name: Configure and build
         run: |
@@ -63,7 +68,7 @@ jobs:
         run: |
           clang++ -std=c++20 -Wall -Wextra -pedantic-errors \
             -fno-exceptions -fno-rtti -fsyntax-only \
-            compiler/runtime/io_posix.cpp compiler/runtime/tls_openssl.cpp
+            compiler/runtime/io_posix.cpp compiler/runtime/tls_openssl.cpp compiler/runtime/http2_nghttp2.cpp
 
       - name: Run all acceptance suites
         run: ctest --test-dir build/ci --output-on-failure --no-tests=error --parallel 1
@@ -76,6 +81,7 @@ jobs:
           python3 compiler/tests/io_acceptance.py "$compiler" IoAcceptance.test_task_and_io_runtimes_link_together
           python3 compiler/tests/stdlib_acceptance.py "$compiler" StandardLibraryAcceptance.test_https_client
           python3 compiler/tests/io_v2_acceptance.py "$compiler"
+          python3 compiler/tests/protocol_acceptance.py "$compiler"
           python3 compiler/tools/release.py smoke "$RUNNER_TEMP/vaqrin"
 
       - name: Upload CTest diagnostics

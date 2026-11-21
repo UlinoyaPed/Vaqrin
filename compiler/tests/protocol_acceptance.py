@@ -1,0 +1,666 @@
+"""Loopback and reference implementation checks for the protocol packages."""
+from concurrent.futures import ThreadPoolExecutor
+import importlib.util
+import json
+import os
+import socket
+import ssl
+import subprocess
+import sys
+import unittest
+
+from acceptance import CompilerCase, REPOSITORY, VAQC
+
+
+FIXTURES = REPOSITORY / "compiler/tests/fixtures/stack"
+
+
+class ProtocolAcceptance(CompilerCase):
+    def compile_fixture(self, name, executable):
+        source = self.source("main.vqr", (FIXTURES / name).read_text(encoding="utf-8"))
+        self.process(VAQC, source, "-o", executable)
+
+    def reference_schema(self):
+        self.process(sys.executable, "-m", "grpc_tools.protoc",
+                     f"-I{FIXTURES}", "--python_out=.", FIXTURES / "wire.proto")
+        spec = importlib.util.spec_from_file_location("wire_pb2", self.root / "wire_pb2.py")
+        schema = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(schema)
+        return schema
+
+    def test_protobuf_reference(self):
+        schema = self.reference_schema()
+        canonical = schema.Envelope(
+            signed32=-(1 << 31), signed64=-(1 << 63), unsigned32=(1 << 32) - 1,
+            unsigned64=(1 << 64) - 1, zig32=-(1 << 31), zig64=-(1 << 63),
+            fixed32_value=0xFEABCDEF, fixed64_value=0xFEDCBA9876543210,
+            sfixed32_value=-42, sfixed64_value=-43, yes=True, mode=23,
+            float_value=1.25, double_value=-2.5, title="互操作", payload=b"vaqrin",
+            sequence=[-1, 0, 1], scores={"key": -6}, code=-1, count=0,
+        )
+        canonical.child.left = 5
+        canonical.child.right = 7
+        first = schema.Envelope()
+        first.CopyFrom(canonical)
+        first.child.ClearField("right")
+        first.label = "overwritten"
+        first.scores["key"] = 6
+        first.count = 3
+        last = schema.Envelope(code=-1, count=0, scores={"key": -6})
+        last.child.right = 7
+        # One unpacked sint32 occurrence of a field whose other values are packed.
+        unpacked = bytes.fromhex("900103")
+        # Two unknown fields, including a matching legacy group.
+        unknown = bytes.fromhex("a00601ab060801ac06")
+        merged = first.SerializeToString() + last.SerializeToString() + unpacked + unknown
+        reference = schema.Envelope.FromString(merged)
+        self.assertEqual((reference.child.left, reference.child.right), (5, 7))
+        self.assertEqual(list(reference.sequence), [-1, 0, 1, -2])
+        self.assertEqual(reference.WhichOneof("selection"), "code")
+        self.assertTrue(reference.HasField("count"))
+        self.assertEqual(reference.count, 0)
+        self.assertEqual(reference.scores["key"], -6)
+        (self.root / "python.bin").write_bytes(merged)
+        self.compile_fixture("wire.vqr", "program")
+        self.process("./program")
+        self.assertEqual(schema.Envelope.FromString((self.root / "vaqrin.bin").read_bytes()), canonical)
+        self.assertEqual((self.root / "vaqrin.bin").read_bytes(), canonical.SerializeToString())
+        self.assertEqual((self.root / "unknown.bin").read_bytes(), unknown)
+
+    def make_certificate(self):
+        cert = self.root / "certificate.pem"
+        key = self.root / "key.pem"
+        self.process("openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                     "-days", "1", "-subj", "/CN=Vaqrin test",
+                     "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1",
+                     "-keyout", key, "-out", cert)
+        return cert, key
+
+    def test_tls_client_alpn(self):
+        cert, key = self.make_certificate()
+        enabled = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        enabled.minimum_version = ssl.TLSVersion.TLSv1_3
+        enabled.load_cert_chain(cert, key)
+        enabled.set_alpn_protocols(["h2", "http/1.1"])
+        unavailable = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        unavailable.load_cert_chain(cert, key)
+
+        with socket.create_server(("127.0.0.1", 0)) as listener:
+            listener.settimeout(5)
+            address = json.dumps(f"127.0.0.1:{listener.getsockname()[1]}")
+            program = self.source("client.vqr", f"""
+                import (bytes, io, net, result, time, tls)
+                func dial() !net.TcpStream {{
+                    var timeout = time.Duration.fromSeconds(2);
+                    var stream = net.TcpStream.connectTimeout(net.parseSocketAddr({address})!, timeout)!;
+                    stream.setReadTimeout(some(timeout))!;
+                    stream.setWriteTimeout(some(timeout))!;
+                    move(stream)
+                }}
+                func main() !void {{
+                    var config = tls.TlsConfig();
+                    config.minimumVersion = tls.Version.Tls13;
+                    config.requireProtocol = true;
+                    config.setRootFile({json.dumps(str(cert))})!;
+                    config.addProtocol("h2".asBytes())!;
+                    var active = tls.TlsStream.connect(dial()!, "localhost", &config)!;
+                    var chosen = active.negotiatedProtocol()!.unwrap();
+                    io.println(bytes.equal(chosen.asConstSlice(), "h2".asBytes()))!;
+                    io.writeString(&active, "ping")!;
+                    var reply = [4]u8{{0, 0, 0, 0}};
+                    io.readExact(&active, reply[:])!;
+                    io.println(bytes.equal(reply[:], "pong".asBytes()))!;
+                    active.close()!;
+                    active.close()!;
+                    var closed = active.read(reply[:]);
+                    io.println(result.errorOf(&closed).unwrap() == io.IoError.Closed)!;
+                    var rejected = tls.TlsStream.connect(dial()!, "localhost", &config);
+                    io.println(result.errorOf(&rejected).unwrap() == tls.TlsError.MissingProtocol)!;
+                    var wrongHost = tls.TlsStream.connect(dial()!, "wrong.example", &config);
+                    io.println(result.errorOf(&wrongHost).unwrap() == tls.TlsError.Certificate)!;
+                }}
+            """)
+            self.process(VAQC, program, "-o", "client")
+
+            def serve():
+                connection, _ = listener.accept()
+                with connection, enabled.wrap_socket(connection, server_side=True) as stream:
+                    stream.settimeout(4)
+                    self.assertEqual(stream.selected_alpn_protocol(), "h2")
+                    with stream.makefile("rb") as data:
+                        self.assertEqual(data.read(4), b"ping")
+                    stream.sendall(b"pong")
+                    stream.unwrap().close()
+                connection, _ = listener.accept()
+                with connection, unavailable.wrap_socket(connection, server_side=True) as stream:
+                    self.assertIsNone(stream.selected_alpn_protocol())
+                connection, _ = listener.accept()
+                with connection, self.assertRaises(ssl.SSLError):
+                    with enabled.wrap_socket(connection, server_side=True):
+                        pass
+
+            with ThreadPoolExecutor(max_workers=1) as worker:
+                served = worker.submit(serve)
+                self.assertEqual(self.process("./client").stdout, b"true\n" * 5)
+                served.result(timeout=6)
+
+    def test_tls_server_alpn(self):
+        cert, key = self.make_certificate()
+        program = self.source("server.vqr", f"""
+            import (fmt, io, net, result, time, tls)
+            func take(listener: *net.TcpListener) !net.TcpStream {{
+                var connection = listener.accept()!;
+                connection.0.setReadTimeout(some(time.Duration.fromSeconds(2)))!;
+                connection.0.setWriteTimeout(some(time.Duration.fromSeconds(2)))!;
+                stream, _ := move(connection);
+                move(stream)
+            }}
+            func main() !void {{
+                var listener = net.listenTcp(net.parseSocketAddr("127.0.0.1:0")!)!;
+                var digits = fmt.formatUint(listener.localAddr()!.port(), 10)!;
+                io.print(digits)!;
+                io.print("\\n")!;
+                var config = tls.TlsConfig();
+                config.addProtocol("h2".asBytes())!;
+                config.requireProtocol = true;
+                var acceptor = tls.TlsAcceptor.fromPem({json.dumps(str(cert))}, {json.dumps(str(key))}, move(config))!;
+                var rejected = acceptor.accept(take(&listener)!);
+                io.println(result.errorOf(&rejected).unwrap() == tls.TlsError.Handshake)!;
+                var missing = acceptor.accept(take(&listener)!);
+                io.println(result.errorOf(&missing).unwrap() == tls.TlsError.MissingProtocol)!;
+                var active = acceptor.accept(take(&listener)!)!;
+                var chosen = active.negotiatedProtocol()!.unwrap();
+                io.writeAll(&active, chosen.asConstSlice())!
+            }}
+        """)
+        self.process(VAQC, program, "-o", "server")
+        with subprocess.Popen([self.root / "server"], stdout=subprocess.PIPE, stderr=subprocess.PIPE) as server:
+            try:
+                with ThreadPoolExecutor(max_workers=1) as worker:
+                    port = int(worker.submit(server.stdout.readline).result(timeout=5))
+                context = ssl.create_default_context(cafile=str(cert))
+                context.set_alpn_protocols(["http/1.1"])
+                with socket.create_connection(("127.0.0.1", port), timeout=4) as client:
+                    with self.assertRaises(ssl.SSLError):
+                        with context.wrap_socket(client, server_hostname="localhost"):
+                            pass
+                context = ssl.create_default_context(cafile=str(cert))
+                with socket.create_connection(("127.0.0.1", port), timeout=4) as client:
+                    with context.wrap_socket(client, server_hostname="localhost") as stream:
+                        self.assertIsNone(stream.selected_alpn_protocol())
+                context.set_alpn_protocols(["http/1.1", "h2"])
+                with socket.create_connection(("127.0.0.1", port), timeout=4) as client:
+                    with context.wrap_socket(client, server_hostname="localhost") as stream:
+                        self.assertEqual(stream.selected_alpn_protocol(), "h2")
+                        with stream.makefile("rb") as data:
+                            self.assertEqual(data.read(2), b"h2")
+                out, err = server.communicate(timeout=5)
+                self.assertEqual(server.returncode, 0, err.decode(errors="replace"))
+                self.assertEqual(out, b"true\ntrue\n")
+            except (OSError, ValueError) as error:
+                if server.poll() is None:
+                    server.kill()
+                out, err = server.communicate(timeout=5)
+                raise AssertionError(f"server exited {server.returncode}: {out!r} {err!r}") from error
+            finally:
+                if server.poll() is None:
+                    server.kill()
+
+    def test_http2_client_tls(self):
+        from h2.config import H2Configuration
+        from h2.connection import H2Connection
+        from h2.events import ConnectionTerminated, DataReceived, RequestReceived, StreamEnded
+
+        cert, key = self.make_certificate()
+        tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        tls.load_cert_chain(cert, key)
+        tls.set_alpn_protocols(["h2"])
+        self.compile_fixture("h2_client.vqr", "client")
+        with socket.create_server(("127.0.0.1", 0)) as listener:
+            listener.settimeout(5)
+            address = f"127.0.0.1:{listener.getsockname()[1]}"
+
+            def serve():
+                connection, _ = listener.accept()
+                with connection, tls.wrap_socket(connection, server_side=True) as stream:
+                    stream.settimeout(5)
+                    self.assertEqual(stream.selected_alpn_protocol(), "h2")
+                    h2 = H2Connection(H2Configuration(client_side=False, header_encoding="utf-8"))
+                    h2.initiate_connection()
+                    stream.sendall(h2.data_to_send())
+                    preface = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
+                    incoming = b""
+                    while len(incoming) < len(preface):
+                        fragment = stream.recv(len(preface) - len(incoming))
+                        self.assertTrue(fragment)
+                        incoming += fragment
+                    self.assertEqual(incoming, preface)
+                    received = {}
+                    pending = {}
+                    finished = False
+                    while not finished:
+                        for event in h2.receive_data(incoming):
+                            if isinstance(event, RequestReceived):
+                                self.assertEqual(dict(event.headers)["x-hpack"], "a-repeated-dynamic-header-value")
+                                self.assertEqual(dict(event.headers)[":path"], "/one" if event.stream_id == 1 else "/two")
+                                received[event.stream_id] = bytearray()
+                            elif isinstance(event, DataReceived):
+                                received[event.stream_id].extend(event.data)
+                                h2.acknowledge_received_data(event.flow_controlled_length, event.stream_id)
+                            elif isinstance(event, StreamEnded):
+                                h2.send_headers(event.stream_id, [(":status", "200"), ("x-hpack", "a-repeated-dynamic-header-value")])
+                                pending[event.stream_id] = b"a" * 90000 if event.stream_id == 1 else b"b" * 111
+                            elif isinstance(event, ConnectionTerminated):
+                                self.assertEqual(event.error_code, 0)
+                                finished = True
+
+                        for stream_id, data in list(pending.items()):
+                            while data:
+                                size = min(len(data), h2.local_flow_control_window(stream_id), h2.max_outbound_frame_size)
+                                if size <= 0:
+                                    break
+                                h2.send_data(stream_id, data[:size])
+                                data = data[size:]
+                            if not data:
+                                h2.send_headers(stream_id, [("x-end", "done")], end_stream=True)
+                                del pending[stream_id]
+                            else:
+                                pending[stream_id] = data
+                        outgoing = h2.data_to_send()
+                        if outgoing:
+                            stream.sendall(outgoing)
+                        if not finished:
+                            incoming = stream.recv(8192)
+                            self.assertTrue(incoming)
+                    self.assertEqual(received, {1: b"A" * 70000, 3: b"two"})
+
+            with ThreadPoolExecutor(max_workers=1) as worker:
+                served = worker.submit(serve)
+                process = subprocess.run(
+                    [self.root / "client"], cwd=self.root, capture_output=True, timeout=18,
+                    env={**os.environ, "VAQRIN_H2_ADDRESS": address, "VAQRIN_H2_CERT": str(cert)},
+                )
+                served.result(timeout=6)
+                self.assertEqual(process.returncode, 0, process.stderr.decode(errors="replace"))
+
+    def test_http2_server_h2c(self):
+        from h2.config import H2Configuration
+        from h2.connection import H2Connection
+        from h2.events import DataReceived, ResponseReceived, StreamEnded, StreamReset, TrailersReceived
+
+        self.compile_fixture("h2_server.vqr", "server")
+        with subprocess.Popen([self.root / "server"], stdout=subprocess.PIPE, stderr=subprocess.PIPE) as server:
+            try:
+                with ThreadPoolExecutor(max_workers=1) as worker:
+                    port = int(worker.submit(server.stdout.readline).result(timeout=5))
+                with socket.create_connection(("127.0.0.1", port), timeout=5) as peer:
+                    h2 = H2Connection(H2Configuration(client_side=True, header_encoding="utf-8"))
+                    h2.initiate_connection()
+                    base = [(":method", "POST"), (":scheme", "http"), (":authority", "localhost")]
+                    h2.send_headers(1, base + [(":path", "/request")])
+                    h2.send_headers(3, base + [(":path", "/reset"), ("x-reset", "yes")])
+                    h2.send_headers(5, base + [(":path", "/large"), ("x-large", "a" * 33000)])
+                    peer.sendall(h2.data_to_send())
+                    left = 82000
+                    body = bytearray()
+                    headers, trailers = {}, {}
+                    ended = reset = over_limit = False
+                    while not (ended and reset and over_limit):
+                        wire = peer.recv(4096)
+                        self.assertTrue(wire)
+                        for event in h2.receive_data(wire):
+                            if isinstance(event, ResponseReceived):
+                                headers.update(event.headers)
+                            elif isinstance(event, TrailersReceived):
+                                trailers.update(event.headers)
+                            elif isinstance(event, DataReceived):
+                                body.extend(event.data)
+                                h2.acknowledge_received_data(event.flow_controlled_length, event.stream_id)
+                            elif isinstance(event, StreamEnded):
+                                self.assertEqual(event.stream_id, 1)
+                                ended = True
+                            elif isinstance(event, StreamReset):
+                                if event.stream_id == 3:
+                                    self.assertEqual(event.error_code, 8)
+                                    reset = True
+                                else:
+                                    self.assertEqual(event.stream_id, 5)
+                                    self.assertNotEqual(event.error_code, 0)
+                                    over_limit = True
+                        while left:
+                            size = min(left, h2.local_flow_control_window(1), h2.max_outbound_frame_size)
+                            if size <= 0:
+                                break
+                            left -= size
+                            h2.send_data(1, b"x" * size, end_stream=left == 0)
+                        output = h2.data_to_send()
+                        if output:
+                            peer.sendall(output)
+                    self.assertEqual(headers, {":status": "200", "x-server": "Vaqrin"})
+                    self.assertEqual(trailers, {"x-end": "done"})
+                    self.assertEqual(body, b"hello from Vaqrin")
+                    h2.close_connection()
+                    peer.sendall(h2.data_to_send())
+                out, err = server.communicate(timeout=5)
+                self.assertEqual(server.returncode, 0, (out, err))
+            finally:
+                if server.poll() is None:
+                    server.kill()
+
+    def test_http2_frame_validation(self):
+        self.hosted(r"""
+            import (http2, result)
+            func main() !void {
+                var short = [2]u8{0, 0};
+                var rejected = http2.FrameHeader.parse(short[:]);
+                io.println(result.errorOf(&rejected).unwrap() == http2.Http2Error.Protocol)!;
+                var header = [9]u8{0, 1, 2, 10, 1, 128, 0, 0, 7};
+                var frame = http2.FrameHeader.parse(header[:])!;
+                io.println(frame.length == 258 && frame.stream == 7 && frame.kind == 10 && frame.flags == 1)!;
+                var connection = http2.Connection.open(http2.Role.Server, http2.Settings())!;
+                var bad = connection.ingest("invalid HTTP/2 client connection preface".asBytes());
+                io.println(result.errorOf(&bad).unwrap() == http2.Http2Error.Protocol)!;
+                var invalidOptions = http2.Settings();
+                invalidOptions.initialStreamWindow = 0xffffffffu32;
+                var badSize = http2.Connection.open(http2.Role.Client, invalidOptions);
+                io.println(result.errorOf(&badSize).unwrap() == http2.Http2Error.InvalidArgument)!;
+            }
+        """, "true\n" * 4)
+
+    def test_grpc_python_server(self):
+        import time
+        import grpc
+
+        cert, key = self.make_certificate()
+        schema = self.reference_schema()
+        self.compile_fixture("grpc_client.vqr", "client")
+
+        def twice(request, context):
+            self.assertEqual(dict(context.invocation_metadata())["proof-bin"], b"binary\x00")
+            self.assertEqual(dict(context.invocation_metadata())["x-request"], "client")
+            self.assertIsNotNone(context.time_remaining())
+            context.send_initial_metadata((("x-initial", "open"),))
+            context.set_trailing_metadata((("proof-bin", b"tail\x00"),))
+            return schema.Child(left=request.left * 2)
+
+        def missing(request, context):
+            context.set_trailing_metadata((("grpc-status-details-bin", b"details"),))
+            context.abort(grpc.StatusCode.NOT_FOUND, "缺失 % field")
+
+        def wait(request, context):
+            time.sleep(0.25)
+            return schema.Child()
+
+        def unary(callback):
+            return grpc.unary_unary_rpc_method_handler(
+                callback, request_deserializer=schema.Child.FromString,
+                response_serializer=schema.Child.SerializeToString,
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as worker:
+            server = grpc.server(worker)
+            server.add_generic_rpc_handlers((
+                grpc.method_handlers_generic_handler("interop.Echo", {
+                    "Double": unary(twice), "Missing": unary(missing), "Wait": unary(wait),
+                }),
+            ))
+            credentials = grpc.ssl_server_credentials(((key.read_bytes(), cert.read_bytes()),))
+            port = server.add_secure_port("127.0.0.1:0", credentials)
+            server.start()
+            try:
+                process = subprocess.run(
+                    [self.root / "client"], cwd=self.root, capture_output=True, timeout=20,
+                    env={**os.environ, "VAQRIN_RPC_ADDRESS": f"https://localhost:{port}",
+                         "VAQRIN_RPC_CERT": str(cert)},
+                )
+                self.assertEqual(process.returncode, 0, (process.stdout, process.stderr))
+            finally:
+                server.stop(0).wait(5)
+
+    def test_grpc_python_client(self):
+        import grpc
+
+        cert, key = self.make_certificate()
+        schema = self.reference_schema()
+        self.compile_fixture("grpc_server.vqr", "server")
+        environment = {**os.environ, "VAQRIN_RPC_CERT": str(cert), "VAQRIN_RPC_KEY": str(key)}
+        with subprocess.Popen([self.root / "server"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              env=environment) as server:
+            try:
+                with ThreadPoolExecutor(max_workers=1) as worker:
+                    port = int(worker.submit(server.stdout.readline).result(timeout=5))
+                creds = grpc.ssl_channel_credentials(root_certificates=cert.read_bytes())
+                with grpc.secure_channel(f"localhost:{port}", creds) as channel:
+                    def unary(name):
+                        return channel.unary_unary(
+                            f"/interop.Echo/{name}", request_serializer=schema.Child.SerializeToString,
+                            response_deserializer=schema.Child.FromString,
+                        )
+
+                    answer, call = unary("Double").with_call(
+                        schema.Child(left=14), timeout=4, metadata=(("proof-bin", b"binary\x00"),),
+                    )
+                    self.assertEqual(answer.left, 28)
+                    self.assertEqual(dict(call.initial_metadata())["x-initial"], "open")
+                    self.assertEqual(dict(call.trailing_metadata())["proof-bin"], b"tail\x00")
+                    with self.assertRaises(grpc.RpcError) as rejected:
+                        unary("Missing")(schema.Child(), timeout=4)
+                    error = rejected.exception
+                    self.assertEqual(error.code(), grpc.StatusCode.NOT_FOUND)
+                    self.assertEqual(error.details(), "缺失 % field")
+                    self.assertEqual(dict(error.trailing_metadata())["grpc-status-details-bin"], b"details")
+                    with self.assertRaises(grpc.RpcError) as unmatched:
+                        unary("Unknown")(schema.Child(), timeout=4)
+                    self.assertEqual(unmatched.exception.code(), grpc.StatusCode.UNIMPLEMENTED)
+                out, err = server.communicate(timeout=6)
+                self.assertEqual(server.returncode, 0, (out, err))
+            finally:
+                if server.poll() is None:
+                    server.kill()
+
+    def test_grpc_vaqrin_to_vaqrin(self):
+        cert, key = self.make_certificate()
+        self.compile_fixture("grpc_server.vqr", "server")
+        self.compile_fixture("grpc_client.vqr", "client")
+        environment = {**os.environ, "VAQRIN_RPC_CERT": str(cert), "VAQRIN_RPC_KEY": str(key)}
+        with subprocess.Popen([self.root / "server"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              env=environment) as server:
+            try:
+                with ThreadPoolExecutor(max_workers=1) as worker:
+                    port = int(worker.submit(server.stdout.readline).result(timeout=5))
+                process = subprocess.run(
+                    [self.root / "client"], capture_output=True, timeout=15,
+                    env={**environment, "VAQRIN_RPC_ADDRESS": f"https://localhost:{port}"},
+                )
+                self.assertEqual(process.returncode, 0, (process.stdout, process.stderr))
+                out, err = server.communicate(timeout=6)
+                self.assertEqual(server.returncode, 0, (out, err))
+            finally:
+                if server.poll() is None:
+                    server.kill()
+
+    def test_grpc_streaming_python_server(self):
+        from threading import Event
+        import grpc
+
+        cert, key = self.make_certificate()
+        schema = self.reference_schema()
+        self.compile_fixture("grpc_stream_client.vqr", "client")
+        cancelled = Event()
+
+        def broadcast(request, context):
+            for value in range(request.left, request.left + 3):
+                yield schema.Child(left=value)
+
+        def sum_messages(requests, context):
+            return schema.Child(left=sum(request.left for request in requests))
+
+        def echo(requests, context):
+            for request in requests:
+                if request.left == 5:
+                    context.add_callback(cancelled.set)
+                yield schema.Child(left=request.left * 2)
+
+        codec = dict(request_deserializer=schema.Child.FromString, response_serializer=schema.Child.SerializeToString)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            server = grpc.server(pool)
+            server.add_generic_rpc_handlers((
+                grpc.method_handlers_generic_handler("interop.Stream", {
+                    "Broadcast": grpc.unary_stream_rpc_method_handler(broadcast, **codec),
+                    "Sum": grpc.stream_unary_rpc_method_handler(sum_messages, **codec),
+                    "Echo": grpc.stream_stream_rpc_method_handler(echo, **codec),
+                }),
+            ))
+            credentials = grpc.ssl_server_credentials(((key.read_bytes(), cert.read_bytes()),))
+            port = server.add_secure_port("127.0.0.1:0", credentials)
+            server.start()
+            try:
+                process = subprocess.run(
+                    [self.root / "client"], capture_output=True, timeout=15,
+                    env={**os.environ, "VAQRIN_RPC_ADDRESS": f"https://localhost:{port}",
+                         "VAQRIN_RPC_CERT": str(cert)},
+                )
+                self.assertEqual(process.returncode, 0, (process.stdout, process.stderr))
+                self.assertTrue(cancelled.wait(3), "the peer did not observe cancellation")
+            finally:
+                server.stop(0).wait(5)
+
+    def test_grpc_streaming_python_client(self):
+        from threading import Event
+        import grpc
+
+        cert, key = self.make_certificate()
+        schema = self.reference_schema()
+        self.compile_fixture("grpc_stream_server.vqr", "server")
+        environment = {**os.environ, "VAQRIN_RPC_CERT": str(cert), "VAQRIN_RPC_KEY": str(key)}
+        with subprocess.Popen([self.root / "server"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              env=environment) as server:
+            try:
+                with ThreadPoolExecutor(max_workers=1) as worker:
+                    port = int(worker.submit(server.stdout.readline).result(timeout=5))
+                creds = grpc.ssl_channel_credentials(root_certificates=cert.read_bytes())
+                with grpc.secure_channel(f"localhost:{port}", creds) as channel:
+                    codec = dict(request_serializer=schema.Child.SerializeToString,
+                                 response_deserializer=schema.Child.FromString)
+                    broadcast = channel.unary_stream("/interop.Stream/Broadcast", **codec)
+                    call = broadcast(schema.Child(left=10), timeout=4)
+                    self.assertEqual([frame.left for frame in call], [10, 11, 12])
+                    self.assertEqual(dict(call.initial_metadata())["x-start"], "vaqrin")
+                    self.assertEqual(dict(call.trailing_metadata())["x-end"], "vaqrin")
+                    add = channel.stream_unary("/interop.Stream/Sum", **codec)
+                    values = (schema.Child(left=value) for value in (2, 3, 4))
+                    self.assertEqual(add(values, timeout=4).left, 9)
+                    echo = channel.stream_stream("/interop.Stream/Echo", **codec)
+                    first_reply = Event()
+
+                    def requests():
+                        yield schema.Child(left=15)
+                        if not first_reply.wait(3):
+                            raise TimeoutError("bidirectional reply did not arrive")
+                        yield schema.Child(left=16)
+
+                    call = echo(requests(), timeout=4)
+                    self.assertEqual(next(call).left, 30)
+                    first_reply.set()
+                    self.assertEqual([frame.left for frame in call], [32])
+                out, err = server.communicate(timeout=6)
+                self.assertEqual(server.returncode, 0, (out, err))
+            finally:
+                if server.poll() is None:
+                    server.kill()
+
+    def test_protoc_vaqrin_plugin(self):
+        self.process(sys.executable, "-m", "grpc_tools.protoc",
+                     f"-I{FIXTURES}", "--python_out=.", "wire.proto", "typed.proto")
+        sys.path.insert(0, str(self.root))
+        try:
+            spec = importlib.util.spec_from_file_location("typed_pb2", self.root / "typed_pb2.py")
+            schema = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(schema)
+        finally:
+            sys.path.pop(0)
+        initial = schema.Input(count=12, numbers=[-1, 0, 40], mode=99, type="keyword", extra=b"")
+        initial.scores["key"].left = 100
+        initial.raw = b"replaced"
+        initial.child.left = 50
+        initial.items.add(right=80)
+        initial.foreign.left = -1
+        initial.branch.count = 3
+        middle = schema.Input(count=0)
+        middle.scores["key"].left = 200
+        middle.nested.left = 3
+        final = schema.Input()
+        final.nested.right = 4
+        # A wrong wire type for field 1 and one unknown fixed32 field remain opaque.
+        opaque = bytes.fromhex("0a017fa506ffffffff")
+        raw = initial.SerializeToString() + middle.SerializeToString() + final.SerializeToString() + opaque
+        (self.root / "generated-input.bin").write_bytes(raw)
+        plugin = VAQC.parent / "protoc-gen-vaqrin"
+        if not plugin.is_file():
+            plugin = REPOSITORY / "compiler/tools/protoc-gen-vaqrin"
+        options = (sys.executable, "-m", "grpc_tools.protoc", f"-I{FIXTURES}",
+                   f"--plugin=protoc-gen-vaqrin={plugin}")
+        self.process(*options, "--vaqrin_out=.", "wire.proto", "typed.proto")
+        repeat = self.root / "repeat"
+        repeat.mkdir()
+        self.process(*options, "--vaqrin_out=repeat", "typed.proto", "wire.proto")
+        for subpath in ("pb_interop/wire_pb.vqr", "pb_demo_ddeep/typed_pb.vqr"):
+            self.assertEqual((self.root / subpath).read_bytes(), (repeat / subpath).read_bytes())
+        test = self.source("main.vqr", (FIXTURES / "typed.vqr").read_text(encoding="utf-8"))
+        self.process(VAQC, test, "--package-path", self.root, "-o", "typed")
+        self.process("./typed")
+        output = (self.root / "generated-output.bin").read_bytes()
+        self.assertEqual(schema.Input.FromString(output), schema.Input.FromString(raw))
+        self.assertTrue(output.endswith(opaque))
+
+        cert, key = self.make_certificate()
+        environment = {**os.environ, "VAQRIN_RPC_CERT": str(cert), "VAQRIN_RPC_KEY": str(key)}
+        executable = self.root / "typed"
+        with subprocess.Popen([executable], env={**environment, "VAQRIN_RPC_SERVER": "1"},
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE) as server:
+            try:
+                with ThreadPoolExecutor(max_workers=1) as worker:
+                    port = int(worker.submit(server.stdout.readline).result(timeout=5))
+                process = subprocess.run(
+                    [executable], capture_output=True, timeout=15,
+                    env={**environment, "VAQRIN_RPC_ADDRESS": f"https://localhost:{port}"},
+                )
+                self.assertEqual(process.returncode, 0, (process.stdout, process.stderr))
+                out, err = server.communicate(timeout=5)
+                self.assertEqual(server.returncode, 0, (out, err))
+            finally:
+                if server.poll() is None:
+                    server.kill()
+
+    def test_grpc_message_boundaries(self):
+        self.hosted(r"""
+            import (bytes, grpc, result)
+            func main() !void {
+                var first = grpc.frame("a".asBytes(), 10)!;
+                var second = grpc.frame("bc".asBytes(), 10)!;
+                var small = first.asConstSlice();
+                var reader = grpc.MessageReader(10);
+                reader.feed(small[0..2])!;
+                io.println(reader.next()! == null)!;
+                var packed = bytes.join([_] []const u8 {small[2..small.len()], second.asConstSlice()}[:], "".asBytes())!;
+                reader.feed(packed.asConstSlice())!;
+                var a = reader.next()!.unwrap();
+                var b = reader.next()!.unwrap();
+                io.println(bytes.equal(a.asConstSlice(), "a".asBytes()))!;
+                io.println(bytes.equal(b.asConstSlice(), "bc".asBytes()))!;
+                reader.finish()!;
+                var invalid = [5]u8{1, 0, 0, 0, 0};
+                reader.feed(invalid[:])!;
+                var unsupported = reader.next();
+                io.println(result.errorOf(&unsupported).unwrap() == grpc.RpcError.UnsupportedEncoding)!;
+                var size = [5]u8{0, 0, 0, 0, 11};
+                var bounded = grpc.MessageReader(10);
+                bounded.feed(size[:])!;
+                var tooLong = bounded.next();
+                io.println(result.errorOf(&tooLong).unwrap() == grpc.RpcError.MessageTooLarge)!;
+            }
+        """, "true\n" * 5)
+
+
+if __name__ == "__main__":
+    unittest.main()

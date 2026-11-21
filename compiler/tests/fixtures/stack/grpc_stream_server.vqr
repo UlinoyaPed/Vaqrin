@@ -1,0 +1,65 @@
+package main
+import (env, fmt, grpc, io, net, protobuf, time, tls)
+
+error StreamTestError { BadValue }
+
+func receive(stream: *grpc.ServerStream) !?i32 {
+    var message = stream.recvMessage()! ?? { return null; };
+    var reader = protobuf.Reader.open(message.asConstSlice(), protobuf.DecodeLimits())!;
+    some(reader.next()!.unwrap().asInt32()!)
+}
+
+func send(stream: *grpc.ServerStream, input: i32) !void {
+    var message = protobuf.Writer(64);
+    message.writeInt32(1, input)!;
+    stream.sendMessage(message.written())
+}
+
+class Handler {
+    #implements: grpc.StreamingHandler
+    pub func handle(stream: *grpc.ServerStream) !grpc.Status {
+        stream.initial.addText("x-start", "vaqrin")!;
+        if stream.path == "/interop.Stream/Broadcast" {
+            var value = receive(stream)! ?? { return StreamTestError.BadValue; };
+            if receive(stream)! != null { return StreamTestError.BadValue; }
+            send(stream, value)!;
+            send(stream, value + 1)!;
+            send(stream, value + 2)!;
+        } else if stream.path == "/interop.Stream/Sum" {
+            var total: i32 = 0;
+            for {
+                var item = receive(stream)! ?? { break; };
+                total += item;
+            }
+            send(stream, total)!;
+        } else {
+            for {
+                var item = receive(stream)! ?? { break; };
+                send(stream, item * 2)!;
+            }
+        }
+        stream.trailing.addText("x-end", "vaqrin")!;
+        grpc.status(grpc.StatusCode.Ok, "")
+    }
+}
+
+func main() !void {
+    var certificate = env.get("VAQRIN_RPC_CERT")!.unwrap();
+    var key = env.get("VAQRIN_RPC_KEY")!.unwrap();
+    var config = tls.TlsConfig();
+    config.requireProtocol = true;
+    config.addProtocol("h2".asBytes())!;
+    var acceptor = tls.TlsAcceptor.fromPem(certificate, key, move(config))!;
+    var listener = net.listenTcp(net.parseSocketAddr("127.0.0.1:0")!)!;
+    var port = fmt.formatUint(listener.localAddr()!.port(), 10)!;
+    io.print(port)!;
+    io.print("\n")!;
+    var server = grpc.Server();
+    var handler = Handler{};
+    server.registerStreaming("/interop.Stream/Broadcast", &handler)!;
+    server.registerStreaming("/interop.Stream/Sum", &handler)!;
+    server.registerStreaming("/interop.Stream/Echo", &handler)!;
+    var options = grpc.ServeOptions();
+    options.timeout = time.Duration.fromSeconds(5);
+    server.acceptTls(&listener, &acceptor, options)
+}

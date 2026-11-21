@@ -1,60 +1,14 @@
 package http
-import (coll, io, net)
+import (tls)
 
 pub error TlsError { Unavailable, SetupFailed, TrustStore, Certificate, Handshake, Protocol }
 
-extern "C" func __vqr_tls_connect(fd: i32, host: *const u8, status: *i32) usize;
-extern "C" func __vqr_tls_read(session: usize, dst: *u8, size: usize, status: *i32) usize;
-extern "C" func __vqr_tls_write(session: usize, src: *const u8, size: usize, status: *i32) usize;
-extern "C" func __vqr_tls_close(session: usize) void;
-
-func checkTlsStatus(status: i32) !void {
-    if status > 0 { return io.systemError(status); }
-    switch status {
-        0 => {},
-        -1 => { return TlsError.Unavailable; },
-        -2 => { return TlsError.SetupFailed; },
-        -3 => { return TlsError.TrustStore; },
-        -4 => { return TlsError.Certificate; },
-        -5 => { return TlsError.Handshake; },
-        _ => { return TlsError.Protocol; },
-    };
-}
-
-class TlsStream {
-    #copy: disabled
-    #implements: io.Reader, io.Writer
-    var stream: net.TcpStream;
-    var session: usize;
-    func init(socket: net.TcpStream, handle: usize) : stream(move(socket)), session(handle) {}
-    func deinit() void { unsafe { __vqr_tls_close(session); } }
-public:
-    static func connect(host: str, socket: net.TcpStream) !Self {
-        var name = coll.Vec<u8>.withCapacity(host.byteLen() + 1)!;
-        for byte in host.asBytes() {
-            if byte == 0 { return HttpError.InvalidTarget; }
-            name.push(byte)!;
-        }
-        name.push(0)!;
-        var fd = socket.systemDescriptor()!;
-        var status: i32 = 0;
-        var handle = unsafe { __vqr_tls_connect(fd, &name[0], &status) };
-        checkTlsStatus(status)!;
-        TlsStream(move(socket), handle)
-    }
-    func read(dst: []u8) !usize {
-        if dst.len() == 0 { return 0; }
-        var status: i32 = 0;
-        var count = unsafe { __vqr_tls_read(session, &dst[0], dst.len(), &status) };
-        checkTlsStatus(status)!;
-        count
-    }
-    func write(src: []const u8) !usize {
-        if src.len() == 0 { return 0; }
-        var status: i32 = 0;
-        var count = unsafe { __vqr_tls_write(session, &src[0], src.len(), &status) };
-        checkTlsStatus(status)!;
-        count
-    }
-    func flush() !void {}
+func httpTlsError(reason: ErrorId) ErrorId {
+    if reason == tls.TlsError.Unavailable { return TlsError.Unavailable; }
+    if reason == tls.TlsError.SetupFailed || reason == tls.TlsError.InvalidName { return TlsError.SetupFailed; }
+    if reason == tls.TlsError.TrustStore { return TlsError.TrustStore; }
+    if reason == tls.TlsError.Certificate { return TlsError.Certificate; }
+    if reason == tls.TlsError.Handshake { return TlsError.Handshake; }
+    if reason == tls.TlsError.Protocol || reason == tls.TlsError.UnexpectedEof { return TlsError.Protocol; }
+    reason
 }

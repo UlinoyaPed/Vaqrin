@@ -1,0 +1,67 @@
+package main
+import (bytes, env, fmt, grpc, io, net, protobuf, time, tls)
+
+error TestError { Unexpected }
+
+class Twice {
+    #implements: grpc.UnaryHandler
+    pub func call(request: grpc.UnaryRequest) !grpc.UnaryResponse {
+        if request.deadline == null { return TestError.Unexpected; }
+        if !bytes.equal(request.metadata.get("proof-bin").unwrap(), "binary\u{0}".asBytes()) {
+            return TestError.Unexpected;
+        }
+        var reader = protobuf.Reader.open(request.body.asConstSlice(), protobuf.DecodeLimits())!;
+        var field = reader.next()!.unwrap();
+        var writer = protobuf.Writer(128);
+        writer.writeInt32(1, field.asInt32()! * 2)!;
+        var reply = grpc.response(writer.takeBytes());
+        reply.initial.addText("x-initial", "open")!;
+        reply.trailing.addBinary("proof-bin", "tail\u{0}".asBytes())!;
+        move(reply)
+    }
+}
+
+class Missing {
+    #implements: grpc.UnaryHandler
+    pub func call(request: grpc.UnaryRequest) !grpc.UnaryResponse {
+        var status = grpc.status(grpc.StatusCode.NotFound, "缺失 % field");
+        for byte in "details".asBytes() { status.details.push(byte)!; }
+        var reply = grpc.reply(move(status));
+        reply.trailing.addText("x-error", "details")!;
+        move(reply)
+    }
+}
+
+class Sleep {
+    #implements: grpc.UnaryHandler
+    pub func call(request: grpc.UnaryRequest) !grpc.UnaryResponse {
+        time.sleep(time.Duration.fromMillis(10))!;
+        grpc.reply(grpc.status(grpc.StatusCode.DeadlineExceeded, ""))
+    }
+}
+
+func main() !void {
+    var certificate = env.get("VAQRIN_RPC_CERT")!.unwrap();
+    var key = env.get("VAQRIN_RPC_KEY")!.unwrap();
+    var config = tls.TlsConfig();
+    config.addProtocol("h2".asBytes())!;
+    config.requireProtocol = true;
+    var tlsAcceptor = tls.TlsAcceptor.fromPem(certificate, key, move(config))!;
+    var listener = net.listenTcp(net.parseSocketAddr("127.0.0.1:0")!)!;
+    var digits = fmt.formatUint(listener.localAddr()!.port(), 10)!;
+    io.print(digits)!;
+    io.print("\n")!;
+    var server = grpc.Server();
+    var handler = Twice{};
+    var missing = Missing{};
+    var wait = Sleep{};
+    server.register("/interop.Echo/Double", &handler)!;
+    server.register("/interop.Echo/Missing", &missing)!;
+    server.register("/interop.Echo/Wait", &wait)!;
+    var options = grpc.ServeOptions();
+    options.timeout = time.Duration.fromSeconds(5);
+    server.acceptTls(&listener, &tlsAcceptor, options) catch (reason) {
+        if reason == tls.TlsError.UnexpectedEof || reason == grpc.RpcError.ConnectionClosed { return; }
+        return reason;
+    }
+}

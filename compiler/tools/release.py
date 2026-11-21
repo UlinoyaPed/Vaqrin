@@ -68,6 +68,8 @@ def smoke(compiler, prefix):
                             cwd=ROOT, capture_output=True, text=True)
     if failed.returncode != 1 or not json.loads(failed.stderr)["code"].startswith("E1"):
         raise RuntimeError("installed syntax checker did not diagnose invalid source")
+    if not (prefix / "bin/protoc-gen-vaqrin").is_file():
+        raise RuntimeError("installed SDK is missing protoc-gen-vaqrin")
     if not (prefix / "share/vaqrin/stdlib/linalg/linalg.vqr").is_file():
         raise RuntimeError("installed standard library is missing linalg")
 

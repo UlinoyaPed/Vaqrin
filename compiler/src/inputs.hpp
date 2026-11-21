@@ -24,6 +24,7 @@ public:
   Path ioRuntimeSource() const { return runtimeRoot / "io_posix.cpp"; }
   Path processRuntimeSource() const { return runtimeRoot / "process_posix.cpp"; }
   Path netRuntimeSource() const { return runtimeRoot / "net_posix.cpp"; }
+  Path http2RuntimeSource() const { return runtimeRoot / "http2_nghttp2.cpp"; }
   Path tlsRuntimeSource() const { return runtimeRoot / "tls_openssl.cpp"; }
   Path decimalRuntimeSource() const { return runtimeRoot / "decimal.cpp"; }
 

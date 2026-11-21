@@ -1,0 +1,22 @@
+package task
+import (io, reactor, time)
+
+extern "C" func __vqr_rt_wait_io(fd: i32, interests: u32, seconds: i64, nanos: i64) i32;
+
+// The owner must keep the descriptor valid until this wait begins.
+pub func waitDescriptor(fd: i32, interest: reactor.Interest, deadline: ?time.Deadline) !void {
+    var mask = (if interest.readable { 1u32 } else { 0u32 }) |
+               (if interest.writable { 2u32 } else { 0u32 });
+    if mask == 0 { return reactor.ReactorError.InvalidInterest; }
+    var seconds: i64 = -1;
+    var nanos: i64 = 0;
+    if deadline != null {
+        whole, fraction := unsafe { deadline.unwrap().instant().monotonicParts() };
+        seconds = whole;
+        nanos = i64(fraction);
+    }
+    var reason = unsafe { __vqr_rt_wait_io(fd, mask, seconds, nanos) };
+    if reason == 125 { return io.IoError.Cancelled; }
+    if reason == 110 { return io.IoError.DeadlineExceeded; }
+    if reason != 0 { return io.systemError(reason); }
+}

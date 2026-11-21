@@ -1,6 +1,6 @@
 # Vaqrin 标准包
 
-可用 `import (core, coll, iter, opt, result, cmp, convert, meta, mem, hash, mmio, bits, algo, atomic, binary, bytes, cell, encoding, simd, text, parse, io, path, fs, env, process, net, http, bufio, fmt, thread, sync, time, channel, task, num, math, linalg, random, json, csv, toml, serde, unicode, regex, url, log, errors)` 导入标准包，也可使用 `std/` 前缀。CMake 在构建目录生成 `share/vaqrin/stdlib`，安装时将标准包源码复制到安装前缀下。编译器按使用情况实例化泛型声明。完整的目标接口见[标准包 API 清单](../docs/stdlib/Vaqrin-stdlib-API-complete-draft.md)。
+可用 `import (core, coll, iter, opt, result, cmp, convert, meta, mem, hash, mmio, bits, algo, atomic, binary, bytes, cell, encoding, simd, text, parse, io, path, fs, env, process, net, reactor, http, bufio, fmt, thread, sync, time, channel, task, num, math, linalg, random, json, csv, toml, serde, unicode, regex, url, log, errors)` 导入标准包，也可使用 `std/` 前缀。CMake 在构建目录生成 `share/vaqrin/stdlib`，安装时将标准包源码复制到安装前缀下。编译器按使用情况实例化泛型声明。完整的目标接口见[标准包 API 清单](../docs/stdlib/Vaqrin-stdlib-API-complete-draft.md)。
 
 | 包 | 当前接口 |
 | --- | --- |
@@ -39,12 +39,13 @@
 | `parse` | 整串及前缀整数和浮点解析、布尔值、Unicode 标量、UTF-8 字节偏移游标和空白分词 |
 | `io` | Reader/Writer/Seeker/Closer、内存流、组合适配器、标准流、宿主文件描述符及原生错误码 |
 | `path` | UTF-8 词法路径、父目录/文件名/扩展名、组件迭代与规范化 |
-| `fs` | File、OpenOptions、Metadata、Permissions、目录读取及文件系统操作 |
+| `fs` | 文件身份、原子写入、目录遍历与清理、符号链接、临时文件和临时目录 |
 | `env` | 读写进程环境、独立的环境快照、当前目录与可执行文件路径 |
 | `process` | POSIX 命令、子进程句柄、环境与标准流配置、有上限的输出捕获 |
 | `http` | [HTTP/1.x 报文读写、带证书验证的 HTTPS 客户端、单连接 HTTP 服务端](http/README.md) |
 | `linalg` | 稠密向量与矩阵、矩阵积、范数、带主元 LU 分解和线性系统求解 |
 | `net` | IPv4/IPv6 地址、系统名称解析、TCP 流与监听、UDP 数据报和超时 |
+| `reactor` | [Linux epoll 就绪监听、注册和描述符生命周期](reactor/README.md) |
 | `bufio` | BufferedReader/Writer、Scanner、Token、peek/unread、按行和分隔符读取 |
 | `fmt` | Writer 格式化、整数/浮点/布尔/字符/字符串、宽度/精度/进制/填充 |
 | `thread` | GNU/Linux 原生线程、一次性领取结果、分离、协作停止、当前线程 ID 及 CPU 数 |

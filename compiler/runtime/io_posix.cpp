@@ -4,6 +4,7 @@
 #define _DEFAULT_SOURCE
 #define _FILE_OFFSET_BITS 64
 
+#include "reactor_linux.h"
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -15,6 +16,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/random.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -40,11 +42,14 @@ static int file_kind(mode_t mode) {
 }
 
 static void write_metadata(const struct stat *value, uint64_t *size, uint32_t *mode,
-                           int64_t *modified, int32_t *kind) {
+                           int64_t *modified, int32_t *kind,
+                           uint64_t *device, uint64_t *inode) {
     if (size) *size = value->st_size < 0 ? 0u : (uint64_t)value->st_size;
     if (mode) *mode = (uint32_t)(value->st_mode & 07777);
     if (modified) *modified = (int64_t)value->st_mtim.tv_sec;
     if (kind) *kind = (int32_t)file_kind(value->st_mode);
+    if (device) *device = static_cast<uint64_t>(value->st_dev);
+    if (inode) *inode = static_cast<uint64_t>(value->st_ino);
 }
 
 namespace {
@@ -66,6 +71,51 @@ void free_environment(char **entries, size_t count) {
 } // namespace
 
 extern "C" {
+
+int32_t __vqr_io_reactor_open(int32_t *out_error) {
+    const int fd = epoll_create1(EPOLL_CLOEXEC);
+    set_error(out_error, fd < 0 ? errno : 0);
+    return fd;
+}
+
+int32_t __vqr_io_reactor_add(int32_t epoll, int32_t fd, uint64_t token, uint32_t interests,
+                            int32_t *out_error) {
+    const int watched = retry_interrupted([&] { return fcntl(fd, F_DUPFD_CLOEXEC, 0); });
+    if (watched < 0) {
+        set_error(out_error, errno);
+        return -1;
+    }
+    if (vqr_epoll_set(epoll, EPOLL_CTL_ADD, watched, token, interests, 0) != 0) {
+        const int reason = errno;
+        close(watched);
+        set_error(out_error, reason);
+        return -1;
+    }
+    set_error(out_error, 0);
+    return watched;
+}
+
+int32_t __vqr_io_reactor_update(int32_t epoll, int32_t fd, uint64_t token, uint32_t interests) {
+    return vqr_epoll_set(epoll, EPOLL_CTL_MOD, fd, token, interests, 0) == 0 ? 0 : errno;
+}
+
+int32_t __vqr_io_reactor_remove(int32_t epoll, int32_t fd) {
+    return epoll_ctl(epoll, EPOLL_CTL_DEL, fd, nullptr) == 0 ? 0 : errno;
+}
+
+void __vqr_io_reactor_close(int32_t fd) { close(fd); }
+
+int32_t __vqr_io_reactor_wait(int32_t epoll, int32_t millis, uint64_t *token,
+                             uint32_t *ready, int32_t *out_error) {
+    struct epoll_event event{};
+    const int count = epoll_wait(epoll, &event, 1, millis);
+    set_error(out_error, count < 0 ? errno : 0);
+    if (count > 0) {
+        *token = event.data.u64;
+        *ready = vqr_epoll_ready(event.events);
+    }
+    return count;
+}
 
 int32_t __vqr_io_open(const char *path, uint32_t flags, uint32_t mode, int32_t *out_error) {
     int native_flags = O_CLOEXEC;
@@ -201,13 +251,14 @@ int32_t __vqr_io_file_truncate(int32_t descriptor, uint64_t size, int32_t *out_e
 }
 
 int32_t __vqr_io_file_metadata(int32_t descriptor, uint64_t *size, uint32_t *mode,
-                               int64_t *modified, int32_t *kind, int32_t *out_error) {
+                               int64_t *modified, int32_t *kind, uint64_t *device,
+                               uint64_t *inode, int32_t *out_error) {
     struct stat value;
     if (fstat(descriptor, &value) != 0) {
         set_error(out_error, errno);
         return -1;
     }
-    write_metadata(&value, size, mode, modified, kind);
+    write_metadata(&value, size, mode, modified, kind, device, inode);
     set_error(out_error, 0);
     return 0;
 }
@@ -222,14 +273,15 @@ int32_t __vqr_io_file_set_mode(int32_t descriptor, uint32_t mode, int32_t *out_e
 }
 
 int32_t __vqr_io_stat(const char *path, int32_t follow, uint64_t *size, uint32_t *mode,
-                      int64_t *modified, int32_t *kind, int32_t *out_error) {
+                      int64_t *modified, int32_t *kind, uint64_t *device,
+                               uint64_t *inode, int32_t *out_error) {
     struct stat value;
     int result = follow ? stat(path, &value) : lstat(path, &value);
     if (result != 0) {
         set_error(out_error, errno);
         return -1;
     }
-    write_metadata(&value, size, mode, modified, kind);
+    write_metadata(&value, size, mode, modified, kind, device, inode);
     set_error(out_error, 0);
     return 0;
 }
@@ -279,6 +331,118 @@ int32_t __vqr_io_chmod(const char *path, uint32_t mode, int32_t *out_error) {
     return 0;
 }
 
+int32_t __vqr_io_symlink(const char *target, const char *name) {
+    return symlink(target, name) == 0 ? 0 : errno;
+}
+
+intptr_t __vqr_io_readlink(const char *name, uint8_t *out, size_t capacity, int32_t *reason) {
+    const ssize_t size = retry_interrupted([&] { return readlink(name, reinterpret_cast<char *>(out), capacity); });
+    set_error(reason, size < 0 ? errno : 0);
+    return size;
+}
+
+static DIR *directory_at(int parent, const char *name, bool nofollow) {
+    int fd = retry_interrupted([&] {
+        return openat(parent, name, O_RDONLY | O_CLOEXEC | O_DIRECTORY | (nofollow ? O_NOFOLLOW : 0));
+    });
+    if (fd < 0) return nullptr;
+    DIR *directory = fdopendir(fd);
+    if (!directory) {
+        const int reason = errno;
+        close(fd);
+        errno = reason;
+    }
+    return directory;
+}
+
+uintptr_t __vqr_io_dir_open_at(int32_t parent, const char *name, int32_t *reason) {
+    DIR *directory = directory_at(parent, name, true);
+    set_error(reason, directory ? 0 : errno);
+    return reinterpret_cast<uintptr_t>(directory);
+}
+
+uintptr_t __vqr_io_dir_open_nofollow(const char *name, int32_t *reason) {
+    return __vqr_io_dir_open_at(AT_FDCWD, name, reason);
+}
+
+int32_t __vqr_io_dir_fd(uintptr_t directory) {
+    return dirfd(reinterpret_cast<DIR *>(directory));
+}
+
+int32_t __vqr_io_unlink_at(int32_t directory, const char *name, int32_t is_directory) {
+    return unlinkat(directory, name, is_directory ? AT_REMOVEDIR : 0) == 0 ? 0 : errno;
+}
+
+int32_t __vqr_io_rename_at(int32_t directory, const char *from, const char *to) {
+    return renameat(directory, from, directory, to) == 0 ? 0 : errno;
+}
+
+int32_t __vqr_io_sync_dir(int32_t directory) {
+    return retry_interrupted([&] { return fsync(directory); }) == 0 ? 0 : errno;
+}
+
+int32_t __vqr_io_temp_at(int32_t directory, uint8_t *name, int32_t create_directory, int32_t *reason) {
+    constexpr char prefix[] = ".vaqrin-";
+    constexpr char digits[] = "0123456789abcdef";
+    memcpy(name, prefix, sizeof(prefix) - 1);
+    for (int retry = 0; retry < 64; ++retry) {
+        uint8_t nonce[8];
+        const ssize_t count = retry_interrupted([&] { return getrandom(nonce, sizeof(nonce), 0); });
+        if (count != sizeof(nonce)) {
+            set_error(reason, count < 0 ? errno : EIO);
+            return -1;
+        }
+        for (size_t index = 0; index < sizeof(nonce); ++index) {
+            name[8 + 2 * index] = digits[nonce[index] >> 4];
+            name[9 + 2 * index] = digits[nonce[index] & 15];
+        }
+        name[24] = '\0';
+        const char *path = reinterpret_cast<const char *>(name);
+        const int result = create_directory ? mkdirat(directory, path, 0700)
+            : openat(directory, path, O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC | O_RDWR, 0600);
+        if (result >= 0) {
+            set_error(reason, 0);
+            return result;
+        }
+        if (errno != EEXIST) {
+            set_error(reason, errno);
+            return -1;
+        }
+    }
+    set_error(reason, EEXIST);
+    return -1;
+}
+
+static bool dot_entry(const char *name) {
+    return name[0] == '.' && (name[1] == '\0' || (name[1] == '.' && name[2] == '\0'));
+}
+
+int32_t __vqr_io_remove_tree_at(int32_t parent, const char *name, uint32_t depth) {
+    struct stat entry{};
+    if (fstatat(parent, name, &entry, AT_SYMLINK_NOFOLLOW) != 0)
+        return errno == ENOENT ? 0 : errno;
+    if (!S_ISDIR(entry.st_mode)) {
+        return unlinkat(parent, name, 0) == 0 || errno == ENOENT ? 0 : errno;
+    }
+    if (depth == 0) return ELOOP;
+    DIR *directory = directory_at(parent, name, true);
+    if (!directory) return errno == ENOENT ? 0 : errno;
+    int status = 0;
+    while (status == 0) {
+        errno = 0;
+        const auto *child = readdir(directory);
+        if (!child) {
+            status = errno;
+            break;
+        }
+        if (!dot_entry(child->d_name))
+            status = __vqr_io_remove_tree_at(dirfd(directory), child->d_name, depth - 1);
+    }
+    if (closedir(directory) != 0 && status == 0) status = errno;
+    if (status == 0 && unlinkat(parent, name, AT_REMOVEDIR) != 0 && errno != ENOENT) status = errno;
+    return status;
+}
+
 uintptr_t __vqr_io_dir_open(const char *path, int32_t *out_error) {
     DIR *directory = opendir(path);
     if (!directory) {
@@ -324,8 +488,12 @@ int32_t __vqr_io_dir_next(void *opaque, uint8_t *name, size_t capacity, size_t *
         case DT_SOCK: result_kind = 4; break;
         case DT_UNKNOWN: {
             struct stat value;
-            if (fstatat(dirfd(directory), entry->d_name, &value, AT_SYMLINK_NOFOLLOW) == 0)
-                result_kind = file_kind(value.st_mode);
+            if (fstatat(dirfd(directory), entry->d_name, &value, AT_SYMLINK_NOFOLLOW) != 0) {
+                if (errno == ENOENT) continue;
+                set_error(out_error, errno);
+                return -1;
+            }
+            result_kind = file_kind(value.st_mode);
             break;
         }
         default: break;

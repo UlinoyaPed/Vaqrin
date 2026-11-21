@@ -1,0 +1,98 @@
+package fs
+import (io, path)
+
+func parentOf(name: *const path.Path) !path.Path {
+    name.parent()! ?? { return path.fromString("."); }
+}
+
+func makeParents(name: path.Path, remaining: usize) !void {
+    if remaining == 0 { return FsError.WalkLimit; }
+    if tryExists(name)! {
+        if !stat(name)!.isDir() { return FsError.NotDirectory; }
+        return;
+    }
+    var parent = name.parent()!;
+    switch move(parent) {
+        some(value) => { makeParents(move(value), remaining - 1)!; },
+        null => {},
+    };
+    mkdir(name) catch (reason) {
+        if reason != io.systemError(17) { return reason; }
+        if !stat(name)!.isDir() { return FsError.NotDirectory; }
+    };
+}
+
+pub func mkdirAll(name: path.Path) !void { makeParents(name, 128) }
+pub func mkdirAll(name: str) !void { mkdirAll(path.fromString(name)!) }
+
+pub func removeAll(name: path.Path, maxDepth: u32) !void {
+    var leaf = name.filename() ?? { return FsError.InvalidPath; };
+    if leaf == "." || leaf == ".." { return FsError.InvalidPath; }
+    var dir = parentOf(&name)!;
+    var parent = io.HostDirectory.open(dir.asString().asBytes()) catch (reason) {
+        if reason == io.systemError(2) { return; }
+        return reason;
+    };
+    parent.removeTree(leaf, maxDepth)
+}
+pub func removeAll(name: path.Path) !void { removeAll(name, 128) }
+pub func removeAll(name: str) !void { removeAll(path.fromString(name)!) }
+
+pub func symlink(target: path.Path, link: path.Path) !void {
+    io.hostSymlink(target.asString().asBytes(), link.asString().asBytes())
+}
+pub func symlink(target: str, link: str) !void {
+    symlink(path.fromString(target)!, path.fromString(link)!)
+}
+pub func readLink(name: path.Path) !path.Path {
+    var target = io.hostReadLink(name.asString().asBytes())!;
+    path.fromString(target)
+}
+pub func readLink(name: str) !path.Path { readLink(path.fromString(name)!) }
+
+pub class WalkLimits {
+    pub var maxDepth: usize;
+    pub var maxEntries: usize;
+    pub func init() : maxDepth(64), maxEntries(100000) {}
+}
+
+pub interface WalkVisitor { func visit(entry: DirectoryEntry, depth: usize) !void; }
+
+func walkChildren(directory: *io.HostDirectory, root: path.Path, visitor: *WalkVisitor,
+                  maxDepth: usize, depth: usize, remaining: *usize) !void {
+    for {
+        var entry = directory.next()! ?? { return; };
+        if depth > maxDepth || *remaining == 0 { return FsError.WalkLimit; };
+        *remaining -= 1;
+        var label = entry.name();
+        var isDir = entry.kindCode() == 1;
+        if isDir {
+            var childPath = path.join(root, path.fromString(label)!)!;
+            var child = directory.openChild(label)!;
+            visitor.visit(DirectoryEntry(move(entry), root), depth)!;
+            walkChildren(&child, childPath, visitor, maxDepth, depth + 1, remaining)!;
+        } else {
+            visitor.visit(DirectoryEntry(move(entry), root), depth)!;
+        }
+    }
+}
+
+func openWalkRoot(name: *const path.Path) !io.HostDirectory {
+    var leaf = name.filename();
+    if leaf != null && leaf.unwrap() != "." && leaf.unwrap() != ".." {
+        var parentPath = parentOf(name)!;
+        var directory = io.HostDirectory.open(parentPath.asString().asBytes())!;
+        return directory.openChild(leaf.unwrap());
+    }
+    io.HostDirectory.openNoFollow(name.asString().asBytes())
+}
+
+pub func walkDir(root: path.Path, options: WalkLimits, visitor: *WalkVisitor) !void {
+    if options.maxDepth > 128 { return FsError.WalkLimit; }
+    var directory = openWalkRoot(&root)!;
+    var remaining = options.maxEntries;
+    walkChildren(&directory, root, visitor, options.maxDepth, 1, &remaining)
+}
+pub func walkDir(root: str, options: WalkLimits, visitor: *WalkVisitor) !void {
+    walkDir(path.fromString(root)!, options, visitor)
+}

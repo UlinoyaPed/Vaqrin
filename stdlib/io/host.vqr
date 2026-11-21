@@ -10,9 +10,9 @@ extern "C" func __vqr_io_file_seek(fd: i32, offset: i64, origin: i32, status: *i
 extern "C" func __vqr_io_file_close(fd: i32, status: *i32) i32;
 extern "C" func __vqr_io_file_sync(fd: i32, dataOnly: i32, status: *i32) i32;
 extern "C" func __vqr_io_file_truncate(fd: i32, size: u64, status: *i32) i32;
-extern "C" func __vqr_io_file_metadata(fd: i32, size: *u64, mode: *u32, modified: *i64, kind: *i32, status: *i32) i32;
+extern "C" func __vqr_io_file_metadata(fd: i32, size: *u64, mode: *u32, modified: *i64, kind: *i32, device: *u64, inode: *u64, status: *i32) i32;
 extern "C" func __vqr_io_file_set_mode(fd: i32, mode: u32, status: *i32) i32;
-extern "C" func __vqr_io_stat(path: *const u8, follow: i32, size: *u64, mode: *u32, modified: *i64, kind: *i32, status: *i32) i32;
+extern "C" func __vqr_io_stat(path: *const u8, follow: i32, size: *u64, mode: *u32, modified: *i64, kind: *i32, device: *u64, inode: *u64, status: *i32) i32;
 extern "C" func __vqr_io_mkdir(path: *const u8, mode: u32, status: *i32) i32;
 extern "C" func __vqr_io_remove(path: *const u8, status: *i32) i32;
 extern "C" func __vqr_io_remove_dir(path: *const u8, status: *i32) i32;
@@ -24,6 +24,17 @@ extern "C" func __vqr_io_dir_close(dir: *u8, status: *i32) i32;
 extern "C" func __vqr_io_getcwd(buffer: *u8, capacity: usize, length: *usize, status: *i32) i32;
 extern "C" func __vqr_io_chdir(path: *const u8, status: *i32) i32;
 
+extern "C" func __vqr_io_symlink(target: *const u8, name: *const u8) i32;
+extern "C" func __vqr_io_readlink(name: *const u8, dst: *u8, size: usize, reason: *i32) isize;
+extern "C" func __vqr_io_dir_open_at(parent: i32, name: *const u8, reason: *i32) usize;
+extern "C" func __vqr_io_dir_open_nofollow(name: *const u8, reason: *i32) usize;
+extern "C" func __vqr_io_dir_fd(handle: usize) i32;
+extern "C" func __vqr_io_unlink_at(dir: i32, name: *const u8, isDir: i32) i32;
+extern "C" func __vqr_io_rename_at(dir: i32, old: *const u8, replacement: *const u8) i32;
+extern "C" func __vqr_io_sync_dir(dir: i32) i32;
+extern "C" func __vqr_io_temp_at(dir: i32, name: *u8, folder: i32, reason: *i32) i32;
+extern "C" func __vqr_io_remove_tree_at(dir: i32, name: *const u8, depth: u32) i32;
+
 func cString(value: []const u8) !coll.Vec<u8> {
     if value.len() == ~usize(0) { return IoError.InvalidArgument; }
     var output = coll.Vec<u8>.withCapacity(value.len() + 1)!;
@@ -33,6 +44,22 @@ func cString(value: []const u8) !coll.Vec<u8> {
     }
     output.push(0)!;
     move(output)
+}
+
+func component(name: str) ![256]u8 {
+    if name.byteLen() == 0 || name == "." || name == ".." { return IoError.InvalidArgument; }
+    if name.byteLen() > 255 { return IoError.LimitExceeded; }
+    var result = mem.zeroedBytes<256>();
+    var input = name.asBytes();
+    for index in usize(0)..input.len() {
+        if input[index] == 0 || input[index] == 47 { return IoError.InvalidArgument; }
+        result[index] = input[index];
+    }
+    result
+}
+
+func checkNative(reason: i32) !void {
+    if reason != 0 { return systemError(reason); }
 }
 
 pub func systemError(code: i32) ErrorId {
@@ -56,18 +83,30 @@ pub func isWouldBlock(reason: ErrorId) bool {
     switch systemErrorCode(reason) { some(code) => code == 11, null => false }
 }
 
+pub class FileIdentity {
+    pub var device: u64;
+    pub var inode: u64;
+    pub const func matches(other: FileIdentity) bool {
+        device == other.device && inode == other.inode
+    }
+}
+
 pub class HostMetadata {
     var fileSize: u64;
     var permissionMode: u32;
     var modified: i64;
     var kind: i32;
+    var fileId: ?FileIdentity;
 public:
     func init(size: u64, mode: u32, modified: i64, kind: i32)
-        : fileSize(size), permissionMode(mode), modified(modified), kind(kind) {}
+        : self(size, mode, modified, kind, null) {}
+    func init(size: u64, mode: u32, modified: i64, kind: i32, fileId: ?FileIdentity)
+        : fileSize(size), permissionMode(mode), modified(modified), kind(kind), fileId(fileId) {}
     const func size() u64 { fileSize }
     const func mode() u32 { permissionMode }
     const func modifiedUnixSeconds() i64 { modified }
     const func kindCode() i32 { kind }
+    const func identity() ?FileIdentity { fileId }
 }
 
 pub class HostFile {
@@ -87,6 +126,20 @@ public:
         var fd = unsafe { __vqr_io_open(&name[0], flags, mode, &errorCode) };
         if fd < 0 { return systemError(errorCode); }
         HostFile(fd, true, (flags & 4) != 0)
+    }
+
+    static func tempIn(parent: *const HostDirectory) !(Self, string) {
+        var dir = parent.systemDescriptor()!;
+        var name = mem.zeroedBytes<25>();
+        var reason: i32 = 0;
+        var fd = unsafe { __vqr_io_temp_at(dir, &name[0], 0, &reason) };
+        if fd < 0 { return systemError(reason); }
+        var file = HostFile(fd, true, false);
+        var path = text.fromBytes(name[0..24]) catch (failure) {
+            unsafe { __vqr_io_unlink_at(dir, &name[0], 0); }
+            return failure;
+        };
+        (move(file), move(path))
     }
 
     static func standardInput() Self { HostFile(0, false, false) }
@@ -186,11 +239,13 @@ public:
         var mode: u32 = 0;
         var modified: i64 = 0;
         var kind: i32 = 0;
+        var device: u64 = 0;
+        var inode: u64 = 0;
         var errorCode: i32 = 0;
-        if unsafe { __vqr_io_file_metadata(descriptor, &size, &mode, &modified, &kind, &errorCode) } != 0 {
+        if unsafe { __vqr_io_file_metadata(descriptor, &size, &mode, &modified, &kind, &device, &inode, &errorCode) } != 0 {
             return systemError(errorCode);
         }
-        HostMetadata(size, mode, modified, kind)
+        HostMetadata(size, mode, modified, kind, some(FileIdentity{device: device, inode: inode}))
     }
 
     func setMode(mode: u32) !void {
@@ -238,6 +293,65 @@ public:
         HostDirectory(directory)
     }
 
+    static func openNoFollow(path: []const u8) !Self {
+        var name = cString(path)!;
+        var reason: i32 = 0;
+        var directory = unsafe { __vqr_io_dir_open_nofollow(&name[0], &reason) };
+        if directory == 0 { return systemError(reason); }
+        HostDirectory(directory)
+    }
+
+    const func systemDescriptor() !i32 {
+        if handle == 0 { return IoError.Closed; }
+        unsafe { __vqr_io_dir_fd(handle) }
+    }
+
+    const func openChild(name: str) !Self {
+        var child = component(name)!;
+        var fd = systemDescriptor()!;
+        var reason: i32 = 0;
+        var directory = unsafe { __vqr_io_dir_open_at(fd, &child[0], &reason) };
+        if directory == 0 { return systemError(reason); }
+        HostDirectory(directory)
+    }
+
+    const func removeChild(name: str, directory: bool) !void {
+        var child = component(name)!;
+        var fd = systemDescriptor()!;
+        checkNative(unsafe { __vqr_io_unlink_at(fd, &child[0], if directory { 1 } else { 0 }) })
+    }
+
+    const func removeTree(name: str, depth: u32) !void {
+        if depth > 128 { return IoError.LimitExceeded; }
+        var child = component(name)!;
+        var fd = systemDescriptor()!;
+        checkNative(unsafe { __vqr_io_remove_tree_at(fd, &child[0], depth) })
+    }
+
+    const func replaceChild(from: str, to: str) !void {
+        var source = component(from)!;
+        var destination = component(to)!;
+        var fd = systemDescriptor()!;
+        checkNative(unsafe { __vqr_io_rename_at(fd, &source[0], &destination[0]) })
+    }
+
+    const func sync() !void {
+        var fd = systemDescriptor()!;
+        checkNative(unsafe { __vqr_io_sync_dir(fd) })
+    }
+
+    const func makeTempDir() !string {
+        var fd = systemDescriptor()!;
+        var name = mem.zeroedBytes<25>();
+        var reason: i32 = 0;
+        var result = unsafe { __vqr_io_temp_at(fd, &name[0], 1, &reason) };
+        if result < 0 { return systemError(reason); }
+        text.fromBytes(name[0..24]) catch (failure) {
+            unsafe { __vqr_io_unlink_at(fd, &name[0], 1); }
+            return failure;
+        }
+    }
+
     func next() !?HostDirEntry {
         if handle == 0 { return IoError.Closed; }
         var directory = unsafe { ptrFromInt<*u8>(handle) };
@@ -272,11 +386,32 @@ pub func hostStat(path: []const u8, follow: bool) !HostMetadata {
     var mode: u32 = 0;
     var modified: i64 = 0;
     var kind: i32 = 0;
+    var device: u64 = 0;
+    var inode: u64 = 0;
     var errorCode: i32 = 0;
-    if unsafe { __vqr_io_stat(&name[0], if follow { 1 } else { 0 }, &size, &mode, &modified, &kind, &errorCode) } != 0 {
+    if unsafe { __vqr_io_stat(&name[0], if follow { 1 } else { 0 }, &size, &mode, &modified, &kind, &device, &inode, &errorCode) } != 0 {
         return systemError(errorCode);
     }
-    HostMetadata(size, mode, modified, kind)
+    HostMetadata(size, mode, modified, kind, some(FileIdentity{device: device, inode: inode}))
+}
+
+pub func hostSymlink(target: []const u8, path: []const u8) !void {
+    var value = cString(target)!;
+    var name = cString(path)!;
+    checkNative(unsafe { __vqr_io_symlink(&value[0], &name[0]) })
+}
+
+pub func hostReadLink(path: []const u8) !string {
+    var name = cString(path)!;
+    var storage = __vqr_uninitialized<[4096]u8>();
+    var buffer = unsafe { (*__vqr_raw_address(&storage))[:] };
+    mem.zeroBytes(buffer);
+    var reason: i32 = 0;
+    var size = unsafe { __vqr_io_readlink(&name[0], &buffer[0], buffer.len(), &reason) };
+    if size < 0 { return systemError(reason); }
+    var count = usize(size)!;
+    if count >= buffer.len() { return IoError.LimitExceeded; }
+    text.fromBytes(buffer[0..count])
 }
 
 pub func hostMkdir(path: []const u8, mode: u32) !void {

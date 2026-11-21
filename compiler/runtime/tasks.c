@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <pthread.h>
+#include <poll.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -8,15 +9,23 @@
 #include <stdlib.h>
 #include <sched.h>
 #include <sys/mman.h>
+#include <sys/eventfd.h>
 #include <time.h>
 #include <ucontext.h>
 #include <unistd.h>
+#include "reactor_linux.h"
 
 enum task_status { TASK_OK, TASK_RUNNING, TASK_JOINED, TASK_CLOSED, TASK_INTERRUPTED, TASK_SELF };
-enum wait_kind { WAIT_NONE, WAIT_TASK, WAIT_GROUP, WAIT_TIME };
+enum wait_kind { WAIT_NONE, WAIT_TASK, WAIT_GROUP, WAIT_TIME, WAIT_IO };
 
 struct task;
 struct worker;
+
+struct io_slot {
+    struct task *task;
+    uint32_t generation;
+    uint32_t next;
+};
 
 struct queue {
     struct task *first;
@@ -34,6 +43,13 @@ struct group {
     bool stopping;
     bool closed;
     void (*report)(uint32_t);
+    pthread_t reactor_thread;
+    int reactor_fd;
+    int reactor_wake;
+    int reactor_error;
+    struct io_slot *io_slots;
+    uint32_t io_capacity;
+    uint32_t io_free;
 };
 
 struct worker {
@@ -49,6 +65,7 @@ struct task {
     struct task *next_group;
     struct task *next_ready;
     struct task *next_waiting;
+    struct task **wait_link;
     void (*run)(void *);
     void (*drop_result)(void *);
     void *work;
@@ -62,6 +79,10 @@ struct task {
     const void *awaited;
     struct timespec deadline;
     uint32_t error;
+    uint32_t io_slot;
+    int io_fd;
+    int io_status;
+    bool io_timed;
     bool interruptible;
     bool finished;
     bool returned;
@@ -94,10 +115,28 @@ static bool earlier(struct timespec a, struct timespec b) {
     return a.tv_sec < b.tv_sec || (a.tv_sec == b.tv_sec && a.tv_nsec < b.tv_nsec);
 }
 
+static void recycle_io_slot(struct group *group, uint32_t index) {
+    struct io_slot *slot = &group->io_slots[index];
+    slot->task = NULL;
+    if (slot->generation != UINT32_MAX) {
+        slot->next = group->io_free;
+        group->io_free = index;
+    }
+}
+
+static void detach_io(struct task *task) {
+    epoll_ctl(task->group->reactor_fd, EPOLL_CTL_DEL, task->io_fd, NULL);
+    close(task->io_fd);
+    recycle_io_slot(task->group, task->io_slot);
+}
+
 static void awaken(struct task **entry) {
     struct task *task = *entry;
     *entry = task->next_waiting;
+    if (*entry) (*entry)->wait_link = entry;
     task->next_waiting = NULL;
+    task->wait_link = NULL;
+    if (task->wait_kind == WAIT_IO) detach_io(task);
     task->wait_kind = WAIT_NONE;
     enqueue(&task->worker->ready, task);
     pthread_cond_broadcast(&changed);
@@ -125,8 +164,9 @@ static bool expire_timers(struct timespec *next) {
     bool has_next = false;
     for (struct task **entry = &waiting; *entry;) {
         struct task *task = *entry;
-        if (task->wait_kind == WAIT_TIME) {
+        if (task->wait_kind == WAIT_TIME || (task->wait_kind == WAIT_IO && task->io_timed)) {
             if (!earlier(now, task->deadline)) {
+                if (task->wait_kind == WAIT_IO) task->io_status = ETIMEDOUT;
                 awaken(entry);
                 continue;
             }
@@ -154,15 +194,173 @@ static void wait_for(enum wait_kind kind, const void *target, bool interruptible
     current->awaited = target;
     current->interruptible = interruptible;
     current->next_waiting = waiting;
+    if (waiting) waiting->wait_link = &current->next_waiting;
+    current->wait_link = &waiting;
     waiting = current;
     pthread_mutex_unlock(&mutex);
     suspend();
     pthread_mutex_lock(&mutex);
 }
 
+static void *run_reactor(void *context) {
+    struct group *group = context;
+    struct epoll_event events[64];
+    for (;;) {
+        const int count = epoll_wait(group->reactor_fd, events, 64, -1);
+        const int reason = errno;
+        if (count < 0 && reason == EINTR) continue;
+        pthread_mutex_lock(&mutex);
+        if (count < 0) {
+            group->reactor_error = reason;
+            for (struct task **entry = &waiting; *entry;) {
+                struct task *task = *entry;
+                if (task->group == group && task->wait_kind == WAIT_IO) {
+                    task->io_status = reason;
+                    awaken(entry);
+                } else entry = &task->next_waiting;
+            }
+            pthread_mutex_unlock(&mutex);
+            return NULL;
+        }
+        if (group->stopping) {
+            pthread_mutex_unlock(&mutex);
+            return NULL;
+        }
+        for (int i = 0; i < count; ++i) {
+            uint64_t token = events[i].data.u64;
+            if (token == 0) continue;
+            uint32_t index = (uint32_t)token - 1;
+            if (index >= group->io_capacity) continue;
+            struct io_slot *slot = &group->io_slots[index];
+            if (slot->task && slot->generation == (uint32_t)(token >> 32))
+                awaken(slot->task->wait_link);
+        }
+        pthread_mutex_unlock(&mutex);
+    }
+}
+
+// Reactor setup and slot changes hold the same lock as wait registration and cancellation.
+static int start_reactor(struct group *group) {
+    if (group->reactor_fd >= 0) return group->reactor_error;
+    int descriptor = epoll_create1(EPOLL_CLOEXEC);
+    if (descriptor < 0) return errno;
+    int wake = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+    int status = wake < 0 ? errno : 0;
+    if (status == 0 && vqr_epoll_set(descriptor, EPOLL_CTL_ADD, wake, 0, VQR_READ, 0) != 0)
+        status = errno;
+    if (status == 0) {
+        group->reactor_fd = descriptor;
+        group->reactor_wake = wake;
+        status = pthread_create(&group->reactor_thread, NULL, run_reactor, group);
+        if (status == 0) return 0;
+        group->reactor_fd = -1;
+        group->reactor_wake = -1;
+    }
+    if (wake >= 0) close(wake);
+    close(descriptor);
+    return status;
+}
+
+static int register_io(struct task *task, int fd, uint32_t interest) {
+    struct group *group = task->group;
+    int status = start_reactor(group);
+    if (status != 0) return status;
+    if (group->io_free == UINT32_MAX) {
+        uint32_t previous = group->io_capacity;
+        if (previous > UINT32_MAX / 2) return ENOSPC;
+        uint32_t capacity = previous == 0 ? 64 : previous * 2;
+        void *memory = realloc(group->io_slots, (size_t)capacity * sizeof(struct io_slot));
+        if (!memory) return ENOMEM;
+        group->io_slots = memory;
+        for (uint32_t i = previous; i < capacity; ++i)
+            group->io_slots[i] = (struct io_slot){.task = NULL, .generation = 0, .next = i + 1};
+        group->io_slots[capacity - 1].next = UINT32_MAX;
+        group->io_free = previous;
+        group->io_capacity = capacity;
+    }
+    int watched;
+    do watched = fcntl(fd, F_DUPFD_CLOEXEC, 0);
+    while (watched < 0 && errno == EINTR);
+    if (watched < 0) return errno;
+    uint32_t index = group->io_free;
+    struct io_slot *slot = &group->io_slots[index];
+    group->io_free = slot->next;
+    ++slot->generation;
+    uint64_t token = ((uint64_t)slot->generation << 32) | (uint64_t)(index + 1);
+    if (vqr_epoll_set(group->reactor_fd, EPOLL_CTL_ADD, watched, token, interest, 1) != 0) {
+        status = errno;
+        close(watched);
+        recycle_io_slot(group, index);
+        return status;
+    }
+    slot->task = task;
+    task->io_fd = watched;
+    task->io_slot = index;
+    return 0;
+}
+
+static int wait_on_thread(int fd, uint32_t interest, const struct timespec *deadline) {
+    struct pollfd descriptor = { .fd = fd, .events = 0, .revents = 0 };
+    if (interest & VQR_READ) descriptor.events |= POLLIN;
+    if (interest & VQR_WRITE) descriptor.events |= POLLOUT;
+    for (;;) {
+        struct timespec remaining = { .tv_sec = 0, .tv_nsec = 0 };
+        if (deadline) {
+            struct timespec now;
+            if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return errno;
+            if (earlier(now, *deadline)) {
+                remaining.tv_sec = deadline->tv_sec - now.tv_sec;
+                remaining.tv_nsec = deadline->tv_nsec - now.tv_nsec;
+                if (remaining.tv_nsec < 0) {
+                    --remaining.tv_sec;
+                    remaining.tv_nsec += 1000000000;
+                }
+            }
+        }
+        int count = ppoll(&descriptor, 1, deadline ? &remaining : NULL, NULL);
+        if (count > 0) return (descriptor.revents & POLLNVAL) ? EBADF : 0;
+        if (count == 0) return ETIMEDOUT;
+        if (errno != EINTR) return errno;
+    }
+}
+
+int __vqr_rt_wait_io(int32_t fd, uint32_t interest, int64_t seconds, int64_t nanos) {
+    if (fd < 0) return EBADF;
+    if (interest == 0 || (interest & ~(VQR_READ | VQR_WRITE)) != 0 ||
+        seconds < -1 || nanos < 0 || nanos >= 1000000000) return EINVAL;
+    struct timespec deadline = { .tv_sec = seconds, .tv_nsec = nanos };
+    if (!current) return wait_on_thread(fd, interest, seconds >= 0 ? &deadline : NULL);
+    pthread_mutex_lock(&mutex);
+    int status = current->cancelled ? ECANCELED : 0;
+    if (status == 0 && seconds >= 0) {
+        struct timespec now;
+        if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) status = errno;
+        else if (!earlier(now, deadline)) status = ETIMEDOUT;
+    }
+    if (status == 0) status = register_io(current, fd, interest);
+    if (status == 0) {
+        current->io_timed = seconds >= 0;
+        current->deadline = deadline;
+        current->io_status = 0;
+        wait_for(WAIT_IO, NULL, true);
+        status = current->cancelled ? ECANCELED : current->io_status;
+    }
+    pthread_mutex_unlock(&mutex);
+    return status;
+}
+
 static void run_task(void) {
     current->run(current->work);
     current->returned = true;
+}
+
+static void initialize_task_context(struct task *task, struct worker *worker) {
+    if (getcontext(&task->context)) abort();
+    task->context.uc_stack.ss_sp = (char *)task->mapping + task->guard_size;
+    task->context.uc_stack.ss_size = task->mapping_size - task->guard_size;
+    task->context.uc_stack.ss_flags = 0;
+    task->context.uc_link = &worker->scheduler;
+    makecontext(&task->context, run_task, 0);
 }
 
 static void *run_worker(void *context) {
@@ -184,14 +382,7 @@ static void *run_worker(void *context) {
         bool started = task->worker != NULL;
         task->worker = worker;
         pthread_mutex_unlock(&mutex);
-        if (!started) {
-            if (getcontext(&task->context)) abort();
-            task->context.uc_stack.ss_sp = (char *)task->mapping + task->guard_size;
-            task->context.uc_stack.ss_size = task->mapping_size - task->guard_size;
-            task->context.uc_stack.ss_flags = 0;
-            task->context.uc_link = &worker->scheduler;
-            makecontext(&task->context, run_task, 0);
-        }
+        if (!started) initialize_task_context(task, worker);
         current = task;
         if (swapcontext(&worker->scheduler, &task->context)) abort();
         current = NULL;
@@ -219,6 +410,9 @@ void *__vqr_rt_group_create(size_t workers, void (*report)(uint32_t)) {
         return NULL;
     }
     group->references = 1;
+    group->reactor_fd = -1;
+    group->reactor_wake = -1;
+    group->io_free = UINT32_MAX;
     group->report = report;
     for (; group->worker_count < workers; ++group->worker_count) {
         struct worker *worker = &group->workers[group->worker_count];
@@ -242,6 +436,7 @@ static void release_group(struct group *group) {
     bool last = --group->references == 0;
     pthread_mutex_unlock(&mutex);
     if (last) {
+        free(group->io_slots);
         free(group->workers);
         free(group);
     }
@@ -312,6 +507,14 @@ int __vqr_rt_group_close(struct group *group) {
     pthread_cond_broadcast(&changed);
     pthread_mutex_unlock(&mutex);
     for (size_t i = 0; i < group->worker_count; ++i) pthread_join(group->workers[i].thread, NULL);
+    if (group->reactor_fd >= 0) {
+        int wake_result;
+        do wake_result = eventfd_write(group->reactor_wake, 1);
+        while (wake_result < 0 && errno == EINTR);
+        pthread_join(group->reactor_thread, NULL);
+        close(group->reactor_wake);
+        close(group->reactor_fd);
+    }
     while (task) {
         struct task *next = task->next_group;
         if (!task->claimed && task->result) {

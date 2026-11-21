@@ -1,7 +1,7 @@
 package fs
 import (io, path, text, coll)
 
-pub error FsError { InvalidOptions, NotFound, NotDirectory, IsDirectory }
+pub error FsError { InvalidOptions, NotFound, NotDirectory, IsDirectory, SameFile, InvalidPath, WalkLimit }
 pub enum FileType { File, Directory, Symlink, Device, Socket, Other }
 
 func fileTypeFromCode(code: i32) FileType {
@@ -68,6 +68,7 @@ public:
     const func isDir() bool { value.kindCode() == 1 }
     const func isSymlink() bool { value.kindCode() == 2 }
     const func fileType() FileType { fileTypeFromCode(value.kindCode()) }
+    const func identity() ?io.FileIdentity { value.identity() }
     const func permissions() Permissions { Permissions(value.mode()) }
     const func modifiedUnixSeconds() i64 { value.modifiedUnixSeconds() }
 }
@@ -169,14 +170,17 @@ pub func appendFile(name: path.Path, data: []const u8) !void {
     var file = options.open(name)!;
     io.writeAll(&file, data)!
 }
-pub func exists(name: path.Path) bool {
-    io.hostStat(name.asString().asBytes(), true) catch { return false; };
+pub func tryExists(name: path.Path) !bool {
+    stat(name) catch (reason) {
+        // ENOENT and ENOTDIR both mean the requested path cannot exist.
+        if reason == io.systemError(2) || reason == io.systemError(20) { return false; }
+        return reason;
+    };
     true
 }
-pub func exists(name: str) bool {
-    var value = path.fromString(name) catch { return false; };
-    exists(value)
-}
+pub func tryExists(name: str) !bool { tryExists(path.fromString(name)!) }
+pub func exists(name: path.Path) bool { tryExists(name) catch { false } }
+pub func exists(name: str) bool { tryExists(name) catch { false } }
 pub func stat(name: path.Path) !Metadata { Metadata(io.hostStat(name.asString().asBytes(), true)!) }
 pub func stat(name: str) !Metadata { stat(path.fromString(name)!) }
 pub func lstat(name: path.Path) !Metadata { Metadata(io.hostStat(name.asString().asBytes(), false)!) }
@@ -199,12 +203,37 @@ pub func readDir(name: path.Path) !Directory {
     Directory(move(handle), name)
 }
 pub func readDir(name: str) !Directory { readDir(path.fromString(name)!) }
+pub func sameFile(first: path.Path, second: path.Path) !bool {
+    var a = stat(first)!;
+    var b = stat(second)!;
+    a.identity().unwrap().matches(b.identity().unwrap())
+}
+pub func sameFile(first: str, second: str) !bool {
+    sameFile(path.fromString(first)!, path.fromString(second)!)
+}
+
 pub func copy(source: path.Path, destination: path.Path) !u64 {
     var input = openRead(source)!;
-    var output = create(destination)!;
+    var sourceInfo = input.metadata()!;
+    if sourceInfo.isDir() { return FsError.IsDirectory; }
+    var options = OpenOptions();
+    options.write(true);
+    options.create(true);
+    var output = options.open(destination)!;
+    // Compare the opened objects before truncation. Either path can be replaced
+    // by another process without changing the identity of these descriptors.
+    var targetInfo = output.metadata()!;
+    if sourceInfo.identity().unwrap().matches(targetInfo.identity().unwrap()) {
+        return FsError.SameFile;
+    }
+    if targetInfo.isFile() { output.truncate(0)!; }
     var count = io.copyAll(&input, &output)!;
     output.flush()!;
+    output.close()!;
     count
+}
+pub func copy(source: str, destination: str) !u64 {
+    copy(path.fromString(source)!, path.fromString(destination)!)
 }
 pub func currentDir() !string { io.currentDir() }
 pub func setCurrentDir(name: path.Path) !void { io.setCurrentDir(name.asString().asBytes()) }

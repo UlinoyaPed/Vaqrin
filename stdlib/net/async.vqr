@@ -1,0 +1,93 @@
+package net
+import (io, reactor, task, time)
+
+extern "C" func __vqr_net_socket_error(fd: i32) i32;
+
+func checkWait(deadline: ?time.Deadline) !void {
+    if task.isCancelled() { return io.IoError.Cancelled; }
+    if deadline != null && deadline.unwrap().expired()! { return io.IoError.DeadlineExceeded; }
+}
+
+pub class AsyncTcpStream {
+    #copy: disabled
+    #implements: io.Reader, io.Writer, io.Closer
+    var stream: TcpStream;
+    var readDeadline: ?time.Deadline;
+    var writeDeadline: ?time.Deadline;
+    func init(value: TcpStream) : stream(move(value)), readDeadline(null), writeDeadline(null) {}
+public:
+    static func connect(address: SocketAddr, deadline: ?time.Deadline) !Self {
+        checkWait(deadline)!;
+        var tcp = TcpStream(openSocket(address, 3, -1)!);
+        var descriptor = tcp.systemDescriptor()!;
+        task.waitDescriptor(descriptor, reactor.Interest.write(), deadline)!;
+        checkStatus(unsafe { __vqr_net_socket_error(descriptor) })!;
+        AsyncTcpStream(move(tcp))
+    }
+    static func fromTcp(socket: TcpStream) !Self {
+        socket.setNonblocking(true)!;
+        AsyncTcpStream(move(socket))
+    }
+    const func systemDescriptor() !i32 { stream.systemDescriptor() }
+    const func localAddr() !SocketAddr { stream.localAddr() }
+    const func peerAddr() !SocketAddr { stream.peerAddr() }
+    func setReadDeadline(value: ?time.Deadline) void { readDeadline = value; }
+    func setWriteDeadline(value: ?time.Deadline) void { writeDeadline = value; }
+    func read(dst: []u8) !usize {
+        var fd = systemDescriptor()!;
+        if dst.len() == 0 { return 0; }
+        for {
+            checkWait(readDeadline)!;
+            var result = stream.read(dst) catch (reason) {
+                if !io.isWouldBlock(reason) { return reason; }
+                task.waitDescriptor(fd, reactor.Interest.read(), readDeadline)!;
+                continue;
+            };
+            return result;
+        }
+    }
+    func write(src: []const u8) !usize {
+        var fd = systemDescriptor()!;
+        if src.len() == 0 { return 0; }
+        for {
+            checkWait(writeDeadline)!;
+            var result = stream.write(src) catch (reason) {
+                if !io.isWouldBlock(reason) { return reason; }
+                task.waitDescriptor(fd, reactor.Interest.write(), writeDeadline)!;
+                continue;
+            };
+            return result;
+        }
+    }
+    func shutdownRead() !void { stream.shutdownRead() }
+    func shutdownWrite() !void { stream.shutdownWrite() }
+    func flush() !void { stream.flush() }
+    func close() !void { stream.close() }
+}
+
+pub class AsyncTcpListener {
+    #copy: disabled
+    var listener: TcpListener;
+    func init(value: TcpListener) : listener(move(value)) {}
+public:
+    static func bind(address: SocketAddr) !Self {
+        var listener = TcpListener.bind(address)!;
+        listener.setNonblocking(true)!;
+        AsyncTcpListener(move(listener))
+    }
+    const func localAddr() !SocketAddr { listener.localAddr() }
+    func accept(deadline: ?time.Deadline) !(AsyncTcpStream, SocketAddr) {
+        var fd = listener.systemDescriptor()!;
+        for {
+            checkWait(deadline)!;
+            var accepted = listener.accept() catch (reason) {
+                if !io.isWouldBlock(reason) { return reason; }
+                task.waitDescriptor(fd, reactor.Interest.read(), deadline)!;
+                continue;
+            };
+            socket, peer := move(accepted);
+            return (AsyncTcpStream.fromTcp(move(socket))!, peer);
+        }
+    }
+    func close() !void { listener.close() }
+}

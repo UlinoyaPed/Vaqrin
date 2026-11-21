@@ -12,14 +12,21 @@ pub interface WriterAt { func writeAt(offset: u64, src: []const u8) !usize; }
 pub interface Closer { func close() !void; }
 
 pub enum SeekOrigin { Start, Current, End }
-pub enum ReadStatus { Bytes, Eof, WouldBlock, Interrupted }
+pub enum ReadStatus { Bytes, Eof, WouldBlock, Interrupted, Cancelled, DeadlineExceeded, Failed }
 pub class IoProgress {
     pub var processed: usize;
     pub var status: ReadStatus;
+    pub var reason: ?ErrorId;
+    pub const func check() !void {
+        if status == ReadStatus.Eof { return IoError.UnexpectedEof; }
+        if status == ReadStatus.WouldBlock { return IoError.WouldBlock; }
+        if status == ReadStatus.Interrupted { return IoError.Interrupted; }
+        if reason != null { return reason.unwrap(); }
+    }
 }
 pub error IoError {
     WriteFailed, UnexpectedEof, NoProgress, WouldBlock, Interrupted, InvalidCount,
-    PositionOutOfRange, LimitExceeded, Closed, InvalidArgument, Unsupported,
+    PositionOutOfRange, LimitExceeded, Closed, InvalidArgument, Unsupported, Cancelled, DeadlineExceeded,
 }
 
 pub func read(reader: *Reader, dst: []u8) !usize {
@@ -37,54 +44,68 @@ pub func write(writer: *Writer, src: []const u8) !usize {
     count
 }
 
+func stopped(processed: usize, reason: ErrorId) IoProgress {
+    var status = ReadStatus.Failed;
+    if isWouldBlock(reason) { status = ReadStatus.WouldBlock; }
+    else if isInterrupted(reason) { status = ReadStatus.Interrupted; }
+    else if reason == IoError.Cancelled { status = ReadStatus.Cancelled; }
+    else if reason == IoError.DeadlineExceeded { status = ReadStatus.DeadlineExceeded; }
+    IoProgress{processed: processed, status: status, reason: some(reason)}
+}
+
+func complete(processed: usize) IoProgress {
+    IoProgress{processed: processed, status: ReadStatus.Bytes, reason: null}
+}
+
 pub func readExactProgress(reader: *Reader, dst: []u8) !IoProgress {
     var offset: usize = 0;
     for offset < dst.len() {
-        var count = read(reader, dst[offset..dst.len()]) catch (reason) {
-            if isWouldBlock(reason) { return IoProgress{processed: offset, status: ReadStatus.WouldBlock}; }
-            if isInterrupted(reason) { return IoProgress{processed: offset, status: ReadStatus.Interrupted}; }
-            return reason;
-        };
-        if count == 0 { return IoProgress{processed: offset, status: ReadStatus.Eof}; }
+        var count = read(reader, dst[offset..dst.len()]) catch (reason) { return stopped(offset, reason); };
+        if count == 0 { return IoProgress{processed: offset, status: ReadStatus.Eof, reason: null}; }
         offset += count;
     }
-    IoProgress{processed: offset, status: ReadStatus.Bytes}
+    complete(offset)
+}
+pub func readExact(reader: *Reader, dst: []u8, processed: *usize) !void {
+    if *processed > dst.len() { return IoError.InvalidCount; }
+    var progress = readExactProgress(reader, dst[*processed..dst.len()])!;
+    *processed += progress.processed;
+    progress.check()
 }
 pub func readExact(reader: *Reader, dst: []u8) !void {
-    var progress = readExactProgress(reader, dst)!;
-    switch progress.status {
-        ReadStatus.Bytes => {},
-        ReadStatus.Eof => return IoError.UnexpectedEof,
-        ReadStatus.WouldBlock => return IoError.WouldBlock,
-        ReadStatus.Interrupted => return IoError.Interrupted,
-    };
+    var processed: usize = 0;
+    readExact(reader, dst, &processed)
+}
+pub func readAtLeast(reader: *Reader, dst: []u8, min: usize, processed: *usize) !usize {
+    if min > dst.len() || *processed > dst.len() { return IoError.InvalidCount; }
+    for *processed < min {
+        var count = read(reader, dst[*processed..dst.len()])!;
+        if count == 0 { return IoError.UnexpectedEof; };
+        *processed += count;
+    }
+    return *processed;
 }
 pub func readAtLeast(reader: *Reader, dst: []u8, min: usize) !usize {
-    if min > dst.len() { return IoError.InvalidCount; }
-    var offset: usize = 0;
-    for offset < min {
-        var count = read(reader, dst[offset..dst.len()])!;
-        if count == 0 { return IoError.UnexpectedEof; }
-        offset += count;
-    }
-    offset
+    var processed: usize = 0;
+    readAtLeast(reader, dst, min, &processed)
 }
 pub func writeAllProgress(writer: *Writer, src: []const u8) !IoProgress {
     var offset: usize = 0;
     for offset < src.len() {
-        var count = write(writer, src[offset..src.len()]) catch (reason) {
-            if isWouldBlock(reason) { return IoProgress{processed: offset, status: ReadStatus.WouldBlock}; }
-            if isInterrupted(reason) { return IoProgress{processed: offset, status: ReadStatus.Interrupted}; }
-            return reason;
-        };
+        var count = write(writer, src[offset..src.len()]) catch (reason) { return stopped(offset, reason); };
         offset += count;
     }
-    IoProgress{processed: offset, status: ReadStatus.Bytes}
+    complete(offset)
+}
+pub func writeAll(writer: *Writer, src: []const u8, processed: *usize) !void {
+    if *processed > src.len() { return IoError.InvalidCount; }
+    var progress = writeAllProgress(writer, src[*processed..src.len()])!;
+    *processed += progress.processed;
+    progress.check()
 }
 pub func writeAll(writer: *Writer, src: []const u8) !void {
-    var progress = writeAllProgress(writer, src)!;
-    if progress.status == ReadStatus.WouldBlock { return IoError.WouldBlock; }
-    if progress.status == ReadStatus.Interrupted { return IoError.Interrupted; }
+    var processed: usize = 0;
+    writeAll(writer, src, &processed)
 }
 pub func writeString(writer: *Writer, value: str) !void { writeAll(writer, value.asBytes()) }
 
@@ -117,20 +138,43 @@ func usableBytes(left: u64, capacity: usize) usize {
 pub func copy(reader: *Reader, writer: *Writer, scratch: []u8) !u64 {
     copyN(reader, writer, ~u64(0), scratch)
 }
-pub func copyN(reader: *Reader, writer: *Writer, n: u64, scratch: []u8) !u64 {
-    if n != 0 && scratch.len() == 0 { return IoError.InvalidCount; }
-    var copied: u64 = 0;
-    for copied < n {
-        var count = read(reader, scratch[0..usableBytes(n - copied, scratch.len())])!;
-        if count == 0 { break; }
-        writeAll(writer, scratch[0..count])!;
-        copied += u64(count);
+pub class CopyCursor {
+    #copy: disabled
+    var total: u64;
+    var first: usize;
+    var last: usize;
+    var ended: bool;
+    pub func init() : total(0), first(0), last(0), ended(false) {}
+    pub const func copied() u64 { total }
+    pub const func pending() usize { last - first }
+    pub func transfer(reader: *Reader, writer: *Writer, limit: u64, scratch: []u8) !u64 {
+        if total > limit || last > scratch.len() || u64(pending()) > limit - total ||
+            (total < limit && scratch.len() == 0) { return IoError.InvalidCount; }
+        for total < limit && !ended {
+            if first == last {
+                var count = read(reader, scratch[0..usableBytes(limit - total, scratch.len())])!;
+                if count == 0 { ended = true; break; }
+                first = 0;
+                last = count;
+            }
+            var progress = writeAllProgress(writer, scratch[first..last])!;
+            first += progress.processed;
+            total += u64(progress.processed);
+            progress.check()!;
+        }
+        total
     }
-    copied
+}
+
+pub func copyN(reader: *Reader, writer: *Writer, n: u64, scratch: []u8) !u64 {
+    var cursor = CopyCursor();
+    cursor.transfer(reader, writer, n, scratch)
 }
 pub func copyAll(reader: *Reader, writer: *Writer) !u64 {
-    var scratch = mem.zeroedBytes<256>();
-    copy(reader, writer, scratch[:])
+    var storage = __vqr_uninitialized<[8192]u8>();
+    var scratch = unsafe { (*__vqr_raw_address(&storage))[:] };
+    mem.zeroBytes(scratch);
+    copy(reader, writer, scratch)
 }
 pub func discard(reader: *Reader, n: u64, scratch: []u8) !u64 {
     if n != 0 && scratch.len() == 0 { return IoError.InvalidCount; }

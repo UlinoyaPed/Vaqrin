@@ -31,14 +31,15 @@
 | `simd` | 2 | 25 | 14 | 0 | 部分实现，已运行代表用例 | 定宽标量回退，硬件向量加速和多目标验收待补 | `mem` |
 | `linalg` | 8 | 64 | 18 | 0 | 部分实现 | 稠密向量、矩阵、范数、LU、Householder QR、线性求解和最小二乘。张量、步幅视图、SVD 与特征值待补 | `coll`, `math`, `num` |
 | `units` | 5 | 10 | 7 | 0 | 未实现 | 暂无标准包源码 | — |
-| `io` | 21 | 38 | 26 | 0 | 部分实现，已运行代表用例 | 流协议、内存流、组合流、POSIX 标准流、定位 I/O 与错误传播。非阻塞轮询和异步流待补 | `bytes`, `coll`, `mem`, `text` |
-| `bufio` | 7 | 35 | 7 | 0 | 部分实现，已运行代表用例 | 缓冲读写及 ASCII 扫描，含整数和浮点 Token。完整分词策略和高级视图待补 | `coll`, `io`, `mem`, `parse`, `text` |
+| `io` | 21 | 38 | 26 | 0 | 部分实现，已运行代表用例 | 流协议、内存流、组合流、POSIX 标准流、定位 I/O 与可恢复部分进度。非阻塞轮询和异步流待补 | `bytes`, `coll`, `mem`, `text` |
+| `bufio` | 7 | 35 | 7 | 0 | 部分实现，已运行代表用例 | 复用缓冲、按块扫描行、短写恢复、ASCII 与自定义字节分隔、UTF-8 与二进制 Token | `coll`, `io`, `mem`, `parse`, `text` |
 | `path` | 5 | 26 | 18 | 0 | 部分实现，已运行代表用例 | 拥有型 POSIX UTF-8 词法路径，原生非 UTF-8、Windows 路径和更多相对路径运算待补 | `coll`, `text` |
-| `fs` | 16 | 53 | 31 | 0 | 部分实现，已运行代表用例 | POSIX 文件、目录、定位和元数据，MemFS、递归遍历、链接及其他系统端口待补 | `coll`, `io`, `path`, `text` |
+| `fs` | 16 | 53 | 31 | 0 | 部分实现，已运行代表用例 | POSIX 文件身份、原子替换、目录遍历与清理、符号链接和临时资源。MemFS 与其他系统端口待补 | `coll`, `io`, `path`, `text` |
 | `time` | 17 | 79 | 17 | 0 | 部分实现，已运行代表用例 | 时长、单调时钟、定时和公历，时区数据库和格式化待补 | `cmp` |
 | `env` | 3 | 8 | 17 | 0 | 部分实现，已运行代表用例 | 进程环境读写、独立快照和路径查询。参数、主机信息、原生字节与变量展开待补 | `coll`, `io`, `path`, `text` |
 | `process` | 6 | 31 | 10 | 0 | 部分实现，已运行代表用例 | POSIX 命令执行和子进程句柄、环境覆盖、工作目录、标准流与文件重定向、退出状态和有上限的双流捕获 | `coll`, `env`, `fs`, `io`, `path`, `text` |
-| `net` | 14 | 58 | 14 | 0 | 部分实现，已运行代表用例 | IPv4/IPv6、TCP 与 UDP、正向系统解析、网络字节序、连接及 I/O 超时。Unix 域、多播、反向解析与异步 I/O 待补 | `binary`, `coll`, `fmt`, `io`, `mem`, `parse`, `text`, `time` |
+| `net` | 14 | 58 | 14 | 0 | 部分实现，已运行代表用例 | IPv4/IPv6、TCP 与 UDP、正向系统解析、网络字节序、连接及 I/O 超时。含可挂起 TCP accept/connect/read/write。异步 UDP、DNS、多播与其他平台待补 | `binary`, `coll`, `fmt`, `io`, `mem`, `parse`, `reactor`, `task`, `text`, `time` |
+| `reactor` | — | — | — | 0 | 部分实现，已运行代表用例 | Linux epoll 注册、修改、注销、就绪等待与 fd 复用防护 | `coll`, `io`, `time` |
 | `http` | 15 | 55 | 12 | 0 | 部分实现 | HTTP/1.x 报文读写、有界 body、HTTP/HTTPS 客户端和单连接 HTTP 服务端。流式 body 与连接池待补 | `bufio`, `coll`, `fmt`, `io`, `net`, `parse`, `text`, `time`, `url` |
 | `json` | 12 | 45 | 13 | 0 | 部分实现，已运行代表用例 | 嵌套 DOM、精确数字词法、代理对、指针及 Codec。编码支持递归键排序、非 ASCII 转义和 f64 转换；完整 RFC 向量待补 | `algo`, `bytes`, `cmp`, `coll`, `convert`, `core`, `fmt`, `io`, `iter`, `math`, `opt`, `parse`, `serde`, `text` |
 | `log` | 10 | 33 | 10 | 0 | 部分实现，已运行代表用例 | 级别、结构化属性、同步多 Handler；异步、系统和 JSON Handler 待补 | `coll`, `io`, `iter`, `text`, `time` |

@@ -50,15 +50,14 @@ bytes are never replayed by a later flush.
 
 - Path currently models POSIX-style UTF-8 paths; arbitrary non-UTF-8 directory names
   are reported as UTF-8 errors. Windows UTF-16 paths are not implemented.
-- Metadata exposes size, file type, mode bits and modified Unix seconds. Creation time
+- Metadata exposes size, file type, device/inode identity, mode bits and modified Unix seconds. Creation time
   and richer ACL/security descriptors are not exposed.
-- Directory traversal is one directory level; recursive walking and symlink policy
-  helpers are not implemented.
-- Scanner uses ASCII whitespace splitting. Custom split callbacks and Unicode
-  whitespace tokenization are not implemented.
+- Recursive traversal follows directory descriptors and skips symbolic links.
+- Scanner supports ASCII whitespace and byte-delimiter splitting. Unicode whitespace
+  and custom callbacks remain future extensions.
 - Formatter supports a small brace-format subset; user-defined Display/DebugFormat
   dispatch, locale-aware formatting and cached FormatPlan are not implemented.
-- Host I/O is synchronous. No asynchronous or network interfaces are added.
+- File I/O is synchronous. Task-aware TCP and readiness use Linux epoll.
 
 
 ## Public API inventory
@@ -179,3 +178,76 @@ in one executable. x86-64 is the executed host target in this integration.
 `Scanner.readInt<T>() !T` 把 EOF 转换为 `io.IoError.UnexpectedEof`。
 两者原样传播输入错误和溢出。包级 `bufio.readLine` 每次只消费一行；
 连续高吞吐读取可复用同一 `BufferedReader`。
+
+## Recoverable transfers and file identity
+
+`readExactProgress` and `writeAllProgress` report the confirmed byte count
+and the stop reason together, including cancellation, deadline expiry,
+interruption, would-block, EOF, and other errors. Start again at the
+first unprocessed byte. The overloads of `readExact` and `writeAll` that
+take `*usize` update the cursor before returning any error. Pass the
+same original slice and cursor for each retry. The two-argument overloads
+are convenient for operations where the caller discards the stream or
+has another way to recover its position on failure.
+
+`BufferedWriter.flush()` drains the buffer and flushes the underlying
+writer. If a write fails, it retains the uncommitted suffix. If only the
+underlying flush fails, retrying does not resend bytes. `finish()` seals
+the writer on success and can be retried after failure. Destruction
+attempts to finish and has no error return. Successful flush and finish
+do not imply disk synchronization. A file can be synced separately.
+`reset` drains the current target before switching to the next one.
+
+`fs.sameFile` compares device and inode, following symbolic links.
+`fs.copy` checks the identities of the open descriptors before truncating
+the destination. An alias returns `FsError.SameFile`. A separate
+destination can contain partial data after a later I/O failure.
+`fs.tryExists` returns false on absent paths and propagates other system
+errors. `fs.exists` is the best-effort boolean convenience wrapper.
+
+## Atomic replacement and directory operations
+
+`fs.atomicWrite` opens the destination's parent once, creates a private
+temporary file in that directory, writes and syncs it, closes it, and
+replaces the destination using a same-directory rename. It then syncs
+the parent directory. A failed write or rename leaves the existing
+destination in place and attempts to remove the temporary file.
+If syncing the directory fails after rename, the new file is already
+visible and an error reports that durable publication could not be
+confirmed. Successful guarantees depend on the file system honoring
+file and directory synchronization. New files use mode 0600 before
+the process umask. An existing destination symlink is replaced as an
+entry. Its target is unaffected.
+
+`TempFile.inDir` and `TempDir.inDir` own their entries and parent
+descriptors. Scope exit attempts cleanup. Explicit `close` reports
+cleanup errors. `TempFile.commit` publishes the file under a single
+new name in the same directory and syncs it. The temporary path
+returned by `location` is informational. Cleanup stays anchored to the
+original parent descriptor.
+
+`mkdirAll` handles existing directories and reports access errors.
+`walkDir` provides a visitor, depth limit, and entry limit. Walks and
+recursive removal use directory-relative operations and skip symlink
+recursion. Links encountered by `removeAll` are removed as entries.
+The UTF-8 visitor can report a decoding error on a non-UTF-8 filename.
+Native recursive removal accepts such entries. The tree may change
+while it is being visited or removed. A later error can leave a
+partially removed tree.
+
+## Buffered input
+
+Keep a `BufferedReader` across line reads for block input. It reads
+directly into its fixed buffer and scans the buffered span for the
+delimiter. The convenience overload taking an unbuffered Reader reads
+only through the delimiter so it never consumes the next line. Scanner
+defaults to ASCII whitespace. Select a byte delimiter with
+`setSplitMode` and use `nextBytes` to read non-UTF-8 tokens. Both
+scanner modes skip empty tokens and honor `setMaxToken`. `next`
+validates UTF-8. Token offsets are byte offsets.
+
+For a recoverable stream copy, keep an `io.CopyCursor` and its scratch
+buffer. `transfer` retains the unwritten suffix of the current chunk in
+that buffer after a destination error and reports committed bytes through
+`copied()`. Pass the same source, destination, total limit, and scratch
+buffer when resuming.

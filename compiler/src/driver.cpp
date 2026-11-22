@@ -592,8 +592,8 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
          (target.getArch() == llvm::Triple::x86_64 || target.getArch() == llvm::Triple::aarch64));
     if (usesRuntime("__vqr_io_reactor_") && !supportsHostRuntime)
       fail({}, "the epoll reactor requires hosted GNU/Linux x86-64 or AArch64", "E290");
-    if (usesProcessRuntime && !supportsHostRuntime)
-      fail({}, "process execution requires hosted GNU/Linux x86-64 or AArch64", "E290");
+    if (usesProcessRuntime && !supportsPosixIo)
+      fail({}, "process execution requires hosted GNU/Linux or macOS on x86-64 or AArch64", "E290");
     if (usesNetRuntime && !supportsHostRuntime)
       fail({}, "host networking requires hosted GNU/Linux x86-64 or AArch64", "E290");
     if (usesHttp2Runtime && !supportsHostRuntime)

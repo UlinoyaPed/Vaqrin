@@ -643,6 +643,9 @@ class StandardLibraryAcceptance(CompilerCase):
                 io.println(captured.status().success() && child.wait()!.success())!;
                 io.println(env.contains("VAQRIN_CHILD_REMOVE_TEST")!)!;
 
+                var inherited = [2]str{"-c", "printf 'inherited\\n'"};
+                io.println(process.run(path.fromString("/bin/sh")!, inherited[:])!.success())!;
+
                 var producer = process.Command.new(path.fromString("/bin/sh")!);
                 var redirectedArgs = [2]str{"-c", "test -z \"$VAQRIN_CHILD_REMOVE_TEST\" && printf file"};
                 producer.args(redirectedArgs[:])!;
@@ -673,13 +676,14 @@ class StandardLibraryAcceptance(CompilerCase):
                 {
                     var input = noInput.stdin().unwrap();
                     input.write("x".asBytes()) catch (reason) {
-                        io.println(io.systemErrorCode(reason).unwrap() == 32)!;
+                        io.println(io.systemErrorCode(reason).unwrap() == BROKEN_PIPE_ERRNO)!;
                         usize(0)
                     };
                 }
                 io.println(noInput.wait()!.success())!;
             }
-        """, "true\nhello:child\ntrue\ntrue\ntrue\nfile\ntrue\ntrue\ntrue\n")
+        """.replace("BROKEN_PIPE_ERRNO", str(errno.EPIPE)),
+                    "true\nhello:child\ntrue\ntrue\ninherited\ntrue\ntrue\nfile\ntrue\ntrue\ntrue\n")
 
         source = self.source("borrowed_child.vqr", """
             import (path, process)

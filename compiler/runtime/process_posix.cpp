@@ -15,6 +15,10 @@
 #include <time.h>
 #include <unistd.h>
 
+#if defined(__APPLE__)
+#include <crt_externs.h>
+#endif
+
 extern "C" intptr_t __vqr_io_file_write(int32_t, const uint8_t *, size_t, int32_t *);
 extern "C" int __vqr_io_env_lock();
 extern "C" void __vqr_io_env_unlock();
@@ -32,23 +36,33 @@ struct Pipe {
     int input = -1;
     int output = -1;
 
-    ~Pipe() {
+    void closeRemaining() {
         if (input >= 0) close(input);
         if (output >= 0) close(output);
     }
 
     int open() {
         int fds[2];
+#if defined(__APPLE__)
+        if (pipe(fds) != 0) return errno;
+#else
         if (pipe2(fds, O_CLOEXEC) != 0) return errno;
+#endif
         input = fds[0];
         output = fds[1];
         int *const descriptors[] = {&input, &output};
         for (int *fd : descriptors) {
-            if (*fd > STDERR_FILENO) continue;
-            int duplicate = fcntl(*fd, F_DUPFD_CLOEXEC, STDERR_FILENO + 1);
-            if (duplicate < 0) return errno;
-            close(*fd);
-            *fd = duplicate;
+            if (*fd <= STDERR_FILENO) {
+                int duplicate = fcntl(*fd, F_DUPFD_CLOEXEC, STDERR_FILENO + 1);
+                if (duplicate < 0) return errno;
+                close(*fd);
+                *fd = duplicate;
+            }
+#if defined(__APPLE__)
+            else if (fcntl(*fd, F_SETFD, FD_CLOEXEC) < 0) {
+                return errno;
+            }
+#endif
         }
         return 0;
     }
@@ -91,14 +105,14 @@ bool same_environment_key(const char *entry, const char *key, size_t size) {
 }
 
 // The caller holds the environment mutex while the array borrows inherited entries.
-int make_environment(const char *overrides, size_t count, bool inherit, char ***result) {
+int make_environment(char **environment, const char *overrides, size_t count, bool inherit, char ***result) {
     size_t inherited = 0;
-    if (inherit && environ)
-        while (environ[inherited]) ++inherited;
+    if (inherit && environment)
+        while (environment[inherited]) ++inherited;
     if (count >= SIZE_MAX - inherited) return EOVERFLOW;
     auto **entries = static_cast<char **>(calloc(inherited + count + 1, sizeof(char *)));
     if (!entries) return errno;
-    if (inherited != 0) memcpy(entries, environ, inherited * sizeof(char *));
+    if (inherited != 0) memcpy(entries, environment, inherited * sizeof(char *));
     size_t length = inherited;
     auto *entry = const_cast<char *>(overrides);
     for (size_t index = 0; index < count; ++index) {
@@ -116,6 +130,23 @@ int make_environment(const char *overrides, size_t count, bool inherit, char ***
     entries[length] = nullptr;
     *result = entries;
     return 0;
+}
+
+int spawn_with_actions(Child &child, char **argv, const posix_spawn_file_actions_t &actions,
+                       char **environment) {
+#if defined(__APPLE__)
+    // Inherit only descriptors selected by the file actions.
+    posix_spawnattr_t attributes;
+    int reason = posix_spawnattr_init(&attributes);
+    if (reason != 0) return reason;
+    reason = posix_spawnattr_setflags(&attributes, POSIX_SPAWN_CLOEXEC_DEFAULT);
+    if (reason == 0)
+        reason = posix_spawnp(&child.pid, argv[0], &actions, &attributes, argv, environment);
+    posix_spawnattr_destroy(&attributes);
+    return reason;
+#else
+    return posix_spawnp(&child.pid, argv[0], &actions, nullptr, argv, environment);
+#endif
 }
 
 int spawn_process(const char *arguments, size_t count, const char *directory, const int32_t *modes,
@@ -137,7 +168,10 @@ int spawn_process(const char *arguments, size_t count, const char *directory, co
     }
     Pipe pipes[3];
     int redirected[3] = {-1, -1, -1};
-    if (*directory) reason = posix_spawn_file_actions_addchdir_np(&actions, directory);
+    // On Darwin, serialize pipe creation with spawn as pipe() and F_SETFD are separate.
+    reason = __vqr_io_env_lock();
+    const bool locked = reason == 0;
+    if (reason == 0 && *directory) reason = posix_spawn_file_actions_addchdir_np(&actions, directory);
     for (int stream = 0; reason == 0 && stream < 3; ++stream) {
         if (modes[stream] == Null) {
             reason = posix_spawn_file_actions_addopen(
@@ -160,18 +194,29 @@ int spawn_process(const char *arguments, size_t count, const char *directory, co
                 reason = posix_spawn_file_actions_adddup2(&actions, fd, stream);
             }
         }
+#if defined(__APPLE__)
+        else {
+            int flags = retry_interrupted([&] { return fcntl(stream, F_GETFD); });
+            if (flags >= 0 && !(flags & FD_CLOEXEC)) {
+                reason = posix_spawn_file_actions_addinherit_np(&actions, stream);
+            } else if (flags < 0 && errno != EBADF) {
+                reason = errno;
+            }
+        }
+#endif
     }
     if (reason == 0) {
-        reason = __vqr_io_env_lock();
-        if (reason == 0) {
-            char **entries = nullptr;
-            if (override_count != 0 || !inherit_env)
-                reason = make_environment(overrides, override_count, inherit_env, &entries);
-            if (reason == 0)
-                reason = posix_spawnp(&child.pid, argv[0], &actions, nullptr, argv, entries ? entries : environ);
-            free(entries);
-            __vqr_io_env_unlock();
-        }
+#if defined(__APPLE__)
+        char **environment = *_NSGetEnviron();
+#else
+        char **environment = environ;
+#endif
+        char **entries = nullptr;
+        if (override_count != 0 || !inherit_env)
+            reason = make_environment(environment, overrides, override_count, inherit_env, &entries);
+        if (reason == 0)
+            reason = spawn_with_actions(child, argv, actions, entries ? entries : environment);
+        free(entries);
     }
     posix_spawn_file_actions_destroy(&actions);
     for (int fd : redirected) {
@@ -185,6 +230,8 @@ int spawn_process(const char *arguments, size_t count, const char *directory, co
             fd = -1;
         }
     }
+    for (auto &pipe : pipes) pipe.closeRemaining();
+    if (locked) __vqr_io_env_unlock();
     return reason;
 }
 

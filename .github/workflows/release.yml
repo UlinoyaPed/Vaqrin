@@ -98,6 +98,13 @@ jobs:
           VAQRIN_RELEASE_PLATFORM: ${{ matrix.platform }}
         run: python compiler/tools/release.py package
 
+      - name: Verify POSIX process execution from the installation
+        if: runner.os == 'Linux' || runner.os == 'macOS'
+        run: |
+          python compiler/tests/stdlib_acceptance.py build/release-root/vaqrin/bin/vaqc \
+            StandardLibraryAcceptance.test_process_status_and_output \
+            StandardLibraryAcceptance.test_spawn_child_pipes_and_file_redirection
+
       - name: Verify Linux runtime and protocol packages from the installation
         if: runner.os == 'Linux'
         shell: bash

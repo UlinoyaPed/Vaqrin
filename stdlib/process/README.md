@@ -31,3 +31,6 @@ the handle waits for the child directly.
 code or terminating signal, with nonzero exit codes returned as ordinary
 results. System failures carry their native error code. This implementation
 targets hosted GNU/Linux x86-64 and AArch64 with glibc 2.29 or later.
+Synchronous process operations also support hosted macOS x86-64 and AArch64.
+On macOS, only the configured standard streams carry through to the child.
+`ChildInput.writeAsync` and `ChildOutput.readAsync` require GNU/Linux.

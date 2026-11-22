@@ -7,10 +7,11 @@ The workflow checks that the installed compiler can format, parse, check,
 emit a native object and run a linked smoke program.
 
 GNU/Linux is the reference host for files, sockets, HTTP, processes, tasks
-and channels. The macOS build also supports the POSIX file and environment
-backend, the default allocator and system entropy. Its release smoke test
-builds and runs a program that uses these APIs. Sockets, processes, epoll,
-tasks and channels still require GNU/Linux. The Windows matrix exercises
+and channels. The macOS build also supports POSIX files, environment
+variables, synchronous process execution, the default allocator and system
+entropy. The release matrix exercises these APIs using the installed
+compiler. Sockets, asynchronous process pipes, epoll, tasks and channels
+require GNU/Linux. The Windows matrix exercises
 the compiler, tools and `random.OsRng`. The Windows release smoke test
 links a COFF object that reads system entropy through CNG with the Visual
 Studio linker. The LLVM SDK and vaqc use the dynamic MSVC CRT.

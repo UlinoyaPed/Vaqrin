@@ -1245,6 +1245,69 @@ class Acceptance(CompilerCase):
                 diagnostic = b"assignment requires a writable location" if name == "rebind" else b"E230"
                 self.assertIn(diagnostic, result.stderr, result.stderr.decode())
 
+    def test_scoped_closure_captures_pin_referents(self):
+        self.hosted(r"""
+            class View {
+                #borrowed: scoped
+                pub var item: &const i32;
+            }
+            func forward<T>(value: T) T { value }
+            func main() !void {
+                var left = 10;
+                var right = 20;
+                {
+                    var view = View{item: &left};
+                    var other: &const i32 = &right;
+                    var bias = 3;
+                    var reader = [view, &other, bias]() i32 => *view.item + other + bias;
+                    var get = forward(reader);
+                    var copy = get;
+                    io.println(get() + copy())!;
+                }
+                left++;
+                right++;
+                io.println(left + right)!;
+            }
+        """, "66\n32\n")
+        cases = {
+            "owner_change": """func bad() i32 {
+                var number = 10;
+                var view = View{item: &number};
+                var callback = [view]() i32 => *view.item;
+                number++;
+                callback()
+            }""",
+            "escaping_owner": """func bad() void {
+                var callback = {
+                    var number = 10;
+                    var loan: &const i32 = &number;
+                    [&loan]() i32 => loan
+                };
+            }""",
+            "captured_return": """func bad() void {
+                var number = 10;
+                var loan: &const i32 = &number;
+                var callback = [&loan](argument: &const i32) &const i32 => loan;
+            }""",
+            "mutable_capture": """func bad() void {
+                var number = 10;
+                var loan: &i32 = &number;
+                var callback = [&loan]() i32 => loan;
+            }""",
+            "mixed_capture": """func bad() void {
+                var number = 10;
+                var regular = 7;
+                var loan: &const i32 = &number;
+                var callback = [&loan, &regular]() i32 => loan + regular;
+            }""",
+        }
+        view = "class View { #borrowed: scoped; pub var item: &const i32; }\n"
+        for name, body in cases.items():
+            with self.subTest(name=name):
+                source = self.source(f"{name}/main.vqr", view + body)
+                result = self.process(VAQC, "check", source, good=False)
+                self.assertIn(b"E230", result.stderr, result.stderr.decode())
+
     def test_indirect_reference_return_contract(self):
         self.hosted(r"""
             type Pick = func(&const i32, &const i32) borrow(2) &const i32;

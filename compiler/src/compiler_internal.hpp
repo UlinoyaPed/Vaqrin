@@ -82,6 +82,8 @@ struct Capture {
   bool writable;
   unsigned index;
   Span declaration{};
+  Type *safeAlias = nullptr;
+  bool scoped = false;
 };
 
 struct Type {

@@ -1463,6 +1463,8 @@ void Body::bindCapture(const Capture &capture, Value *environment, Span span) {
                     capture.writable});
   scopes.back().push_back(i);
   locals.back().declaration = capture.declaration;
+  locals.back().reference = capture.safeAlias;
+  if (capture.scoped) locals.back().origin.root = i;
   initialized.push_back(true);
   (void)span;
 }
@@ -1497,18 +1499,34 @@ ValueAt Body::lambda(const Ast &n, Type *expected) {
       if (!names.insert(original->text).second) fail(item->span, "duplicate lambda capture");
       auto &local = locals[i];
       indexSymbol(original->span, local.declaration);
-      if ((local.reference && item->kind != NodeKind::Name) || p.hasReference(local.type))
-        fail(item->span, "safe references cannot be captured by a closure", "E230");
-      bool reference = item->kind == NodeKind::Unary;
+      const bool reference = item->kind == NodeKind::Unary;
+      auto *safeAlias = reference ? local.reference : nullptr;
+      const bool referenceValue = p.hasReference(local.type);
+      const bool scoped = safeAlias || (referenceValue && item->kind == NodeKind::Name);
+      if ((local.reference && item->kind != NodeKind::Name && !safeAlias) ||
+          (safeAlias && !safeAlias->readOnly) ||
+          (referenceValue && (!scoped || !p.copyable(local.type) || p.drops(local.type))))
+        fail(item->span, "scoped closure captures require a read-only borrow", "E230");
       if (!reference && !p.movable(local.type))
         fail(item->span, "immovable values require a reference capture", "E290");
-      captures.push_back(
-          {original->text, local.type, reference, local.writable, static_cast<unsigned>(fields.size()), local.declaration});
-      fields.push_back(p.storage(reference ? p.pointer(local.type, !local.writable) : local.type));
+      const bool writable = local.writable && !scoped;
+      captures.push_back({original->text, local.type, reference, writable,
+                          static_cast<unsigned>(fields.size()), local.declaration, safeAlias, scoped});
+      fields.push_back(p.storage(reference ? p.pointer(local.type, !writable) : local.type));
       fields.push_back(p.boolTy->ir);
     }
     t = p.add(Kind::Closure, StructType::get(p.context, fields), name);
     t->captures = captures;
+    t->scopedBorrow = std::ranges::any_of(captures, &Capture::scoped);
+    if (t->scopedBorrow) {
+      for (const auto &capture : captures) {
+        if (capture.scoped) continue;
+        const auto kind = capture.type->kind;
+        if (capture.reference || (kind != Kind::Int && kind != Kind::Bool &&
+                                  kind != Kind::Char && kind != Kind::Float))
+          fail(n->span, "a scoped closure can only combine tracked borrows and scalar copies", "E230");
+      }
+    }
   }
   for (const auto &param : n->parameters)
     if (!names.insert(param.name).second)
@@ -1563,13 +1581,22 @@ ValueAt Body::lambda(const Ast &n, Type *expected) {
   Value *environment = Constant::getNullValue(t->ir);
   enter();
   std::vector<int> transfers;
+  Borrow origin{};
   for (unsigned i = 0; i < captures.size(); ++i) {
-    auto v = expression(n->children[i]);
+    const auto &capture = captures[i];
+    auto v = capture.safeAlias ? referenceName(findLocal(capture.name), n->children[i]->span)
+                               : expression(n->children[i]);
     if (!live()) {
       leave();
       return neverValue();
     }
     auto *stored = read(v, n->span);
+    if (capture.scoped) {
+      if (v.origin.root < 0) fail(n->span, "scoped capture requires a tracked owner", "E230");
+      auto loan = bind(" <capture loan " + std::to_string(i) + ">", v.type, false, stored, n->span);
+      recordBorrow(loan, v, n->span);
+      origin = origin.root < 0 ? v.origin : joinBorrow(origin, v.origin, t, n->span);
+    }
     if (p.drops(v.type))
       transfers.push_back(bind(" <capture " + std::to_string(i) + ">", v.type, true, stored, n->span));
     environment = ir.CreateInsertValue(environment, stored, captures[i].index);
@@ -1578,7 +1605,7 @@ ValueAt Body::lambda(const Ast &n, Type *expected) {
   for (int i : transfers)
     setAlive(i, false);
   leave();
-  return {t, environment};
+  return {t, environment, nullptr, false, -1, false, false, origin};
 }
 
 ValueAt Body::allocate(const Ast &n) {
@@ -1970,9 +1997,11 @@ ValueAt Body::call(const Ast &n, Type *expected) {
   enter();
   if (closureCall) {
     requireInit(target, n->span);
+    checkAccess(target, false, n->span);
     Value *env = target.address;
     if (!env) {
       auto i = bind(" <closure>", target.type, true, read(target, n->span), n->span);
+      recordBorrow(i, target, n->span);
       env = locals[i].slot;
     } else if (!target.writable && std::ranges::any_of(target.type->captures, [](const auto &c) {
                  return c.writable && !c.reference;

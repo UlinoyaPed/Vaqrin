@@ -303,7 +303,7 @@ void Body::hintBinding(Span span, Type *type, EditorHints::BindingKind kind) {
 }
 
 bool Body::carriesBorrow(Type *t) {
-  if (t == p.viewTy || t->kind == Kind::Pointer || t->kind == Kind::Reference || t->kind == Kind::Slice)
+  if (p.hasReference(t) || t == p.viewTy || t->kind == Kind::Pointer || t->kind == Kind::Slice)
     return true;
   if (t->kind == Kind::Result || t->kind == Kind::Optional || t->kind == Kind::Tuple ||
       t->kind == Kind::Array)

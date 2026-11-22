@@ -1113,6 +1113,7 @@ FunctionEntry &Program::function(Definition d, Types substitutions, Type *owner,
   auto linkage = publiclyLinked && !aggregateC ? GlobalValue::ExternalLinkage : GlobalValue::InternalLinkage;
   auto *fn = Function::Create(signature, linkage, c && !aggregateC ? decl.name : "vqr." + instance, *module);
   auto *bridge = aggregateC ? bridgeC(fn, ret, params, d) : nullptr;
+  if (decl.comptime && fn->hasLocalLinkage()) fn->addFnAttr("vaqrin.comptime");
   if (decl.external && d.file->standard && d.file->package == "math_ffi")
     fn->addFnAttr("vaqrin.libm");
   fn->setDoesNotThrow();

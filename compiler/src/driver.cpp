@@ -5,6 +5,7 @@
 #include <llvm/ADT/StringExtras.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
 #include <llvm/Config/llvm-config.h>
+#include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Module.h>
@@ -20,6 +21,7 @@
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/TargetParser/Host.h>
 #include <llvm/Transforms/IPO/GlobalDCE.h>
+#include <llvm/Transforms/Utils/LowerMemIntrinsics.h>
 
 #include <algorithm>
 #include <chrono>
@@ -327,7 +329,43 @@ void compileRuntime(const std::string &driver, std::vector<std::string> args, co
   fs::remove_all(stage, error);
 }
 
+void lowerLargeZeroStores(llvm::Module &module, bool freestanding) {
+  // SelectionDAG expands aggregate stores into one operation per element.
+  // Use a bulk operation for large byte arrays, including at -O0.
+  constexpr std::uint64_t minimumBytes = 4096;
+  std::vector<llvm::StoreInst *> stores;
+  for (auto &function : module) {
+    for (auto &block : function) {
+      for (auto &instruction : block) {
+        auto *store = llvm::dyn_cast<llvm::StoreInst>(&instruction);
+        if (!store || !store->isSimple()) continue;
+        auto *value = llvm::dyn_cast<llvm::ConstantAggregateZero>(store->getValueOperand());
+        auto *array = value ? llvm::dyn_cast<llvm::ArrayType>(value->getType()) : nullptr;
+        if (array && array->getElementType()->isIntegerTy(8) && array->getNumElements() >= minimumBytes)
+          stores.push_back(store);
+      }
+    }
+  }
+  for (auto *store : stores) {
+    auto *array = llvm::cast<llvm::ArrayType>(store->getValueOperand()->getType());
+    llvm::IRBuilder<> builder(store);
+    builder.SetCurrentDebugLocation(store->getDebugLoc());
+    auto *fill = builder.CreateMemSet(store->getPointerOperand(), builder.getInt8(0),
+                                      array->getNumElements(), store->getAlign());
+    if (freestanding) {
+      llvm::expandMemSetAsLoop(llvm::cast<llvm::MemSetInst>(fill));
+      fill->eraseFromParent();
+    }
+    store->eraseFromParent();
+  }
+}
+
 void optimize(llvm::Module &module, llvm::TargetMachine &machine, const Options &options) {
+  for (auto it = module.begin(); it != module.end();) {
+    auto &function = *it++;
+    if (function.hasFnAttribute("vaqrin.comptime") && function.use_empty())
+      function.eraseFromParent();
+  }
   auto level = options.optimization;
   llvm::LoopAnalysisManager lam;
   llvm::FunctionAnalysisManager fam;
@@ -345,6 +383,7 @@ void optimize(llvm::Module &module, llvm::TargetMachine &machine, const Options 
       level ? pb.buildPerModuleDefaultPipeline(levels[level]) : pb.buildO0DefaultPipeline(levels[0]);
   if (options.emit == "exe") passes.addPass(llvm::GlobalDCEPass());
   passes.run(module, mam);
+  lowerLargeZeroStores(module, options.profile == "freestanding");
   if (llvm::verifyModule(module, &llvm::errs()))
     fail({}, "LLVM verification failed after optimization", "E900");
 }

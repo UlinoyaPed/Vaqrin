@@ -287,6 +287,14 @@ ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::v
     out->addIncoming(failure.value, start);
     return {result, out};
   }
+  if (key == "__vqr_zeroed_byte_array") {
+    arity(0);
+    if (types.size() != 1) fail(n->span, "zeroed storage requires a byte array type");
+    auto *array = parseType(types[0]);
+    if (array->kind != Kind::Array || array->parts[0] != p.integer(8, false))
+      fail(n->span, "zeroed storage requires a byte array type");
+    return {array, Constant::getNullValue(array->ir)};
+  }
   if (key == "__vqr_uninitialized") {
     arity(0);
     if (types.size() != 1) fail(n->span, "uninitialized storage requires an element type");

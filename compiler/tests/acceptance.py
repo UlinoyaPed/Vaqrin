@@ -75,6 +75,27 @@ class Acceptance(CompilerCase):
             self.assertEqual(self.process("./after-edit", good=False).returncode, 27)
             self.assertEqual(len(list(cache.glob("*.ast"))), 2)
 
+    def test_large_zeroed_byte_array_native_codegen(self):
+        program = self.source("zeros.vqr", """
+            import (mem)
+            const count: usize = 131072;
+            const example = mem.zeroedBytes<4>();
+            func main() i32 {
+                var bytes = mem.zeroedBytes<count>();
+                for byte in bytes[:] { if byte != 0 { return 1; } }
+                bytes[count - 1] = 7;
+                if bytes[count - 1] != 7 || example[0] != 0 { return 2; }
+                0
+            }
+        """)
+        self.process(VAQC, "build", "-O0", program, "-o", "zeros")
+        self.process("./zeros")
+        self.process(VAQC, "build", "-O0", "--emit=obj", program, "-o", "zeros.o")
+        self.process(VAQC, "build", "-O0", "--profile=freestanding",
+                     "--emit=obj", program, "-o", "freestanding.o")
+        symbols = self.process("llvm-nm", "--undefined-only", "freestanding.o")
+        self.assertNotIn(b"memset", symbols.stdout)
+
     def test_large_constant_compilation(self):
         def timings(path):
             run = self.process(VAQC, "check", "--timings", path)

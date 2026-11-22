@@ -170,6 +170,28 @@ class Acceptance(CompilerCase):
         symbols = self.process("llvm-nm", "--undefined-only", "freestanding.o")
         self.assertNotIn(b"memset", symbols.stdout)
 
+    def test_large_constant_arrays_copy_in_bulk(self):
+        pattern = ",".join("17u32" if index % 2 == 0 else "254u32" for index in range(32768))
+        literals = ",".join("7u8" for _ in range(4096))
+        source = self.source("large_arrays.vqr", f"""
+            const base = [_]u32{{{pattern}}};
+            func main() i32 {{
+                var copied = base;
+                var inline = [_]u8{{{literals}}};
+                copied[0] = 10;
+                inline[0] = 1;
+                if base[0] != 17u32 || copied[0] != 10u32 || copied[32767] != 254u32 {{ return 1; }}
+                if inline[0] != 1u8 || inline[4095] != 7u8 {{ return 2; }}
+                0
+            }}
+        """)
+        self.process(VAQC, "build", "-O0", source, "-o", "copied")
+        self.process("./copied")
+        self.process(VAQC, "build", "-O0", "--profile=freestanding", "--emit=obj", source, "-o", "copied.o")
+        symbols = self.process("llvm-nm", "--undefined-only", "copied.o").stdout
+        self.assertNotIn(b"memcpy", symbols)
+        self.assertNotIn(b"memset", symbols)
+
     def test_windows_release_entry_uses_native_system_entropy(self):
         release = runpy.run_path(str(REPOSITORY / "compiler/tools/release.py"))
         source = self.source("release.vqr", release["WINDOWS_SMOKE_SOURCE"])

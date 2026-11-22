@@ -3,6 +3,7 @@
 #include "tooling.hpp"
 
 #include <llvm/ADT/StringExtras.h>
+#include <llvm/Analysis/TargetTransformInfo.h>
 #include <llvm/Bitcode/BitcodeReader.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
 #include <llvm/Config/llvm-config.h>
@@ -330,34 +331,75 @@ void compileRuntime(const std::string &driver, std::vector<std::string> args, co
   fs::remove_all(stage, error);
 }
 
-void lowerLargeZeroStores(llvm::Module &module, bool freestanding) {
+void lowerLargeArrayStores(llvm::Module &module, llvm::TargetMachine &machine, bool freestanding) {
   // SelectionDAG expands aggregate stores into one operation per element.
-  // Use a bulk operation for large byte arrays, including at -O0.
+  // Keep initialization from constant data in bulk form, including at -O0.
   constexpr std::uint64_t minimumBytes = 4096;
-  std::vector<llvm::StoreInst *> stores;
+  struct Initialization {
+    llvm::StoreInst *store;
+    llvm::Constant *literal;
+    llvm::LoadInst *copy;
+  };
+  const auto &layout = module.getDataLayout();
+  std::vector<Initialization> stores;
   for (auto &function : module) {
     for (auto &block : function) {
       for (auto &instruction : block) {
         auto *store = llvm::dyn_cast<llvm::StoreInst>(&instruction);
         if (!store || !store->isSimple()) continue;
-        auto *value = llvm::dyn_cast<llvm::ConstantAggregateZero>(store->getValueOperand());
-        auto *array = value ? llvm::dyn_cast<llvm::ArrayType>(value->getType()) : nullptr;
-        if (array && array->getElementType()->isIntegerTy(8) && array->getNumElements() >= minimumBytes)
-          stores.push_back(store);
+        auto *value = store->getValueOperand();
+        auto *array = llvm::dyn_cast<llvm::ArrayType>(value->getType());
+        if (!array || !llvm::isa<llvm::IntegerType>(array->getElementType())) continue;
+        auto width = array->getElementType()->getIntegerBitWidth();
+        if (width != 8 && width != 16 && width != 32 && width != 64) continue;
+        if (layout.getTypeStoreSize(array).getFixedValue() < minimumBytes) continue;
+        if (llvm::isa<llvm::ConstantAggregateZero, llvm::ConstantDataArray>(value)) {
+          stores.push_back({store, llvm::cast<llvm::Constant>(value), nullptr});
+        } else if (auto *load = llvm::dyn_cast<llvm::LoadInst>(value);
+                   load && load->isSimple() && load->hasOneUse()) {
+          auto *global = llvm::dyn_cast<llvm::GlobalVariable>(load->getPointerOperand()->stripPointerCasts());
+          if (global && global->isConstant() && global->hasInitializer()) stores.push_back({store, nullptr, load});
+        }
       }
     }
   }
-  for (auto *store : stores) {
-    auto *array = llvm::cast<llvm::ArrayType>(store->getValueOperand()->getType());
+  llvm::DenseMap<llvm::Constant *, llvm::GlobalVariable *> literals;
+  for (const auto &[store, literal, copy] : stores) {
+    auto *type = store->getValueOperand()->getType();
+    auto bytes = layout.getTypeStoreSize(type).getFixedValue();
     llvm::IRBuilder<> builder(store);
     builder.SetCurrentDebugLocation(store->getDebugLoc());
-    auto *fill = builder.CreateMemSet(store->getPointerOperand(), builder.getInt8(0),
-                                      array->getNumElements(), store->getAlign());
-    if (freestanding) {
-      llvm::expandMemSetAsLoop(llvm::cast<llvm::MemSetInst>(fill));
-      fill->eraseFromParent();
+    if (literal && literal->isNullValue()) {
+      auto *fill = builder.CreateMemSet(store->getPointerOperand(), builder.getInt8(0), bytes, store->getAlign());
+      if (freestanding) {
+        llvm::expandMemSetAsLoop(llvm::cast<llvm::MemSetInst>(fill));
+        fill->eraseFromParent();
+      }
+    } else {
+      llvm::Value *source;
+      llvm::Align alignment;
+      if (copy) {
+        source = copy->getPointerOperand();
+        alignment = copy->getAlign();
+      } else {
+        auto *&constant = literals[literal];
+        if (!constant) {
+          constant = new llvm::GlobalVariable(module, type, true, llvm::GlobalValue::PrivateLinkage,
+                                              literal, "vaqrin.array.initializer");
+          constant->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+        }
+        source = constant;
+        alignment = layout.getABITypeAlign(type);
+      }
+      auto *transfer = builder.CreateMemCpy(store->getPointerOperand(), store->getAlign(), source, alignment, bytes);
+      if (freestanding) {
+        auto info = machine.getTargetTransformInfo(*store->getFunction());
+        llvm::expandMemCpyAsLoop(llvm::cast<llvm::MemCpyInst>(transfer), info);
+        transfer->eraseFromParent();
+      }
     }
     store->eraseFromParent();
+    if (copy) copy->eraseFromParent();
   }
 }
 
@@ -384,7 +426,7 @@ void optimize(llvm::Module &module, llvm::TargetMachine &machine, const Options 
       level ? pb.buildPerModuleDefaultPipeline(levels[level]) : pb.buildO0DefaultPipeline(levels[0]);
   if (options.emit == "exe") passes.addPass(llvm::GlobalDCEPass());
   passes.run(module, mam);
-  lowerLargeZeroStores(module, options.profile == "freestanding");
+  lowerLargeArrayStores(module, machine, options.profile == "freestanding");
   if (llvm::verifyModule(module, &llvm::errs()))
     fail({}, "LLVM verification failed after optimization", "E900");
 }

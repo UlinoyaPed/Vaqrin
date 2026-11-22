@@ -149,20 +149,29 @@ std::string digest(llvm::StringRef data) {
   return llvm::toHex(hash.final(), true);
 }
 
-std::unique_ptr<llvm::MemoryBuffer> readRecord(const std::filesystem::path &entry) {
+} // namespace
+
+namespace artifact {
+namespace {
+constexpr std::size_t checksumLength = 64;
+}
+
+llvm::StringRef payload(const llvm::MemoryBuffer &record) { return record.getBuffer().drop_front(checksumLength); }
+
+std::unique_ptr<llvm::MemoryBuffer> read(const std::filesystem::path &entry, std::size_t maxBytes) {
   if (entry.empty()) return {};
   std::error_code error;
   const auto size = std::filesystem::file_size(entry, error);
-  if (error || size <= 64 || size > limit + 64) return {};
+  if (error || size <= checksumLength || size - checksumLength > maxBytes) return {};
   auto buffer = llvm::MemoryBuffer::getFile(entry.string());
   if (!buffer) return {};
   const auto record = (*buffer)->getBuffer();
-  if (record.size() != size || digest(record.drop_front(64)) != record.take_front(64)) return {};
+  if (record.size() != size || digest(payload(**buffer)) != record.take_front(checksumLength)) return {};
   return std::move(*buffer);
 }
 
-void writeRecord(const std::filesystem::path &entry, llvm::StringRef payload) {
-  if (entry.empty() || payload.empty() || payload.size() > limit) return;
+void write(const std::filesystem::path &entry, llvm::StringRef bytes, std::size_t maxBytes) {
+  if (entry.empty() || bytes.empty() || bytes.size() > maxBytes) return;
   auto directory = entry.parent_path();
   std::error_code error;
   std::filesystem::create_directories(directory, error);
@@ -172,7 +181,7 @@ void writeRecord(const std::filesystem::path &entry, llvm::StringRef payload) {
   if (llvm::sys::fs::createUniqueFile((directory / ".artifact-%%%%%%").string(), fd, temporary)) return;
   {
     llvm::raw_fd_ostream out(fd, true);
-    out << digest(payload) << payload;
+    out << digest(bytes) << bytes;
     out.close();
     error = out.error();
     out.clear_error();
@@ -181,7 +190,7 @@ void writeRecord(const std::filesystem::path &entry, llvm::StringRef payload) {
   llvm::sys::fs::remove(temporary);
 }
 
-} // namespace
+} // namespace artifact
 
 SyntaxCache::SyntaxCache(const std::filesystem::path &executable) {
   if (auto *custom = std::getenv("VAQRIN_AST_CACHE")) {
@@ -213,9 +222,9 @@ std::filesystem::path SyntaxCache::entry(const Source &source) const {
 }
 
 std::optional<File> SyntaxCache::load(const std::filesystem::path &entry, const Source &source) const {
-  auto record = readRecord(entry);
+  auto record = artifact::read(entry, limit);
   if (!record) return {};
-  auto data = record->getBuffer().drop_front(64);
+  auto data = artifact::payload(*record);
   try {
     File value;
     Archive<true> archive(source, data);
@@ -233,7 +242,7 @@ void SyntaxCache::store(const std::filesystem::path &entry, const Source &source
     archive.file(file);
     payload = archive.release();
   } catch (const InvalidCache &) { return; }
-  writeRecord(entry, payload);
+  artifact::write(entry, payload, limit);
 }
 
 std::filesystem::path SyntaxCache::tableEntry(const Source &source, std::size_t declarationOffset) const {
@@ -248,13 +257,13 @@ std::filesystem::path SyntaxCache::tableEntry(const Source &source, std::size_t 
 }
 
 std::optional<std::string> SyntaxCache::loadTable(const std::filesystem::path &entry, std::size_t size) const {
-  auto record = readRecord(entry);
-  if (!record || record->getBufferSize() - 64 != size) return {};
-  return record->getBuffer().drop_front(64).str();
+  auto record = artifact::read(entry, limit);
+  if (!record || artifact::payload(*record).size() != size) return {};
+  return artifact::payload(*record).str();
 }
 
 void SyntaxCache::storeTable(const std::filesystem::path &entry, std::string_view bytes) const {
-  writeRecord(entry, llvm::StringRef(bytes));
+  artifact::write(entry, llvm::StringRef(bytes), limit);
 }
 
 } // namespace vqr

@@ -1,5 +1,6 @@
 """Exercise the compiler as installed, including independent native consumers."""
 import pathlib
+import hashlib
 import json
 import os
 import re
@@ -112,6 +113,41 @@ class Acceptance(CompilerCase):
             module.write_text(base.replace("19u32", "31u32"), encoding="utf-8")
             run(31)
             self.assertEqual(len(list(cache.glob("*.table"))), 4)
+
+    def test_optimized_module_cache_reuses_verified_bitcode(self):
+        helper = self.source("math_data.vqr", "pub func square() i32 { 42 }")
+        source = self.source("main.vqr", "func main() i32 { math_data.square() }")
+        cache = self.root / "artifacts"
+        with patch.dict(os.environ, VAQRIN_MODULE_CACHE=str(cache)):
+            def build(expected, hit=False, level="-O2"):
+                compiled = self.process(VAQC, "build", "--timings", level, source, "-o", "cached")
+                keyword = "hit" if hit else "miss"
+                self.assertIn(f"optimization cache {keyword}".encode(), compiled.stderr)
+                self.assertEqual(self.process("./cached", good=False).returncode, expected)
+
+            build(42)
+            entry, = cache.glob("*.bc")
+            signature = entry.stat().st_mtime_ns
+            build(42, hit=True)
+            self.assertEqual(entry.stat().st_mtime_ns, signature)
+
+            entry.write_bytes(b"invalid cache")
+            build(42)
+            invalid = b"not LLVM bitcode"
+            entry.write_bytes(hashlib.sha256(invalid).hexdigest().encode() + invalid)
+            build(42)
+            build(42, hit=True)
+            build(42, level="-O1")
+
+            helper.write_text("pub func square() i32 { 19 }", encoding="utf-8")
+            build(19)
+            self.assertEqual(len(list(cache.glob("*.bc"))), 3)
+
+            args = ("build", "--timings", "-O2", "--emit=llvm-ir", source)
+            self.process(VAQC, *args, "-o", "fresh.ll")
+            warm = self.process(VAQC, *args, "-o", "cached.ll")
+            self.assertIn(b"optimization cache hit", warm.stderr)
+            self.assertEqual((self.root / "fresh.ll").read_bytes(), (self.root / "cached.ll").read_bytes())
 
     def test_large_zeroed_byte_array_native_codegen(self):
         program = self.source("zeros.vqr", """

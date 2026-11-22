@@ -3,6 +3,7 @@
 #include "tooling.hpp"
 
 #include <llvm/ADT/StringExtras.h>
+#include <llvm/Bitcode/BitcodeReader.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
 #include <llvm/Config/llvm-config.h>
 #include <llvm/IR/IntrinsicInst.h>
@@ -388,6 +389,61 @@ void optimize(llvm::Module &module, llvm::TargetMachine &machine, const Options 
     fail({}, "LLVM verification failed after optimization", "E900");
 }
 
+fs::path moduleCacheEntry(const llvm::Module &module, const Options &options, const fs::path &executable) {
+  const auto *directory = std::getenv("VAQRIN_MODULE_CACHE");
+  if (!directory || !fs::path(directory).is_absolute() || options.optimization == 0) return {};
+  std::error_code error;
+  auto modified = fs::last_write_time(executable, error);
+  if (error) return {};
+  auto size = fs::file_size(executable, error);
+  if (error) return {};
+
+  // Hash the validated input IR, which already includes the resolved sources
+  // and their concrete generic instantiations.
+  llvm::SmallVector<char, 0> input;
+  llvm::raw_svector_ostream bitcode(input);
+  llvm::WriteBitcodeToFile(module, bitcode);
+  llvm::SHA256 hash;
+  auto field = [&](llvm::StringRef value) {
+    hash.update(std::to_string(value.size()) + ":");
+    hash.update(value);
+  };
+  for (const auto &value : std::array<std::string, 11>{
+           "vaqrin-module-v1", LLVM_VERSION_STRING, executable.string(), std::to_string(size),
+           std::to_string(modified.time_since_epoch().count()), options.triple, options.cpu,
+           options.features, options.profile, options.emit, std::to_string(options.optimization)})
+    field(value);
+  field(bitcode.str());
+  return fs::path(directory) / (llvm::toHex(hash.final(), true) + ".bc");
+}
+
+void optimizeBuild(std::unique_ptr<llvm::Module> &module, llvm::TargetMachine &machine,
+                   const Request &request, const fs::path &executable,
+                   std::unique_ptr<llvm::LLVMContext> &cachedContext) {
+  constexpr std::size_t maxBytes = 64 * 1024 * 1024;
+  const auto path = moduleCacheEntry(*module, request.options, executable);
+  if (auto record = artifact::read(path, maxBytes)) {
+    auto context = std::make_unique<llvm::LLVMContext>();
+    auto parsed = llvm::parseBitcodeFile({artifact::payload(*record), "cached module"}, *context);
+    if (!parsed) {
+      llvm::consumeError(parsed.takeError());
+    } else if (!llvm::verifyModule(**parsed)) {
+      (*parsed)->setModuleIdentifier(module->getModuleIdentifier());
+      module = std::move(*parsed);
+      cachedContext = std::move(context);
+      if (request.timings) std::cerr << "vaqc: optimization cache hit\n";
+      return;
+    }
+  }
+  optimize(*module, machine, request.options);
+  if (path.empty()) return;
+  if (request.timings) std::cerr << "vaqc: optimization cache miss\n";
+  llvm::SmallVector<char, 0> bytes;
+  llvm::raw_svector_ostream output(bytes);
+  llvm::WriteBitcodeToFile(*module, output);
+  artifact::write(path, output.str(), maxBytes);
+}
+
 void emit(llvm::Module &module, llvm::TargetMachine &machine, const fs::path &path, std::string_view kind) {
   std::error_code ec;
   llvm::raw_fd_ostream stream(path.string(), ec, llvm::sys::fs::OF_None);
@@ -717,6 +773,7 @@ int main(int argc, char **argv) {
       request.options.editorHints = &hints;
     }
     llvm::LLVMContext context;
+    std::unique_ptr<llvm::LLVMContext> cachedContext;
     CompileTimings compileTimings;
     if (request.timings) request.options.compileTimings = &compileTimings;
     auto module = compile(context, *machine, request.options, *inputs);
@@ -729,7 +786,7 @@ int main(int argc, char **argv) {
                   << std::chrono::duration<double, std::milli>(compileTimings.durations[i]).count() << " ms\n";
     }
     if (!request.options.check) {
-      optimize(*module, *machine, request.options);
+      optimizeBuild(module, *machine, request, executable, cachedContext);
       stage("optimize");
       produce(request, *module, *machine, *inputs);
       stage("emit and link");

@@ -46,3 +46,7 @@ models = { path = "../shared/models" }
 Unicode 数据表可跨项目复用编译后的常量字节。模块类型和依赖仍按当前项目检查。
 可用绝对路径形式的 `VAQRIN_AST_CACHE` 指定缓存目录，默认使用
 `$XDG_CACHE_HOME/vaqrin/syntax` 或 `~/.cache/vaqrin/syntax`。将该变量设为 `0` 可禁用缓存。
+
+在重复构建中，可以用绝对路径 `VAQRIN_MODULE_CACHE` 启用优化后的 LLVM bitcode 缓存。
+该缓存用于 `-O1` 至 `-O3`，按当前解析并实例化后的 IR、编译器及目标参数查找。
+`--timings` 会显示缓存命中或未命中。原生代码生成和链接使用当前工具链。

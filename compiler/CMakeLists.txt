@@ -27,7 +27,7 @@ if(VAQRIN_USE_LLVM_DYLIB AND TARGET LLVM AND "all" IN_LIST LLVM_DYLIB_COMPONENTS
 else()
     # Installed SDKs can leave LLVM_COMPONENT_LIBS unset, making "all" expand to nothing.
     llvm_map_components_to_libnames(llvm_libs
-        Core Support TargetParser BitWriter Passes IPO CodeGen MC Target
+        Core Support TargetParser BitReader BitWriter Passes IPO CodeGen MC Target
         AllTargetsCodeGens AllTargetsDescs AllTargetsInfos)
     target_link_libraries(vaqc PRIVATE ${llvm_libs})
 endif()

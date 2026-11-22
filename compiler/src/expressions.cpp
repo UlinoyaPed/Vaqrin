@@ -412,6 +412,16 @@ ValueAt Body::member(const Ast &n) {
   return field;
 }
 
+Value *Body::arrayStorage(ValueAt array, Span span, std::size_t scope) {
+  if (!p.hasReference(array.type)) return asPointer(array, span).value;
+  checkAccess(array, false, span);
+  pinBorrow(array, span, scope);
+  if (array.address) return array.address;
+  auto *storage = slot(array.type, "borrowed.array");
+  ir.CreateStore(read(array, span), storage);
+  return storage;
+}
+
 ValueAt Body::index(const Ast &n) {
   auto v = expression(n->children[0]);
   if (v.type == p.neverTy) return v;
@@ -435,7 +445,9 @@ ValueAt Body::index(const Ast &n) {
   bool writable;
   if (t->kind == Kind::Array) {
     count = ConstantInt::get(p.sizeTy->ir, t->count);
-    address = asPointer(v, n->span).value;
+    if (n->kind == NodeKind::Slice && p.hasReference(t))
+      fail(n->span, "reference-bearing arrays cannot expose a raw slice", "E230");
+    address = arrayStorage(v, n->span, temporaryScope);
     writable = v.writable;
   } else {
     auto *slice = read(v, n->span);

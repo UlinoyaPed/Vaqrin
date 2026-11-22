@@ -395,8 +395,9 @@ Type *Program::type(const Ast &n, const File &file, const Types &generics, const
     if ((integer->sign && len.isNegative()) || len.getActiveBits() > pointerBits() - 1)
       fail(n->span, "array length exceeds the target object size");
     auto *element = type(n->children[1], file, generics, values);
-    if (hasReference(element)) fail(n->span, "reference storage in arrays is not supported", "E230");
     ensureSized(element, n->span);
+    if (hasReference(element) && (!copyable(element) || drops(element)))
+      fail(n->span, "arrays of references require copyable, non-owning elements", "E230");
     auto size = module->getDataLayout().getTypeAllocSize(storage(element)).getFixedValue();
     auto limit = (std::uint64_t{1} << (pointerBits() - 1)) - 1;
     if (size && len.getZExtValue() > limit / size)

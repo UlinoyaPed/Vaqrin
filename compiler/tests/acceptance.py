@@ -1317,7 +1317,6 @@ class Acceptance(CompilerCase):
                 View{owner: &x, tag: 3}
             }""",
             "container": "func bad() void { var values = coll.Vec<View>(); }",
-            "array": "func bad() void { var values = [_]View{}; }",
             "pointer_type": "type Invalid = *View;",
             "rebind": """func bad() void {
                 var owner = Owner{number: 1};
@@ -1445,6 +1444,69 @@ class Acceptance(CompilerCase):
             with self.subTest(index=index):
                 path = self.source(f"tuple-{index}/main.vqr", source)
                 result = self.process(VAQC, "check", path, good=False)
+                self.assertIn(b"E230", result.stderr, result.stderr.decode())
+
+    def test_readonly_reference_arrays_index_and_iterate(self):
+        self.hosted(r"""
+            func twice(number: &const i32) [2]&const i32 {
+                [_]&const i32{number, number}
+            }
+            func main() !void {
+                var left = 20;
+                var right = 22;
+                {
+                    var items = [_]&const i32{&left, &right};
+                    var total = 0;
+                    for item in items { total += item; }
+                    io.println(total)!;
+                    io.println(*items[1])!;
+                }
+                left++;
+                var input: &const i32 = &left;
+                io.println(*twice(input)[0] + *twice(input)[1])!;
+            }
+        """, "42\n22\n42\n")
+        cases = {
+            "mutation": """func bad() void {
+                var number = 42;
+                var values = [_]&const i32{&number};
+                number++;
+            }""",
+            "write_in_loop": """func bad() void {
+                var number = 42;
+                for value in [_]&const i32{&number} { number += value; }
+            }""",
+            "move_during_loop": """func bad() void {
+                var number = 42;
+                var references = [_]&const i32{&number};
+                for _ in references { move(references); }
+            }""",
+            "move_during_index": """func take(items: [1]&const i32) usize { 0 }
+                func bad() i32 {
+                    var number = 42;
+                    var references = [_]&const i32{&number};
+                    *references[take(move(references))]
+                }""",
+            "mutable_reference": """func bad() void {
+                var number = 42;
+                var values = [_]&i32{&number};
+            }""",
+            "raw_slice": """func bad() void {
+                var number = 42;
+                var values = [_]&const i32{&number};
+                var slice = values[:];
+            }""",
+            "index_side_effect": """class Owner { #copy: disabled; pub var number: i32; }
+                func take(value: Owner) usize { 0 }
+                func bad() void {
+                    var owner = Owner{number: 42};
+                    ([_]&const Owner{&owner})[take(move(owner))];
+                }""",
+        }
+        for name, text in cases.items():
+            with self.subTest(name=name):
+                source = self.source(f"array-{name}/main.vqr", text)
+                result = self.process(VAQC, "check", source, good=False)
                 self.assertIn(b"E230", result.stderr, result.stderr.decode())
 
     def test_scoped_enums_and_empty_borrow_branches(self):

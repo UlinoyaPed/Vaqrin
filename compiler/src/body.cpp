@@ -149,6 +149,15 @@ void Body::recordBorrow(int id, ValueAt v, Span span) {
   if (p.hasReference(v.type) || locals[id].reference || carriesBorrow(v.type)) locals[id].origin = v.origin;
 }
 
+void Body::pinBorrow(ValueAt value, Span span, std::size_t scope) {
+  // The loan needs a lexical slot in the checker, but no copy in native storage.
+  const auto local = static_cast<int>(locals.size());
+  locals.push_back({" <borrow loan>", value.type, nullptr, nullptr, nullptr, false, scope, false});
+  scopes[scope].push_back(local);
+  initialized.push_back(true);
+  recordBorrow(local, value, span);
+}
+
 void Body::holdBorrow(Borrow &combined, ValueAt value, Value *stored, Span span) {
   if (value.origin.root < 0)
     fail(span, "borrowed value requires a tracked owner", "E230");
@@ -1338,7 +1347,7 @@ ValueAt Body::loop(const Ast &n) {
         element = array.type->parts[0];
         start = {p.sizeTy, ConstantInt::get(p.sizeTy->ir, 0)};
         if (array.type->kind == Kind::Array) {
-          arrayPtr = asPointer(array, n->span).value;
+          arrayPtr = arrayStorage(array, n->span, scopes.size() - 1);
           length = ConstantInt::get(p.sizeTy->ir, array.type->count);
         } else {
           auto *pair = read(array, n->span);
@@ -1450,8 +1459,10 @@ ValueAt Body::loop(const Ast &n) {
       item = read({element, nullptr, addr, false, -1, true}, n->span);
     }
     if (enumerate && n->names[0] != "_") bindIteration(0, {p.sizeTy, counter});
-    if (n->names.back() != "_")
-      bindIteration(n->names.size() - 1, {element, item});
+    if (n->names.back() != "_") {
+      auto origin = array.type && p.hasReference(array.type) ? array.origin : Borrow{};
+      bindIteration(n->names.size() - 1, {element, item, nullptr, false, -1, false, false, origin});
+    }
     else if (p.drops(element))
       drop(element, asPointer({element, item}, n->span).value);
   }
@@ -1584,8 +1595,8 @@ ValueAt Body::expression(const Ast &n, Type *expected) {
     if (array) {
       element = parseType(n->type->children[1]);
       p.ensureSized(element, n->span);
-      if (p.hasReference(element))
-        fail(n->span, "reference storage in arrays is not supported", "E230");
+      if (p.hasReference(element) && (!p.copyable(element) || p.drops(element)))
+        fail(n->span, "arrays of references require copyable, non-owning elements", "E230");
       t = n->type->children[0] ? parseType(n->type) : p.aggregate(Kind::Array, {element}, n->children.size());
       if (t->count != n->children.size()) fail(n->span, "array initializer count does not match its length");
     }
@@ -1611,13 +1622,13 @@ ValueAt Body::expression(const Ast &n, Type *expected) {
       temporaryBorrow |= item.temporaryBorrow;
       auto *value = read(item, n->span);
       if (p.hasReference(item.type)) {
-        if (array || !p.copyable(item.type) || p.drops(item.type))
-          fail(syntax->span, "tuple reference elements must be read-only and copyable", "E230");
+        if (!p.copyable(item.type) || p.drops(item.type))
+          fail(syntax->span, "aggregate reference elements must be read-only and copyable", "E230");
         referenceElements = true;
         if (item.origin.root >= 0) {
           holdBorrow(origin, item, value, syntax->span);
         } else if (item.hasBorrowPayload()) {
-          fail(syntax->span, "tuple reference element requires a tracked owner", "E230");
+          fail(syntax->span, "aggregate reference element requires a tracked owner", "E230");
         }
       }
       int temporary = -1;
@@ -1649,7 +1660,7 @@ ValueAt Body::expression(const Ast &n, Type *expected) {
       if (temporaries[i] != -1) setAlive(temporaries[i], false);
     }
     leave();
-    v = {t, out, nullptr, false, -1, false, temporaryBorrow, origin, referenceElements && origin.root < 0};
+    v = {t, out, nullptr, false, -1, false, temporaryBorrow, origin, p.hasReference(t) && origin.root < 0};
     break;
   }
   case NodeKind::Fields: {

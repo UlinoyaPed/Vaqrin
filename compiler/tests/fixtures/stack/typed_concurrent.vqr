@@ -1,0 +1,47 @@
+package main
+import (grpc, io, mem, net, pb_demo_ddeep as types, pb_interop as interop, task)
+
+class Handler {
+    #implements: types.ConcurrentService_Echo
+    pub const func rpc_Double(request: types.Msg_Input, context: *const grpc.UnaryRequest)
+        !grpc.TypedResponse<interop.Msg_Child> {
+        var result = interop.Msg_Child();
+        result.f_left = (request.f_count ?? 0) * 2;
+        grpc.typedResponse<interop.Msg_Child>(move(result))
+    }
+
+    pub const func rpc_Broadcast(stream: *types.ConcurrentStream_Echo_Broadcast) !grpc.Status {
+        grpc.status(grpc.StatusCode.Unimplemented, "")
+    }
+
+    pub const func rpc_Sum(stream: *types.ConcurrentStream_Echo_Sum) !grpc.Status {
+        grpc.status(grpc.StatusCode.Unimplemented, "")
+    }
+
+    pub const func rpc_Mirror(stream: *types.ConcurrentStream_Echo_Mirror) !grpc.Status {
+        for {
+            var request = stream.recv() catch (reason) {
+                if task.isCancelled() { io.println("typed call cancelled")!; }
+                return reason;
+            };
+            var value = move(request) ?? { break; };
+            var result = interop.Msg_Child();
+            result.f_left = value.f_count ?? 0;
+            stream.send(&result)!;
+        }
+        grpc.status(grpc.StatusCode.Ok, "")
+    }
+}
+
+func main() !void {
+    var service = mem.Shared<Handler>.new(Handler{})!;
+    var adapter = types.ConcurrentServer_Echo<Handler>(move(service));
+    var server = grpc.Server();
+    unsafe { adapter.register(&server)!; }
+    var options = grpc.ServeOptions();
+    options.applicationWorkers = 1;
+    var listener = net.AsyncTcpListener.bind(net.parseSocketAddr("127.0.0.1:0")!)!;
+    io.println(listener.localAddr()!.port())!;
+    socket, _ := listener.accept(null)!;
+    server.serveConcurrentH2c(move(socket), options)
+}

@@ -871,6 +871,60 @@ class ProtocolAcceptance(CompilerCase):
                 if server.poll() is None:
                     server.kill()
 
+    def test_generated_concurrent_service_interoperates_with_grpcio(self):
+        import grpc
+        from google.protobuf import descriptor_pool, message_factory
+        from google.protobuf.descriptor_pb2 import FileDescriptorSet
+
+        plugin = VAQC.parent / "protoc-gen-vaqrin"
+        if not plugin.is_file():
+            plugin = REPOSITORY / "compiler/tools/protoc-gen-vaqrin"
+        self.process(sys.executable, "-m", "grpc_tools.protoc", f"-I{FIXTURES}",
+                     f"--plugin=protoc-gen-vaqrin={plugin}", "--vaqrin_out=.",
+                     "--descriptor_set_out=descriptors.pb", "--include_imports",
+                     "wire.proto", "typed.proto")
+        descriptors = FileDescriptorSet.FromString((self.root / "descriptors.pb").read_bytes())
+        pool = descriptor_pool.DescriptorPool()
+        for file in descriptors.file:
+            pool.Add(file)
+        request = message_factory.GetMessageClass(pool.FindMessageTypeByName("demo.deep.Input"))
+        child = message_factory.GetMessageClass(pool.FindMessageTypeByName("interop.Child"))
+        source = self.source("main.vqr", (FIXTURES / "typed_concurrent.vqr").read_text(encoding="utf-8"))
+        self.process(VAQC, source, "--package-path", self.root, "-o", "generated-concurrent")
+        with subprocess.Popen([self.root / "generated-concurrent"], stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE) as server, ThreadPoolExecutor(max_workers=1) as worker:
+            def line():
+                return worker.submit(server.stdout.readline).result(timeout=5)
+
+            try:
+                port = int(line())
+                with grpc.insecure_channel(f"127.0.0.1:{port}") as channel:
+                    serialize = request.SerializeToString
+                    mirror = channel.stream_stream("/demo.deep.Echo/Mirror",
+                                                   request_serializer=serialize,
+                                                   response_deserializer=child.FromString)
+                    double = channel.unary_unary("/demo.deep.Echo/Double",
+                                                 request_serializer=serialize,
+                                                 response_deserializer=child.FromString)
+                    requests = Queue()
+                    requests.put(request(count=12))
+                    streamed = mirror(iter(requests.get, None), timeout=5)
+                    try:
+                        self.assertEqual(next(streamed).left, 12)
+                        self.assertEqual(double(request(count=20), timeout=2).left, 40)
+                        self.assertTrue(streamed.cancel())
+                        self.assertEqual(line(), b"typed call cancelled\n")
+                        self.assertEqual([item.left for item in mirror(iter([request(count=3), request(count=5)]),
+                                                                       timeout=2)], [3, 5])
+                    finally:
+                        requests.put(None)
+                        streamed.cancel()
+                stdout, stderr = server.communicate(timeout=5)
+                self.assertEqual(server.returncode, 0, (stdout, stderr))
+            finally:
+                if server.poll() is None:
+                    server.kill()
+
     def test_grpc_concurrent_unary_calls_and_cancellation(self):
         self.compile_fixture("grpc_concurrent.vqr", "concurrent")
         self.check_grpc_concurrent()

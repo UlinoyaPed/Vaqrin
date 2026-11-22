@@ -65,7 +65,12 @@ client encodes input, invokes the RPC, and decodes the typed result. For
 streaming methods it exposes typed send, receive and half-close operations.
 Implement the generated service interface and keep its generated server
 adapter at a stable address while registered. The adapter owns the
-individual method registrations using the synchronous handler interfaces.
+individual method registrations. For concurrent dispatch, implement the
+generated `ConcurrentService_<Name>` interface with const methods, put the
+shareable implementation in `mem.Shared`, and pass it to
+`ConcurrentServer_<Name>`. Streaming methods receive the corresponding
+`ConcurrentStream_<Name>_<Method>` wrapper. Register the adapter in an
+unsafe block and keep it at a stable address for the lifetime of its routes.
 See the [Greeter example](../../examples/grpc/README.md).
 
 The transport uses OpenSSL 3, nghttp2 and zlib on hosted GNU/Linux. Building

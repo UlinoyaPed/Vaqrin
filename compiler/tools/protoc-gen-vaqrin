@@ -395,65 +395,99 @@ class Generator:
                 p.end()
         p.end()
         p.line()
-        p.start(f"pub interface {name}Service")
+        self.service_server(name, service, concurrent=False)
+        self.service_server(name, service, concurrent=True)
+
+    def service_server(self, name, service, concurrent):
+        p = self.out
+        if concurrent:
+            self.imports.add("mem")
+        interface = f"ConcurrentService_{name}" if concurrent else f"{name}Service"
+        declaration = "const func" if concurrent else "func"
+        stream_prefix = "ConcurrentStream" if concurrent else "Stream"
+        adapter_prefix = "ConcurrentAdapter" if concurrent else "Adapter"
+        p.start(f"pub interface {interface}")
         for method in service.method:
             if method.client_streaming or method.server_streaming:
-                p.line(f"func rpc_{method.name}(stream: *Stream_{name}_{escape(method.name)}) !grpc.Status;")
+                p.line(f"{declaration} rpc_{method.name}(stream: *{stream_prefix}_{name}_{escape(method.name)}) !grpc.Status;")
             else:
-                p.line(f"func rpc_{method.name}(request: {self.message_type(method.input_type)}, context: *const grpc.UnaryRequest) !grpc.TypedResponse<{self.message_type(method.output_type)}>;")
+                p.line(f"{declaration} rpc_{method.name}(request: {self.message_type(method.input_type)}, context: *const grpc.UnaryRequest) !grpc.TypedResponse<{self.message_type(method.output_type)}>;")
         p.end()
         p.line()
         for method in service.method:
-            self.adapter(name, method)
-        p.start(f"pub class {name}Server")
+            self.adapter(name, interface, method, concurrent)
+
+        def member_type(method):
+            adapter = f"{adapter_prefix}_{name}_{escape(method.name)}"
+            return f"{adapter}<H>" if concurrent else adapter
+
+        server = f"ConcurrentServer_{name}<H: {interface} & Shareable>" if concurrent else f"{name}Server"
+        service_type = "mem.Shared<H>" if concurrent else f"*{interface}"
+        argument = "service.clone()" if concurrent else "service"
+        p.start(f"pub class {server}")
         p.line("#copy: disabled")
         for method in service.method:
-            p.line(f"var handle_{method.name}: Adapter_{name}_{escape(method.name)};")
-        members = ", ".join(f"handle_{m.name}(Adapter_{name}_{escape(m.name)}(service))" for m in service.method)
-        if members:
-            p.line(f"pub func init(service: *{name}Service) : {members} {{}}")
-        else:
-            p.line(f"pub func init(service: *{name}Service) {{}}")
-        p.start("pub func register(server: *grpc.Server) !void")
+            p.line(f"var handle_{method.name}: {member_type(method)};")
+        members = ", ".join(f"handle_{m.name}({member_type(m)}({argument}))" for m in service.method)
+        initializer = f" : {members}" if members else ""
+        p.line(f"pub func init(service: {service_type}){initializer} {{}}")
+        p.start(f"pub {'unsafe ' if concurrent else ''}func register(server: *grpc.Server) !void")
         for method in service.method:
-            register = "registerStreaming" if method.client_streaming or method.server_streaming else "register"
-            p.line(f'server.{register}("{self.service_path(service, method)}", &handle_{method.name})!;')
+            streaming = method.client_streaming or method.server_streaming
+            if concurrent:
+                register = "registerConcurrentStreaming" if streaming else "registerConcurrent"
+                p.line(f'unsafe {{ server.{register}<{member_type(method)}>("{self.service_path(service, method)}", &handle_{method.name})!; }}')
+            else:
+                register = "registerStreaming" if streaming else "register"
+                p.line(f'server.{register}("{self.service_path(service, method)}", &handle_{method.name})!;')
         p.end()
         p.end()
         p.line()
 
-    def adapter(self, service, method):
+    def adapter(self, service, interface, method, concurrent):
         p = self.out
         suffix = f"{service}_{escape(method.name)}"
         input_type, output_type = self.message_type(method.input_type), self.message_type(method.output_type)
         encoder, decoder = self.codec(method.input_type), self.codec(method.output_type)
         streaming = method.client_streaming or method.server_streaming
+        wrapper = f"ConcurrentStream_{suffix}" if concurrent else f"Stream_{suffix}"
+        raw = "grpc.ConcurrentServerStream" if concurrent else "grpc.ServerStream"
         if streaming:
-            self.stream_types(suffix, input_type, output_type, encoder, decoder)
-        p.start(f"class Adapter_{suffix}")
+            if not concurrent:
+                self.client_stream(suffix, input_type, output_type, encoder, decoder)
+            self.server_stream(wrapper, raw, input_type, output_type, encoder, decoder)
+        if concurrent:
+            p.start(f"class ConcurrentAdapter_{suffix}<H: {interface} & Shareable>")
+            service_type = "mem.Shared<H>"
+        else:
+            p.start(f"class Adapter_{suffix}")
+            service_type = f"*{interface}"
         trait = "StreamingHandler" if streaming else "UnaryHandler"
-        p.line(f"#implements: grpc.{trait}")
-        p.line(f"var service: *{service}Service;")
-        p.line(f"pub func init(service: *{service}Service) : service(service) {{}}")
+        p.line(f"#implements: grpc.{'Concurrent' if concurrent else ''}{trait}")
+        p.line(f"var service: {service_type};")
+        owned = "move(service)" if concurrent else "service"
+        p.line(f"pub func init(service: {service_type}) : service({owned}) {{}}")
+        declaration = "const func" if concurrent else "func"
+        target = "service.asPtr()" if concurrent else "service"
         if streaming:
-            p.start("pub func handle(stream: *grpc.ServerStream) !grpc.Status")
-            p.line(f"var typed = Stream_{suffix}(stream);")
-            p.line(f"service.rpc_{method.name}(&typed)")
+            p.start(f"pub {declaration} handle(stream: *{raw}) !grpc.Status")
+            p.line(f"var typed = {wrapper}(stream);")
+            p.line(f"{target}.rpc_{method.name}(&typed)")
             p.end()
         else:
-            p.start("pub func call(request: grpc.UnaryRequest) !grpc.UnaryResponse")
+            p.start(f"pub {declaration} call(request: grpc.UnaryRequest) !grpc.UnaryResponse")
             p.line(f"var decoder = {encoder}{{}};")
             p.line(f"var encoder = {decoder}{{}};")
             p.line(f"var typed = protobuf.decode<{input_type}>(request.body.asConstSlice(), &decoder, protobuf.DecodeLimits()) catch {{")
             p.line('    return grpc.reply(grpc.status(grpc.StatusCode.InvalidArgument, ""));')
             p.line("};")
-            p.line(f"var result = service.rpc_{method.name}(move(typed), &request)!;")
+            p.line(f"var result = {target}.rpc_{method.name}(move(typed), &request)!;")
             p.line(f"grpc.encodeResponse<{output_type}>(move(result), &encoder, 4 * 1024 * 1024)")
             p.end()
         p.end()
         p.line()
 
-    def stream_types(self, suffix, input_type, output_type, encoder, decoder):
+    def client_stream(self, suffix, input_type, output_type, encoder, decoder):
         p = self.out
         p.start(f"pub class Call_{suffix}")
         p.line("#copy: disabled")
@@ -475,9 +509,12 @@ class Generator:
         p.line("pub func complete() !grpc.UnaryResponse { call.complete() }")
         p.end()
         p.line()
-        p.start(f"pub class Stream_{suffix}")
-        p.line("pub var raw: *grpc.ServerStream;")
-        p.line("pub func init(raw: *grpc.ServerStream) : raw(raw) {}")
+
+    def server_stream(self, wrapper, raw, input_type, output_type, encoder, decoder):
+        p = self.out
+        p.start(f"pub class {wrapper}")
+        p.line(f"pub var raw: *{raw};")
+        p.line(f"pub func init(raw: *{raw}) : raw(raw) {{}}")
         p.start(f"pub func recv() !?{input_type}")
         p.line("var bytes = raw.recvMessage()! ?? { return null; };")
         p.line(f"var codec = {encoder}{{}};")

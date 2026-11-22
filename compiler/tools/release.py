@@ -53,7 +53,8 @@ def build_llvm():
 
 def smoke(compiler, prefix):
     source = BUILD / "release-smoke.vqr"
-    source.write_text("func main() i32 {\n\treturn 0;  \n}\n", encoding="utf-8")
+    entry = 'export "C" func' if WINDOWS else "func"
+    source.write_text(f"{entry} main() i32 {{\n\treturn 0;  \n}}\n", encoding="utf-8")
     run(compiler, "fmt", "--write", source)
     run(compiler, "fmt", "--check", source)
     run(compiler, "check", "--syntax-only", "--diagnostics=json", source)

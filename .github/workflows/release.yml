@@ -8,6 +8,12 @@ on:
       - 'compiler/**'
       - 'stdlib/**'
       - '.github/workflows/release.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'compiler/CMakeLists.txt'
+      - 'compiler/tools/release.py'
+      - '.github/workflows/release.yml'
   workflow_dispatch:
 
 permissions:

@@ -20,6 +20,8 @@ Push a tag in the form `vMAJOR.MINOR.PATCH` on a commit that is in `main` to
 publish a release. You can add a prerelease suffix, such as `-rc.1`.
 Publishing waits for every build and attaches the six archives and
 `SHA256SUMS`. A manual workflow run builds archives without publishing.
+Pull requests that update the release script, CMake build, or release workflow
+also run the native build matrix.
 
 Use `vaqc fmt FILE.vqr` to emit a formatted copy, `vaqc fmt --write FILE.vqr`
 to edit in place and `vaqc fmt --check FILE.vqr` to check formatting. The

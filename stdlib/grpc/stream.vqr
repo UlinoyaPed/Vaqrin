@@ -172,12 +172,7 @@ func performStream(handler: *StreamingHandler, wire: *Transport, connection: *ht
     var stream = ServerStream(wire, connection, deferred, id, move(head), options);
     var outcome = handler.handle(&stream) catch (reason) {
         if reason == RpcError.Cancelled { return; }
-        var code = if reason == RpcError.DeadlineExceeded { StatusCode.DeadlineExceeded }
-            else if reason == RpcError.MessageTooLarge || reason == RpcError.ResourceExhausted { StatusCode.ResourceExhausted }
-            else if reason == RpcError.UnsupportedEncoding { StatusCode.Unimplemented }
-            else if reason == RpcError.Protocol { StatusCode.InvalidArgument }
-            else { StatusCode.Internal };
-        return stream.finish(status(code, ""));
+        return stream.finish(status(streamStatus(reason), ""));
     };
     if stream.deadline != null && stream.deadline.unwrap().expired()! {
         return stream.finish(status(StatusCode.DeadlineExceeded, ""));

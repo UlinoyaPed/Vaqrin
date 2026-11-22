@@ -42,7 +42,9 @@
 - UAX #29 扩展字素簇状态机：CR/LF、控制字符、Hangul、Extend、ZWJ、SpacingMark、Prepend、Regional Indicator 奇偶配对、Extended_Pictographic ZWJ 序列、Indic conjunct GB9c。
 - `Graphemes` 字素簇遍历、`graphemeCount` 与 UTF-8 字节偏移边界检测 `isGraphemeBoundary`。
 
-`Normalizer` 的 `push` 接受标量，当前实现将输入标量暂存在内部 Vec，`finish` 生成规范化字符串；`flushTo` 将当前完整结果复制到调用者缓冲区。该版本尚未实现可限制内存的安全前缀流式 flush，长文本的暂存内存随输入增长。
+`Normalizer` 的 `push` 接受标量，当前实现将输入标量暂存在内部 Vec，`finish` 生成规范化字符串；`flushTo` 将当前完整结果复制到调用者缓冲区。长文本的整串规范化需要随输入增长的暂存内存。
+
+需要限制流式规范化的内存时，使用 `StreamingNormalizer(form, maxSegmentScalars)`。每次推入标量后用 `readOutput` 取走已稳定的 UTF-8 字节，再推入下一个标量。超过规范化段上限时返回 `UnicodeError.SegmentTooLong`。
 
 大小写折叠遵循默认 Unicode full case folding（非 Turkic 映射）。简单大小写接口保持一对一标量映射；未提供依赖语言环境的 SpecialCasing 字符串大小写转换。
 
@@ -56,11 +58,11 @@
 - `\\n`、`\\r`、`\\t`、`\\f`、`\\v`、`\\0`、`\\xHH`、`\\u{...}`。
 - `\\d` / `\\D`、`\\s` / `\\S`、`\\w` / `\\W`。
 - 字符类、否定字符类、闭区间范围。
-- 捕获组 `()`、非捕获组 `(?:...)`、分支 `|`。
+- 捕获组 `()`、命名组 `(?<name>...)` 和 `(?P<name>...)`、非捕获组 `(?:...)`、分支 `|`。
 - 贪婪和非贪婪 `*`、`+`、`?`、`{m}`、`{m,n}`、`{m,}`。
 - `^`、`$`，以及多行模式。
 - 大小写不敏感、dotAll、Unicode/ASCII 预定义类模式。
-- 按编号捕获组、find/findAt/findAll、captures/capturesAll、split、replace/replaceAll。
+- 按编号或通过 `captureNamed` 按名称读取捕获组，以及 find/findAt/findAll、captures/capturesAll、split、replace/replaceAll。
 - 替换串支持 `$0`、`$1` 等组编号、`$&` 完整匹配和 `$$` 字面美元符号。
 
 默认资源限制：最多 4,096 个 NFA 状态、输入最多 16 MiB、每次搜索最多 64 Mi 次 VM 工作步骤、最多 32 个捕获组、4,194,304 个捕获历史节点。工作步骤预算按单次搜索计算；RegexBuilder 可覆盖状态数、输入大小和工作预算。
@@ -73,7 +75,6 @@
 
 - 反向引用，例如 `\\1`、`\\2`。
 - 正向/负向前瞻、后顾等环视。
-- 命名捕获组。
 - Unicode 属性转义 `\\p{...}` / `\\P{...}`。
 - 单词边界 `\\b` / `\\B`。
 - 内联模式标志。
@@ -89,8 +90,7 @@
 - 空匹配迭代推进一个 UTF-8 标量，避免无限循环。
 - findAt 拒绝 UTF-8 continuation byte 偏移。
 - 编译期限制状态数、嵌套深度、重复次数及捕获组数；运行期限制输入字节数和 VM 工作预算。
-- Unicode 正规化和字素分段算法已实现，但尚未在本环境运行官方完整一致性测试。
-- Vaqrin 编译器与运行时验收尚未执行；当前工作环境只能通过 GitHub 源码接口读写仓库，不能将静态审查结论表述为编译通过。
+- GNU/Linux CI 使用 Unicode 17.0 官方向量验证四种规范化形式、流式输出和字素分段。
 
 ## 本地验收步骤
 

@@ -485,6 +485,14 @@ extern "C" int32_t __vqr_http2_send(uintptr_t handle, int32_t stream, const uint
     return 0;
 }
 
+extern "C" int32_t __vqr_http2_has_pending_data(uintptr_t handle, int32_t stream) {
+    auto &connection = get(handle);
+    if (connection.failure) return connection.failure;
+    auto *output = find_outgoing(connection, stream);
+    if (!output) return stream_closed;
+    return output->head != nullptr;
+}
+
 extern "C" int32_t __vqr_http2_trailers(uintptr_t handle, int32_t stream,
                                         const uint8_t *data, size_t length) {
     auto &connection = get(handle);

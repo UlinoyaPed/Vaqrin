@@ -313,6 +313,36 @@ func forward(value: ?i32) !?i32 {
             self.assertEqual({edit["textDocument"]["uri"]: len(edit["edits"])
                               for edit in changed["documentChanges"]}, {uri: 2, helper.as_uri(): 1})
 
+            field = request("rename", position=position(0, "value"), newName="quantity")
+            self.assertEqual({edit["textDocument"]["uri"]: len(edit["edits"])
+                              for edit in field["documentChanges"]}, {uri: 2, helper.as_uri(): 1})
+
+            helper.write_text("""pub class Boxed<T> {
+    pub var size: T;
+    pub func init(input: T) : size(input) {}
+    pub const func measure() T { size }
+}
+pub class Other { pub var size: i32; }
+""", encoding="utf-8")
+            source = """func f() i32 {
+    var item = helper.Boxed<i32>(4);
+    var maybe = some(item);
+    var other = helper.Other{size: 5};
+    item.measure() + item.size + maybe?.size.unwrap() + other.size
+}
+"""
+            send("textDocument/didChange", {"textDocument": {"uri": uri, "version": 10},
+                                           "contentChanges": [{"text": source}]})
+            self.assertEqual(receive()["params"]["diagnostics"], [])
+            cursor = position(4, "size")
+            found = request("references", position=cursor, context={"includeDeclaration": True})
+            self.assertEqual({path: [item["range"]["start"]["line"] for item in found
+                                     if item["uri"] == path] for path in (uri, helper.as_uri())},
+                             {uri: [4, 4], helper.as_uri(): [1, 2, 3]})
+            field = request("rename", position=cursor, newName="capacity")
+            self.assertEqual({edit["textDocument"]["uri"]: len(edit["edits"])
+                              for edit in field["documentChanges"]}, {uri: 2, helper.as_uri(): 3})
+
             send("shutdown", identifier=3)
             self.assertEqual(receive()["id"], 3)
             send("exit")

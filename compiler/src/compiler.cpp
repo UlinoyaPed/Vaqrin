@@ -542,6 +542,8 @@ void Program::fill(Type *t, const Types &substitutions) {
                            : evaluate(m.body, *t->def.file, nullptr, substitutions, t->comptimeArguments).first;
       ensureSized(field, m.span);
       if (hasReference(field)) fail(m.span, "reference storage in class fields is not supported", "E230");
+      if (auto *hints = options.editorHints; hints && hints->workspace && !t->def.file->standard)
+        hints->index(m.nameSpan, m.nameSpan, true);
       t->fields.push_back({&m, field, static_cast<unsigned>(layout.size())});
       layout.push_back(storage(field));
     }
@@ -864,10 +866,11 @@ bool Program::transferable(Type *t, bool shared) {
       // The logging queue owns a deep, default-allocator copy of each record.
       else if (file.standard && file.package == "log" && name == "QueuedRecord")
         allowed = !shared;
-      // This private gRPC adapter transfers decoder-owned request buffers and
-      // copies worker responses into default-allocator storage before joining.
+      // These private gRPC adapters transfer only default-allocator buffers
+      // and share handlers under the stable-address registration contract.
       else if (file.standard && file.package == "grpc" &&
-               (name == "ConcurrentInput" || name == "ConcurrentOutput"))
+               (name == "ConcurrentInput" || name == "ConcurrentOutput" ||
+                name == "ConcurrentStreamInput" || name == "StreamCommand" || name == "StreamReply"))
         allowed = !shared;
       // Select registrations borrow stable storage protected by the mailbox mutex.
       else if (file.standard && file.package == "channel" && name == "Mailbox")

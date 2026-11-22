@@ -1,5 +1,5 @@
 package main
-import (coll, env, grpc, io, net, task, time, tls)
+import (bytes, coll, env, grpc, io, net, task, time, tls)
 
 class Handler {
     #implements: grpc.ConcurrentUnaryHandler
@@ -17,12 +17,41 @@ class Handler {
     }
 }
 
+class Echo {
+    #implements: grpc.ConcurrentStreamingHandler
+    pub const func handle(stream: *grpc.ConcurrentServerStream) !grpc.Status {
+        stream.initial.addText("x-stream", "ready")!;
+        for {
+            var input = stream.recvMessage() catch (reason) {
+                if task.isCancelled() { io.println("stream cancelled")!; }
+                return reason;
+            };
+            var message = move(input) ?? { break; };
+            if bytes.equal(message.asConstSlice(), "pressure".asBytes()) {
+                var pressure = coll.Vec<u8>.withCapacity(131072)!;
+                for index in usize(0)..131072 { pressure.push(0)!; }
+                stream.sendMessage(pressure.asConstSlice())!;
+                io.println("pressure drained")!;
+            } else {
+                stream.sendMessage(message.asConstSlice())!;
+            }
+        }
+        stream.trailing.addText("x-stream-end", "received")!;
+        grpc.status(grpc.StatusCode.Ok, "")
+    }
+}
+
 func main() !void {
     var server = grpc.Server();
     var handler = Handler{};
+    var echo = Echo{};
+    var options = grpc.ServeOptions();
+    options.applicationWorkers = 1;
+    options.compressResponses = true;
     unsafe {
         server.registerConcurrent("/interop.Concurrent/Wait", &handler)!;
         server.registerConcurrent("/interop.Concurrent/Fast", &handler)!;
+        server.registerConcurrentStreaming("/interop.Concurrent/Echo", &echo)!;
     }
     var listener = net.AsyncTcpListener.bind(net.parseSocketAddr("127.0.0.1:0")!)!;
     io.println(listener.localAddr()!.port())!;
@@ -34,8 +63,8 @@ func main() !void {
         config.addProtocol("h2".asBytes())!;
         config.requireProtocol = true;
         var acceptor = tls.TlsAcceptor.fromPem(cert, key, move(config))!;
-        return server.acceptConcurrentTls(&listener, &acceptor, grpc.ServeOptions(), null);
+        return server.acceptConcurrentTls(&listener, &acceptor, options, null);
     }
     socket, peer := listener.accept(null)!;
-    server.serveConcurrentH2c(move(socket), grpc.ServeOptions())
+    server.serveConcurrentH2c(move(socket), options)
 }

@@ -388,6 +388,13 @@ static void initialize_task_context(struct task *task, struct worker *worker) {
     makecontext(&task->context, run_task, 0);
 }
 
+int __vqr_rt_signal_completion_fd(int descriptor) {
+    int rc;
+    do rc = eventfd_write(descriptor, 1);
+    while (rc < 0 && errno == EINTR);
+    return rc < 0 && errno != EAGAIN ? errno : 0;
+}
+
 static void *run_worker(void *context) {
     struct worker *worker = context;
     struct group *group = worker->group;
@@ -416,12 +423,7 @@ static void *run_worker(void *context) {
         if (task->returned) {
             task->finished = true;
             group->pending--;
-            if (group->completion_fd >= 0) {
-                int rc;
-                do rc = eventfd_write(group->completion_fd, 1);
-                while (rc < 0 && errno == EINTR);
-                // EAGAIN means the descriptor is already readable.
-            }
+            if (group->completion_fd >= 0) __vqr_rt_signal_completion_fd(group->completion_fd);
             awaken_waiters(WAIT_TASK, task);
             if (group->pending == 0) awaken_waiters(WAIT_GROUP, group);
             pthread_cond_broadcast(&changed);

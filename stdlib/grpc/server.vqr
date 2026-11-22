@@ -33,7 +33,11 @@ pub func response(body: coll.Vec<u8>) UnaryResponse {
                   body: some(move(body))}
 }
 
-enum RouteHandler { Unary(UnaryRoute), Streaming(*StreamingHandler) }
+enum RouteHandler {
+    Unary(UnaryRoute),
+    Streaming(*StreamingHandler),
+    ConcurrentStreaming(*const ConcurrentStreamingHandler),
+}
 
 class Route {
     pub var path: string;
@@ -75,6 +79,12 @@ public:
     }
     func registerStreaming(path: str, handler: *StreamingHandler) !void {
         registerRoute(path, RouteHandler.Streaming(handler))
+    }
+    // The shared handler must remain alive at a stable address while registered.
+    unsafe func registerConcurrentStreaming<H: ConcurrentStreamingHandler & Shareable>(
+        path: str, handler: *const H) !void {
+        var route: *const ConcurrentStreamingHandler = handler;
+        registerRoute(path, RouteHandler.ConcurrentStreaming(route))
     }
     func serveTls(socket: tls.TlsStream, options: ServeOptions) !void {
         var settings = http2.Settings();
@@ -154,6 +164,7 @@ private:
         var goingAway = false;
         var receiveDeadline: ?time.Deadline = null;
         for {
+            var queuedWrite = false;
             if !pendingTlsWrite {
                 if concurrent {
                     calls.clearCompletionSignal()!;
@@ -161,10 +172,12 @@ private:
                     wire.setTimeout(options.timeout)!;
                 }
                 session.flush(wire)!;
+                if concurrent { queuedWrite = calls.advanceWrites(session)!; }
                 if goingAway && active.len() == 0 && !calls.pending() { return; }
             }
             var next = if pendingTlsWrite { null } else { deferred.next(session)! };
             var event = move(next) ?? {
+                if queuedWrite { continue; }
                 if concurrent {
                     if receiveDeadline == null { receiveDeadline = some(time.Deadline.after(options.timeout)!); }
                     var idle = receiveDeadline.unwrap();
@@ -202,6 +215,28 @@ private:
                 }
                 continue;
             };
+            var runningStream = calls.streamAt(event.stream);
+            if runningStream != null {
+                var stream = runningStream.unwrap();
+                switch event.kind {
+                    http2.EventKind.Data => {
+                        stream.data(session, event.payload()) catch (reason) {
+                            if reason != http2.Http2Error.StreamClosed { return reason; }
+                            stream.cancel();
+                        };
+                        continue;
+                    },
+                    http2.EventKind.EndStream => { stream.end(); continue; },
+                    http2.EventKind.Closed => { stream.cancel(); continue; },
+                    http2.EventKind.Headers => {
+                        // Request metadata is sent in the initial header block.
+                        session.reset(event.stream, 1)!;
+                        stream.cancel();
+                        continue;
+                    },
+                    _ => {},
+                };
+            }
             var position = callAt(&active, event.stream);
             switch event.kind {
                 http2.EventKind.Headers => {
@@ -221,6 +256,18 @@ private:
                             RouteHandler.Streaming(handler) => {
                                 performStream(handler, wire, session, &deferred, event.stream,
                                               move(head), options)!;
+                            },
+                            RouteHandler.ConcurrentStreaming(handler) => {
+                                if !concurrent {
+                                    sendError(session, event.stream, StatusCode.Unimplemented)!;
+                                    continue;
+                                }
+                                if calls.count() >= usize(options.maxConcurrentStreams) {
+                                    sendError(session, event.stream, StatusCode.ResourceExhausted)!;
+                                    continue;
+                                }
+                                calls.startStream(event.stream, handler, move(head), options)
+                                    catch { sendError(session, event.stream, StatusCode.ResourceExhausted)!; };
                             },
                         };
                     }

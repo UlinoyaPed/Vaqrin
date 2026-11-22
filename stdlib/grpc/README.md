@@ -35,15 +35,21 @@ identity or gzip messages. Set `CallOptions.compression` to
 support. Each message has an independent gzip member. Both wire and decoded
 sizes are bounded by `maxMessageBytes`.
 
-Register read-only, shareable unary handlers with
-`registerConcurrent<H>` and use `serveConcurrentH2c` or
-`acceptConcurrentTls`. The unsafe registration borrows the handler, so it
-must stay alive at a stable address until the server no longer uses it.
-`ServeOptions.applicationWorkers` bounds the worker count and
-`maxConcurrentStreams` bounds the number of outstanding calls. Each
-connection has one HTTP/2 I/O owner. Workers report completion through the
-reactor. A peer reset or local deadline cancels the corresponding task.
-A cancelled handler releases its slot when it finishes.
+Use `serveConcurrentH2c` or `acceptConcurrentTls` with read-only,
+shareable handlers. Register a `ConcurrentUnaryHandler` with
+`registerConcurrent<H>` or a `ConcurrentStreamingHandler` with
+`registerConcurrentStreaming<H>`. Both unsafe registrations borrow the
+handler, which must stay alive at a stable address until the server no
+longer uses it. `ServeOptions.applicationWorkers` bounds the worker count
+and `maxConcurrentStreams` bounds the number of outstanding calls.
+
+A concurrent streaming handler reads, writes and sets metadata through
+`ConcurrentServerStream`. Return a `Status` to finish the call. Request
+half-close returns `null` from `recvMessage`. The connection owns the
+HTTP/2 session and processes other calls while a handler waits for a
+request or peer flow-control credit. A peer reset or local deadline
+cancels the corresponding task. A cancelled handler releases its slot
+when it finishes.
 
 For streaming, register a `StreamingHandler` with `registerStreaming`.
 A `ServerStream` reads and writes individual messages and exposes initial
@@ -59,7 +65,8 @@ client encodes input, invokes the RPC, and decodes the typed result. For
 streaming methods it exposes typed send, receive and half-close operations.
 Implement the generated service interface and keep its generated server
 adapter at a stable address while registered. The adapter owns the
-individual method registrations. See the [Greeter example](../../examples/grpc/README.md).
+individual method registrations using the synchronous handler interfaces.
+See the [Greeter example](../../examples/grpc/README.md).
 
 The transport uses OpenSSL 3, nghttp2 and zlib on hosted GNU/Linux. Building
 gRPC applications requires zlib development headers (`zlib1g-dev` on

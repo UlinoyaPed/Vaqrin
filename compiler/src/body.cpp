@@ -285,6 +285,11 @@ void Body::indexSymbol(Span occurrence, Span declaration, bool definition) {
     hints->index(occurrence, declaration, definition);
 }
 
+void Body::indexField(Span occurrence, Type *type, const Decl &field) {
+  if (auto *hints = p.options.editorHints; hints && hints->workspace && !type->def.file->standard)
+    indexSymbol(occurrence, field.nameSpan);
+}
+
 void Body::indexLocal(int id, Span declaration) {
   if (locals[id].name.starts_with(" ")) return;
   locals[id].declaration = declaration;
@@ -969,6 +974,7 @@ void Body::build(FunctionEntry &entry) {
       Ast initializer = field.decl->body;
       if (auto i = values.find(field.decl->name); i != values.end()) {
         if (i->second->children.size() != 1) fail(i->second->span, "field initializer expects one value");
+        indexField(i->second->span, owner, *field.decl);
         initializer = i->second->children[0];
         values.erase(i);
       }

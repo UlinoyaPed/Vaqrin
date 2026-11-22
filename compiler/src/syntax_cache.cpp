@@ -166,7 +166,7 @@ SyntaxCache::SyntaxCache(const std::filesystem::path &executable) {
   if (error) { directory.clear(); return; }
   auto size = std::filesystem::file_size(executable, error);
   if (error) { directory.clear(); return; }
-  compilerKey = "v1\n" + executable.string() + '\n' + std::to_string(size) + '\n' +
+  compilerKey = "v2\n" + executable.string() + '\n' + std::to_string(size) + '\n' +
                 std::to_string(modified.time_since_epoch().count());
 }
 

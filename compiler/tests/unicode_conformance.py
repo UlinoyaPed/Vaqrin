@@ -71,18 +71,15 @@ func normalization(input: *bufio.Scanner) !bool {
     for i in usize(0)..5 {
         var canonicalExpected = if i < 3 { values[1] } else { values[3] };
         var decomposedExpected = if i < 3 { values[2] } else { values[4] };
-        if unicode.normalize(values[i], unicode.NormalForm.NFC)! != canonicalExpected ||
-           unicode.normalize(values[i], unicode.NormalForm.NFD)! != decomposedExpected ||
-           unicode.normalize(values[i], unicode.NormalForm.NFKC)! != values[3] ||
-           unicode.normalize(values[i], unicode.NormalForm.NFKD)! != values[4] {
-            return false;
+        var forms = [4]unicode.NormalForm{unicode.NormalForm.NFC, unicode.NormalForm.NFD,
+                                           unicode.NormalForm.NFKC, unicode.NormalForm.NFKD};
+        var expected = [4]str{canonicalExpected, decomposedExpected, values[3], values[4]};
+        for form in usize(0)..forms.len() {
+            if unicode.normalize(values[i], forms[form])! != expected[form] ||
+               streaming(values[i], forms[form])! != expected[form] {
+                return false;
+            }
         }
-    }
-    if streaming(raw, unicode.NormalForm.NFC)! != canonical ||
-       streaming(raw, unicode.NormalForm.NFD)! != decomposed ||
-       streaming(raw, unicode.NormalForm.NFKC)! != compatibility ||
-       streaming(raw, unicode.NormalForm.NFKD)! != compatibilityDecomposed {
-        return false;
     }
     true
 }

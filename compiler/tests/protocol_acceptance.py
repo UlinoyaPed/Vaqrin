@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 import importlib.util
 import json
 import os
+from queue import Queue
 import socket
 import ssl
 import subprocess
@@ -236,6 +237,7 @@ class ProtocolAcceptance(CompilerCase):
                                    b"5\r\nxxxxx\r\n1388\r\n" + b"x" * 5000 + b"\r\n0\r\n\r\n")
                     with client.makefile("rb") as reply:
                         self.assertTrue(reply.readline().startswith(b"HTTP/1.1 204 "))
+                        self.assertTrue(reply.read().endswith(b"\r\n\r\n"))
                 out, err = server.communicate(timeout=5)
                 self.assertEqual(server.returncode, 0, (out, err))
             finally:
@@ -874,7 +876,12 @@ class ProtocolAcceptance(CompilerCase):
         self.check_grpc_concurrent()
         self.check_grpc_concurrent(self.make_certificate())
 
-    def check_grpc_concurrent(self, certificate=None):
+    def test_grpc_concurrent_bidi_with_one_worker(self):
+        self.compile_fixture("grpc_concurrent.vqr", "concurrent")
+        self.check_grpc_concurrent(check=self.check_streams)
+        self.check_grpc_concurrent(self.make_certificate(), check=self.check_streams)
+
+    def check_grpc_concurrent(self, certificate=None, check=None):
         import grpc
 
         environment = os.environ.copy()
@@ -896,26 +903,143 @@ class ProtocolAcceptance(CompilerCase):
                 else:
                     connection = grpc.insecure_channel(endpoint)
                 with connection as channel:
-                    wait = channel.unary_unary("/interop.Concurrent/Wait")
-                    fast = channel.unary_unary("/interop.Concurrent/Fast")
-                    slow = wait.future(b"slow", timeout=5)
-                    self.assertEqual(read_line(), b"waiting\n")
-                    response, call = fast.with_call(b"fast", timeout=1)
-                    self.assertEqual(response, b"fast")
-                    self.assertEqual(dict(call.initial_metadata())["x-worker"], "ready")
-                    self.assertFalse(slow.done())
-                    self.assertTrue(slow.cancel())
-                    self.assertEqual(read_line(), b"cancelled\n")
-
-                    slow = wait.future(b"deadline", timeout=0.4)
-                    self.assertEqual(read_line(), b"waiting\n")
-                    with self.assertRaises(grpc.RpcError) as deadline:
-                        slow.result()
-                    self.assertEqual(deadline.exception.code(), grpc.StatusCode.DEADLINE_EXCEEDED)
-                    self.assertEqual(read_line(), b"cancelled\n")
-                    self.assertEqual(fast(b"reused", timeout=2), b"reused")
+                    (check or self.check_unary_calls)(channel, read_line)
                 out, err = server.communicate(timeout=6)
                 self.assertEqual(server.returncode, 0, (out, err))
+            finally:
+                if server.poll() is None:
+                    server.kill()
+
+    def check_unary_calls(self, channel, read_line):
+        import grpc
+
+        wait = channel.unary_unary("/interop.Concurrent/Wait")
+        fast = channel.unary_unary("/interop.Concurrent/Fast")
+        slow = wait.future(b"slow", timeout=5)
+        self.assertEqual(read_line(), b"waiting\n")
+        response, call = fast.with_call(b"fast", timeout=1)
+        self.assertEqual(response, b"fast")
+        self.assertEqual(dict(call.initial_metadata())["x-worker"], "ready")
+        self.assertFalse(slow.done())
+        self.assertTrue(slow.cancel())
+        self.assertEqual(read_line(), b"cancelled\n")
+
+        slow = wait.future(b"deadline", timeout=0.4)
+        self.assertEqual(read_line(), b"waiting\n")
+        with self.assertRaises(grpc.RpcError) as deadline:
+            slow.result()
+        self.assertEqual(deadline.exception.code(), grpc.StatusCode.DEADLINE_EXCEEDED)
+        self.assertEqual(read_line(), b"cancelled\n")
+        self.assertEqual(fast(b"reused", timeout=2), b"reused")
+
+
+    def check_streams(self, channel, read_line):
+        import grpc
+
+        echo = channel.stream_stream("/interop.Concurrent/Echo")
+        fast = channel.unary_unary("/interop.Concurrent/Fast")
+        requests = Queue()
+        requests.put(b"first")
+        call = echo(iter(requests.get, None), timeout=8)
+        try:
+            self.assertEqual(next(call), b"first")
+            self.assertEqual(dict(call.initial_metadata())["x-stream"], "ready")
+            self.assertEqual(fast(b"same connection", timeout=1), b"same connection")
+            large = bytes(range(256)) * 640
+            other = echo(iter([large, b"last"]), timeout=4)
+            self.assertEqual(list(other), [large, b"last"])
+            self.assertEqual(dict(other.trailing_metadata())["x-stream-end"], "received")
+            compressed = echo(iter([b"compressible" * 160]), timeout=3, compression=grpc.Compression.Gzip)
+            self.assertEqual(list(compressed), [b"compressible" * 160])
+            self.assertTrue(call.cancel())
+            with self.assertRaises(grpc.RpcError) as cancelled:
+                next(call)
+            self.assertEqual(cancelled.exception.code(), grpc.StatusCode.CANCELLED)
+            self.assertEqual(read_line(), b"stream cancelled\n")
+            self.assertEqual(fast(b"after cancellation", timeout=2), b"after cancellation")
+        finally:
+            requests.put(None)
+            call.cancel()
+
+    def test_grpc_concurrent_bidi_respects_stream_flow_control(self):
+        from h2.connection import H2Connection
+        from h2.events import DataReceived, ResponseReceived, StreamEnded, TrailersReceived
+        from h2.settings import SettingCodes
+
+        self.compile_fixture("grpc_concurrent.vqr", "concurrent")
+        env = os.environ.copy()
+        env.pop("VAQRIN_RPC_CERT", None)
+        server = subprocess.Popen([self.root / "concurrent"], stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE, env=env)
+        with server, ThreadPoolExecutor(max_workers=1) as reader:
+            def read_stdout():
+                return reader.submit(server.stdout.readline).result(timeout=6)
+
+            try:
+                endpoint = ("127.0.0.1", int(read_stdout()))
+                with socket.create_connection(endpoint, timeout=3) as wire:
+                    connection = H2Connection()
+                    connection.initiate_connection()
+                    connection.update_settings({SettingCodes.INITIAL_WINDOW_SIZE: 1024})
+
+                    def start(stream, method, data):
+                        connection.send_headers(stream, [
+                            (":method", "POST"), (":scheme", "http"),
+                            (":authority", "localhost"), (":path", f"/interop.Concurrent/{method}"),
+                            ("content-type", "application/grpc"), ("te", "trailers"),
+                        ])
+                        connection.send_data(stream, b"\x00" + len(data).to_bytes(4, "big") + data,
+                                             end_stream=True)
+
+                    start(1, "Echo", b"pressure")
+                    start(3, "Fast", b"still writable")
+                    wire.sendall(connection.data_to_send())
+                    received = {1: bytearray(), 3: bytearray()}
+                    ended = set()
+                    status = {}
+
+                    def read_events():
+                        data = wire.recv(16384)
+                        self.assertTrue(data)
+                        for event in connection.receive_data(data):
+                            if isinstance(event, DataReceived):
+                                received[event.stream_id].extend(event.data)
+                            if isinstance(event, (ResponseReceived, TrailersReceived)):
+                                code = dict(event.headers).get(b"grpc-status")
+                                if code is not None:
+                                    status[event.stream_id] = code
+                            if isinstance(event, StreamEnded):
+                                ended.add(event.stream_id)
+                        wire.sendall(connection.data_to_send())
+
+                    while len(received[1]) < 1024 or 3 not in ended:
+                        read_events()
+                    self.assertEqual(len(received[1]), 1024)
+                    self.assertNotIn(1, ended)
+                    self.assertEqual(received[3], b"\x00\x00\x00\x00\x0estill writable")
+                    connection.increment_flow_control_window(131072, stream_id=1)
+                    connection.increment_flow_control_window(131072)
+                    wire.sendall(connection.data_to_send())
+                    while 1 not in ended:
+                        read_events()
+                    self.assertEqual(received[1], b"\x00\x00\x02\x00\x00" + bytes(131072))
+                    self.assertEqual(read_stdout(), b"pressure drained\n")
+                    self.assertEqual(status, {1: b"0", 3: b"0"})
+
+                    connection.send_headers(5, [
+                        (":method", "POST"), (":scheme", "http"),
+                        (":authority", "localhost"), (":path", "/interop.Concurrent/Echo"),
+                        ("content-type", "application/grpc"), ("te", "trailers"),
+                        ("grpc-timeout", "350m"),
+                    ])
+                    wire.sendall(connection.data_to_send())
+                    while 5 not in ended:
+                        read_events()
+                    self.assertEqual(status[5], b"4")
+                    self.assertEqual(read_stdout(), b"stream cancelled\n")
+
+                _, err = server.communicate(timeout=6)
+                self.assertEqual(server.returncode, 0, err)
             finally:
                 if server.poll() is None:
                     server.kill()

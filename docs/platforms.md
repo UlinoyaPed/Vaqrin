@@ -31,6 +31,8 @@ The Zed extension uses the same diagnostics and formats unsaved documents.
 
 
 The Zed server checks open buffers through `vaqc check --overlay-map`.
-Compiler symbol locations cover local bindings, top-level functions and global
-values in the checked sources. Rechecking a rename verifies the edited buffers'
-name resolution before returning the edits.
+Compiler symbol locations cover local bindings, top-level functions, global
+values, named types and fields in the checked sources. Field locations
+include member access, field literals and constructor initializer lists.
+Rechecking a rename verifies the edited buffers' name resolution before
+returning the edits.

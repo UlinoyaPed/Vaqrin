@@ -919,7 +919,9 @@ Ast Parser::postfix(Ast base, bool excludeFields) {
       take();
       auto n = make(NodeKind::Fields, t.span, "", {base});
       list("}", [&] {
-        n->names.push_back(name().text);
+        auto field = name();
+        n->names.push_back(field.text);
+        n->bindingSpans.push_back(field.span);
         require(":");
         n->children.push_back(expression());
       });

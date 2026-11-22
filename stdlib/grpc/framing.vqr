@@ -31,16 +31,19 @@ pub class MessageReader {
     var offset: usize;
     var limit: usize;
     var encoding: MessageEncoding;
+    var readAhead: usize;
 public:
     func init(limit: usize) : data(coll.Vec<u8>()), offset(0),
-        limit(if limit > 0x7fffffff { 0x7fffffff } else { limit }), encoding(MessageEncoding.Identity) {}
+        limit(if limit > 0x7fffffff { 0x7fffffff } else { limit }), encoding(MessageEncoding.Identity), readAhead(4096) {}
     func useCompression(value: Compression) void {
         encoding = if value == Compression.Gzip { MessageEncoding.Gzip } else { MessageEncoding.Identity };
     }
+    const func unreadBytes() usize { data.len() - offset }
+    func useReceiveWindow() void { readAhead += 65535; }
     func feed(fragment: []const u8) !void {
-        var unread = data.len() - offset;
-        // A 4 KiB transport read can complete one message and contain several more.
-        var capacity = limit + 5 + 4096;
+        var unread = unreadBytes();
+        // One partial message plus the transport read-ahead or unconsumed window.
+        var capacity = limit + 5 + readAhead;
         if unread > capacity || fragment.len() > capacity - unread { return RpcError.MessageTooLarge; }
         if offset != 0 {
             for index in usize(0)..unread { data[index] = data[offset + index]; }

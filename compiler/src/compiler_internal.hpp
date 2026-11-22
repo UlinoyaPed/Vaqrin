@@ -223,6 +223,7 @@ private:
   bool carriesBorrow(Type *t);
   void rejectTemporaryBorrow(ValueAt value, Span span);
   void indexSymbol(Span occurrence, Span declaration, bool definition = false);
+  void indexField(Span occurrence, Type *type, const Decl &field);
   void indexLocal(int id, Span declaration);
   void hintBinding(Span span, Type *type, EditorHints::BindingKind kind = EditorHints::BindingKind::Local);
   int findLocal(std::string_view name) const;

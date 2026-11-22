@@ -1,0 +1,289 @@
+package grpc
+import (channel, coll, core, http2, opt, task, time)
+
+extern "C" func __vqr_rt_signal_completion_fd(descriptor: i32) i32;
+
+pub interface ConcurrentStreamingHandler {
+    const func handle(stream: *ConcurrentServerStream) !Status;
+}
+
+enum StreamOperation { Receive, Headers(http2.HeaderBlock), Data(coll.Vec<u8>), Finish(http2.HeaderBlock) }
+enum StreamResult { Sent, Message(coll.Vec<u8>), End, Failure(ErrorId) }
+
+// The payload of each envelope is allocated by the protocol code with the default allocator.
+class StreamCommand {
+    #copy: disabled
+    pub var operation: StreamOperation;
+}
+
+class StreamReply {
+    #copy: disabled
+    pub var result: StreamResult;
+}
+
+pub class ConcurrentServerStream {
+    #copy: disabled
+    var requests: channel.Sender<StreamCommand>;
+    var replies: channel.Receiver<StreamReply>;
+    var descriptor: i32;
+    var limit: usize;
+    var compression: Compression;
+    var acknowledged: bool;
+    var finished: bool;
+    pub var path: string;
+    pub var metadata: Metadata;
+    pub var deadline: ?time.Deadline;
+    pub var initial: Metadata;
+    pub var trailing: Metadata;
+
+    pub func init(requests: channel.Sender<StreamCommand>, replies: channel.Receiver<StreamReply>,
+              descriptor: i32, head: HeaderInfo, options: ServeOptions)
+        : requests(move(requests)), replies(move(replies)), descriptor(descriptor),
+          limit(options.maxMessageBytes),
+          compression(if head.acceptsCompressed && options.compressResponses {
+              Compression.Gzip
+          } else { Compression.Identity }),
+          acknowledged(false), finished(false), path(core.replace<string>(&head.path, "")),
+          metadata(core.replace<Metadata>(&head.metadata, Metadata())), deadline(head.deadline),
+          initial(Metadata()), trailing(Metadata()) {}
+
+public:
+    const func maxMessageBytes() usize { limit }
+    const func checkDeadline() !void {
+        if finished { return RpcError.CallClosed; }
+        if deadline != null && deadline.unwrap().expired()! { return RpcError.DeadlineExceeded; }
+        if task.isCancelled() { return RpcError.Cancelled; }
+    }
+    func sendHeaders() !void {
+        checkDeadline()!;
+        if acknowledged { return; }
+        var headers = http2.HeaderBlock();
+        headers.add(":status", "200")!;
+        headers.add("content-type", "application/grpc")!;
+        headers.add("grpc-accept-encoding", "identity,gzip")!;
+        if compression == Compression.Gzip { headers.add("grpc-encoding", "gzip")!; }
+        initial.writeTo(&headers)!;
+        send(StreamOperation.Headers(move(headers)))!;
+        acknowledged = true;
+    }
+    func sendMessage(message: []const u8) !void {
+        checkDeadline()!;
+        var data = frameMessage(message, limit, compression)!;
+        sendHeaders()!;
+        send(StreamOperation.Data(move(data)))
+    }
+    func recvMessage() !?coll.Vec<u8> {
+        switch transact(StreamOperation.Receive)! {
+            StreamResult.Message(bytes) => some(move(bytes)),
+            StreamResult.End => null,
+            _ => { return RpcError.Protocol; },
+        }
+    }
+
+    func finish(result: *const Status) !void {
+        if finished { return; }
+        var trailers = http2.HeaderBlock();
+        trailing.writeTo(&trailers)!;
+        encodeStatus(&trailers, result)!;
+        sendHeaders()!;
+        send(StreamOperation.Finish(move(trailers)))!;
+        finished = true;
+    }
+
+private:
+    func send(operation: StreamOperation) !void {
+        switch transact(move(operation))! {
+            StreamResult.Sent => {},
+            _ => { return RpcError.Protocol; },
+        }
+    }
+    func transact(operation: StreamOperation) !StreamResult {
+        checkDeadline()!;
+        requests.send(StreamCommand{operation: move(operation)}) catch (reason) {
+            if reason == channel.ChannelError.OutOfMemory { return RpcError.ResourceExhausted; }
+            return RpcError.Cancelled;
+        };
+        if unsafe { __vqr_rt_signal_completion_fd(descriptor) } != 0 { return RpcError.ConnectionClosed; }
+        var reply = replies.recv() catch { return RpcError.Cancelled; };
+        var response = move(reply) ?? { return RpcError.Cancelled; };
+        var result = core.replace<StreamResult>(&response.result, StreamResult.End);
+        switch result {
+            StreamResult.Failure(reason) => { return reason; },
+            _ => {},
+        };
+        move(result)
+    }
+}
+
+class ConcurrentStreamInput {
+    #copy: disabled
+    pub var handler: *const ConcurrentStreamingHandler;
+    pub var stream: ConcurrentServerStream;
+
+    pub func run() !void {
+        var result = handler.handle(&stream) catch (reason) { status(streamStatus(reason), "") };
+        stream.finish(&result)
+    }
+}
+
+class PendingStream {
+    #copy: disabled
+    pub var id: i32;
+    pub var deadline: ?time.Deadline;
+    pub var job: task.Task<void>;
+    var requests: channel.Receiver<StreamCommand>;
+    var replies: channel.Sender<StreamReply>;
+    var decoder: MessageReader;
+    var credited: usize;
+    var reading: bool;
+    var outbound: ?coll.Vec<u8>;
+    var sentBytes: usize;
+    var ended: bool;
+    var headersSent: bool;
+    pub var replyable: bool;
+
+    pub func init(id: i32, deadline: ?time.Deadline, job: task.Task<void>,
+                  requests: channel.Receiver<StreamCommand>, replies: channel.Sender<StreamReply>,
+                  decoder: MessageReader)
+        : id(id), deadline(deadline), job(move(job)), requests(move(requests)), replies(move(replies)),
+          decoder(move(decoder)), credited(0), reading(false), outbound(null), sentBytes(0),
+          ended(false), headersSent(false), replyable(true) {}
+
+    pub func cancel() void {
+        replyable = false;
+        job.cancel();
+        replies.close();
+        opt.take<coll.Vec<u8>>(&outbound);
+    }
+
+    pub func abort(session: *http2.Connection, code: StatusCode) !void {
+        var interruptedMessage = outbound != null && sentBytes != 0;
+        cancel();
+        if interruptedMessage { return session.reset(id, 8); } // CANCEL
+        if headersSent {
+            var trailers = http2.HeaderBlock();
+            var result = status(code, "");
+            encodeStatus(&trailers, &result)!;
+            session.sendTrailers(id, &trailers)
+        } else {
+            sendError(session, id, code)
+        }
+    }
+
+    pub func data(session: *http2.Connection, bytes: []const u8) !void {
+        session.consumeConnection(bytes.len())!;
+        if !replyable { return; }
+        decoder.feed(bytes) catch (reason) { return abort(session, streamStatus(reason)); };
+    }
+
+    pub func end() void { ended = true; }
+
+    pub func poll(session: *http2.Connection) !void {
+        if !replyable { return; }
+        if deadline != null && deadline.unwrap().expired()! {
+            return abort(session, StatusCode.DeadlineExceeded);
+        }
+        if reading { return receive(session); }
+        if outbound != null { return; }
+        switch requests.tryRecv() {
+            channel.TryRecv.Value(command) => {
+                var operation = core.replace<StreamOperation>(&command.operation, StreamOperation.Receive);
+                switch move(operation) {
+                    StreamOperation.Receive => {
+                        reading = true;
+                        receive(session)
+                    },
+                    StreamOperation.Headers(headers) => {
+                        session.respond(id, &headers, false)!;
+                        headersSent = true;
+                        reply(StreamResult.Sent)
+                    },
+                    StreamOperation.Data(bytes) => {
+                        outbound = some(move(bytes));
+                    },
+                    StreamOperation.Finish(trailers) => {
+                        session.sendTrailers(id, &trailers)!;
+                        reply(StreamResult.Sent)!;
+                        replyable = false;
+                    },
+                }
+            },
+            _ => {},
+        }
+    }
+
+    pub func advanceWrite(session: *http2.Connection) !bool {
+        if !replyable || outbound == null { return false; }
+        if sentBytes != 0 && session.hasPendingData(id)! { return false; }
+        var bytes = opt.asPtr<coll.Vec<u8>>(&outbound).unwrap().asConstSlice();
+        if sentBytes == bytes.len() {
+            opt.take<coll.Vec<u8>>(&outbound);
+            sentBytes = 0;
+            reply(StreamResult.Sent)!;
+            return false;
+        }
+        // Keep one DATA chunk per stream queued in nghttp2. A stalled peer
+        // pauses this call until its WINDOW_UPDATE arrives.
+        var end = if bytes.len() - sentBytes > 16384 { sentBytes + 16384 } else { bytes.len() };
+        session.sendData(id, bytes[sentBytes..end], false) catch (reason) {
+            if reason != http2.Http2Error.ResourceLimit { return reason; }
+            abort(session, StatusCode.ResourceExhausted)!;
+            return true;
+        };
+        sentBytes = end;
+        true
+    }
+
+private:
+    func receive(session: *http2.Connection) !void {
+        var before = decoder.unreadBytes();
+        var message = decoder.next() catch (reason) {
+            reading = false;
+            return reply(StreamResult.Failure(reason));
+        };
+        switch move(message) {
+            some(bytes) => {
+                var removed = before - decoder.unreadBytes();
+                if removed > credited {
+                    session.consumeStream(id, removed - credited)!;
+                    credited = 0;
+                } else {
+                    credited -= removed;
+                }
+                reading = false;
+                reply(StreamResult.Message(move(bytes)))
+            },
+            null => {
+                if ended {
+                    reading = false;
+                    decoder.finish() catch (reason) { return reply(StreamResult.Failure(reason)); };
+                    return reply(StreamResult.End);
+                }
+                // Credit a partial message so the peer can send past the initial window.
+                if before > credited {
+                    session.consumeStream(id, before - credited)!;
+                    credited = before;
+                }
+            },
+        }
+    }
+
+    func reply(result: StreamResult) !void {
+        // Only the worker can request a reply, and it waits for each before sending another command.
+        switch replies.trySend(StreamReply{result: move(result)}) {
+            channel.TrySendResult.Sent => {},
+            channel.TrySendResult.Closed(dropped) => {},
+            channel.TrySendResult.OutOfMemory(dropped) => { return RpcError.ResourceExhausted; },
+            channel.TrySendResult.Full(dropped) => { return RpcError.Protocol; },
+        }
+    }
+}
+
+func streamStatus(reason: ErrorId) StatusCode {
+    if reason == RpcError.DeadlineExceeded { return StatusCode.DeadlineExceeded; }
+    if reason == RpcError.Cancelled { return StatusCode.Cancelled; }
+    if reason == RpcError.MessageTooLarge || reason == RpcError.ResourceExhausted { return StatusCode.ResourceExhausted; }
+    if reason == RpcError.UnsupportedEncoding { return StatusCode.Unimplemented; }
+    if reason == RpcError.Protocol { return StatusCode.InvalidArgument; }
+    StatusCode.Internal
+}

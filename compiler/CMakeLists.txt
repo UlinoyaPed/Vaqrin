@@ -47,17 +47,23 @@ foreach(package_file IN LISTS vaqrin_package_files)
 endforeach()
 install(DIRECTORY "${VAQRIN_STDLIB_SOURCE}/" DESTINATION share/vaqrin/stdlib
     FILES_MATCHING PATTERN "*.vqr")
-configure_file(runtime/reactor_linux.h "${CMAKE_CURRENT_BINARY_DIR}/share/vaqrin/runtime/reactor_linux.h" COPYONLY)
-configure_file(runtime/tasks.c "${CMAKE_CURRENT_BINARY_DIR}/share/vaqrin/runtime/tasks.c" COPYONLY)
-configure_file(runtime/io_posix.cpp "${CMAKE_CURRENT_BINARY_DIR}/share/vaqrin/runtime/io_posix.cpp" COPYONLY)
-configure_file(runtime/decimal.cpp "${CMAKE_CURRENT_BINARY_DIR}/share/vaqrin/runtime/decimal.cpp" COPYONLY)
-configure_file(runtime/process_posix.cpp "${CMAKE_CURRENT_BINARY_DIR}/share/vaqrin/runtime/process_posix.cpp" COPYONLY)
-configure_file(runtime/net_posix.cpp "${CMAKE_CURRENT_BINARY_DIR}/share/vaqrin/runtime/net_posix.cpp" COPYONLY)
-configure_file(runtime/gzip_zlib.cpp "${CMAKE_CURRENT_BINARY_DIR}/share/vaqrin/runtime/gzip_zlib.cpp" COPYONLY)
-configure_file(runtime/http2_nghttp2.cpp "${CMAKE_CURRENT_BINARY_DIR}/share/vaqrin/runtime/http2_nghttp2.cpp" COPYONLY)
-configure_file(runtime/tls_openssl.cpp "${CMAKE_CURRENT_BINARY_DIR}/share/vaqrin/runtime/tls_openssl.cpp" COPYONLY)
-install(FILES runtime/reactor_linux.h runtime/tasks.c runtime/io_posix.cpp runtime/decimal.cpp runtime/process_posix.cpp
-    runtime/net_posix.cpp runtime/tls_openssl.cpp runtime/http2_nghttp2.cpp runtime/gzip_zlib.cpp DESTINATION share/vaqrin/runtime)
+set(VAQRIN_RUNTIME_FILES
+    runtime/reactor_linux.h
+    runtime/tasks.c
+    runtime/io_posix.cpp
+    runtime/decimal.cpp
+    runtime/process_posix.cpp
+    runtime/net_posix.cpp
+    runtime/tls_openssl.cpp
+    runtime/http2_nghttp2.cpp
+    runtime/gzip_zlib.cpp
+)
+foreach(runtime_file IN LISTS VAQRIN_RUNTIME_FILES)
+    get_filename_component(runtime_name "${runtime_file}" NAME)
+    configure_file("${runtime_file}"
+        "${CMAKE_CURRENT_BINARY_DIR}/share/vaqrin/runtime/${runtime_name}" COPYONLY)
+endforeach()
+install(FILES ${VAQRIN_RUNTIME_FILES} DESTINATION share/vaqrin/runtime)
 
 install(TARGETS vaqc RUNTIME DESTINATION bin)
 install(PROGRAMS tools/protoc-gen-vaqrin DESTINATION bin)

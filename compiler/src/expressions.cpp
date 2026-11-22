@@ -209,6 +209,7 @@ ValueAt Body::name(const Ast &n) {
       if (self < 0) break;
       if (constructing && !constructed.contains(f.index))
         fail(n->span, "field is not initialized yet", "E230");
+      indexField(n->span, owner, *f.decl);
       return {f.type,
               nullptr,
               ir.CreateStructGEP(owner->ir, fn->getArg(0), f.index),
@@ -301,6 +302,7 @@ ValueAt Body::member(const Ast &n) {
       auto f = std::ranges::find_if(obj->fields, [&](const Field &f) { return f.decl->name == n->text; });
       if (f == obj->fields.end()) fail(n->span, "unknown field '" + n->text + "'");
       if (!f->decl->visible && owner != obj) fail(n->span, "field is private");
+      indexField(n->span, obj, *f->decl);
       index = f->index;
       fieldType = f->type;
     }
@@ -382,6 +384,7 @@ ValueAt Body::member(const Ast &n) {
   if (!f->decl->visible && owner != v.type) fail(n->span, "field '" + n->text + "' is private");
   if (constructing && base->kind == NodeKind::Name && base->text == "self" && !constructed.contains(f->index))
     fail(n->span, "field is not initialized yet", "E230");
+  indexField(n->span, v.type, *f->decl);
   auto field = payload(v, f->index, f->type);
   field.writable &= !f->decl->readOnly;
   return field;
@@ -1403,9 +1406,9 @@ ValueAt Body::construct(const Ast &n, Type *t, const std::vector<Definition> &de
     fail(n->span, "class has no matching constructor; use a field initializer");
   if (!p.methods(t, "init", false).empty())
     fail(n->span, "class declares init and cannot use field construction");
-  std::map<std::string, Ast> explicitValues;
+  std::map<std::string, std::size_t> explicitValues;
   for (std::size_t i = 0; i < n->names.size(); ++i)
-    if (!explicitValues.emplace(n->names[i], n->children[i + 1]).second)
+    if (!explicitValues.emplace(n->names[i], i).second)
       fail(n->span, "field initialized twice");
   Value *out = Constant::getNullValue(t->ir);
   enter();
@@ -1413,9 +1416,13 @@ ValueAt Body::construct(const Ast &n, Type *t, const std::vector<Definition> &de
   for (const auto &f : t->fields) {
     if (!f.decl->visible && owner != t) fail(n->span, "field '" + f.decl->name + "' is private");
     auto value = explicitValues.find(f.decl->name);
-    auto initializer = value == explicitValues.end() ? f.decl->body : value->second;
+    Ast initializer = f.decl->body;
+    if (value != explicitValues.end()) {
+      indexField(n->bindingSpans[value->second], t, *f.decl);
+      initializer = n->children[value->second + 1];
+      explicitValues.erase(value);
+    }
     if (!initializer) fail(n->span, "missing initializer for '" + f.decl->name + "'");
-    if (value != explicitValues.end()) explicitValues.erase(value);
     auto v = expression(initializer, f.type);
     if (!live()) {
       leave();

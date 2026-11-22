@@ -1,5 +1,5 @@
 package grpc
-import (cmp, coll, core, http2, reactor, task, text, time)
+import (channel, cmp, coll, core, http2, reactor, task, text, time)
 
 class ConcurrentInput {
     #copy: disabled
@@ -71,11 +71,13 @@ class ConcurrentCalls {
     #copy: disabled
     var group: task.TaskGroup;
     var running: coll.Vec<PendingCall>;
+    var streaming: coll.Vec<PendingStream>;
     pub func init(workers: usize) !void
-        : group(task.TaskGroup.withWorkers(workers)!), running(coll.Vec<PendingCall>()) {}
+        : group(task.TaskGroup.withWorkers(workers)!), running(coll.Vec<PendingCall>()),
+          streaming(coll.Vec<PendingStream>()) {}
 
-    pub const func count() usize { running.len() }
-    pub const func pending() bool { running.len() != 0 }
+    pub const func count() usize { running.len() + streaming.len() }
+    pub const func pending() bool { count() != 0 }
 
     pub func completionDescriptor() !i32 { group.completionDescriptor() }
     pub func clearCompletionSignal() !void { group.clearCompletionSignal() }
@@ -83,6 +85,13 @@ class ConcurrentCalls {
         var first = ceiling;
         for index in usize(0)..running.len() {
             var call = running.at(index);
+            if call.replyable && call.deadline != null {
+                var candidate = call.deadline.unwrap();
+                if candidate.instant().compare(first.instant()) == cmp.Ordering.Less { first = candidate; }
+            }
+        }
+        for index in usize(0)..streaming.len() {
+            var call = streaming.at(index);
             if call.replyable && call.deadline != null {
                 var candidate = call.deadline.unwrap();
                 if candidate.instant().compare(first.instant()) == cmp.Ordering.Less { first = candidate; }
@@ -103,7 +112,42 @@ class ConcurrentCalls {
         running.push(PendingCall(stream, deadline, move(job), compression))
     }
 
+    pub func startStream(id: i32, handler: *const ConcurrentStreamingHandler, request: HeaderInfo,
+                         options: ServeOptions) !void {
+        streaming.reserve(streaming.len() + 1)!;
+        var alarm = request.deadline;
+        var decoder = MessageReader(options.maxMessageBytes);
+        decoder.useReceiveWindow();
+        if (request.encoding ?? MessageEncoding.Identity) == MessageEncoding.Gzip {
+            decoder.useCompression(Compression.Gzip);
+        }
+        command, commands := channel.Channel<StreamCommand>.bounded(1)!;
+        reply, replies := channel.Channel<StreamReply>.bounded(1)!;
+        var stream = ConcurrentServerStream(move(command), move(replies), completionDescriptor()!,
+                                            move(request), options);
+        var input = ConcurrentStreamInput{handler: handler, stream: move(stream)};
+        var run = [move(input)]() !void => {
+            var owned = move(input);
+            owned.run()
+        };
+        var job = group.spawn<void>(move(run))!;
+        streaming.push(PendingStream(id, alarm, move(job), move(commands), move(reply), move(decoder)))
+    }
+
+    pub func streamAt(id: i32) ?*PendingStream {
+        for index in usize(0)..streaming.len() {
+            var stream = streaming.atMut(index);
+            if stream.id == id { return some(stream); }
+        }
+        null
+    }
+
     pub func cancel(stream: i32) void {
+        var active = streamAt(stream);
+        if active != null {
+            active.unwrap().cancel();
+            return;
+        }
         for index in usize(0)..running.len() {
             var call = running.atMut(index);
             if call.stream == stream {
@@ -115,6 +159,7 @@ class ConcurrentCalls {
     }
 
     pub func collect(session: *http2.Connection, limit: usize) !void {
+        collectStreams(session)!;
         var index = usize(0);
         for index < running.len() {
             var call = running.atMut(index);
@@ -137,6 +182,43 @@ class ConcurrentCalls {
             if !completed.replyable { continue; }
             sendUnaryResult(session, completed.stream, &result.result, limit, completed.compression)
                 catch (reason) { if reason != http2.Http2Error.StreamClosed { return reason; } };
+        }
+    }
+
+    pub func advanceWrites(session: *http2.Connection) !bool {
+        var queued = false;
+        for index in usize(0)..streaming.len() {
+            var stream = streaming.atMut(index);
+            var submitted = stream.advanceWrite(session) catch (reason) {
+                if reason != http2.Http2Error.StreamClosed { return reason; }
+                stream.cancel();
+                false
+            };
+            if submitted { queued = true; }
+        }
+        queued
+    }
+
+    func collectStreams(session: *http2.Connection) !void {
+        var index = usize(0);
+        for index < streaming.len() {
+            var stream = streaming.atMut(index);
+            stream.poll(session) catch (reason) {
+                if reason == http2.Http2Error.StreamClosed { stream.cancel(); }
+                else if reason == http2.Http2Error.ResourceLimit || reason == http2.Http2Error.InvalidArgument {
+                    stream.abort(session, StatusCode.ResourceExhausted) catch (failure) {
+                        if failure != http2.Http2Error.StreamClosed { return failure; }
+                    };
+                } else { return reason; }
+            };
+            if !stream.job.isFinished() { index++; continue; }
+            var completed = streaming.swapRemove(index).unwrap();
+            completed.job.join() catch (reason) {
+                if !completed.replyable { continue; }
+                completed.abort(session, streamStatus(reason)) catch (failure) {
+                    if failure != http2.Http2Error.StreamClosed { return failure; }
+                };
+            };
         }
     }
 }

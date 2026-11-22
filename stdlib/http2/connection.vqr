@@ -43,6 +43,7 @@ extern "C" func __vqr_http2_consume_connection(session: usize, size: usize) i32;
 extern "C" func __vqr_http2_consume_stream(session: usize, stream: i32, size: usize) i32;
 extern "C" func __vqr_http2_headers(session: usize, stream: i32, end: i32, data: *const u8, size: usize) i32;
 extern "C" func __vqr_http2_send(session: usize, stream: i32, data: *const u8, size: usize, end: i32) i32;
+extern "C" func __vqr_http2_has_pending_data(session: usize, stream: i32) i32;
 extern "C" func __vqr_http2_trailers(session: usize, stream: i32, data: *const u8, size: usize) i32;
 extern "C" func __vqr_http2_reset(session: usize, stream: i32, code: u32) i32;
 extern "C" func __vqr_http2_goaway(session: usize, code: u32) i32;
@@ -179,6 +180,14 @@ public:
         var empty: u8 = 0;
         var input: *const u8 = if data.len() == 0 { &empty } else { &data[0] };
         checkStatus(unsafe { __vqr_http2_send(handle, stream, input, data.len(), flag) })
+    }
+    // True while the transport needs more output or peer window credit for queued DATA.
+    const func hasPendingData(stream: i32) !bool {
+        checkOpen()!;
+        if stream <= 0 { return Http2Error.InvalidArgument; }
+        var pending = unsafe { __vqr_http2_has_pending_data(handle, stream) };
+        checkStatus(pending)!;
+        pending != 0
     }
     func sendTrailers(stream: i32, headers: *const HeaderBlock) !void {
         checkOpen()!;

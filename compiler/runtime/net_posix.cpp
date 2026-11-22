@@ -375,7 +375,9 @@ intptr_t __vqr_net_send_to(int32_t fd, const uint8_t *data, size_t size, const u
 intptr_t __vqr_net_receive_from(int32_t fd, uint8_t *data, size_t size, uint8_t *wire,
                                 int32_t *truncated, int32_t *out_error) {
     sockaddr_storage storage{};
-    iovec payload{data, size};
+    // Darwin can return immediately from an empty recvmsg without reading a packet.
+    uint8_t discarded = 0;
+    iovec payload{size == 0 ? &discarded : data, size == 0 ? 1 : size};
     msghdr message{};
     message.msg_name = &storage;
     message.msg_iov = &payload;
@@ -392,9 +394,9 @@ intptr_t __vqr_net_receive_from(int32_t fd, uint8_t *data, size_t size, uint8_t 
         *out_error = EAFNOSUPPORT;
         return -1;
     }
-    *truncated = (message.msg_flags & MSG_TRUNC) != 0;
+    *truncated = (message.msg_flags & MSG_TRUNC) != 0 || (size == 0 && count != 0);
     *out_error = 0;
-    return count;
+    return size == 0 ? 0 : count;
 }
 
 uintptr_t __vqr_net_resolve(const char *name, int32_t *out_error) {

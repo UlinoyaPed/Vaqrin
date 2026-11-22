@@ -33,7 +33,8 @@ class CompilerCase(unittest.TestCase):
             [str(arg) for arg in args], cwd=self.root, input=input, capture_output=True, timeout=25
         )
         if good:
-            self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
+            self.assertEqual(result.returncode, 0, "stderr:\n" + result.stderr.decode(errors="replace") +
+                             "\nstdout:\n" + result.stdout.decode(errors="replace"))
         else:
             self.assertNotEqual(result.returncode, 0, result.stdout.decode(errors="replace"))
         return result

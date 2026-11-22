@@ -1580,18 +1580,34 @@ ValueAt Body::expression(const Ast &n, Type *expected) {
     std::vector<Value *> elements;
     std::vector<int> temporaries;
     bool temporaryBorrow = false;
+    bool referenceElements = false;
+    Borrow origin{};
     enter();
     for (unsigned i = 0; i < n->children.size(); ++i) {
-      auto item = expression(n->children[i], array ? element : t ? t->parts[i] : nullptr);
+      const auto &syntax = n->children[i];
+      auto *expectedItem = array ? element : t ? t->parts[i] : nullptr;
+      auto item = expectedItem && expectedItem->kind == Kind::Reference
+                      ? borrow(expression(syntax), expectedItem, syntax->span, false)
+                      : expression(syntax, expectedItem);
       if (!live()) {
         leave();
         return neverValue();
       }
-      if (p.hasReference(item.type))
-        fail(n->span, "reference storage in array and tuple literals is not supported", "E230");
       types.push_back(item.type);
       temporaryBorrow |= item.temporaryBorrow;
       auto *value = read(item, n->span);
+      if (p.hasReference(item.type)) {
+        if (array || !p.copyable(item.type) || p.drops(item.type))
+          fail(syntax->span, "tuple reference elements must be read-only and copyable", "E230");
+        referenceElements = true;
+        if (item.origin.root >= 0) {
+          auto loan = bind(" <tuple loan " + std::to_string(i) + ">", item.type, false, value, syntax->span);
+          recordBorrow(loan, item, syntax->span);
+          origin = origin.root < 0 ? item.origin : joinBorrow(origin, item.origin, item.type, syntax->span);
+        } else if (!item.noPayload && !(isa<Constant>(value) && cast<Constant>(value)->isNullValue())) {
+          fail(syntax->span, "tuple reference element requires a tracked owner", "E230");
+        }
+      }
       int temporary = -1;
       if (p.drops(item.type)) {
         // Retain ownership until the remaining elements have been evaluated.
@@ -1602,6 +1618,8 @@ ValueAt Body::expression(const Ast &n, Type *expected) {
       temporaries.push_back(temporary);
     }
     if (!t) t = p.aggregate(Kind::Tuple, types);
+    if (referenceElements && (!p.copyable(t) || p.drops(t)))
+      fail(n->span, "a tuple with references requires copyable, non-owning elements", "E230");
     Value *out = Constant::getNullValue(t->ir);
     if (array) {
       // Building an LLVM constant one insertvalue at a time copies the
@@ -1619,7 +1637,7 @@ ValueAt Body::expression(const Ast &n, Type *expected) {
       if (temporaries[i] != -1) setAlive(temporaries[i], false);
     }
     leave();
-    v = {t, out, nullptr, false, -1, false, temporaryBorrow};
+    v = {t, out, nullptr, false, -1, false, temporaryBorrow, origin, referenceElements && origin.root < 0};
     break;
   }
   case NodeKind::Fields: {

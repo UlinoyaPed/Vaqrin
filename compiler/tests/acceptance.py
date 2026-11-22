@@ -1322,6 +1322,55 @@ class Acceptance(CompilerCase):
                 result = self.process(VAQC, "check", source, good=False)
                 self.assertIn(b"E230", result.stderr, result.stderr.decode())
 
+    def test_readonly_reference_tuples(self):
+        self.hosted(r"""
+            type Same = (&const i32, &const i32);
+            func twice(value: &const i32) Same { (value, value) }
+            func main() !void {
+                var first = 17;
+                var second = 25;
+                {
+                    var pair: (&const i32, &const i32, i32) = (&first, &second, 1);
+                    io.println(*pair.0 + *pair.1 + pair.2)!;
+                }
+                first++;
+                var input: &const i32 = &first;
+                a, b := twice(input);
+                io.println(a + b)!;
+            }
+        """, "43\n36\n")
+        cases = [
+            """func bad() i32 {
+                var left = 10;
+                var right = 20;
+                var pair: (&const i32, &const i32) = (&left, &right);
+                right++;
+                *pair.1
+            }""",
+            """func bad() void {
+                var first = 1;
+                var second = 2;
+                var pair: (&i32, &i32) = (&first, &second);
+            }""",
+            """func bad() void {
+                var outer = 1;
+                var pair = {
+                    var inner = 2;
+                    var value: (&const i32, &const i32) = (&outer, &inner);
+                    value
+                };
+            }""",
+            """func bad() void {
+                var first = 1;
+                var pair: (&const i32, string) = (&first, "owned");
+            }""",
+        ]
+        for index, source in enumerate(cases):
+            with self.subTest(index=index):
+                path = self.source(f"tuple-{index}/main.vqr", source)
+                result = self.process(VAQC, "check", path, good=False)
+                self.assertIn(b"E230", result.stderr, result.stderr.decode())
+
     def test_indirect_reference_return_contract(self):
         self.hosted(r"""
             type Pick = func(&const i32, &const i32) borrow(2) &const i32;

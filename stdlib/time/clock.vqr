@@ -2,24 +2,23 @@ package time
 import (cmp)
 
 class Timespec {
-    #repr: C
     pub var seconds: i64;
-    pub var nanoseconds: i64;
+    pub var nanoseconds: i32;
 }
 
-const monotonicClock: c_int = 1;
-const realtimeClock: c_int = 0;
-const absoluteSleep: c_int = 1;
-const interrupted: c_int = 4;
+const monotonicClock: i32 = 1;
+const realtimeClock: i32 = 0;
 
-extern "C" func clock_gettime(clock: c_int, value: *Timespec) c_int;
-extern "C" func clock_nanosleep(clock: c_int, flags: c_int, value: *const Timespec, remaining: *Timespec) c_int;
+extern "C" func __vqr_io_clock_now(clock: i32, seconds: *i64, nanoseconds: *i32) i32;
+extern "C" func __vqr_io_clock_sleep_until(seconds: i64, nanoseconds: i32) i32;
 
-func readClock(clock: c_int) !Timespec {
-    __vqr_validate_native_clocks();
-    var value = Timespec{seconds: 0, nanoseconds: 0};
-    if unsafe { clock_gettime(clock, &value) } != 0 { return TimeError.ClockUnavailable; }
-    value
+func readClock(clock: i32) !Timespec {
+    var seconds: i64 = 0;
+    var nanoseconds: i32 = 0;
+    if unsafe { __vqr_io_clock_now(clock, &seconds, &nanoseconds) } != 0 {
+        return TimeError.ClockUnavailable;
+    }
+    Timespec{seconds: seconds, nanoseconds: nanoseconds}
 }
 
 pub class Instant {
@@ -28,8 +27,7 @@ pub class Instant {
 public:
     static func now() !Self {
         var time = readClock(monotonicClock)!;
-        var nanos = i32(time.nanoseconds) catch { return TimeError.ClockUnavailable; };
-        Instant(Duration.fromParts(time.seconds, nanos)!)
+        Instant(Duration.fromParts(time.seconds, time.nanoseconds)!)
     }
 
     const func compare(other: Self) cmp.Ordering { offset.compare(other.offset) }
@@ -42,14 +40,9 @@ public:
     unsafe const func monotonicParts() (i64, i32) { (offset.seconds(), offset.nanosPart()) }
 
     const func waitUntil() !void {
-        __vqr_validate_native_clocks();
         if offset.isNegative() || offset.isZero() { return; }
-        var absolute = Timespec{seconds: offset.seconds(), nanoseconds: i64(offset.nanosPart())};
-        var leftover = Timespec{seconds: 0, nanoseconds: 0};
-        for {
-            var outcome = unsafe { clock_nanosleep(monotonicClock, absoluteSleep, &absolute, &leftover) };
-            if outcome == 0 { return; }
-            if outcome != interrupted { return TimeError.ClockUnavailable; }
+        if unsafe { __vqr_io_clock_sleep_until(offset.seconds(), offset.nanosPart()) } != 0 {
+            return TimeError.ClockUnavailable;
         }
     }
 }

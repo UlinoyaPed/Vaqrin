@@ -27,6 +27,23 @@ class StandardLibraryAcceptance(CompilerCase):
         self.assertEqual(compiled.returncode, 0, compiled.stderr.decode(errors="replace"))
         return self.process("./example").stdout.decode()
 
+    def test_native_clocks_and_absolute_deadline(self):
+        self.hosted(r"""
+            import (cmp, time)
+            func main() !void {
+                var utc = time.now()!;
+                io.println(utc.unixSeconds() > 1700000000)!;
+                var start = time.monotonicNow()!;
+                var delay = time.Duration.fromMillis(5);
+                var end = start.checkedAdd(delay)!;
+                var deadline = time.Deadline.at(end);
+                time.sleepUntil(end)!;
+                io.println(deadline.expired()! && deadline.remaining()!.isZero())!;
+                io.println(start.elapsed()!.compare(delay) != cmp.Ordering.Less)!;
+                time.sleepUntil(start)!;
+            }
+        """, "true\n" * 3)
+
     def test_cbor_adapter_and_decode_limits(self):
         self.hosted(r"""
             import (bytes, cbor, result, serde)

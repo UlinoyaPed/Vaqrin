@@ -26,6 +26,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
 static void set_error(int32_t *out_error, int value) {
@@ -116,6 +117,39 @@ void free_environment(char **entries, size_t count) {
 } // namespace
 
 extern "C" {
+
+int32_t __vqr_io_clock_now(int32_t monotonic, int64_t *seconds, int32_t *nanoseconds) {
+    timespec value{};
+    if (clock_gettime(monotonic != 0 ? CLOCK_MONOTONIC : CLOCK_REALTIME, &value) != 0)
+        return errno;
+    *seconds = value.tv_sec;
+    *nanoseconds = static_cast<int32_t>(value.tv_nsec);
+    return 0;
+}
+
+int32_t __vqr_io_clock_sleep_until(int64_t seconds, int32_t nanoseconds) {
+#if defined(__APPLE__)
+    for (;;) {
+        timespec now{};
+        if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return errno;
+        if (seconds < now.tv_sec || (seconds == now.tv_sec && nanoseconds <= now.tv_nsec))
+            return 0;
+        timespec remaining{seconds - now.tv_sec, nanoseconds - now.tv_nsec};
+        if (remaining.tv_nsec < 0) {
+            --remaining.tv_sec;
+            remaining.tv_nsec += 1000000000;
+        }
+        // Recheck the absolute deadline after interruption and after a relative sleep.
+        if (nanosleep(&remaining, nullptr) != 0 && errno != EINTR) return errno;
+    }
+#else
+    const timespec target{seconds, nanoseconds};
+    int status;
+    do status = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &target, nullptr);
+    while (status == EINTR);
+    return status;
+#endif
+}
 
 int32_t __vqr_io_random(uint8_t *dst, size_t length) {
     while (length > 0) {

@@ -11,11 +11,6 @@ ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::v
   if (key.starts_with("__vqr_thread_")) return threadIntrinsic(key.substr(13), n, types);
   if (key.starts_with("__vqr_task_")) return taskIntrinsic(key.substr(11), n, types);
   if (key.starts_with("__vqr_sync_")) return syncIntrinsic(key.substr(11), n);
-  if (key == "__vqr_validate_native_clocks") {
-    if (!p.hostedLinux64())
-      fail(n->span, "native clocks require a hosted GNU/Linux x86-64 or AArch64 target", "E290");
-    return voidValue();
-  }
   if (key == "__vqr_posix_would_block") return {p.integer(32, true), ir.getInt32(p.hostedMac64() ? 35 : 11)};
   if (key == "__vqr_default_heap") return {p.boolTy, ir.getInt1(p.heapAvailable())};
   if (key == "__vqr_validate_channel") {

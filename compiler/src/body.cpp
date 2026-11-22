@@ -1570,6 +1570,8 @@ ValueAt Body::expression(const Ast &n, Type *expected) {
     if (array) {
       element = parseType(n->type->children[1]);
       p.ensureSized(element, n->span);
+      if (p.hasReference(element))
+        fail(n->span, "reference storage in arrays is not supported", "E230");
       t = n->type->children[0] ? parseType(n->type) : p.aggregate(Kind::Array, {element}, n->children.size());
       if (t->count != n->children.size()) fail(n->span, "array initializer count does not match its length");
     }

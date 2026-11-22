@@ -102,6 +102,7 @@ struct Type {
   bool filling = false;
   bool filled = false;
   bool cAbi = false;
+  bool scopedBorrow = false;
   std::vector<Capture> captures;
   std::vector<Type *> callable;
   Function *callEntry = nullptr;

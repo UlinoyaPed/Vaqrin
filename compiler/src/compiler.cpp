@@ -118,7 +118,7 @@ Type *Program::reference(Type *t, bool readOnly, bool compatible) {
 }
 
 bool Program::hasReference(Type *t) {
-  if (t->kind == Kind::Reference) return true;
+  if (t->kind == Kind::Reference || t->scopedBorrow) return true;
   if (t->kind != Kind::Optional && t->kind != Kind::Result && t->kind != Kind::Array &&
       t->kind != Kind::Tuple)
     return false;
@@ -478,6 +478,7 @@ Type *Program::nominal(Definition d, const std::vector<Type *> &args, bool compl
     auto *layout = kind == Kind::Interface ? voidTy->ir : StructType::create(context, id);
     t = add(kind, layout, id, args);
     t->def = d;
+    t->scopedBorrow = kind == Kind::Class && attribute(*d.decl, "borrowed") == "scoped";
     t->comptimeArguments = values;
   }
   if (complete) ensureSized(t, d.decl->span);
@@ -534,19 +535,34 @@ void Program::fill(Type *t, const Types &substitutions) {
   collect(collect, d.members);
   if (t->kind == Kind::Class) {
     t->cAbi = attribute(d, "repr") == "C";
+    bool referenceField = false;
+    if (t->scopedBorrow && std::ranges::any_of(d.attributes, [](const auto &a) { return a.name != "borrowed"; }))
+      fail(d.span, "a scoped borrow record cannot declare other class attributes", "E230");
     for (const auto *member : t->members) {
       const auto &m = *member;
+      if (t->scopedBorrow && (m.kind != DeclKind::Field || m.embed))
+        fail(m.span, "a scoped borrow record can only declare fields", "E230");
       if (m.kind != DeclKind::Field) continue;
       if (!names.insert(m.name).second) fail(m.span, "duplicate field '" + m.name + "'");
       auto *field = m.type ? type(m.type, *t->def.file, substitutions, t->comptimeArguments)
                            : evaluate(m.body, *t->def.file, nullptr, substitutions, t->comptimeArguments).first;
       ensureSized(field, m.span);
-      if (hasReference(field)) fail(m.span, "reference storage in class fields is not supported", "E230");
+      if (t->scopedBorrow) {
+        if (field->kind == Kind::Reference && field->readOnly && !field->compatible && !m.body)
+          referenceField = true;
+        else if (field->kind != Kind::Int && field->kind != Kind::Bool &&
+                 field->kind != Kind::Char && field->kind != Kind::Float)
+          fail(m.span, "scoped borrow fields require a read-only reference or scalar", "E230");
+      } else if (hasReference(field)) {
+        fail(m.span, "reference fields require #borrowed: scoped", "E230");
+      }
       if (auto *hints = options.editorHints; hints && hints->workspace && !t->def.file->standard)
         hints->index(m.nameSpan, m.nameSpan, true);
       t->fields.push_back({&m, field, static_cast<unsigned>(layout.size())});
       layout.push_back(storage(field));
     }
+    if (t->scopedBorrow && !referenceField)
+      fail(d.span, "a scoped borrow record requires a read-only reference field", "E230");
     auto copy = attribute(d, "copy");
     if (copy == "enable" && !methods(t, "deinit", false).empty() && methods(t, "copy", false).empty())
       fail(d.span, "copy-enabled class with deinit requires a copy method");
@@ -1232,7 +1248,8 @@ std::unique_ptr<Module> Program::build() {
               (d.kind == DeclKind::Function && a.name == "return_borrow") ||
               (d.kind == DeclKind::Class &&
                ((a.name == "copy" && (a.value == "enable" || a.value == "disabled")) ||
-                (a.name == "move" && a.value == "disabled") || a.name == "implements" || a.name == "derive")))
+                (a.name == "move" && a.value == "disabled") || a.name == "implements" || a.name == "derive" ||
+                (a.name == "borrowed" && a.value == "scoped"))))
             continue;
           fail(a.span, "invalid attribute '" + a.name + "' for declaration");
         }

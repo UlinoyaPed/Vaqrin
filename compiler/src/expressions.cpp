@@ -321,7 +321,7 @@ ValueAt Body::member(const Ast &n) {
     phi->addIncoming(value.value, from);
     phi->addIncoming(Constant::getNullValue(type->ir), none);
     merge({state, initialized}, state.size());
-    return {type, phi, nullptr, false, -1, false, field.temporaryBorrow};
+    return {type, phi, nullptr, false, -1, false, field.temporaryBorrow, field.origin};
   }
   auto target = base->kind == NodeKind::Generic ? base->children[0] : base;
   auto basePath = path(target);
@@ -386,7 +386,7 @@ ValueAt Body::member(const Ast &n) {
     fail(n->span, "field is not initialized yet", "E230");
   indexField(n->span, v.type, *f->decl);
   auto field = payload(v, f->index, f->type);
-  field.writable &= !f->decl->readOnly;
+  field.writable &= !f->decl->readOnly && !v.type->scopedBorrow;
   return field;
 }
 
@@ -1320,9 +1320,10 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
       returnOrigin = value.origin;
       returnTemporary = value.temporaryBorrow;
     }
-    if (t->kind == Kind::Reference) {
-      checkAccess(value, !t->readOnly, n->span);
-      if (!t->readOnly) invalidateOwnedAddresses(value);
+    if (p.hasReference(t)) {
+      const bool write = !p.copyable(t);
+      checkAccess(value, write, n->span);
+      if (write) invalidateOwnedAddresses(value);
       auto loan = bind(" <loan " + std::to_string(i) + ">", t, false, raw, n->span);
       locals[loan].origin = value.origin;
     }
@@ -1413,6 +1414,7 @@ ValueAt Body::construct(const Ast &n, Type *t, const std::vector<Definition> &de
   Value *out = Constant::getNullValue(t->ir);
   enter();
   std::vector<int> transfers;
+  Borrow origin{};
   for (const auto &f : t->fields) {
     if (!f.decl->visible && owner != t) fail(n->span, "field '" + f.decl->name + "' is private");
     auto value = explicitValues.find(f.decl->name);
@@ -1423,12 +1425,20 @@ ValueAt Body::construct(const Ast &n, Type *t, const std::vector<Definition> &de
       explicitValues.erase(value);
     }
     if (!initializer) fail(n->span, "missing initializer for '" + f.decl->name + "'");
-    auto v = expression(initializer, f.type);
+    auto v = f.type->kind == Kind::Reference
+                 ? borrow(expression(initializer), f.type, initializer->span, false)
+                 : expression(initializer, f.type);
     if (!live()) {
       leave();
       return neverValue();
     }
     auto *data = read(v, n->span);
+    if (f.type->kind == Kind::Reference) {
+      if (v.origin.root < 0) fail(initializer->span, "reference field requires a tracked owner", "E230");
+      auto loan = bind(" <field loan " + f.decl->name + ">", f.type, false, data, initializer->span);
+      recordBorrow(loan, v, initializer->span);
+      origin = origin.root < 0 ? v.origin : joinBorrow(origin, v.origin, t, initializer->span);
+    }
     if (p.drops(f.type))
       transfers.push_back(bind(" <field " + f.decl->name + ">", f.type, true, data, n->span));
     out = ir.CreateInsertValue(out, data, f.index);
@@ -1437,7 +1447,7 @@ ValueAt Body::construct(const Ast &n, Type *t, const std::vector<Definition> &de
   for (auto i : transfers)
     setAlive(i, false);
   leave();
-  return {t, out};
+  return {t, out, nullptr, false, -1, false, false, origin};
 }
 
 void Body::bindCapture(const Capture &capture, Value *environment, Span span) {
@@ -1987,9 +1997,10 @@ ValueAt Body::call(const Ast &n, Type *expected) {
       returnOrigin = v.origin;
       returnTemporary = v.temporaryBorrow;
     }
-    if (parts[i]->kind == Kind::Reference) {
-      checkAccess(v, !parts[i]->readOnly, n->span);
-      if (!parts[i]->readOnly) invalidateOwnedAddresses(v);
+    if (p.hasReference(parts[i])) {
+      const bool write = !p.copyable(parts[i]);
+      checkAccess(v, write, n->span);
+      if (write) invalidateOwnedAddresses(v);
       auto loan = bind(" <loan " + std::to_string(i) + ">", parts[i], false, value, n->span);
       locals[loan].origin = v.origin;
     }

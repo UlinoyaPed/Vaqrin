@@ -1160,6 +1160,91 @@ class Acceptance(CompilerCase):
             error = self.process(VAQC, "check", source, good=False)
             self.assertIn(b"access conflicts with active borrow", error.stderr)
 
+    def test_scoped_borrow_fields(self):
+        self.hosted(r"""
+            class View<T> {
+                #borrowed: scoped
+                pub var first: &const T;
+                pub var second: &const T;
+                pub var tag: i32;
+            }
+            func pair(value: &const i32) View<i32> {
+                View<i32>{first: value, second: value, tag: 1}
+            }
+            func first(value: View<i32>) &const i32 { value.first }
+            func main() !void {
+                var number = 11;
+                var alternate = 30;
+                {
+                    var both = View<i32>{first: &number, second: &alternate, tag: 99};
+                    io.println(*both.first + *both.second + both.tag)!;
+                    var included: ?View<i32> = some(both);
+                    switch included?.first { some(&item) => { io.println(item)!; }, null => {} }
+                }
+                number++;
+                var borrow: &const i32 = &number;
+                var held = pair(borrow);
+                io.println(*first(held))!;
+            }
+        """, "140\n11\n12\n")
+
+        view = """
+            import (coll)
+            class Owner {
+                #copy: disabled
+                pub var number: i32;
+                func deinit() void {}
+            }
+            class View {
+                #borrowed: scoped
+                pub var owner: &const Owner;
+                pub var tag: i32;
+            }
+            func consume(value: Owner) i32 { value.number }
+            func inspect(view: View, tag: i32) i32 { view.tag + tag }
+        """
+        cases = {
+            "move": """func bad() i32 {
+                var x = Owner{number: 1};
+                var saved = View{owner: &x, tag: 3};
+                consume(move(x))
+            }""",
+            "temporary": """func bad() i32 {
+                var x = Owner{number: 1};
+                inspect(View{owner: &x, tag: 3}, consume(move(x)))
+            }""",
+            "initializer": """func bad() void {
+                var x = Owner{number: 1};
+                var view = View{owner: &x, tag: consume(move(x))};
+            }""",
+            "address": """func bad() void {
+                var x = Owner{number: 1};
+                var view = View{owner: &x, tag: 3};
+                var pointer = &view;
+            }""",
+            "escape": """func bad(source: &const Owner) View {
+                var x = Owner{number: 1};
+                View{owner: &x, tag: 3}
+            }""",
+            "container": "func bad() void { var values = coll.Vec<View>(); }",
+            "array": "func bad() void { var values = [_]View{}; }",
+            "pointer_type": "type Invalid = *View;",
+            "rebind": """func bad() void {
+                var owner = Owner{number: 1};
+                var other = Owner{number: 2};
+                var view = View{owner: &owner, tag: 3};
+                var next: &const Owner = &other;
+                view.owner = next;
+            }""",
+            "mutable": "class Invalid { #borrowed: scoped; pub var owner: &Owner; }",
+        }
+        for name, body in cases.items():
+            with self.subTest(name=name):
+                source = self.source(f"{name}/main.vqr", view + body)
+                result = self.process(VAQC, "check", source, good=False)
+                diagnostic = b"assignment requires a writable location" if name == "rebind" else b"E230"
+                self.assertIn(diagnostic, result.stderr, result.stderr.decode())
+
     def test_indirect_reference_return_contract(self):
         self.hosted(r"""
             type Pick = func(&const i32, &const i32) borrow(2) &const i32;

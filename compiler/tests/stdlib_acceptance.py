@@ -361,6 +361,30 @@ class StandardLibraryAcceptance(CompilerCase):
             }
         """, "true\n" * 23)
 
+    def test_complex_log_and_exp_preserve_representable_components(self):
+        self.hosted(r"""
+            import (math)
+            func exercise<T>(largest: T, tiny: T, exponent: T, phase: T) !void {
+                var log = math.Complex<T>.new(largest, largest).log();
+                var expected = math.log<T>(largest) + math.log<T>(T(2)) / T(2);
+                io.println(math.isFinite(log.real()) && math.abs<T>(log.real() - expected) < T(0.001))!;
+                io.println(math.abs<T>(log.imag() - math.pi<T>() / T(4)) < T(0.001))!;
+                var small = math.Complex<T>.new(tiny, tiny).log();
+                io.println(math.isFinite(small.real()) && small.real() > math.log<T>(tiny))!;
+                var onAxis = math.Complex<T>.new(exponent, -T(0)).exp();
+                io.println(math.isInfinite(onAxis.real()) && onAxis.imag() == T(0) && math.signbit(onAxis.imag()))!;
+                var exponential = math.Complex<T>.new(exponent, phase).exp();
+                io.println(math.isInfinite(exponential.real()) &&
+                           math.isFinite(exponential.imag()) && exponential.imag() > T(0))!;
+            }
+            func main() !void {
+                exercise<f32>(3.3e38, 1.0e-43, 100.0, 1.0e-40)!;
+                exercise<f64>(1.7e308, 1.0e-320, 1000.0, 1.0e-320)!;
+                var computed = math.Complex<f64>.new(1000.0, 1.0e-320).exp().imag();
+                io.println(computed > 1.96e114 && computed < 1.98e114)!;
+            }
+        """, "true\n" * 11)
+
     def test_numerics(self):
         self.assertEqual(
             self.example("examples/numerics/main.vqr"),

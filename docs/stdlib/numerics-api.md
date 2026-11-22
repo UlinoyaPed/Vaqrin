@@ -96,7 +96,7 @@
 
 **Complex<T>**
 
-字段 `re`、`im`；方法 `real`、`imag`、`conjugate`、`norm`、`abs`、`arg`、`add`、`sub`、`mul`、`div`、`sqrt`、`exp`、`log`、`pow`。
+字段为 `re` 和 `im`。方法包括 `real`、`imag`、`conjugate`、`norm`、`abs`、`arg`、`add`、`sub`、`mul`、`div`、`sqrt`、`exp`、`log` 和 `pow`。`log` 缩放输入分量后计算对数模。`exp` 在公共指数溢出时分别计算实部和虚部，以保留可表示的分量及带符号零。
 
 **Interval<T>**
 
@@ -108,11 +108,11 @@
 
 ## random
 
-**错误：** `RandomError`（EmptyRange、InvalidProbability、InvalidWeights、EmptyAlphabet、InvalidAlphabet、InvalidSeed、SampleTooLarge、UnsupportedWidth）。
+**错误：** `RandomError`（EmptyRange、InvalidProbability、InvalidWeights、EmptyAlphabet、InvalidAlphabet、InvalidSeed、SampleTooLarge、UnsupportedWidth、SystemEntropyUnavailable）。
 
-**接口：** `Rng`（`nextU64`、`fill`）；`CryptoRng`（`fillSecure`）。当前没有 CryptoRng 实现。
+**接口：** `Rng`（`nextU64`、`fill`）；`CryptoRng`（`fillSecure`）。`OsRng` 实现 `CryptoRng`，通过系统熵源提供随机字节。
 
-**种子：** `Seed`（`low`、`high`、`fromU64`）；`seedFromBytes`。
+**种子**包括 `Seed`、`seedFromBytes` 和系统种子 `systemSeed`。
 
 **生成器：**
 

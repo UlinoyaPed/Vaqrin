@@ -413,6 +413,15 @@ func scaledDot(a: f64, b: f64, c: f64, d: f64) (f64, c_int) {
 }
 func infiniteComponent(x: f64) f64 { copysign(if isInfinite(x) { 1.0 } else { 0.0 }, x) }
 
+func scaledExpComponent<T>(exponent: T, factor: T, scale: T) T {
+    if factor == T(0) && !isNan(exponent) { return factor; }
+    if isInfinite(scale) && isFinite(exponent) && isFinite(factor) {
+        var shifted = toF64<T>(exponent) + logValue<f64>(absValue<f64>(toF64<T>(factor)));
+        return copysignValue(fromF64<T>(expValue<f64>(shifted)), factor);
+    }
+    scale * factor
+}
+
 pub class Complex<T> {
     pub var re: T;
     pub var im: T;
@@ -477,9 +486,18 @@ pub class Complex<T> {
     }
     pub const func exp() Self {
         var scale = expValue(re);
-        Complex<T>(scale * cosValue(im), scale * sinValue(im))
+        Complex<T>(scaledExpComponent(re, cosValue(im), scale), scaledExpComponent(re, sinValue(im), scale))
     }
-    pub const func log() Self { Complex<T>(logValue(abs()), arg()) }
+    pub const func log() Self {
+        var x = absValue<T>(re);
+        var y = absValue<T>(im);
+        if !isFinite(x) || !isFinite(y) || (x == T(0) && y == T(0)) {
+            return Complex<T>(logValue(abs()), arg());
+        }
+        var major = maxNum<T>(x, y);
+        var ratio = minNum<T>(x, y) / major;
+        Complex<T>(logValue(major) + log1p<T>(ratio * ratio) / T(2), arg())
+    }
     pub const func pow(other: Self) Self { (other.mul(log())).exp() }
 }
 

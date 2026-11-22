@@ -22,9 +22,7 @@ ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::v
     if (n->children.size() != count + 1) fail(n->span, "wrong intrinsic argument count");
   };
   if (key == "__vqr_windows_system_entropy" || key == "__vqr_windows_fill_entropy") {
-    const auto target = p.targetTriple();
-    const bool available = p.options.profile == "hosted" && target.isWindowsMSVCEnvironment() &&
-                           (target.getArch() == Triple::x86_64 || target.getArch() == Triple::aarch64);
+    const bool available = p.hostedWindows64();
     if (key == "__vqr_windows_system_entropy") {
       arity(0);
       return {p.boolTy, ir.getInt1(available)};
@@ -298,9 +296,7 @@ ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::v
     ir.CreateCondBr(ir.CreateICmpUGE(total, bytes), allocate, end);
     ir.SetInsertPoint(allocate);
     auto *padded = ir.CreateAnd(total, ir.CreateNot(mask));
-    auto allocator = p.module->getOrInsertFunction(
-        "aligned_alloc", FunctionType::get(pointer->ir, {p.sizeTy->ir, p.sizeTy->ir}, false));
-    auto *address = ir.CreateCall(allocator, {align, padded});
+    auto *address = allocateAligned(align, padded);
     auto success = wrap(result, wrap(optional, address, true).value, true);
     auto *value = ir.CreateSelect(ir.CreateIsNotNull(address), success.value, failure.value);
     ir.CreateBr(end);
@@ -464,9 +460,7 @@ ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::v
     auto *bytes = ir.CreateMul(length, size(stride));
     auto *padded = ir.CreateAnd(ir.CreateAdd(bytes, size(align - 1)), size(~(align - 1)));
     padded = ir.CreateSelect(ir.CreateICmpEQ(padded, size(0)), size(align), padded);
-    auto allocator = p.module->getOrInsertFunction("aligned_alloc",
-                                                   FunctionType::get(ptr->ir, {sizeType, sizeType}, false));
-    auto *address = ir.CreateCall(allocator, {size(align), padded});
+    auto *address = allocateAligned(size(align), padded);
     auto *result = p.aggregate(Kind::Result, {ptr});
     auto failed = wrap(result, ir.getInt32(0xfffffffc), false);
     auto *out = ir.CreateSelect(ir.CreateIsNotNull(address), wrap(result, address, true).value, failed.value);
@@ -498,7 +492,7 @@ ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::v
   if (key == "__vqr_free") {
     // A freestanding empty Vec can be destroyed without linking an allocator.
     if (heap)
-      freeAllocation(address);
+      freeAllocation(address, true);
     else
       guard(ir, ir.getFalse());
   } else if (key == "__vqr_slot_take") {

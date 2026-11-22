@@ -379,9 +379,21 @@ void Body::merge(const std::vector<std::vector<bool>> &states, std::size_t size)
   }
 }
 
-void Body::freeAllocation(Value *address) {
+Value *Body::allocateAligned(Value *alignment, Value *bytes) {
+  auto *size = p.sizeTy->ir;
+  auto *signature = FunctionType::get(ir.getPtrTy(), {size, size}, false);
+  if (p.hostedWindows64()) {
+    auto allocate = p.module->getOrInsertFunction("_aligned_malloc", signature);
+    return ir.CreateCall(allocate, {bytes, alignment});
+  }
+  auto allocate = p.module->getOrInsertFunction("aligned_alloc", signature);
+  return ir.CreateCall(allocate, {alignment, bytes});
+}
+
+void Body::freeAllocation(Value *address, bool aligned) {
   auto *ptr = PointerType::getUnqual(p.context);
-  auto free = p.module->getOrInsertFunction("free", FunctionType::get(ir.getVoidTy(), {ptr}, false));
+  auto name = aligned && p.hostedWindows64() ? "_aligned_free" : "free";
+  auto free = p.module->getOrInsertFunction(name, FunctionType::get(ir.getVoidTy(), {ptr}, false));
   ir.CreateCall(free, {address});
 }
 
@@ -398,7 +410,7 @@ void Body::releaseBox(Value *address, Value *context) {
   ir.CreateBr(end);
   ir.SetInsertPoint(fallback);
   if (p.heapAvailable()) {
-    freeAllocation(address);
+    freeAllocation(address, true);
     ir.CreateBr(end);
   } else {
     ir.CreateCall(Intrinsic::getOrInsertDeclaration(p.module.get(), Intrinsic::trap));
@@ -425,7 +437,7 @@ void Body::emitDrop(Type *t, Value *address) {
                                         AtomicOrdering::AcquireRelease);
     ir.CreateCondBr(ir.CreateICmpEQ(previous, one), last, end);
     ir.SetInsertPoint(last);
-    freeAllocation(owner);
+    freeAllocation(owner, false);
     ir.CreateBr(end);
     ir.SetInsertPoint(end);
   } else if (t->kind == Kind::Box || t->kind == Kind::Allocation) {

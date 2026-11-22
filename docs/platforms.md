@@ -12,10 +12,10 @@ variables, synchronous process execution, monotonic and UTC clocks,
 synchronous TCP, UDP and DNS, the default allocator and system entropy.
 The release matrix exercises these APIs using the installed compiler.
 Task-aware sockets, asynchronous process pipes, epoll, tasks and channels
-require GNU/Linux. The Windows matrix exercises
-the compiler, tools and `random.OsRng`. The Windows release smoke test
-links a COFF object that reads system entropy through CNG with the Visual
-Studio linker. The LLVM SDK and vaqc use the dynamic MSVC CRT.
+require GNU/Linux. The Windows matrix exercises the compiler, tools,
+default allocator, owning text and `random.OsRng`. The Windows release
+smoke test links a COFF object with the Visual Studio linker and reads system
+entropy through CNG. The LLVM SDK and vaqc use the dynamic MSVC CRT.
 Use a Visual Studio developer environment
 and Clang when using the driver's native executable link mode on Windows.
 

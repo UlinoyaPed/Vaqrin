@@ -290,7 +290,8 @@ private:
   ValueAt allocate(const Ast &n);
   ValueAt lambda(const Ast &n, Type *expected);
   void bindCapture(const Capture &capture, Value *environment, Span span);
-  void freeAllocation(Value *address);
+  Value *allocateAligned(Value *alignment, Value *bytes);
+  void freeAllocation(Value *address, bool aligned);
   void releaseBox(Value *address, Value *context);
   Value *textView(ValueAt value, Span span);
   void disposeTemporary(ValueAt value, Span span);
@@ -434,8 +435,13 @@ public:
     return options.profile == "hosted" && target.isMacOSX() &&
            (target.getArch() == llvm::Triple::x86_64 || target.getArch() == llvm::Triple::aarch64);
   }
+  bool hostedWindows64() const {
+    auto target = targetTriple();
+    return options.profile == "hosted" && target.isWindowsMSVCEnvironment() &&
+           (target.getArch() == Triple::x86_64 || target.getArch() == Triple::aarch64);
+  }
   bool heapAvailable() const {
-    return options.profile == "hosted" && (targetTriple().isOSLinux() || hostedMac64());
+    return options.profile == "hosted" && (targetTriple().isOSLinux() || hostedMac64() || hostedWindows64());
   }
   unsigned pointerBits() const { return module->getDataLayout().getPointerSizeInBits(); }
   std::string key(Definition d) const {

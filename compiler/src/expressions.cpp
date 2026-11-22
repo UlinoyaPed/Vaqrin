@@ -1710,9 +1710,7 @@ ValueAt Body::allocate(const Ast &n) {
     auto size = layout.getTypeAllocSize(p.storage(t)).getFixedValue();
     size = std::max(align, ((size + align - 1) / align) * align);
     auto sizeConstant = [&](std::uint64_t value) { return ConstantInt::get(p.sizeTy->ir, value); };
-    auto allocator = p.module->getOrInsertFunction("aligned_alloc",
-                                                   FunctionType::get(ptr, {p.sizeTy->ir, p.sizeTy->ir}, false));
-    storage = ir.CreateCall(allocator, {sizeConstant(align), sizeConstant(size)});
+    storage = allocateAligned(sizeConstant(align), sizeConstant(size));
   }
   auto *rawBox = ir.CreateInsertValue(PoisonValue::get(box->ir), storage, 0);
   rawBox = ir.CreateInsertValue(rawBox, context, 1);

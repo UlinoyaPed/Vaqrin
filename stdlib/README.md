@@ -87,7 +87,7 @@ LinkedList 使用双向节点和独立 Box 所有权表，节点地址在插入�
 
 `algo.partition` 将满足谓词的元素移到切片前部，返回前部长度。`stablePartition` 保持两组元素各自的原始顺序，最坏 O(n log n) 时间、O(log n) 栈空间。两者均支持仅可移动的元素，且不分配堆内存。`isPartitioned` 检查分区顺序，`partitionPoint` 在已分区的切片上二分查找分界位置。
 
-默认堆分配器支持 GNU/Linux 和 macOS 宿主的 x86-64 与 AArch64。Vec、VecDeque、LinkedList 和 HashMap 可绑定 `mem.AllocatorRef`；FixedVec / FixedDeque 不需要堆分配。BTree 节点目前使用默认 Box 分配器。裸机上的 Vec、VecDeque、LinkedList 和 HashMap 可以用显式分配器增长。缺少默认堆且未指定分配器时，支持两种分配方式的容器返回 `AllocatorUnavailable`。Vec 可能持有借用的分配器，因而类型能力检查禁止将其跨线程移交。
+默认堆分配器支持 GNU/Linux、macOS 和 Windows MSVC 宿主的 x86-64 与 AArch64。Vec、VecDeque、LinkedList 和 HashMap 可绑定 `mem.AllocatorRef`；FixedVec / FixedDeque 不需要堆分配。BTree 节点目前使用默认 Box 分配器。裸机上的 Vec、VecDeque、LinkedList 和 HashMap 可以用显式分配器增长。缺少默认堆且未指定分配器时，支持两种分配方式的容器返回 `AllocatorUnavailable`。Vec 可能持有借用的分配器，因而类型能力检查禁止将其跨线程移交。
 
 位流的 `LsbFirst` 从字节低位开始，也先读写结果或参数的低位。`MsbFirst` 从字节高位开始，从读写宽度所覆盖的最高位开始。读不到足够位时，`BitReader` 返回成功的空值并保持位置。超出写入容量时，`BitWriter` 返回错误并保持缓冲区和位置。
 

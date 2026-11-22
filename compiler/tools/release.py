@@ -14,8 +14,24 @@ ROOT = Path(__file__).resolve().parents[2]
 BUILD = ROOT / "build"
 WINDOWS = os.name == "nt"
 MSVC_RUNTIME = "MultiThreadedDLL"
-WINDOWS_SMOKE_SOURCE = """import (mem, random)
+WINDOWS_SMOKE_SOURCE = """import (coll, mem, random, text)
+
+func heapWorks() !bool {
+    var allocator = mem.GlobalAllocator();
+    var layout = mem.Layout.fromSizeAlign(31, 64)!;
+    var block = allocator.alloc(layout)!.unwrap();
+    var aligned = mem.isAligned(block, 64);
+    allocator.free(block, layout);
+    var items = coll.Vec<u64>();
+    for value in u64(0)..u64(96) { items.push(value)!; }
+    var boxed = new u64(23)!;
+    var owned = text.fromBytes("Windows heap".asBytes())!;
+    var copy = owned;
+    return aligned && items[95] == 95 && *boxed.asPtr() == 23 && copy == "Windows heap";
+}
+
 export "C" func main() i32 {
+    if !(heapWorks() catch { return 3; }) { return 4; }
 	var bytes = mem.zeroedBytes<16>();
     random.fillSystem(bytes[:]) catch { return 1; };
     for byte in bytes[:] { if byte != 0 { return 0; } }

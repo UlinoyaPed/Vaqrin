@@ -29,6 +29,7 @@ enum class NodeKind {
   Generic,
   If,
   Switch,
+  Select,
   Arm,
   Return,
   Break,
@@ -85,7 +86,7 @@ struct Attribute {
 enum class DeclKind { Function, Global, Alias, Error, Enum, Class, Interface, Field, Variant, Conditional };
 struct Decl {
   DeclKind kind;
-  Span span;
+  Span span, nameSpan;
   std::string name;
   Ast type, body;
   std::vector<Parameter> params;
@@ -121,5 +122,7 @@ struct File {
 };
 
 File parse(const Source &source);
+File parse(const Source &source, std::vector<Token> tokens);
+void deriveSerde(File &file);
 void printAst(const File &file);
 } // namespace vqr

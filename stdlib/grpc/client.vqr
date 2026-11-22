@@ -15,6 +15,7 @@ pub class Call {
     pub var deadline: ?time.Deadline;
     pub var id: u64;
     pub var decoder: MessageReader;
+    var compression: Compression;
     pub var sentEnd: bool;
     pub var remoteEnd: bool;
     pub var cancelled: bool;
@@ -25,9 +26,16 @@ pub class Call {
     pub var trailing: Metadata;
     pub var status: ?Status;
     pub func init(stream: i32, deadline: ?time.Deadline, id: u64, limit: usize)
-        : stream(stream), deadline(deadline), id(id), decoder(MessageReader(limit)), sentEnd(false),
-          remoteEnd(false), cancelled(false), gotHeaders(false), grpc(false), http(0),
-          initial(Metadata()), trailing(Metadata()), status(null) {}
+        : stream(stream), deadline(deadline), id(id), decoder(MessageReader(limit)),
+          compression(Compression.Identity), sentEnd(false), remoteEnd(false), cancelled(false),
+          gotHeaders(false), grpc(false), http(0), initial(Metadata()), trailing(Metadata()), status(null) {}
+    pub static func withCompression(stream: i32, deadline: ?time.Deadline, id: u64,
+                                    limit: usize, algorithm: Compression) Self {
+        var call = Call(stream, deadline, id, limit);
+        call.compression = algorithm;
+        move(call)
+    }
+    pub const func sendCompression() Compression { compression }
     pub func complete() !UnaryResponse {
         if !remoteEnd { return RpcError.CallInProgress; }
         var current = core.replace<?Status>(&status, null) ?? { return RpcError.CallClosed; };
@@ -35,6 +43,12 @@ pub class Call {
         var trailers = core.replace<Metadata>(&trailing, Metadata());
         UnaryResponse{initial: move(headers), trailing: move(trailers), status: move(current), body: null}
     }
+}
+
+class ActiveCall {
+    pub var stream: i32;
+    pub var serial: u64;
+    pub func init(stream: i32, serial: u64) : stream(stream), serial(serial) {}
 }
 
 pub class ClientConn {
@@ -45,24 +59,30 @@ pub class ClientConn {
     var secure: bool;
     var timeout: time.Duration;
     var limit: usize;
-    var active: i32;
-    var goingAway: bool;
+    var active: coll.Vec<ActiveCall>;
+    var deferred: DeferredEvents;
+    var maxCalls: usize;
+    var lastAccepted: ?i32;
+    var terminated: bool;
     var serial: u64;
 public:
     func init(wire: Transport, session: http2.Connection, authority: string, secure: bool, options: DialOptions)
         : wire(move(wire)), connection(move(session)), authority(move(authority)), secure(secure),
-          timeout(options.timeout), limit(options.maxMessageBytes), active(0), goingAway(false), serial(0) {}
+          timeout(options.timeout), limit(options.maxMessageBytes), active(coll.Vec<ActiveCall>()),
+          deferred(DeferredEvents()), maxCalls(options.maxConcurrentCalls), lastAccepted(null),
+          terminated(false), serial(0) {}
     const func maxMessageBytes() usize { limit }
     func close() !void {
-        goingAway = true;
+        terminated = true;
+        active.clear();
         connection.goAway(0) catch {};
         connection.flush(&wire) catch {};
         connection.close();
         wire.close()
     }
     func start(path: str, options: *const CallOptions) !Call {
-        if goingAway { return RpcError.ConnectionClosed; }
-        if active != 0 { return RpcError.CallInProgress; }
+        if terminated || lastAccepted != null { return RpcError.ConnectionClosed; }
+        if active.len() >= maxCalls { return RpcError.ResourceExhausted; }
         if !validMethod(path) { return RpcError.InvalidMethod; }
         var headers = http2.HeaderBlock();
         headers.add(":method", "POST")!;
@@ -71,22 +91,24 @@ public:
         headers.add(":authority", authority)!;
         headers.add("content-type", "application/grpc")!;
         headers.add("te", "trailers")!;
-        headers.add("grpc-accept-encoding", "identity")!;
+        headers.add("grpc-accept-encoding", "identity,gzip")!;
+        if options.compression == Compression.Gzip { headers.add("grpc-encoding", "gzip")!; }
         if options.deadline != null {
             var remaining = options.deadline.unwrap().remaining()!;
             var value = durationHeader(remaining)!;
             headers.add("grpc-timeout", value)!;
         }
         options.metadata.writeTo(&headers)!;
+        active.reserve(active.len() + 1)!;
         var stream = connection.request(&headers, false)!;
-        active = stream;
         serial +%= 1;
-        Call(stream, options.deadline, serial, limit)
+        active.push(ActiveCall(stream, serial))!;
+        Call.withCompression(stream, options.deadline, serial, limit, options.compression)
     }
     func sendMessage(call: *Call, message: []const u8) !void {
         requireActive(call)!;
         if call.sentEnd { return RpcError.CallClosed; }
-        var encoded = frame(message, limit)!;
+        var encoded = frameMessage(message, limit, call.sendCompression())!;
         connection.sendData(call.stream, encoded.asConstSlice(), false)!;
         updateTimeout(call)!;
         connection.flush(&wire)
@@ -102,8 +124,10 @@ public:
     func cancel(call: *Call) !void {
         requireActive(call)!;
         call.cancelled = true;
-        active = 0;
-        connection.reset(call.stream, 8)!;
+        removeCall(call.stream);
+        var reset = connection.reset(call.stream, 8);
+        drainCallEvents(call.stream);
+        reset!;
         wire.setTimeout(timeout)!;
         connection.flush(&wire)
     }
@@ -113,7 +137,14 @@ public:
         requireActive(call)!;
         readMessage(call) catch (reason) {
             var expired = call.deadline != null && (call.deadline.unwrap().expired() catch { false });
-            cancel(call) catch { goingAway = true; };
+            if reason == RpcError.ConnectionClosed || terminated {
+                removeCall(call.stream);
+                drainCallEvents(call.stream);
+            } else {
+                cancel(call) catch (problem) {
+                    if problem != http2.Http2Error.StreamClosed { terminated = true; }
+                };
+            }
             if expired { return RpcError.DeadlineExceeded; }
             return reason;
         }
@@ -133,7 +164,60 @@ public:
 private:
     const func requireActive(call: *const Call) !void {
         if call.cancelled { return RpcError.Cancelled; }
-        if active != call.stream || serial != call.id || active == 0 { return RpcError.CallClosed; }
+        if terminated { return RpcError.ConnectionClosed; }
+        var index = findCall(call.stream) ?? { return RpcError.CallClosed; };
+        if active.at(index).serial != call.id { return RpcError.CallClosed; }
+    }
+    const func findCall(stream: i32) ?usize {
+        for i in usize(0)..active.len() {
+            if active.at(i).stream == stream { return some(i); }
+        }
+        null
+    }
+    func removeCall(stream: i32) void {
+        var index = findCall(stream) ?? { return; };
+        active.swapRemove(index);
+    }
+    func drainCallEvents(stream: i32) void {
+        for {
+            var discarded = deferred.forStream(stream) ?? { return; };
+        }
+    }
+    func nextEvent(call: *const Call) !http2.Event {
+        for {
+            updateTimeout(call)!;
+            var deferredEvent = deferred.forStream(call.stream);
+            switch move(deferredEvent) {
+                some(waiting) => { return move(waiting); },
+                null => {},
+            };
+            if terminated || (lastAccepted != null && call.stream > lastAccepted.unwrap()) {
+                return RpcError.ConnectionClosed;
+            }
+            var event = connection.next()! ?? {
+                connection.flush(&wire)!;
+                if !connection.receive(&wire)! {
+                    terminated = true;
+                    return RpcError.ConnectionClosed;
+                }
+                continue;
+            };
+            if event.kind == http2.EventKind.GoAway {
+                if event.code != 0 { terminated = true; return RpcError.ConnectionClosed; }
+                if lastAccepted == null || event.stream < lastAccepted.unwrap() {
+                    lastAccepted = some(event.stream);
+                }
+                continue;
+            }
+            if event.kind == http2.EventKind.Data { connection.consumeConnection(event.payload().len())!; }
+            if event.stream == call.stream { return move(event); }
+            if findCall(event.stream) != null {
+                deferred.defer(move(event)) catch (reason) {
+                    terminated = true;
+                    return reason;
+                };
+            }
+        }
     }
     func updateTimeout(call: *const Call) !void {
         var duration = timeout;
@@ -152,24 +236,14 @@ private:
         // An early final response can arrive before the application half-closes.
         if !call.sentEnd { connection.reset(call.stream, 0) catch {}; }
         call.remoteEnd = true;
-        active = 0;
+        removeCall(call.stream);
+        drainCallEvents(call.stream);
     }
     func readMessage(call: *Call) !?coll.Vec<u8> {
         for {
             var message = call.decoder.next()!;
             if message != null { return move(message); }
-            var event = connection.next()! ?? {
-                updateTimeout(call)!;
-                connection.flush(&wire)!;
-                if !connection.receive(&wire)! { return RpcError.ConnectionClosed; }
-                continue;
-            };
-            if event.kind == http2.EventKind.GoAway {
-                goingAway = true;
-                if event.stream < call.stream || event.code != 0 { return RpcError.ConnectionClosed; }
-                continue;
-            }
-            if event.stream != call.stream { continue; }
+            var event = nextEvent(call)!;
             switch event.kind {
                 http2.EventKind.Headers => {
                     var info = parseHeaders(&event)!;
@@ -179,7 +253,9 @@ private:
                         call.http = info.http;
                         call.grpc = info.http == 200 && info.grpc;
                         call.gotHeaders = true;
-                        if !info.identity && call.grpc { return RpcError.UnsupportedEncoding; }
+                        var encoding = info.encoding ?? MessageEncoding.Identity;
+                        if call.grpc && encoding == MessageEncoding.Unsupported { return RpcError.UnsupportedEncoding; }
+                        if encoding == MessageEncoding.Gzip { call.decoder.useCompression(Compression.Gzip); }
                     }
                     if info.remoteStatus != null {
                         if (event.code & 1) == 0 || call.status != null { return RpcError.Protocol; }
@@ -196,7 +272,7 @@ private:
                 },
                 http2.EventKind.Data => {
                     if call.grpc { call.decoder.feed(event.payload())!; }
-                    connection.consume(call.stream, event.payload().len())!;
+                    connection.consumeStream(call.stream, event.payload().len())!;
                 },
                 http2.EventKind.EndStream => {
                     finishRemote(call)!;

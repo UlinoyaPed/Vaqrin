@@ -1,5 +1,5 @@
 package http
-import (coll, fmt, io, parse, text)
+import (coll, fmt, io, mem, parse, text)
 
 class ReadBudget {
     pub var remaining: usize;
@@ -40,6 +40,25 @@ func version(value: str) !bool {
     if value == "HTTP/1.1" { return true; }
     if value == "HTTP/1.0" { return false; }
     HttpError.InvalidStartLine
+}
+
+func connectionClose(fields: *const HeaderMap) bool {
+    for field in fields.items() {
+        if !sameName(field.0, "Connection") { continue; }
+        var value = field.1.asBytes();
+        var pos: usize = 0;
+        for pos < value.len() {
+            var end = pos + byteAt(value[pos..value.len()], 44);
+            var left = pos;
+            var right = end;
+            for left < right && (value[left] == 32 || value[left] == 9) { left++; }
+            for right > left && (value[right - 1] == 32 || value[right - 1] == 9) { right--; }
+            if sameName(unsafe { __vqr_text_borrow_utf8(value[left..right]) }, "close") { return true; }
+            if end == value.len() { break; }
+            pos = end + 1;
+        }
+    }
+    false
 }
 
 func readFields(reader: *io.Reader, limits: HttpLimits, budget: *ReadBudget) !HeaderMap {
@@ -96,55 +115,15 @@ func inspect(fields: *const HeaderMap) !Framing {
     out
 }
 
-func appendBody(reader: *io.Reader, body: *coll.Vec<u8>, count: usize, limit: usize) !void {
-    var start = body.len();
-    if start > limit || count > limit - start { return HttpError.BodyLimit; }
-    body.reserveAdditional(count)!;
-    for i in usize(0)..count { body.push(0)!; }
-    var bytes = body.asSlice();
-    io.readExact(reader, bytes[start..bytes.len()])
-}
-
-func readChunked(reader: *io.Reader, limits: HttpLimits, budget: *ReadBudget) !Body {
-    var body = coll.Vec<u8>();
-    for {
-        var line = readLine(reader, limits.maxLineBytes, budget)!;
-        var raw = line.asBytes();
-        var end = byteAt(raw, 59);
-        for byte in raw[end..raw.len()] {
-            if (byte < 32 && byte != 9) || byte >= 127 { return HttpError.InvalidFraming; }
-        }
-        var sizeText = unsafe { __vqr_text_borrow_utf8(raw[0..end]) };
-        var count = digits(sizeText, 16)!;
-        if count == 0 {
-            var trailers = readFields(reader, limits, budget)!;
-            if trailers.contains("Content-Length") || trailers.contains("Transfer-Encoding") ||
-               trailers.contains("Host") || trailers.contains("Connection") {
-                return HttpError.InvalidFraming;
-            }
-            return Body.fromOwned(move(body));
-        }
-        appendBody(reader, &body, count, limits.maxBodyBytes)!;
-        if readByte(reader)! != 13 || readByte(reader)! != 10 { return HttpError.InvalidFraming; }
-    }
-}
-
-func readBody(reader: *io.Reader, framing: Framing, limits: HttpLimits, budget: *ReadBudget,
-              untilClose: bool) !Body {
-    if framing.chunked { return readChunked(reader, limits, budget); }
-    if framing.length == null && untilClose {
-        var bytes = io.readToEnd(reader, limits.maxBodyBytes) catch (reason) {
-            if reason == io.IoError.LimitExceeded { return HttpError.BodyLimit; }
-            return reason;
-        };
-        return Body.fromOwned(move(bytes));
-    }
-    var body = coll.Vec<u8>();
-    appendBody(reader, &body, framing.length ?? 0, limits.maxBodyBytes)!;
-    Body.fromOwned(move(body))
-}
-
 pub func parseRequest(reader: *io.Reader, limits: HttpLimits) !Request {
+    request, body := parseRequestStream(reader, limits)!;
+    var bytes = io.readToEnd(&body, limits.maxBodyBytes)!;
+    request.setBody(Body.fromOwned(move(bytes)));
+    move(request)
+}
+
+// Keep the input alive while consuming the body.
+pub func parseRequestStream(reader: *io.Reader, limits: HttpLimits) !(Request, BodyReader) {
     var budget = ReadBudget{remaining: limits.maxHeaderBytes};
     var line = readLine(reader, limits.maxLineBytes, &budget)!;
     var data = line.asBytes();
@@ -163,8 +142,8 @@ pub func parseRequest(reader: *io.Reader, limits: HttpLimits) !Request {
     if !modern && framing.chunked { return HttpError.InvalidFraming; }
     var targetFields = request.headers();
     *targetFields = move(fields);
-    request.setBody(readBody(reader, framing, limits, &budget, false)!);
-    move(request)
+    var body = BodyReader(reader, framing, limits, budget, false, false)!;
+    (move(request), move(body))
 }
 
 func suppressBody(code: u16, method: Method) bool {
@@ -176,6 +155,25 @@ pub func parseResponse(reader: *io.Reader, limits: HttpLimits) !Response {
 }
 
 pub func parseResponseFor(reader: *io.Reader, method: Method, limits: HttpLimits) !Response {
+    response, persistent := parseResponseState(reader, method, limits)!;
+    move(response)
+}
+
+func parseResponseState(reader: *io.Reader, method: Method, limits: HttpLimits) !(Response, bool) {
+    response, body, persistent := parseResponseHead(reader, method, limits)!;
+    var bytes = io.readToEnd(&body, limits.maxBodyBytes)!;
+    response.setBody(Body.fromOwned(move(bytes)));
+    (move(response), persistent)
+}
+
+// The returned response carries the status and headers. The separate reader
+// yields payload bytes without buffering the complete response.
+pub func parseResponseStream(reader: *io.Reader, method: Method, limits: HttpLimits) !(Response, BodyReader) {
+    response, body, persistent := parseResponseHead(reader, method, limits)!;
+    (move(response), move(body))
+}
+
+func parseResponseHead(reader: *io.Reader, method: Method, limits: HttpLimits) !(Response, BodyReader, bool) {
     var budget = ReadBudget{remaining: limits.maxHeaderBytes};
     var line = readLine(reader, limits.maxLineBytes, &budget)!;
     var data = line.asBytes();
@@ -194,12 +192,12 @@ pub func parseResponseFor(reader: *io.Reader, method: Method, limits: HttpLimits
     if code == 101 || (method == Method.CONNECT && code >= 200 && code < 300) {
         return HttpError.UnsupportedUpgrade;
     }
+    var noBody = suppressBody(code, method);
+    var persistent = modern && (noBody || framing.chunked || framing.length != null) && !connectionClose(&fields);
     var targetFields = response.headers();
     *targetFields = move(fields);
-    if !suppressBody(code, method) {
-        response.setBody(readBody(reader, framing, limits, &budget, true)!);
-    }
-    move(response)
+    var body = BodyReader(reader, framing, limits, budget, noBody, true)!;
+    (move(response), move(body), persistent)
 }
 
 func writeFields(writer: *io.Writer, fields: *const HeaderMap, length: ?usize) !void {
@@ -235,12 +233,47 @@ pub func writeRequest(writer: *io.Writer, request: *Request) !void {
     if !framing.host { return HttpError.MissingHost; }
     var data = request.bodyBytes();
     var length = outgoingLength(framing, data.len(), true)!;
+    writeRequestHead(writer, request, length)!;
+    io.writeAll(writer, data)
+}
+
+func writeRequestHead(writer: *io.Writer, request: *Request, length: ?usize) !void {
     io.writeString(writer, methodText(request.method()))!;
     io.writeString(writer, " ")!;
     io.writeString(writer, request.target())!;
     io.writeString(writer, " HTTP/1.1\r\n")!;
-    writeFields(writer, fields, length)!;
-    io.writeAll(writer, data)
+    writeFields(writer, request.headers(), length)
+}
+
+pub func writeRequestStream(writer: *io.Writer, request: *Request, source: *io.Reader, limit: usize) !void {
+    requestTarget(request.target())!;
+    var fields = request.headers();
+    var framing = inspect(fields)!;
+    if !framing.host { return HttpError.MissingHost; }
+    if framing.length != null || request.bodyBytes().len() != 0 { return HttpError.InvalidFraming; }
+    if !framing.chunked { fields.set("Transfer-Encoding", "chunked")!; }
+    writeRequestHead(writer, request, null)!;
+    writeChunks(writer, source, limit)
+}
+
+func writeChunks(writer: *io.Writer, source: *io.Reader, limit: usize) !void {
+    var storage = __vqr_uninitialized<[8192]u8>();
+    var buffer = unsafe { (*__vqr_raw_address(&storage))[:] };
+    mem.zeroBytes(buffer);
+    var remaining = limit;
+    for {
+        var count = io.read(source, buffer)!;
+        if count == 0 { break; }
+        if count > remaining { return HttpError.BodyLimit; }
+        remaining -= count;
+        var digits: u64 = u64(count);
+        var size = fmt.formatUint(digits, 16)!;
+        io.writeString(writer, size)!;
+        io.writeString(writer, "\r\n")!;
+        io.writeAll(writer, buffer[0..count])!;
+        io.writeString(writer, "\r\n")!;
+    }
+    io.writeString(writer, "0\r\n\r\n")
 }
 
 pub func writeResponse(writer: *io.Writer, response: *Response) !void {

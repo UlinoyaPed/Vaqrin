@@ -1,5 +1,5 @@
 package grpc
-import (coll, core, http2, net, text, time, tls)
+import (coll, core, http2, io, mem, net, opt, reactor, task, text, time, tls)
 
 pub class UnaryRequest {
     #copy: disabled
@@ -10,13 +10,18 @@ pub class UnaryRequest {
 }
 
 pub interface UnaryHandler { func call(request: UnaryRequest) !UnaryResponse; }
+pub interface ConcurrentUnaryHandler { const func call(request: UnaryRequest) !UnaryResponse; }
+
+enum UnaryRoute { Synchronous(*UnaryHandler), Concurrent(*const ConcurrentUnaryHandler) }
 
 pub class ServeOptions {
     pub var timeout: time.Duration;
     pub var maxMessageBytes: usize;
     pub var maxConcurrentStreams: u32;
+    pub var compressResponses: bool;
+    pub var applicationWorkers: usize;
     pub func init() : timeout(time.Duration.fromSeconds(15)), maxMessageBytes(4 * 1024 * 1024),
-        maxConcurrentStreams(16) {}
+        maxConcurrentStreams(16), compressResponses(false), applicationWorkers(2) {}
 }
 
 pub func reply(status: Status) UnaryResponse {
@@ -28,7 +33,7 @@ pub func response(body: coll.Vec<u8>) UnaryResponse {
                   body: some(move(body))}
 }
 
-enum RouteHandler { Unary(*UnaryHandler), Streaming(*StreamingHandler) }
+enum RouteHandler { Unary(UnaryRoute), Streaming(*StreamingHandler) }
 
 class Route {
     pub var path: string;
@@ -38,11 +43,13 @@ class Route {
 class Incoming {
     #copy: disabled
     pub var stream: i32;
-    pub var route: *UnaryHandler;
+    pub var route: UnaryRoute;
     pub var decoder: MessageReader;
     pub var head: HeaderInfo;
-    pub func init(stream: i32, route: *UnaryHandler, head: HeaderInfo, limit: usize)
-        : stream(stream), route(route), decoder(MessageReader(limit)), head(move(head)) {}
+    pub func init(stream: i32, route: UnaryRoute, incoming: HeaderInfo, limit: usize)
+        : stream(stream), route(route), decoder(MessageReader(limit)), head(move(incoming)) {
+        if (head.encoding ?? MessageEncoding.Identity) == MessageEncoding.Gzip { decoder.useCompression(Compression.Gzip); }
+    }
     pub func request() !UnaryRequest {
         var body = decoder.next()! ?? { return RpcError.Protocol; };
         decoder.finish()!;
@@ -59,7 +66,12 @@ pub class Server {
 public:
     func init() : routes(coll.Vec<Route>()) {}
     func register(path: str, handler: *UnaryHandler) !void {
-        registerRoute(path, RouteHandler.Unary(handler))
+        registerRoute(path, RouteHandler.Unary(UnaryRoute.Synchronous(handler)))
+    }
+    // The shared handler must remain alive at a stable address while registered.
+    unsafe func registerConcurrent<H: ConcurrentUnaryHandler & Shareable>(path: str, handler: *const H) !void {
+        var route: *const ConcurrentUnaryHandler = handler;
+        registerRoute(path, RouteHandler.Unary(UnaryRoute.Concurrent(route)))
     }
     func registerStreaming(path: str, handler: *StreamingHandler) !void {
         registerRoute(path, RouteHandler.Streaming(handler))
@@ -70,7 +82,7 @@ public:
         var session = http2.openTls(http2.Role.Server, &socket, settings)!;
         var stream = Transport(StreamSocket.Secure(move(socket)));
         stream.setTimeout(options.timeout)!;
-        serve(&stream, &session, options)
+        serve(&stream, &session, options, false)
     }
     func serveH2c(socket: net.TcpStream, options: ServeOptions) !void {
         var settings = http2.Settings();
@@ -78,7 +90,24 @@ public:
         var session = http2.Connection.open(http2.Role.Server, settings)!;
         var stream = Transport(StreamSocket.Clear(move(socket)));
         stream.setTimeout(options.timeout)!;
-        serve(&stream, &session, options)
+        serve(&stream, &session, options, false)
+    }
+    func serveConcurrentH2c(socket: net.AsyncTcpStream, options: ServeOptions) !void {
+        var settings = http2.Settings();
+        settings.maxStreams = options.maxConcurrentStreams;
+        var session = http2.Connection.open(http2.Role.Server, settings)!;
+        var stream = Transport(StreamSocket.AsyncClear(move(socket)));
+        serve(&stream, &session, options, true)
+    }
+    func acceptConcurrentTls(listener: *net.AsyncTcpListener, acceptor: *const tls.TlsAcceptor,
+                             options: ServeOptions, deadline: ?time.Deadline) !void {
+        socket, peer := listener.accept(deadline)!;
+        var secure = acceptor.acceptAsync(move(socket), some(time.Deadline.after(options.timeout)!))!;
+        var settings = http2.Settings();
+        settings.maxStreams = options.maxConcurrentStreams;
+        var session = http2.openTls(http2.Role.Server, &secure, settings)!;
+        var stream = Transport(StreamSocket.AsyncSecure(move(secure)));
+        serve(&stream, &session, options, true)
     }
     func acceptTls(listener: *net.TcpListener, acceptor: *const tls.TlsAcceptor, options: ServeOptions) !void {
         raw, _ := listener.accept()!;
@@ -108,27 +137,68 @@ private:
             sendError(session, event.stream, StatusCode.InvalidArgument)!;
             return null;
         }
-        if !head.identity {
+        if (head.encoding ?? MessageEncoding.Identity) == MessageEncoding.Unsupported {
             sendError(session, event.stream, StatusCode.Unimplemented)!;
             return null;
         }
         some(move(head))
     }
-    func serve(wire: *Transport, session: *http2.Connection, options: ServeOptions) !void {
+    func serve(wire: *Transport, session: *http2.Connection, options: ServeOptions, concurrent: bool) !void {
+        var calls = ConcurrentCalls(if concurrent { options.applicationWorkers } else { 1 })!;
+        var watched: ?CompletionWatch = null;
+        if concurrent { watched = some(CompletionWatch(wire.descriptor()!, calls.completionDescriptor()!)!); }
+        var storage = mem.zeroedBytes<4096>();
+        var pendingTlsWrite = false;
         var active = coll.Vec<Incoming>();
         var deferred = DeferredEvents();
         var goingAway = false;
+        var receiveDeadline: ?time.Deadline = null;
         for {
-            session.flush(wire)!;
-            if goingAway && active.len() == 0 { return; }
-            var event = deferred.next(session)! ?? {
-                var received = session.receive(wire) catch (reason) {
-                    if reason == tls.TlsError.UnexpectedEof && active.len() == 0 { return; }
-                    return reason;
-                };
-                if !received {
-                    if active.len() != 0 { return RpcError.ConnectionClosed; }
-                    return;
+            if !pendingTlsWrite {
+                if concurrent {
+                    calls.clearCompletionSignal()!;
+                    calls.collect(session, options.maxMessageBytes)!;
+                    wire.setTimeout(options.timeout)!;
+                }
+                session.flush(wire)!;
+                if goingAway && active.len() == 0 && !calls.pending() { return; }
+            }
+            var next = if pendingTlsWrite { null } else { deferred.next(session)! };
+            var event = move(next) ?? {
+                if concurrent {
+                    if receiveDeadline == null { receiveDeadline = some(time.Deadline.after(options.timeout)!); }
+                    var idle = receiveDeadline.unwrap();
+                    received, interest := wire.tryRead(storage[:]) catch (reason) {
+                        if reason == tls.TlsError.UnexpectedEof && active.len() == 0 { return; }
+                        return reason;
+                    };
+                    pendingTlsWrite = interest != null && interest.unwrap().writable;
+                    if pendingTlsWrite {
+                        task.waitDescriptor(wire.descriptor()!, reactor.Interest.write(), some(idle))!;
+                        continue;
+                    }
+                    if interest != null {
+                        var wake = opt.asMutPtr<CompletionWatch>(&watched).unwrap();
+                        wake.wait(calls.nextDeadline(idle)) catch (reason) {
+                            if reason != io.IoError.DeadlineExceeded || idle.expired()! { return reason; }
+                        };
+                        continue;
+                    }
+                    if received == 0 {
+                        if active.len() != 0 { return RpcError.ConnectionClosed; }
+                        return;
+                    }
+                    session.ingest(storage[0..received])!;
+                    receiveDeadline = null;
+                } else {
+                    var received = session.receive(wire) catch (reason) {
+                        if reason == tls.TlsError.UnexpectedEof && active.len() == 0 { return; }
+                        return reason;
+                    };
+                    if !received {
+                        if active.len() != 0 { return RpcError.ConnectionClosed; }
+                        return;
+                    }
                 }
                 continue;
             };
@@ -160,7 +230,7 @@ private:
                         var index = position.unwrap();
                         var item = active.getMutPtr(index).unwrap();
                         item.decoder.feed(event.payload()) catch (reason) {
-                            sendError(session, event.stream, if reason == RpcError.MessageTooLarge {
+                            sendError(session, event.stream, if reason == RpcError.MessageTooLarge || reason == RpcError.ResourceExhausted {
                                 StatusCode.ResourceExhausted
                             } else { StatusCode.Internal })!;
                             active.swapRemove(index);
@@ -171,10 +241,11 @@ private:
                 http2.EventKind.EndStream => {
                     if position != null {
                         var item = active.swapRemove(position.unwrap()).unwrap();
-                        runHandler(session, &item, options.maxMessageBytes)!;
+                        runHandler(session, &item, options, &calls, concurrent)!;
                     }
                 },
                 http2.EventKind.Closed => {
+                    if concurrent { calls.cancel(event.stream); }
                     if position != null { active.swapRemove(position.unwrap()); }
                 },
                 http2.EventKind.GoAway => { goingAway = true; },
@@ -191,41 +262,62 @@ func callAt(calls: *const coll.Vec<Incoming>, stream: i32) ?usize {
     null
 }
 
-func runHandler(session: *http2.Connection, item: *Incoming, limit: usize) !void {
+func runHandler(session: *http2.Connection, item: *Incoming, options: ServeOptions,
+                calls: *ConcurrentCalls, concurrent: bool) !void {
     var deadline = item.head.deadline;
     if deadline != null && deadline.unwrap().expired()! {
         return sendError(session, item.stream, StatusCode.DeadlineExceeded);
     }
     var request = item.request() catch (reason) {
         return sendError(session, item.stream,
-            if reason == RpcError.MessageTooLarge { StatusCode.ResourceExhausted }
+            if reason == RpcError.MessageTooLarge || reason == RpcError.ResourceExhausted { StatusCode.ResourceExhausted }
             else if reason == RpcError.UnsupportedEncoding { StatusCode.Unimplemented }
             else { StatusCode.InvalidArgument });
     };
-    var result = item.route.call(move(request)) catch {
-        return sendError(session, item.stream, StatusCode.Internal);
-    };
-    if deadline != null && deadline.unwrap().expired()! {
-        return sendError(session, item.stream, StatusCode.DeadlineExceeded);
+    var compression = if options.compressResponses && item.head.acceptsCompressed {
+        Compression.Gzip
+    } else { Compression.Identity };
+    switch item.route {
+        UnaryRoute.Synchronous(handler) => {
+            var result = handler.call(move(request)) catch {
+                return sendError(session, item.stream, StatusCode.Internal);
+            };
+            if deadline != null && deadline.unwrap().expired()! {
+                return sendError(session, item.stream, StatusCode.DeadlineExceeded);
+            }
+            sendUnaryResult(session, item.stream, &result, options.maxMessageBytes, compression)
+        },
+        UnaryRoute.Concurrent(handler) => {
+            if !concurrent { return sendError(session, item.stream, StatusCode.Unimplemented); }
+            if calls.count() >= usize(options.maxConcurrentStreams) {
+                return sendError(session, item.stream, StatusCode.ResourceExhausted);
+            }
+            calls.start(item.stream, handler, move(request), compression, options.maxMessageBytes)
+                catch { return sendError(session, item.stream, StatusCode.ResourceExhausted); }
+        },
     }
-    var status = result.status.code;
-    if status == StatusCode.Ok && result.body == null {
-        return sendError(session, item.stream, StatusCode.Internal);
+}
+
+func sendUnaryResult(session: *http2.Connection, stream: i32, result: *const UnaryResponse,
+                     limit: usize, compression: Compression) !void {
+    if result.status.code == StatusCode.Ok && result.body == null {
+        return sendError(session, stream, StatusCode.Internal);
     }
-    sendResponse(session, item.stream, &result, limit)
+    sendResponse(session, stream, result, limit, compression)
 }
 
 func sendError(session: *http2.Connection, stream: i32, code: StatusCode) !void {
     var answer = reply(status(code, ""));
-    sendResponse(session, stream, &answer, 0)
+    sendResponse(session, stream, &answer, 0, Compression.Identity)
 }
 
 func sendResponse(session: *http2.Connection, stream: i32,
-                  response: *const UnaryResponse, limit: usize) !void {
+                  response: *const UnaryResponse, limit: usize, compression: Compression) !void {
     var headers = http2.HeaderBlock();
     headers.add(":status", "200")!;
     headers.add("content-type", "application/grpc")!;
-    headers.add("grpc-accept-encoding", "identity")!;
+    headers.add("grpc-accept-encoding", "identity,gzip")!;
+    if compression == Compression.Gzip && response.body != null { headers.add("grpc-encoding", "gzip")!; }
     response.initial.writeTo(&headers)!;
     switch response.body {
         null => {
@@ -247,7 +339,7 @@ func sendResponse(session: *http2.Connection, stream: i32,
     session.respond(stream, &headers, false)!;
     switch response.body {
         some(ref body) => {
-            var payload = frame(body.asConstSlice(), limit)!;
+            var payload = frameMessage(body.asConstSlice(), limit, compression)!;
             session.sendData(stream, payload.asConstSlice(), false)!;
         },
         null => {},

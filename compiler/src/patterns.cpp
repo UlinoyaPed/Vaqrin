@@ -239,12 +239,15 @@ ValueAt Body::match(const Ast &n, Type *expected) {
   PatternMatrix used;
   std::vector<std::vector<bool>> states;
   std::vector<std::pair<Value *, BasicBlock *>> edges;
+  bool temporaryBorrow = false;
+  Borrow origin{};
   for (std::size_t i = 1; i < n->children.size(); ++i) {
     auto arm = n->children[i];
     auto *entry = block("switch.arm");
-    using Binding = std::tuple<std::string, Type *, NodeKind, int, int>;
+    using Binding = std::tuple<std::string, Type *, NodeKind, Borrow>;
     std::vector<Binding> signature;
     std::vector<AllocaInst *> slots;
+    std::vector<Span> declarations;
     bool first = true;
     for (const auto &pattern : arm->children) {
       unsigned budget = 100000;
@@ -257,7 +260,7 @@ ValueAt Body::match(const Ast &n, Type *expected) {
       std::ranges::sort(bindings, {}, [](const auto &b) { return b.first->text; });
       std::vector<Binding> current;
       for (auto &[pat, v] : bindings) {
-        current.emplace_back(pat->text, v.type, pat->kind, v.origin.root, v.origin.via);
+        current.emplace_back(pat->text, v.type, pat->kind, v.origin);
         hintBinding(pat->span, v.type, EditorHints::BindingKind::Pattern);
       }
       if (first) {
@@ -267,8 +270,12 @@ ValueAt Body::match(const Ast &n, Type *expected) {
         first = false;
       } else if (current != signature)
         fail(pattern->span, "alternative patterns must bind the same names, types and permissions");
-      for (unsigned i = 0; i < bindings.size(); ++i)
+      if (declarations.empty())
+        for (const auto &[pattern, _] : bindings) declarations.push_back(pattern->span);
+      for (unsigned i = 0; i < bindings.size(); ++i) {
+        indexSymbol(bindings[i].first->span, declarations[i], true);
         ir.CreateStore(read(bindings[i].second, bindings[i].first->span), slots[i]);
+      }
       if (selection) ir.CreateStore(ir.getInt32(used.size() - 1), selection);
       ir.CreateBr(entry);
       ir.SetInsertPoint(next);
@@ -283,10 +290,11 @@ ValueAt Body::match(const Ast &n, Type *expected) {
       bind(" <match remainder>", ownerType, true, owner, arm->span);
     }
     for (unsigned j = 0; j < signature.size(); ++j) {
-      auto &[key, t, mode, root, via] = signature[j];
+      auto &[key, t, mode, borrowed] = signature[j];
       auto id = bind(key, t, true, ir.CreateLoad(p.storage(t), slots[j]), arm->span);
+      locals[id].declaration = declarations[j];
       if (t->kind == Kind::Reference || p.hasReference(t))
-        recordBorrow(id, {t, nullptr, nullptr, false, -1, false, false, {root, via}}, arm->span);
+        recordBorrow(id, {t, nullptr, nullptr, false, -1, false, false, borrowed}, arm->span);
     }
     auto borrow = patternBorrows.end();
     if (subject.local >= 0 && std::ranges::any_of(signature, [](const auto &item) {
@@ -297,14 +305,16 @@ ValueAt Body::match(const Ast &n, Type *expected) {
     if (borrow != patternBorrows.end()) patternBorrows.erase(borrow);
     if (live()) {
       if (!resultType) resultType = v.type;
-      if (p.hasReference(resultType))
-        fail(arm->span, "reference-valued switch expressions require explicit returns", "E230");
       if (resultType == p.voidTy) {
         if (v.type->kind == Kind::Result) fail(arm->span, "unused error result", "E231");
         if (p.drops(v.type) && !v.borrowed) drop(v.type, asPointer(v, arm->span).value);
         v = voidValue();
       }
-      auto *value = read(coerce(v, resultType, arm->span), arm->span);
+      v = coerce(v, resultType, arm->span);
+      temporaryBorrow |= v.temporaryBorrow;
+      if (p.hasReference(resultType))
+        origin = edges.empty() ? v.origin : joinBorrow(origin, v.origin, resultType, arm->span);
+      auto *value = read(v, arm->span);
       leave();
       states.push_back(initialized);
       edges.emplace_back(value, ir.GetInsertBlock());
@@ -337,7 +347,7 @@ ValueAt Body::match(const Ast &n, Type *expected) {
   auto *phi = ir.CreatePHI(resultType->ir, edges.size());
   for (auto [v, b] : edges)
     phi->addIncoming(v, b);
-  return {resultType, phi};
+  return {resultType, phi, nullptr, false, -1, false, temporaryBorrow, origin};
 }
 
 } // namespace vqr::detail

@@ -12,6 +12,8 @@ enum TlsStatus : int32_t {
     missing_protocol = -7,
     server_identity = -8,
     unexpected_eof = -9,
+    want_read = -10,
+    want_write = -11,
 };
 }
 
@@ -173,9 +175,19 @@ void load_openssl() {
 
 #undef VAQRIN_OPENSSL_FUNCTIONS
 
+struct Alpn {
+    const unsigned char *protocols;
+    unsigned int length;
+    bool required;
+};
+
 struct Session {
     SSL *ssl;
     SocketState socket;
+    Alpn alpn;
+    bool server;
+    bool nonblocking;
+    bool handshaken;
     bool failed;
 };
 
@@ -195,10 +207,11 @@ TlsResult run_tls(SSL *ssl, Operation operation) {
         const int error = api.SSL_get_error(ssl, result);
         if (error == SSL_ERROR_WANT_READ || error == SSL_ERROR_WANT_WRITE) {
             if (reason == EINTR) continue;
-            if (reason == EAGAIN || reason == EWOULDBLOCK) return {error, ETIMEDOUT};
+            return {error, error == SSL_ERROR_WANT_READ ? want_read : want_write};
         }
         if (error == SSL_ERROR_SSL) {
             const auto detail = api.ERR_peek_last_error();
+            if (ERR_SYSTEM_ERROR(detail)) return {error, ERR_GET_REASON(detail)};
             if (ERR_GET_LIB(detail) == ERR_LIB_SSL &&
                 ERR_GET_REASON(detail) == SSL_R_UNEXPECTED_EOF_WHILE_READING)
                 return {error, unexpected_eof};
@@ -215,12 +228,6 @@ bool configure_identity(SSL *ssl, const char *host) {
     return api.SSL_set1_host(ssl, host) == 1 && api.SSL_set_tlsext_host_name(ssl, host) == 1;
 }
 
-struct Alpn {
-    const unsigned char *protocols;
-    unsigned int length;
-    bool required;
-};
-
 int select_alpn(SSL *, const unsigned char **selected, unsigned char *size,
                 const unsigned char *peer, unsigned int peer_size, void *data) {
     const auto &alpn = *static_cast<const Alpn *>(data);
@@ -234,9 +241,10 @@ int select_alpn(SSL *, const unsigned char **selected, unsigned char *size,
 
 int no_password(char *, int, int, void *) { return 0; }
 
-SSL *open_tls(SocketState &socket, const char *host, const char *ca, const char *cert, const char *key,
-              Alpn &alpn, int32_t version, int32_t &status) {
-    const bool server = *cert != '\0';
+SSL *prepare_tls(Session &session, const char *host, const char *ca, const char *cert,
+                 const char *key, int32_t version, int32_t &status) {
+    const bool server = session.server;
+    auto &alpn = session.alpn;
     status = setup_failed;
     SSL_CTX *context = api.SSL_CTX_new(server ? api.TLS_server_method() : api.TLS_client_method());
     if (context == nullptr) return nullptr;
@@ -265,32 +273,45 @@ SSL *open_tls(SocketState &socket, const char *host, const char *ca, const char 
                 status = trust_store;
         }
     }
-    if (ssl != nullptr && attach_socket(ssl, socket) &&
+    if (ssl != nullptr && attach_socket(ssl, session.socket) &&
         (server || (configure_identity(ssl, host) &&
-                    (alpn.length == 0 || api.SSL_set_alpn_protos(ssl, alpn.protocols, alpn.length) == 0)))) {
-        const auto result = run_tls(ssl, [&] { return server ? api.SSL_accept(ssl) : api.SSL_connect(ssl); });
-        if (!server && api.SSL_get_verify_result(ssl) != X509_V_OK) {
-            status = certificate;
-        } else if (result.error == SSL_ERROR_NONE) {
-            const unsigned char *selected = nullptr;
-            unsigned int count = 0;
-            api.SSL_get0_alpn_selected(ssl, &selected, &count);
-            status = alpn.required && count == 0 ? missing_protocol : 0;
-        } else {
-            status = result.status != 0 ? result.status : handshake;
-        }
-    }
-    // The callback borrows alpn only for the synchronous initial handshake.
-    if (server && alpn.length != 0) api.SSL_CTX_set_alpn_select_cb(context, nullptr, nullptr);
+                    (alpn.length == 0 || api.SSL_set_alpn_protos(ssl, alpn.protocols, alpn.length) == 0))))
+        status = 0;
     api.SSL_CTX_free(context);
     if (status == 0) return ssl;
     if (ssl != nullptr) api.SSL_free(ssl);
     return nullptr;
 }
 
+bool retryable(int32_t status) { return status == want_read || status == want_write; }
+
+int32_t handshake_step(Session &session) {
+    if (session.failed) return protocol;
+    if (session.handshaken) return 0;
+    auto *ssl = session.ssl;
+    const auto result = run_tls(ssl, [&] {
+        return session.server ? api.SSL_accept(ssl) : api.SSL_connect(ssl);
+    });
+    if (retryable(result.status) && session.nonblocking) return result.status;
+    int32_t status;
+    if (!session.server && api.SSL_get_verify_result(ssl) != X509_V_OK) {
+        status = certificate;
+    } else if (result.error == SSL_ERROR_NONE) {
+        const unsigned char *selected = nullptr;
+        unsigned int count = 0;
+        api.SSL_get0_alpn_selected(ssl, &selected, &count);
+        status = session.alpn.required && count == 0 ? missing_protocol : 0;
+    } else {
+        status = retryable(result.status) ? ETIMEDOUT : result.status != 0 ? result.status : handshake;
+    }
+    session.handshaken = status == 0;
+    session.failed = status != 0;
+    return status;
+}
+
 template <class Operation>
 size_t transfer(Session &session, int32_t &status, bool reading, Operation operation) {
-    if (session.failed) {
+    if (session.failed || !session.handshaken) {
         status = protocol;
         return 0;
     }
@@ -300,36 +321,69 @@ size_t transfer(Session &session, int32_t &status, bool reading, Operation opera
         status = 0;
         return count;
     }
-    status = result.status != 0 ? result.status
-        : session.socket.eof && result.error == SSL_ERROR_SYSCALL ? unexpected_eof : protocol;
+    if (retryable(result.status) && session.nonblocking) {
+        status = result.status;
+        return 0;
+    }
+    if (retryable(result.status)) {
+        status = ETIMEDOUT;
+    } else if (reading && session.socket.eof &&
+               (result.status == EPIPE || result.status == ECONNRESET ||
+                (result.status == 0 && result.error == SSL_ERROR_SYSCALL))) {
+        status = unexpected_eof;
+    } else if (!reading && result.error == SSL_ERROR_ZERO_RETURN) {
+        status = EPIPE;
+    } else {
+        status = result.status != 0 ? result.status : protocol;
+    }
     session.failed = true;
     return 0;
 }
 
 } // namespace
 
-extern "C" uintptr_t __vqr_tls_open(int32_t fd, const char *host, const char *ca,
-                                     const char *cert, const char *key, const uint8_t *protocols,
-                                     uint32_t size, int32_t version, int32_t required, int32_t *status) {
+extern "C" uintptr_t __vqr_tls_prepare(int32_t fd, const char *host, const char *ca,
+                                        const char *cert, const char *key, const uint8_t *protocols,
+                                        uint32_t size, int32_t version, int32_t required,
+                                        int32_t nonblocking, int32_t *status) {
     if (pthread_once(&load_once, load_openssl) != 0 || !api.ready) {
         *status = unavailable;
         return 0;
     }
-    auto *session = static_cast<Session *>(malloc(sizeof(Session)));
+    auto *session = static_cast<Session *>(calloc(1, sizeof(Session) + size));
     if (session == nullptr) {
         *status = ENOMEM;
         return 0;
     }
-    Alpn alpn{protocols, size, required != 0};
+    auto *owned_protocols = reinterpret_cast<uint8_t *>(session + 1);
+    if (size != 0) memcpy(owned_protocols, protocols, size);
+    session->alpn = {owned_protocols, size, required != 0};
     session->socket = {fd, false};
-    session->ssl = open_tls(session->socket, host, ca, cert, key, alpn, version, *status);
+    session->server = *cert != '\0';
+    session->nonblocking = nonblocking != 0;
+    session->ssl = prepare_tls(*session, host, ca, cert, key, version, *status);
     if (session->ssl == nullptr) {
         free(session);
         return 0;
     }
-    session->failed = false;
-    *status = 0;
     return reinterpret_cast<uintptr_t>(session);
+}
+
+extern "C" int32_t __vqr_tls_handshake(uintptr_t handle) {
+    return handshake_step(*reinterpret_cast<Session *>(handle));
+}
+
+extern "C" void __vqr_tls_close(uintptr_t handle);
+
+extern "C" uintptr_t __vqr_tls_open(int32_t fd, const char *host, const char *ca,
+                                     const char *cert, const char *key, const uint8_t *protocols,
+                                     uint32_t size, int32_t version, int32_t required, int32_t *status) {
+    const auto handle = __vqr_tls_prepare(fd, host, ca, cert, key, protocols, size, version, required, 0, status);
+    if (handle == 0) return 0;
+    *status = __vqr_tls_handshake(handle);
+    if (*status == 0) return handle;
+    __vqr_tls_close(handle);
+    return 0;
 }
 
 extern "C" size_t __vqr_tls_alpn(uintptr_t handle, uint8_t *dst) {
@@ -355,7 +409,7 @@ extern "C" size_t __vqr_tls_write(uintptr_t handle, const uint8_t *data, size_t 
 
 extern "C" void __vqr_tls_close(uintptr_t handle) {
     auto *session = reinterpret_cast<Session *>(handle);
-    if (!session->failed) {
+    if (session->handshaken && !session->failed) {
         // Send close_notify once without waiting for a reply.
         api.ERR_clear_error();
         api.SSL_shutdown(session->ssl);
@@ -366,6 +420,12 @@ extern "C" void __vqr_tls_close(uintptr_t handle) {
 
 #else
 
+extern "C" uintptr_t __vqr_tls_prepare(int32_t, const char *, const char *, const char *, const char *,
+                                        const uint8_t *, uint32_t, int32_t, int32_t, int32_t, int32_t *status) {
+    *status = unavailable;
+    return 0;
+}
+extern "C" int32_t __vqr_tls_handshake(uintptr_t) { return unavailable; }
 extern "C" uintptr_t __vqr_tls_open(int32_t, const char *, const char *, const char *, const char *,
                                      const uint8_t *, uint32_t, int32_t, int32_t, int32_t *status) {
     *status = unavailable;

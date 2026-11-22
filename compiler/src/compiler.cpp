@@ -66,6 +66,12 @@ void Program::indexFiles() {
       if (!group.empty() && (d.kind != DeclKind::Function || group.front().decl->kind != DeclKind::Function))
         fail(d.span, "duplicate declaration '" + d.name + "'");
       group.push_back({&source, &d});
+      if (auto *hints = options.editorHints; hints && hints->workspace && !source.standard &&
+          !d.external && !d.exported && d.name != "main" &&
+          (d.kind == DeclKind::Function || d.kind == DeclKind::Global || d.kind == DeclKind::Class ||
+           d.kind == DeclKind::Interface || d.kind == DeclKind::Alias || d.kind == DeclKind::Enum ||
+           d.kind == DeclKind::Error))
+        hints->index(d.nameSpan, d.nameSpan, true);
     }
   }
 }
@@ -139,6 +145,27 @@ int Program::borrowParameter(Definition def, const std::vector<Type *> &params, 
   if (found < 0)
     fail(def.decl->span, "reference result requires a reference parameter or #return_borrow: self", "E230");
   return found;
+}
+
+std::size_t Program::functionBorrow(ArrayRef<Type *> parameters, Type *result, std::size_t explicitSource,
+                                    Span span) {
+  if (!hasReference(result)) {
+    if (explicitSource) fail(span, "borrow source requires a reference result", "E230");
+    return 0;
+  }
+  if (explicitSource != 0) {
+    if (explicitSource > parameters.size() || !hasReference(parameters[explicitSource - 1]))
+      fail(span, "borrow source must identify a reference parameter", "E230");
+    return explicitSource;
+  }
+  std::size_t source = 0;
+  for (std::size_t i = 0; i < parameters.size(); ++i) {
+    if (!hasReference(parameters[i])) continue;
+    if (source) fail(span, "reference result requires borrow(index) to identify its source", "E230");
+    source = i + 1;
+  }
+  if (!source) fail(span, "reference result requires a reference parameter", "E230");
+  return source;
 }
 
 Type *Program::box(Type *t) {
@@ -216,6 +243,7 @@ Type *Program::aggregate(Kind kind, std::vector<Type *> parts, std::uint64_t cou
     break;
   case Kind::Function:
     key = typeKey(cAbi ? "extern C func" : "func", parts);
+    if (count != 0) key += " borrow(" + std::to_string(count) + ')';
     break;
   default:
     key = typeKey("tuple", parts);
@@ -290,7 +318,7 @@ std::pair<Type *, Constant *> Program::genericValue(const Ast &arg, const File &
 }
 
 Type *Program::named(std::string name, const File &file, Span span, const Types &generics,
-                     const std::vector<Ast> &args, const Constants &values) {
+                     const std::vector<Ast> &args, const Constants &values, Span occurrence) {
   if (auto i = generics.find(name); i != generics.end() && args.empty()) return i->second;
   auto defs = resolve(file, name, span);
   if (!defs.empty()) {
@@ -299,6 +327,8 @@ Type *Program::named(std::string name, const File &file, Span span, const Types 
     if (kind != DeclKind::Alias && kind != DeclKind::Class && kind != DeclKind::Enum &&
         kind != DeclKind::Interface)
       fail(span, "'" + name + "' does not name a type");
+    if (auto *hints = options.editorHints; hints && hints->workspace && !file.standard && !d.file->standard)
+      hints->index(occurrence, d.decl->nameSpan, false);
     if (args.size() != d.decl->generics.size()) fail(span, "wrong number of type arguments for " + name);
     Types substitutions;
     Constants constants;
@@ -353,8 +383,10 @@ Type *Program::named(std::string name, const File &file, Span span, const Types 
 }
 
 Type *Program::type(const Ast &n, const File &file, const Types &generics, const Constants &values) {
+  CompileTimings::Scope timer(options.compileTimings, CompileTimings::Types);
   if (n->kind == NodeKind::TypeName || n->kind == NodeKind::Name)
-    return named(n->text, file, n->span, generics, n->children, values);
+    return named(n->text, file, n->span, generics, n->children, values,
+                 n->bindingSpans.empty() ? n->span : n->bindingSpans.front());
   if (n->kind == NodeKind::TypeArray) {
     if (!n->children[0]) fail(n->span, "inferred array length only applies to constructors");
     auto [integer, c] = evaluate(n->children[0], file, nullptr, generics, values);
@@ -377,11 +409,21 @@ Type *Program::type(const Ast &n, const File &file, const Types &generics, const
       parts.push_back(type(a, file, generics, values));
     if (n->type) {
       parts.push_back(type(n->type, file, generics, values));
-      if (n->text == "C" && std::ranges::any_of(parts, [](auto *part) {
-            return part->kind == Kind::Reference || (part->kind == Kind::Pointer && !part->ir->isPointerTy());
-          }))
-        fail(n->span, "interface views cannot use the C ABI");
-      return aggregate(Kind::Function, parts, 0, n->text == "C");
+      const bool c = n->text == "C";
+      if (c && (!n->names.empty() || std::ranges::any_of(parts, [&](auto *part) {
+            return hasReference(part) || (part->kind == Kind::Pointer && !part->ir->isPointerTy());
+          })))
+        fail(n->span, "references and interface views cannot use the C ABI");
+      std::size_t source = 0;
+      if (!n->names.empty()) {
+        const auto &text = n->names.front();
+        auto end = text.data() + text.size();
+        auto parsed = std::from_chars(text.data(), end, source);
+        if (parsed.ec != std::errc{} || parsed.ptr != end || source == 0)
+          fail(n->bindingSpans.front(), "borrow source must be a 1-based parameter index", "E230");
+      }
+      source = functionBorrow(ArrayRef<Type *>(parts).drop_back(), parts.back(), source, n->span);
+      return aggregate(Kind::Function, parts, source, c);
     }
     for (auto *t : parts)
       ensureSized(t, n->span);
@@ -415,6 +457,7 @@ std::string Program::attribute(const Decl &d, std::string_view key) {
 
 Type *Program::nominal(Definition d, const std::vector<Type *> &args, bool complete,
                         const Constants &values) {
+  CompileTimings::Scope timer(options.compileTimings, CompileTimings::Types);
   if (std::ranges::any_of(args, [&](auto *argument) { return hasReference(argument); }))
     fail(d.decl->span, "nominal types cannot store reference type arguments", "E230");
   if (args.size() + values.size() != d.decl->generics.size())
@@ -615,21 +658,30 @@ void Program::validateInterfaces(Type *type) {
       auto expectedTypes = classTypes(interface);
       expectedTypes["Self"] = type;
       for (const auto &requirement : interface->def.decl->members) {
-        if (!requirement.generics.empty() || hasComptimeParameters(requirement))
-          fail(requirement.span, "generic interface methods are not yet supported", "E290");
+        bool generic = !requirement.generics.empty() || hasComptimeParameters(requirement);
         Definition wanted{interface->def.file, &requirement};
-        auto expected = parameters(wanted, expectedTypes, nullptr, interface->comptimeArguments);
-        auto *result = this->type(requirement.type, *wanted.file, expectedTypes, interface->comptimeArguments);
+        std::vector<Type *> expected;
+        Type *result = nullptr;
+        if (!generic) {
+          expected = parameters(wanted, expectedTypes, nullptr, interface->comptimeArguments);
+          result = this->type(requirement.type, *wanted.file, expectedTypes, interface->comptimeArguments);
+        }
         std::vector<Definition> matches;
         for (auto found : methods(type, requirement.name, false)) {
           const auto &method = *found.decl;
           if (!method.visible || !found.publicPath || method.unsafe != requirement.unsafe ||
               method.readOnly != requirement.readOnly || method.params.size() != requirement.params.size() ||
-              method.comptime != requirement.comptime || !method.generics.empty() ||
-              hasComptimeParameters(method))
+              method.comptime != requirement.comptime)
             continue;
           auto *owner = found.declaringType ? found.declaringType : type;
           auto methodTypes = classTypes(owner);
+          if (generic) {
+            if (matchesGenericInterface(wanted, expectedTypes, interface->comptimeArguments,
+                                        found, methodTypes, owner->comptimeArguments))
+              matches.push_back(std::move(found));
+            continue;
+          }
+          if (!method.generics.empty() || hasComptimeParameters(method)) continue;
           auto actual = parameters(found, methodTypes, nullptr, owner->comptimeArguments);
           if (actual != expected) continue;
           if (this->type(method.type, *found.file, methodTypes, owner->comptimeArguments) != result) continue;
@@ -669,33 +721,38 @@ GlobalVariable *Program::interfaceTable(Type *type, Type *interface, Span span) 
   interfaceTables.emplace(id, table);
   std::vector<Constant *> functions;
   for (const auto &method : methods) {
+    if (!method.decl->generics.empty() || hasComptimeParameters(*method.decl)) {
+      functions.push_back(ConstantPointerNull::get(PointerType::getUnqual(context)));
+      continue;
+    }
     auto *owner = method.declaringType ? method.declaringType : type;
     auto &entry = function(method, classTypes(owner), owner);
-    if (method.receiverPath.empty()) {
-      functions.push_back(entry.ir);
-    } else {
-      auto *thunk = Function::Create(entry.ir->getFunctionType(), GlobalValue::InternalLinkage,
-                                     "vqr.interface.receiver", *module);
-      thunk->setDoesNotThrow();
-      IRBuilder<> builder(BasicBlock::Create(context, "entry", thunk));
-      Type *current = type;
-      Value *address = thunk->getArg(0);
-      for (auto field : method.receiverPath) {
-        address = builder.CreateStructGEP(current->ir, address, field);
-        current = current->fields[field].type;
-      }
-      std::vector<Value *> parameters{address};
-      for (unsigned i = 1; i < thunk->arg_size(); ++i) parameters.push_back(thunk->getArg(i));
-      auto *call = builder.CreateCall(entry.ir, parameters);
-      if (entry.result == neverTy) builder.CreateUnreachable();
-      else if (entry.result == voidTy) builder.CreateRetVoid();
-      else builder.CreateRet(call);
-      functions.push_back(thunk);
-    }
+    functions.push_back(interfaceThunk(type, method, entry));
     lower(entry);
   }
   table->setInitializer(ConstantArray::get(layout, functions));
   return table;
+}
+
+Function *Program::interfaceThunk(Type *type, const Definition &method, FunctionEntry &entry) {
+  if (method.receiverPath.empty()) return entry.ir;
+  auto *thunk = Function::Create(entry.ir->getFunctionType(), GlobalValue::InternalLinkage,
+                                 "vqr.interface.receiver", *module);
+  thunk->setDoesNotThrow();
+  IRBuilder<> builder(BasicBlock::Create(context, "entry", thunk));
+  Type *current = type;
+  Value *address = thunk->getArg(0);
+  for (auto field : method.receiverPath) {
+    address = builder.CreateStructGEP(current->ir, address, field);
+    current = current->fields[field].type;
+  }
+  std::vector<Value *> parameters{address};
+  for (unsigned i = 1; i < thunk->arg_size(); ++i) parameters.push_back(thunk->getArg(i));
+  auto *call = builder.CreateCall(entry.ir, parameters);
+  if (entry.result == neverTy) builder.CreateUnreachable();
+  else if (entry.result == voidTy) builder.CreateRetVoid();
+  else builder.CreateRet(call);
+  return thunk;
 }
 
 bool Program::satisfies(Type *t, const Ast &constraint, const File &file, const Types &generics,
@@ -801,9 +858,20 @@ bool Program::transferable(Type *t, bool shared) {
         allowed = false;
       else if (file.standard && file.package == "coll" && name == "FixedVec")
         allowed = check(type->parts[0]);
-      // The private channel queue creates its buffers only with the default allocator.
+      // The private queue uses the default allocator.
       else if (file.standard && file.package == "channel" && name == "Queue")
         allowed = check(type->parts[0]);
+      // The logging queue owns a deep, default-allocator copy of each record.
+      else if (file.standard && file.package == "log" && name == "QueuedRecord")
+        allowed = !shared;
+      // This private gRPC adapter transfers decoder-owned request buffers and
+      // copies worker responses into default-allocator storage before joining.
+      else if (file.standard && file.package == "grpc" &&
+               (name == "ConcurrentInput" || name == "ConcurrentOutput"))
+        allowed = !shared;
+      // Select registrations borrow stable storage protected by the mailbox mutex.
+      else if (file.standard && file.package == "channel" && name == "Mailbox")
+        allowed = !shared && check(type->parts[0]);
       else
         allowed = std::ranges::all_of(type->fields, [&](const auto &field) { return check(field.type); });
       break;
@@ -982,6 +1050,7 @@ std::vector<Type *> Program::parameters(Definition d, const Types &types, Type *
 }
 
 FunctionEntry &Program::function(Definition d, Types substitutions, Type *owner, Constants values) {
+  CompileTimings::Scope timer(options.compileTimings, CompileTimings::Instantiation);
   auto &decl = *d.decl;
   if (owner) values.insert(owner->comptimeArguments.begin(), owner->comptimeArguments.end());
   auto params = parameters(d, substitutions, owner, values);
@@ -1013,16 +1082,13 @@ FunctionEntry &Program::function(Definition d, Types substitutions, Type *owner,
     if (hasComptimeParameters(decl) || !decl.generics.empty())
       fail(decl.span, "C functions require a fixed runtime signature");
     if (!cSymbols.insert(decl.name).second) fail(decl.span, "duplicate C symbol '" + decl.name + "'");
-    if (d.file->standard && decl.external && decl.name.starts_with("__vqr_io_") && !hostedLinux64())
-      fail(decl.span, "host I/O requires hosted GNU/Linux x86-64 or AArch64", "E290");
-    auto scalar = [](Type *t) {
-      return (t->kind == Kind::Int && (t->bits == 8 || t->bits == 16 || t->bits == 32 || t->bits == 64)) ||
-             t->kind == Kind::Float ||
-             (t->kind == Kind::Pointer && t->ir->isPointerTy()) || (t->kind == Kind::Function && t->cAbi);
-    };
-    if ((ret != voidTy && !scalar(ret)) || !std::ranges::all_of(params, scalar))
-      fail(decl.span, "C ABI requires supported scalar types; aggregate bridges are not yet supported",
-           "E290");
+    if (d.file->standard && decl.external && decl.name.starts_with("__vqr_io_") && !hostedLinux64()) {
+      if (decl.name.starts_with("__vqr_io_reactor_"))
+        fail(decl.span, "the epoll reactor requires hosted GNU/Linux x86-64 or AArch64", "E290");
+      if (!hostedMac64())
+        fail(decl.span, "host I/O requires hosted GNU/Linux or macOS on x86-64 or AArch64", "E290");
+    }
+    validateCAbi(ret, params, decl.span);
   }
   if (owner && decl.name == "deinit" && (ret != voidTy || !decl.params.empty() || decl.readOnly))
     fail(decl.span, "deinit must be a mutable instance method with no arguments returning void");
@@ -1040,23 +1106,26 @@ FunctionEntry &Program::function(Definition d, Types substitutions, Type *owner,
   auto *signature = FunctionType::get(ret->ir, args, false);
   bool c = decl.external || decl.exported;
   bool publiclyLinked = c || (options.emit != "exe" && decl.visible && !owner && (!d.file->standard || d.file->package == root));
-  auto linkage = publiclyLinked ? GlobalValue::ExternalLinkage : GlobalValue::InternalLinkage;
-  auto *fn = Function::Create(signature, linkage, c ? decl.name : "vqr." + instance, *module);
+  bool aggregateC = c && hasAggregateCAbi(ret, params);
+  auto linkage = publiclyLinked && !aggregateC ? GlobalValue::ExternalLinkage : GlobalValue::InternalLinkage;
+  auto *fn = Function::Create(signature, linkage, c && !aggregateC ? decl.name : "vqr." + instance, *module);
+  auto *bridge = aggregateC ? bridgeC(fn, ret, params, d) : nullptr;
   if (decl.external && d.file->standard && d.file->package == "math_ffi")
     fn->addFnAttr("vaqrin.libm");
   fn->setDoesNotThrow();
   if (ret == neverTy) fn->setDoesNotReturn();
-  if (c && extendCNarrowInteger()) {
+  if (c && !aggregateC && extendCNarrowInteger()) {
     if (ret->kind == Kind::Int && ret->bits < 32)
       fn->addRetAttr(ret->sign ? llvm::Attribute::SExt : llvm::Attribute::ZExt);
     for (unsigned i = 0; i < params.size(); ++i)
       if (params[i]->kind == Kind::Int && params[i]->bits < 32)
         fn->addParamAttr(i, params[i]->sign ? llvm::Attribute::SExt : llvm::Attribute::ZExt);
   }
-  return functions
-      .emplace(instance,
-               FunctionEntry{d, ret, params, std::move(substitutions), std::move(values), fn, owner})
+  auto &entry = functions
+      .emplace(instance, FunctionEntry{d, ret, params, std::move(substitutions), std::move(values), fn, owner})
       .first->second;
+  entry.cBridge = bridge;
+  return entry;
 }
 
 Type *Program::signature(FunctionEntry &entry) {
@@ -1064,11 +1133,13 @@ Type *Program::signature(FunctionEntry &entry) {
     fail(entry.def.decl->span, "comptime parameters require a direct call");
   auto types = entry.parameters;
   types.push_back(entry.result);
-  return aggregate(Kind::Function, types, 0, entry.def.decl->external || entry.def.decl->exported);
+  auto source = borrowParameter(entry.def, entry.parameters, entry.result, false);
+  return aggregate(Kind::Function, types, source + 1, entry.def.decl->external || entry.def.decl->exported);
 }
 
 void Program::lower(FunctionEntry &entry) {
   if (entry.lowered || entry.lowering) return;
+  CompileTimings::Scope timer(options.compileTimings, CompileTimings::Lowering);
   entry.lowering = true;
   if (!entry.def.decl->external)
     Body(*this, *entry.def.file, entry.ir, entry.result, entry.substitutions, entry.def.decl->comptime,
@@ -1080,6 +1151,7 @@ void Program::lower(FunctionEntry &entry) {
 
 std::pair<Type *, Constant *> Program::evaluate(const Ast &node, const File &file, Type *expected,
                                                 const Types &generics, const Constants &values) {
+  CompileTimings::Scope timer(options.compileTimings, CompileTimings::Ctfe);
   if (auto n = mathInteger(node, true)) {
     auto *integer = expected && expected->kind == Kind::Int ? expected : this->integer(32, true);
     if ((!expected || expected->kind == Kind::Int) && fits(*n, integer->bits, integer->sign))
@@ -1106,51 +1178,55 @@ std::pair<Type *, Constant *> Program::evaluate(const Ast &node, const File &fil
 
 std::unique_ptr<Module> Program::build() {
   std::size_t checked = 0;
-  while (checked < files.size()) {
-    indexFiles();
-    const auto &file = files[checked++];
-    if (file.standard && file.package == "net" && !hostedLinux64())
-      fail(file.span, "standard package 'net' requires hosted GNU/Linux x86-64 or AArch64", "E290");
-    if (file.standard && file.package != root) continue;
-    for (const auto &d : file.declarations) {
-      std::set<std::string> seen;
-      for (const auto &a : d.attributes) {
-        if (!seen.insert(a.name).second) fail(a.span, "duplicate attribute '" + a.name + "'");
-        if ((a.name == "repr" &&
-             (d.kind == DeclKind::Enum || (d.kind == DeclKind::Class && a.value == "C"))) ||
-            (d.kind == DeclKind::Function && a.name == "return_borrow") ||
-            (d.kind == DeclKind::Class &&
-             ((a.name == "copy" && (a.value == "enable" || a.value == "disabled")) ||
-              (a.name == "move" && a.value == "disabled") || a.name == "implements")))
-          continue;
-        fail(a.span, "invalid attribute '" + a.name + "' for declaration");
-      }
-      Definition def{&file, &d};
-      if (d.name == "main") {
-        if (d.external || d.exported) {
-          if (!options.check && options.emit == "exe" && options.profile == "hosted")
-            fail(d.span, "C symbol main conflicts with the generated host entry");
-        } else {
-          auto *result = type(d.type, file);
-          if (result->kind == Kind::Result) result = result->parts[0];
-          if (result != voidTy && result != integer(32, true))
-            fail(d.span, "main must return void, !void, i32 or !i32");
-          if (!file.explicitInput && !file.selected) continue;
+  do {
+    while (checked < files.size()) {
+      indexFiles();
+      const auto &file = files[checked++];
+      if (file.standard && file.package == "net" && !hostedLinux64())
+        fail(file.span, "standard package 'net' requires hosted GNU/Linux x86-64 or AArch64", "E290");
+      if (file.standard && file.package != root) continue;
+      for (const auto &d : file.declarations) {
+        std::set<std::string> seen;
+        for (const auto &a : d.attributes) {
+          if (!seen.insert(a.name).second) fail(a.span, "duplicate attribute '" + a.name + "'");
+          if ((a.name == "repr" &&
+               (d.kind == DeclKind::Enum || (d.kind == DeclKind::Class && a.value == "C"))) ||
+              (d.kind == DeclKind::Function && a.name == "return_borrow") ||
+              (d.kind == DeclKind::Class &&
+               ((a.name == "copy" && (a.value == "enable" || a.value == "disabled")) ||
+                (a.name == "move" && a.value == "disabled") || a.name == "implements" || a.name == "derive")))
+            continue;
+          fail(a.span, "invalid attribute '" + a.name + "' for declaration");
         }
+        Definition def{&file, &d};
+        if (d.name == "main") {
+          if (d.external || d.exported) {
+            if (!options.check && options.emit == "exe" && options.profile == "hosted")
+              fail(d.span, "C symbol main conflicts with the generated host entry");
+          } else {
+            auto *result = type(d.type, file);
+            if (result->kind == Kind::Result) result = result->parts[0];
+            if (result != voidTy && result != integer(32, true))
+              fail(d.span, "main must return void, !void, i32 or !i32");
+            if (!file.explicitInput && !file.selected) continue;
+          }
+        }
+        if (d.kind == DeclKind::Global) global(def);
+        if ((d.kind == DeclKind::Enum || d.kind == DeclKind::Class) && d.generics.empty()) {
+          auto *t = nominal(def, {});
+          for (const auto *member : t->members)
+            if (member->kind == DeclKind::Function && member->generics.empty() &&
+                !hasComptimeParameters(*member))
+              function({&file, member}, classTypes(t), t);
+        }
+        if (d.kind == DeclKind::Function && d.generics.empty() && !hasComptimeParameters(d)) function(def);
+        if (d.kind == DeclKind::Alias && d.generics.empty()) named(d.name, file, d.span);
       }
-      if (d.kind == DeclKind::Global) global(def);
-      if ((d.kind == DeclKind::Enum || d.kind == DeclKind::Class) && d.generics.empty()) {
-        auto *t = nominal(def, {});
-        for (const auto *member : t->members)
-          if (member->kind == DeclKind::Function && member->generics.empty() &&
-              !hasComptimeParameters(*member))
-            function({&file, member}, classTypes(t), t);
-      }
-      if (d.kind == DeclKind::Function && d.generics.empty() && !hasComptimeParameters(d)) function(def);
-      if (d.kind == DeclKind::Alias && d.generics.empty()) named(d.name, file, d.span);
+      for (auto &[_, entry] : functions) lower(entry);
     }
-    for (auto &[_, entry] : functions) lower(entry);
-  }
+    prepareGenericInterfaces();
+  } while (checked < files.size());
+  emitGenericInterfaces();
   if (!options.check && options.emit == "exe" && options.profile == "hosted") {
     auto selected = std::ranges::find(files, true, &File::selected);
     if (selected == files.end()) fail({}, "no entry selected");

@@ -1,0 +1,41 @@
+package main
+import (coll, env, grpc, io, net, task, time, tls)
+
+class Handler {
+    #implements: grpc.ConcurrentUnaryHandler
+    pub const func call(request: grpc.UnaryRequest) !grpc.UnaryResponse {
+        if request.path == "/interop.Concurrent/Wait" {
+            io.println("waiting")!;
+            task.sleep(time.Duration.fromSeconds(2)) catch (reason) {
+                if task.isCancelled() { io.println("cancelled")!; }
+                return reason;
+            };
+        }
+        var response = grpc.response(coll.Vec<u8>.fromSlice(request.body.asConstSlice())!);
+        response.initial.addText("x-worker", "ready")!;
+        move(response)
+    }
+}
+
+func main() !void {
+    var server = grpc.Server();
+    var handler = Handler{};
+    unsafe {
+        server.registerConcurrent("/interop.Concurrent/Wait", &handler)!;
+        server.registerConcurrent("/interop.Concurrent/Fast", &handler)!;
+    }
+    var listener = net.AsyncTcpListener.bind(net.parseSocketAddr("127.0.0.1:0")!)!;
+    io.println(listener.localAddr()!.port())!;
+    var certificate = env.get("VAQRIN_RPC_CERT")!;
+    if certificate != null {
+        var cert = move(certificate).unwrap();
+        var key = env.get("VAQRIN_RPC_KEY")!.unwrap();
+        var config = tls.TlsConfig();
+        config.addProtocol("h2".asBytes())!;
+        config.requireProtocol = true;
+        var acceptor = tls.TlsAcceptor.fromPem(cert, key, move(config))!;
+        return server.acceptConcurrentTls(&listener, &acceptor, grpc.ServeOptions(), null);
+    }
+    socket, peer := listener.accept(null)!;
+    server.serveConcurrentH2c(move(socket), grpc.ServeOptions())
+}

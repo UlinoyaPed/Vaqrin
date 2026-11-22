@@ -16,7 +16,7 @@ if(LLVM_PACKAGE_VERSION VERSION_LESS 20.1.8)
     message(FATAL_ERROR "Vaqrin requires LLVM 20.1.8 or newer")
 endif()
 
-add_executable(vaqc src/driver.cpp src/inputs.cpp src/source.cpp src/tooling.cpp src/parser.cpp src/compiler.cpp src/body.cpp src/expressions.cpp src/patterns.cpp src/numeric.cpp src/ctfe.cpp src/stdlib.cpp src/std_bits.cpp src/std_atomic.cpp src/std_thread.cpp src/std_task.cpp)
+add_executable(vaqc src/driver.cpp src/inputs.cpp src/source.cpp src/syntax_cache.cpp src/tooling.cpp src/parser.cpp src/compiler.cpp src/generic_interface.cpp src/derive_serde.cpp src/c_abi.cpp src/body.cpp src/expressions.cpp src/select.cpp src/patterns.cpp src/numeric.cpp src/ctfe.cpp src/stdlib.cpp src/std_bits.cpp src/std_atomic.cpp src/std_thread.cpp src/std_task.cpp)
 target_include_directories(vaqc SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 separate_arguments(llvm_definitions NATIVE_COMMAND "${LLVM_DEFINITIONS}")
 target_compile_options(vaqc PRIVATE ${llvm_definitions}
@@ -53,10 +53,11 @@ configure_file(runtime/io_posix.cpp "${CMAKE_CURRENT_BINARY_DIR}/share/vaqrin/ru
 configure_file(runtime/decimal.cpp "${CMAKE_CURRENT_BINARY_DIR}/share/vaqrin/runtime/decimal.cpp" COPYONLY)
 configure_file(runtime/process_posix.cpp "${CMAKE_CURRENT_BINARY_DIR}/share/vaqrin/runtime/process_posix.cpp" COPYONLY)
 configure_file(runtime/net_posix.cpp "${CMAKE_CURRENT_BINARY_DIR}/share/vaqrin/runtime/net_posix.cpp" COPYONLY)
+configure_file(runtime/gzip_zlib.cpp "${CMAKE_CURRENT_BINARY_DIR}/share/vaqrin/runtime/gzip_zlib.cpp" COPYONLY)
 configure_file(runtime/http2_nghttp2.cpp "${CMAKE_CURRENT_BINARY_DIR}/share/vaqrin/runtime/http2_nghttp2.cpp" COPYONLY)
 configure_file(runtime/tls_openssl.cpp "${CMAKE_CURRENT_BINARY_DIR}/share/vaqrin/runtime/tls_openssl.cpp" COPYONLY)
 install(FILES runtime/reactor_linux.h runtime/tasks.c runtime/io_posix.cpp runtime/decimal.cpp runtime/process_posix.cpp
-    runtime/net_posix.cpp runtime/tls_openssl.cpp runtime/http2_nghttp2.cpp DESTINATION share/vaqrin/runtime)
+    runtime/net_posix.cpp runtime/tls_openssl.cpp runtime/http2_nghttp2.cpp runtime/gzip_zlib.cpp DESTINATION share/vaqrin/runtime)
 
 install(TARGETS vaqc RUNTIME DESTINATION bin)
 install(PROGRAMS tools/protoc-gen-vaqrin DESTINATION bin)

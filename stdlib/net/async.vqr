@@ -1,5 +1,5 @@
 package net
-import (io, reactor, task, time)
+import (coll, core, io, reactor, task, time)
 
 extern "C" func __vqr_net_socket_error(fd: i32) i32;
 
@@ -28,11 +28,15 @@ public:
         socket.setNonblocking(true)!;
         AsyncTcpStream(move(socket))
     }
+    static func intoTcp(value: Self) TcpStream {
+        core.replace<TcpStream>(&value.stream, TcpStream(Socket(-1)))
+    }
     const func systemDescriptor() !i32 { stream.systemDescriptor() }
     const func localAddr() !SocketAddr { stream.localAddr() }
     const func peerAddr() !SocketAddr { stream.peerAddr() }
     func setReadDeadline(value: ?time.Deadline) void { readDeadline = value; }
     func setWriteDeadline(value: ?time.Deadline) void { writeDeadline = value; }
+    func tryRead(dst: []u8) !usize { stream.read(dst) }
     func read(dst: []u8) !usize {
         var fd = systemDescriptor()!;
         if dst.len() == 0 { return 0; }
@@ -90,4 +94,76 @@ public:
         }
     }
     func close() !void { listener.close() }
+}
+
+extern "C" func __vqr_net_resolve_start(host: *const u8, status: *i32) usize;
+extern "C" func __vqr_net_resolve_event(handle: usize) i32;
+extern "C" func __vqr_net_resolve_finish(handle: usize, status: *i32) usize;
+extern "C" func __vqr_net_resolve_release(handle: usize) void;
+
+class PendingResolution {
+    #copy: disabled
+    var handle: usize;
+public:
+    func init(value: usize) : handle(value) {}
+    const func wait(port: u16, deadline: ?time.Deadline) !coll.Vec<SocketAddr> {
+        var event = unsafe { __vqr_net_resolve_event(handle) };
+        task.waitDescriptor(event, reactor.Interest.read(), deadline)!;
+        checkWait(deadline)!;
+        var reason: i32 = 0;
+        var result = unsafe { __vqr_net_resolve_finish(handle, &reason) };
+        var addresses = ResolverResults(result);
+        if reason == -1 { return NetError.NameResolution; }
+        checkStatus(reason)!;
+        addresses.copyAddresses(port)
+    }
+    func deinit() void { unsafe { __vqr_net_resolve_release(handle); } }
+}
+
+pub func resolveAddrAsync(host: str, port: u16, deadline: ?time.Deadline) !coll.Vec<SocketAddr> {
+    checkWait(deadline)!;
+    var name = cString(host)!;
+    var reason: i32 = 0;
+    var raw = unsafe { __vqr_net_resolve_start(&name[0], &reason) };
+    checkStatus(reason)!;
+    var request = PendingResolution(raw);
+    request.wait(port, deadline)
+}
+
+pub class AsyncUdpSocket {
+    #copy: disabled
+    var socket: UdpSocket;
+    func init(value: UdpSocket) : socket(move(value)) {}
+public:
+    static func bind(address: SocketAddr) !Self { AsyncUdpSocket.fromUdp(UdpSocket.bind(address)!) }
+    static func fromUdp(value: UdpSocket) !Self {
+        value.setNonblocking(true)!;
+        AsyncUdpSocket(move(value))
+    }
+    const func localAddr() !SocketAddr { socket.localAddr() }
+    func close() !void { socket.close() }
+    func sendTo(src: []const u8, address: SocketAddr, deadline: ?time.Deadline) !usize {
+        var fd = socket.systemDescriptor()!;
+        for {
+            checkWait(deadline)!;
+            var count = socket.sendTo(src, address) catch (reason) {
+                if !io.isWouldBlock(reason) { return reason; }
+                task.waitDescriptor(fd, reactor.Interest.write(), deadline)!;
+                continue;
+            };
+            return count;
+        }
+    }
+    func recvFrom(dst: []u8, deadline: ?time.Deadline) !Datagram {
+        var fd = socket.systemDescriptor()!;
+        for {
+            checkWait(deadline)!;
+            var datagram = socket.recvFrom(dst) catch (reason) {
+                if !io.isWouldBlock(reason) { return reason; }
+                task.waitDescriptor(fd, reactor.Interest.read(), deadline)!;
+                continue;
+            };
+            return datagram;
+        }
+    }
 }

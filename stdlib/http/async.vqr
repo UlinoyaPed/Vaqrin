@@ -1,0 +1,280 @@
+package http
+import (bufio, io, net, opt, text, time, tls)
+
+func dialAsync(host: str, port: u16, deadline: ?time.Deadline) !net.AsyncTcpStream {
+    var raw = host.asBytes();
+    if byteAt(raw, 58) < raw.len() {
+        var address = net.SocketAddr.new(net.IpAddr.V6(net.parseIpv6(host)!), port);
+        return net.AsyncTcpStream.connect(address, deadline);
+    }
+    var endpoints = net.resolveAddrAsync(host, port, deadline)!;
+    var last: ErrorId = net.NetError.NameResolution;
+    for endpoint in endpoints.asConstSlice() {
+        var stream = net.AsyncTcpStream.connect(endpoint, deadline) catch (reason) {
+            if reason == io.IoError.Cancelled || reason == io.IoError.DeadlineExceeded { return reason; }
+            last = reason;
+            continue;
+        };
+        return move(stream);
+    }
+    last
+}
+
+pub interface ResponseConsumer {
+    func consume(head: *const Response, body: *io.Reader) !void;
+}
+
+// One sequential HTTP/1.1 session to a fixed origin.
+pub class AsyncConnection {
+    #copy: disabled
+    var plain: ?net.AsyncTcpStream;
+    var encrypted: ?tls.TlsStream;
+    var authority: string;
+    var limits: HttpLimits;
+    var usable: bool;
+public:
+    func init(plain: ?net.AsyncTcpStream, encrypted: ?tls.TlsStream, authority: string, limits: HttpLimits)
+        : plain(move(plain)), encrypted(move(encrypted)), authority(move(authority)), limits(limits), usable(true) {}
+    const func isOpen() bool { usable }
+
+    func close() !void {
+        usable = false;
+        switch opt.asMutPtr<net.AsyncTcpStream>(&plain) {
+            some(socket) => return socket.close(),
+            null => {},
+        }
+        switch opt.asMutPtr<tls.TlsStream>(&encrypted) {
+            some(socket) => return socket.close(),
+            null => {},
+        }
+    }
+
+    func send(request: *Request) !Response {
+        sendUntil(request, some(time.Deadline.after(limits.timeout)!))
+    }
+
+    func sendUntil(request: *Request, deadline: ?time.Deadline) !Response {
+        if !usable { return io.IoError.Closed; }
+        request.headers().set("Host", authority)!;
+        var requestClose = connectionClose(request.headers());
+        var response = exchangeOnStream(request, deadline) catch (reason) {
+            close() catch {};
+            return reason;
+        };
+        if requestClose || !response.1 { close() catch {}; }
+        reply, more := move(response);
+        move(reply)
+    }
+
+    func sendStreaming(request: *Request, consumer: *ResponseConsumer) !void {
+        sendStreamUntil(request, null, consumer, some(time.Deadline.after(limits.timeout)!))
+    }
+
+    func sendWithBodyStream(request: *Request, source: *io.Reader, consumer: *ResponseConsumer) !void {
+        sendStreamUntil(request, some(source), consumer, some(time.Deadline.after(limits.timeout)!))
+    }
+
+    func sendStreamUntil(request: *Request, source: ?*io.Reader, consumer: *ResponseConsumer,
+                      deadline: ?time.Deadline) !void {
+        if !usable { return io.IoError.Closed; }
+        request.headers().set("Host", authority)!;
+        var requestClose = connectionClose(request.headers());
+        var persisted = streamResponse(request, source, consumer, deadline) catch (reason) {
+            close() catch {};
+            return reason;
+        };
+        if requestClose || !persisted { close() catch {}; }
+    }
+
+private:
+    func streamResponse(request: *Request, source: ?*io.Reader, consumer: *ResponseConsumer,
+                        deadline: ?time.Deadline) !bool {
+        switch opt.asMutPtr<net.AsyncTcpStream>(&plain) {
+            some(socket) => {
+                socket.setReadDeadline(deadline);
+                socket.setWriteDeadline(deadline);
+                return exchangeStreamed(socket, socket, request, source, limits, consumer);
+            },
+            null => {},
+        }
+        var secure = opt.asMutPtr<tls.TlsStream>(&encrypted).unwrap();
+        secure.setReadDeadline(deadline);
+        secure.setWriteDeadline(deadline);
+        exchangeStreamed(secure, secure, request, source, limits, consumer) catch (reason) { return httpTlsError(reason); }
+    }
+
+    func exchangeOnStream(request: *Request, deadline: ?time.Deadline) !(Response, bool) {
+        switch opt.asMutPtr<net.AsyncTcpStream>(&plain) {
+            some(socket) => {
+                socket.setReadDeadline(deadline);
+                socket.setWriteDeadline(deadline);
+                return exchangePersistent(socket, socket, request, limits);
+            },
+            null => {},
+        }
+        var secure = opt.asMutPtr<tls.TlsStream>(&encrypted).unwrap();
+        secure.setReadDeadline(deadline);
+        secure.setWriteDeadline(deadline);
+        exchangePersistent(secure, secure, request, limits) catch (reason) { return httpTlsError(reason); }
+    }
+}
+
+func exchangePersistent(reader: *io.Reader, writer: *io.Writer, request: *Request,
+                        limits: HttpLimits) !(Response, bool) {
+    writeRequest(writer, request)!;
+    var buffer = bufio.BufferedReader(reader, 8192)!;
+    for attempt in 0..8 {
+        response, persistent := parseResponseState(&buffer, request.method(), limits)!;
+        if response.status().value() >= 200 {
+            return (move(response), persistent && buffer.bufferLen() == 0);
+        }
+    }
+    HttpError.TooManyResponses
+}
+
+func exchangeStreamed(reader: *io.Reader, writer: *io.Writer, request: *Request, source: ?*io.Reader,
+                      limits: HttpLimits, consumer: *ResponseConsumer) !bool {
+    if source != null { writeRequestStream(writer, request, source.unwrap(), limits.maxBodyBytes)!; }
+    else { writeRequest(writer, request)!; }
+    var buffer = bufio.BufferedReader(reader, 8192)!;
+    for attempt in 0..8 {
+        response, body, persistent := parseResponseHead(&buffer, request.method(), limits)!;
+        if response.status().value() < 200 { continue; }
+        consumer.consume(&response, &body)!;
+        return persistent && body.isComplete() && buffer.bufferLen() == 0;
+    }
+    HttpError.TooManyResponses
+}
+
+pub class AsyncClient {
+    pub var limits: HttpLimits;
+    var tlsOptions: tls.TlsConfig;
+public:
+    func init() : limits(HttpLimits()), tlsOptions(tls.TlsConfig()) {}
+    func setTimeout(timeout: time.Duration) void { limits.timeout = timeout; }
+    func setRootFile(path: str) !void { tlsOptions.setRootFile(path) }
+
+    const func connect(address: str) !AsyncConnection {
+        connectUntil(address, some(time.Deadline.after(limits.timeout)!))
+    }
+
+    const func connectUntil(address: str, deadline: ?time.Deadline) !AsyncConnection {
+        var target = parseUrl(address)!;
+        var secure = sameName(target.scheme(), "https");
+        if !secure && !sameName(target.scheme(), "http") { return HttpError.UnsupportedScheme; }
+        var host = httpHost(&target)!;
+        var authority = hostHeader(&target, host)!;
+        var defaultPort: u16 = if secure { 443 } else { 80 };
+        var socket = dialAsync(host, target.port() ?? defaultPort, deadline)!;
+        if secure {
+            var encrypted = tlsOptions.connectAsync(move(socket), host, deadline) catch (reason) {
+                return httpTlsError(reason);
+            };
+            return AsyncConnection(null, some(move(encrypted)), move(authority), limits);
+        }
+        AsyncConnection(some(move(socket)), null, move(authority), limits)
+    }
+
+    const func send(address: str, request: *Request) !Response {
+        var target = parseUrl(address)!;
+        sendTo(&target, request)
+    }
+    const func request(address: str, method: Method, body: Body) !Response {
+        var target = parseUrl(address)!;
+        var path = pathTarget(&target)!;
+        var message = Request.new(method, path)!;
+        message.setBody(move(body));
+        sendTo(&target, &message)
+    }
+    const func get(address: str) !Response { request(address, Method.GET, Body()) }
+    const func head(address: str) !Response { request(address, Method.HEAD, Body()) }
+    const func post(address: str, body: Body) !Response { request(address, Method.POST, move(body)) }
+private:
+    const func sendTo(target: *const Url, request: *Request) !Response {
+        var deadline = some(time.Deadline.after(limits.timeout)!);
+        var secure = sameName(target.scheme(), "https");
+        if !secure && !sameName(target.scheme(), "http") { return HttpError.UnsupportedScheme; }
+        var host = httpHost(target)!;
+        var authority = hostHeader(target, host)!;
+        request.headers().set("Host", authority)!;
+        request.headers().set("Connection", "close")!;
+        var defaultPort: u16 = if secure { 443 } else { 80 };
+        var stream = dialAsync(host, target.port() ?? defaultPort, deadline)!;
+        stream.setReadDeadline(deadline);
+        stream.setWriteDeadline(deadline);
+        if secure {
+            var encrypted = tlsOptions.connectAsync(move(stream), host, deadline) catch (reason) {
+                return httpTlsError(reason);
+            };
+            return exchange(&encrypted, &encrypted, request, limits) catch (reason) {
+                return httpTlsError(reason);
+            };
+        }
+        exchange(&stream, &stream, request, limits)
+    }
+}
+
+pub interface RequestConsumer {
+    func consume(head: *const Request, body: *io.Reader) !Response;
+}
+
+pub class AsyncServer {
+    #copy: disabled
+    var listener: net.AsyncTcpListener;
+    pub var limits: HttpLimits;
+    func init(value: net.AsyncTcpListener) : listener(move(value)), limits(HttpLimits()) {}
+public:
+    static func bind(address: net.SocketAddr) !Self { AsyncServer(net.AsyncTcpListener.bind(address)!) }
+    const func localAddr() !net.SocketAddr { listener.localAddr() }
+    func close() !void { listener.close() }
+
+    func serveOne(handler: *Handler, acceptDeadline: ?time.Deadline) !void {
+        socket, peer := listener.accept(acceptDeadline)!;
+        var deadline = some(time.Deadline.after(limits.timeout)!);
+        socket.setReadDeadline(deadline);
+        socket.setWriteDeadline(deadline);
+        serveHttp(&socket, &socket, handler, limits)
+    }
+
+    func serveOneStreaming(handler: *RequestConsumer, acceptDeadline: ?time.Deadline) !void {
+        socket, peer := listener.accept(acceptDeadline)!;
+        var deadline = some(time.Deadline.after(limits.timeout)!);
+        socket.setReadDeadline(deadline);
+        socket.setWriteDeadline(deadline);
+        serveStreamedHttp(&socket, &socket, handler, limits)
+    }
+
+    func serveOneStreamingTls(handler: *RequestConsumer, config: *const tls.TlsAcceptor,
+                              acceptDeadline: ?time.Deadline) !void {
+        socket, peer := listener.accept(acceptDeadline)!;
+        var deadline = some(time.Deadline.after(limits.timeout)!);
+        var stream = config.acceptAsync(move(socket), deadline)!;
+        serveStreamedHttp(&stream, &stream, handler, limits)
+    }
+
+    func serveOneTls(handler: *Handler, config: *const tls.TlsAcceptor, acceptDeadline: ?time.Deadline) !void {
+        socket, peer := listener.accept(acceptDeadline)!;
+        var deadline = some(time.Deadline.after(limits.timeout)!);
+        var stream = config.acceptAsync(move(socket), deadline)!;
+        serveHttp(&stream, &stream, handler, limits)
+    }
+}
+
+func serveHttp(reader: *io.Reader, writer: *io.Writer, handler: *Handler, limits: HttpLimits) !void {
+    var buffer = bufio.BufferedReader(reader, 8192)!;
+    var request = parseRequest(&buffer, limits)!;
+    var method = request.method();
+    var response = handler.handle(move(request))!;
+    response.headers().set("Connection", "close")!;
+    writeResponseFor(writer, &response, method)
+}
+
+
+func serveStreamedHttp(reader: *io.Reader, writer: *io.Writer, handler: *RequestConsumer,
+                       limits: HttpLimits) !void {
+    var buffer = bufio.BufferedReader(reader, 8192)!;
+    request, body := parseRequestStream(&buffer, limits)!;
+    var response = handler.consume(&request, &body)!;
+    response.headers().set("Connection", "close")!;
+    writeResponseFor(writer, &response, request.method())
+}

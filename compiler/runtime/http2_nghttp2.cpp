@@ -407,6 +407,16 @@ extern "C" int32_t __vqr_http2_consume(uintptr_t handle, int32_t stream, size_t 
     return convert(connection, nghttp2_session_consume(connection.session, stream, size));
 }
 
+extern "C" int32_t __vqr_http2_consume_connection(uintptr_t handle, size_t size) {
+    auto &connection = get(handle);
+    return convert(connection, nghttp2_session_consume_connection(connection.session, size));
+}
+
+extern "C" int32_t __vqr_http2_consume_stream(uintptr_t handle, int32_t stream, size_t size) {
+    auto &connection = get(handle);
+    return convert(connection, nghttp2_session_consume_stream(connection.session, stream, size));
+}
+
 extern "C" int32_t __vqr_http2_headers(uintptr_t handle, int32_t stream, int32_t end,
                                        const uint8_t *wire, size_t length) {
     auto &connection = get(handle);

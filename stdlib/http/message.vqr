@@ -183,10 +183,10 @@ public:
         count
     }
     func writeTo(writer: *io.Writer) !u64 {
-        var count = len();
-        io.writeAll(writer, bytes())!;
-        position += count;
-        u64(count)
+        var progress = io.writeAllProgress(writer, bytes())!;
+        position += progress.processed;
+        progress.check()!;
+        u64(progress.processed)
     }
     func discard(limit: usize) !u64 {
         var count = len();

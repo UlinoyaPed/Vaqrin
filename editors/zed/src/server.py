@@ -1,5 +1,6 @@
 """Stdio LSP for Vaqrin. Language diagnostics come from vaqc check."""
 
+from bisect import bisect_right
 from concurrent.futures import ThreadPoolExecutor
 import json
 import os
@@ -760,7 +761,7 @@ class Server:
                     self.refresh_id += 1
                     self.send(id=f"vaqrin-inlays-{self.refresh_id}", method="workspace/inlayHint/refresh")
 
-    def check_text(self, uri, text):
+    def check_text(self, uri, text, *, symbols=False, workspace=False, replacements=None):
         def diagnostic(message, code=None, row=0, start=0, end=0, severity=1):
             return {"message": message, "source": "vaqc", "code": code, "severity": severity,
                     "range": {"start": {"line": row, "character": start},
@@ -776,15 +777,46 @@ class Server:
             with tempfile.TemporaryDirectory(prefix="vaqrin-lsp-") as temp:
                 overlay = Path(temp) / "buffer.vqr"
                 overlay.write_bytes(text.encode("utf-8"))
+                with self.lock:
+                    documents = dict(self.documents)
+                overlays = {str(source): str(overlay)}
+                neighboring = {source}
+                if workspace:
+                    neighboring.update(path.resolve() for path in source.parent.glob("*.vqr") if path.is_file())
+                changes = {file_path(other_uri): other_text for other_uri, (_, other_text) in documents.items()}
+                changes.update(replacements or {})
+                for other, other_text in changes.items():
+                    if other is None or other == source or other.suffix != ".vqr" or not other.parent.is_dir():
+                        continue
+                    replacement = Path(temp) / f"buffer-{len(overlays)}.vqr"
+                    replacement.write_bytes(other_text.encode("utf-8"))
+                    overlays[str(other)] = str(replacement)
+                    if workspace and other.parent == source.parent:
+                        neighboring.add(other)
+                overlay_flags = ["--overlay", overlay]
+                if workspace or len(overlays) > 1:
+                    overlay_map = Path(temp) / "overlays.json"
+                    overlay_map.write_text(json.dumps(overlays), encoding="utf-8")
+                    overlay_flags = ["--overlay-map", overlay_map]
+                paths = [source, *sorted(neighboring - {source})]
+
                 def run(*flags):
-                    return subprocess.run([compiler, "check", *flags, "--overlay", overlay, source],
-                                          cwd=self.root, capture_output=True, encoding="utf-8",
-                                          errors="replace", timeout=20)
-                result = run("--editor-hints", "--diagnostics=json")
-                if "unknown option '--diagnostics=json'" in result.stderr:
-                    result = run("--editor-hints")
-                if "unknown option '--editor-hints'" in result.stderr:
-                    result = run()
+                    result = subprocess.run([compiler, "check", *flags, *overlay_flags, *paths],
+                                            cwd=self.root, capture_output=True, encoding="utf-8",
+                                            errors="replace", timeout=20)
+                    if not workspace and overlay_flags[0] == "--overlay-map" and "unknown option '--overlay-map'" in result.stderr:
+                        overlay_flags[:] = ["--overlay", overlay]
+                        return run(*flags)
+                    return result
+                if symbols:
+                    flag = "--editor-workspace-symbols" if workspace else "--editor-symbols"
+                    result = run(flag, "--diagnostics=json")
+                else:
+                    result = run("--editor-hints", "--diagnostics=json")
+                    if "unknown option '--diagnostics=json'" in result.stderr:
+                        result = run("--editor-hints")
+                    if "unknown option '--editor-hints'" in result.stderr:
+                        result = run()
         except (OSError, subprocess.TimeoutExpired) as error:
             return [diagnostic(str(error), severity=2)], None
         try:
@@ -793,6 +825,8 @@ class Server:
             bindings = None
         if result.returncode == 0:
             return [], bindings
+        if symbols:
+            return [], None
         try:
             report = json.loads(result.stderr)
         except ValueError:
@@ -866,6 +900,161 @@ class Server:
                            "end": offset_position(text, len(text))},
                  "newText": formatted}]
 
+    def code_actions(self, params):
+        uri = params["textDocument"]["uri"]
+        document = self.documents.get(uri)
+        if document is None:
+            return []
+        version, text = document
+        requested = params.get("context", {}).get("only", [])
+
+        def includes(kind):
+            return not requested or any(kind == item or kind.startswith(item + ".") for item in requested)
+
+        def action(title, kind, edits):
+            return {"title": title, "kind": kind, "edit": {"documentChanges": [
+                {"textDocument": {"uri": uri, "version": version}, "edits": edits}]}}
+
+        actions = []
+        if includes("source.vaqrin.format"):
+            edits = self.format_document(params)
+            if edits:
+                actions.append(action("Format Vaqrin document", "source.vaqrin.format", edits))
+        if not includes("refactor.rewrite"):
+            return actions
+
+        diagnostics, bindings = self.check_text(uri, text)
+        if diagnostics or not bindings:
+            return actions
+        selection = params["range"]
+        raw = text.encode("utf-8")
+        start = (selection["start"]["line"], selection["start"]["character"])
+        end = (selection["end"]["line"], selection["end"]["character"])
+        for binding in bindings:
+            if binding["kind"] != "local":
+                continue
+            first = offset_position(text, len(raw[:binding["begin"]].decode("utf-8")))
+            last = offset_position(text, len(raw[:binding["end"]].decode("utf-8")))
+            if (first["line"], first["character"]) > end or (last["line"], last["character"]) < start:
+                continue
+            insert = ": " + binding["type"]
+            at = binding["end"]
+            edited = (raw[:at] + insert.encode("utf-8") + raw[at:]).decode("utf-8")
+            errors, _ = self.check_text(uri, edited)
+            if not errors:
+                actions.append(action("Add explicit binding type", "refactor.rewrite", [
+                    {"range": {"start": last, "end": last}, "newText": insert}]))
+        return actions
+
+    def semantic_symbol(self, params, method):
+        uri = params["textDocument"]["uri"]
+        source = file_path(uri)
+        document = self.documents.get(uri)
+        empty = [] if method in ("references", "definition") else None
+        if source is None or document is None:
+            return empty
+        version, text = document
+        lines = text.split("\n")
+        row = params["position"]["line"]
+        if not 0 <= row < len(lines):
+            return empty
+        offset = sum(len(line) + 1 for line in lines[:row])
+        offset += position_offset(lines[row], params["position"]["character"])
+        byte_offset = len(text[:offset].encode("utf-8"))
+
+        def index(buffer, workspace, replacements=None):
+            _, symbols = self.check_text(uri, buffer, symbols=True, workspace=workspace,
+                                         replacements=replacements)
+            if symbols is not None:
+                return [(*map(Path, (item.get("path", str(source)),
+                                    item.get("declarationPath", str(source)))),
+                         item["begin"], item["end"], item["declaration"], item["definition"])
+                        for item in symbols]
+            return None
+
+        workspace = True
+        symbols = index(text, workspace)
+        if symbols is None:
+            workspace = False
+            symbols = index(text, workspace)
+        if symbols is None:
+            return empty
+        selected = [item for item in symbols if item[0] == source and item[2] <= byte_offset < item[3]]
+        if len(selected) != 1:
+            return empty
+        declaration = (selected[0][1], selected[0][4])
+        occurrences = [item for item in symbols if (item[1], item[4]) == declaration]
+        files = {source: (uri, version, text, text.encode("utf-8"))}
+        for other_uri, (revision, buffer) in self.documents.items():
+            path = file_path(other_uri)
+            if path and path != source:
+                files[path] = (other_uri, revision, buffer, buffer.encode("utf-8"))
+
+        def file_data(path):
+            if path not in files:
+                raw = path.read_bytes()
+                files[path] = (path.as_uri(), None, raw.decode("utf-8"), raw)
+            return files[path]
+
+        def symbol_range(occurrence):
+            _, _, buffer, raw = file_data(occurrence[0])
+            return {side: offset_position(buffer, len(raw[:idx].decode("utf-8")))
+                    for side, idx in zip(("start", "end"), occurrence[2:4])}
+
+        if method in ("references", "definition"):
+            include_definition = params.get("context", {}).get("includeDeclaration", False)
+            return [{"uri": file_data(item[0])[0], "range": symbol_range(item)} for item in occurrences
+                    if (method == "definition" and item[5]) or
+                       (method == "references" and (include_definition or not item[5]))]
+        if method == "prepareRename":
+            return symbol_range(selected[0])
+        replacement = params["newName"]
+        if not replacement.isidentifier() or replacement in KEYWORDS or replacement == "_":
+            raise ValueError("new name must be a Vaqrin identifier")
+        encoded = replacement.encode("utf-8")
+        root = next((path for path in source.parents if (path / "package.toml").is_file()),
+                    source.parent)
+        grouped = {}
+        for item in occurrences:
+            if not item[0].is_relative_to(root):
+                raise ValueError("renaming would edit a file outside this project")
+            grouped.setdefault(item[0], []).append(item)
+
+        replacements, translations = {}, {}
+        for path, items in grouped.items():
+            _, _, _, raw = file_data(path)
+            parts, ends, shifts = [], [], [0]
+            previous = 0
+            for _, _, start, end, _, _ in items:
+                if start < previous:
+                    raise ValueError("symbol resolution differs between instantiations")
+                parts.extend((raw[previous:start], encoded))
+                previous = end
+                ends.append(end)
+                shifts.append(shifts[-1] + len(encoded) - (end - start))
+            parts.append(raw[previous:])
+            replacements[path] = b"".join(parts).decode("utf-8")
+            translations[path] = ends, shifts
+
+        after = index(replacements.get(source, text), workspace, replacements)
+
+        def shift(path, offset):
+            ends, shifts = translations.get(path, ([], [0]))
+            return offset + shifts[bisect_right(ends, offset)]
+
+        expected = {(path, declaration_path, shift(path, begin), shift(path, end),
+                     shift(declaration_path, declaration), definition)
+                    for path, declaration_path, begin, end, declaration, definition in symbols}
+        if after is None or expected != set(after):
+            raise ValueError("renaming would change name resolution or fail to compile")
+        changes = []
+        for path, items in grouped.items():
+            target_uri, revision, _, _ = file_data(path)
+            changes.append({"textDocument": {"uri": target_uri, "version": revision},
+                            "edits": [{"range": symbol_range(item), "newText": replacement}
+                                      for item in items]})
+        return {"documentChanges": changes}
+
     def handle(self, method, params):
         if method == "initialize":
             capabilities = params.get("capabilities", {})
@@ -879,16 +1068,28 @@ class Server:
                                      "hoverProvider": True, "definitionProvider": True,
                                      "declarationProvider": True, "implementationProvider": True,
                                      "typeDefinitionProvider": True, "inlayHintProvider": True,
-                                     "documentFormattingProvider": True}}
+                                     "documentFormattingProvider": True, "referencesProvider": True,
+                                     "renameProvider": {"prepareProvider": True},
+                                     "codeActionProvider": {"codeActionKinds": [
+                                         "refactor.rewrite", "source.vaqrin.format"]}}}
         if method == "shutdown":
             self.stop()
         elif method == "textDocument/formatting":
             return self.format_document(params)
+        elif method == "textDocument/codeAction":
+            return self.code_actions(params)
         elif method == "textDocument/signatureHelp":
             return self.signature_help(params)
+        elif method in ("textDocument/references", "textDocument/prepareRename", "textDocument/rename"):
+            return self.semantic_symbol(params, method.rsplit("/", 1)[-1])
         elif method in ("textDocument/hover", "textDocument/definition", "textDocument/declaration",
                         "textDocument/implementation", "textDocument/typeDefinition"):
-            return self.lookup(params, method.rsplit("/", 1)[-1])
+            mode = method.rsplit("/", 1)[-1]
+            if mode in ("definition", "declaration"):
+                semantic = self.semantic_symbol(params, "definition")
+                if semantic:
+                    return semantic
+            return self.lookup(params, mode)
         elif method == "textDocument/completion":
             return self.complete(params["textDocument"]["uri"], params["position"])
         elif method in ("textDocument/didOpen", "textDocument/didChange", "textDocument/didSave"):

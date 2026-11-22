@@ -1,0 +1,109 @@
+package mem
+
+class ArenaBlock {
+    pub var next: ?*ArenaBlock;
+    pub var allocation: Layout;
+    pub var start: usize;
+    pub var cursor: usize;
+    pub var serial: usize;
+}
+
+pub class ArenaMark {
+    pub var owner: usize;
+    pub var block: usize;
+    pub var cursor: usize;
+}
+
+pub class Arena {
+    #copy: disabled
+    #implements: Allocator
+    var backing: AllocatorRef;
+    var first: ?*ArenaBlock;
+    var serial: usize;
+    var occupied: usize;
+    var reserved: usize;
+public:
+    func init(backing: AllocatorRef) : backing(backing), first(null), serial(0), occupied(0), reserved(0) {}
+    const func used() usize { occupied }
+    const func capacity() usize { reserved }
+
+    func alloc(request: Layout) !?*u8 {
+        if request.size() == 0 { return null; }
+        switch first {
+            some(block) => {
+                var result = carve(block, request)!;
+                if result != null { return result; }
+            },
+            null => {},
+        }
+        var bytes = if request.size() < 4096 { usize(4096) } else { request.size() };
+        var space = Layout.fromSizeAlign(bytes, request.align())!;
+        var header = layout<ArenaBlock>();
+        var start = alignUp(header.size(), request.align())!;
+        var allocation = header.extend(space)!;
+        if serial == ~usize(0) || bytes > ~usize(0) - reserved { return LayoutError.Overflow; }
+        var raw = backing.alloc(allocation)! ?? { return AllocationError.OutOfMemory; };
+        var link = unsafe { ptrCast<*ArenaBlock>(raw) };
+        serial++;
+        *link = ArenaBlock{next: first, allocation: allocation, start: start, cursor: start, serial: serial};
+        first = some(link);
+        reserved += bytes;
+        carve(link, request)
+    }
+
+    func free(ptr: *u8, request: Layout) void {}
+
+    const func mark() ArenaMark {
+        switch first {
+            null => ArenaMark{owner: __vqr_pointer_address(self), block: 0, cursor: 0},
+            some(block) => ArenaMark{owner: __vqr_pointer_address(self), block: block.serial, cursor: block.cursor},
+        }
+    }
+
+    // All values allocated since the mark must have been released by the caller.
+    unsafe func rewind(mark: ArenaMark) void {
+        if mark.owner != __vqr_pointer_address(self) { panic("arena mark belongs to a different arena"); }
+        if mark.block == 0 {
+            clearBlocks();
+            return;
+        }
+        var scan = first;
+        for scan != null && scan.unwrap().serial != mark.block { scan = scan.unwrap().next; }
+        var target = scan ?? { panic("arena mark is no longer live"); };
+        if mark.cursor < target.start || mark.cursor > target.cursor { panic("invalid arena mark cursor"); }
+        for first.unwrap() != target { releaseFirst(); }
+        occupied -= target.cursor - mark.cursor;
+        target.cursor = mark.cursor;
+    }
+
+    unsafe func reset() void { clearBlocks(); }
+    func deinit() void { clearBlocks(); }
+
+private:
+    func carve(block: *ArenaBlock, request: Layout) !?*u8 {
+        var address = __vqr_pointer_address(block);
+        if block.cursor > ~usize(0) - address { return LayoutError.Overflow; }
+        var aligned = alignUp(address + block.cursor, request.align())! - address;
+        var room = block.allocation.size();
+        if aligned > room || request.size() > room - aligned { return null; }
+        var stop = aligned + request.size();
+        var advanced = stop - block.cursor;
+        if advanced > ~usize(0) - occupied { return LayoutError.Overflow; }
+        occupied += advanced;
+        block.cursor = stop;
+        unsafe { some(ptrCast<*u8>(block).offset(aligned)) }
+    }
+
+    func releaseFirst() void {
+        var block = first.unwrap();
+        first = block.next;
+        occupied -= block.cursor - block.start;
+        reserved -= block.allocation.size() - block.start;
+        var memory = unsafe { ptrCast<*u8>(block) };
+        backing.free(memory, block.allocation);
+    }
+
+    func clearBlocks() void {
+        for first != null { releaseFirst(); }
+    }
+}

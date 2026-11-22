@@ -9,11 +9,11 @@
 - parse, parseWithOptions, parseReader, stringify, get, asF64.
 - TomlDomSerializer, TomlDomDeserializer, encode<T>, decode<T>.
 
-The implemented subset supports basic and literal single-line strings, Unicode
-escapes in basic strings, booleans, signed decimal/hex/octal/binary integers,
-decimal floats retained as their exact source lexeme, local dates, local times,
-offset date-times, arrays, inline tables, dotted keys, nested tables, comments,
-duplicate-key checks, and bounded input/depth/entry counts.
+The parser accepts basic and literal strings in single-line and multiline forms,
+booleans, decimal and base-prefixed integers, floats, date and time values,
+multiline arrays, inline tables, dotted keys and arrays of tables. Table headers
+resolve through the latest element of a table array. The parser checks duplicate
+keys, table redefinition, and input, depth and entry limits.
 
 Float values and date/time values retain their original text. asF64 converts
 integer and decimal values, including underscored decimals and TOML's signed
@@ -21,7 +21,5 @@ infinity and NaN forms. The serde adapters read and write f64 values. Finite
 values use a round-trippable scientific decimal representation and can be
 stored inside a root table. Optional and date-time codecs remain pending.
 
-This is not a complete TOML 1.0 implementation. Multiline strings, multiline
-arrays, arrays of tables, full table redefinition semantics, and all edge cases
-of the specification remain unsupported. Do not advertise full TOML 1.0
-conformance.
+Tests cover representative decoded values, duplicate and conflicting table
+definitions, and round trips through the DOM adapters.

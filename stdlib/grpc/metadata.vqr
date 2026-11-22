@@ -39,6 +39,11 @@ public:
         if !metadataKey(name) || !binaryKey(name) { return RpcError.InvalidMetadata; }
         add(name, value)
     }
+    const func cloneOwned() !Self {
+        var owned = Metadata();
+        for field in entries.iterRef() { owned.add(field.name, field.value.asConstSlice())!; }
+        move(owned)
+    }
     const func items() []const MetadataField { entries.asConstSlice() }
     const func get(name: str) ?[]const u8 {
         for item in entries.iterRef() {

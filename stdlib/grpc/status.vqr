@@ -5,7 +5,7 @@ pub enum StatusCode { Ok, Cancelled, Unknown, InvalidArgument, DeadlineExceeded,
 
 pub error RpcError {
     InvalidEndpoint, InvalidMethod, InvalidMetadata, Protocol, UnsupportedEncoding,
-    MessageTooLarge, ConnectionClosed, CallInProgress, CallClosed, DeadlineExceeded, Cancelled,
+    MessageTooLarge, ResourceExhausted, ConnectionClosed, CallInProgress, CallClosed, DeadlineExceeded, Cancelled,
 }
 
 pub class Status {

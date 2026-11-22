@@ -61,14 +61,15 @@ class HeaderInfo {
     pub var path: string;
     pub var grpc: bool;
     pub var trailersExpected: bool;
-    pub var identity: bool;
+    pub var encoding: ?MessageEncoding;
+    pub var acceptsCompressed: bool;
     pub var deadline: ?time.Deadline;
     pub var http: u32;
     pub var remoteStatus: ?StatusCode;
     pub var message: string;
     pub var details: coll.Vec<u8>;
     pub func init() : metadata(Metadata()), method(""), path(""), grpc(false), trailersExpected(false),
-        identity(true), deadline(null), http(0), remoteStatus(null), message(""), details(coll.Vec<u8>()) {}
+        encoding(null), acceptsCompressed(false), deadline(null), http(0), remoteStatus(null), message(""), details(coll.Vec<u8>()) {}
 }
 
 func parseHeaders(event: *const http2.Event) !HeaderInfo {
@@ -90,7 +91,12 @@ func parseHeaders(event: *const http2.Event) !HeaderInfo {
             var value = text.fromBytes(field.value)!;
             info.grpc = grpcType(value);
         } else if name == "grpc-encoding" {
-            info.identity = bytes.equal(field.value, "identity".asBytes());
+            if info.encoding != null { return RpcError.Protocol; }
+            if bytes.equal(field.value, "identity".asBytes()) { info.encoding = some(MessageEncoding.Identity); }
+            else if bytes.equal(field.value, "gzip".asBytes()) { info.encoding = some(MessageEncoding.Gzip); }
+            else { info.encoding = some(MessageEncoding.Unsupported); }
+        } else if name == "grpc-accept-encoding" {
+            info.acceptsCompressed = info.acceptsCompressed || acceptsGzip(field.value);
         } else if name == "grpc-timeout" {
             if info.deadline != null { return RpcError.Protocol; }
             var value = text.fromBytes(field.value)!;

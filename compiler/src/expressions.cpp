@@ -197,6 +197,7 @@ ValueAt Body::name(const Ast &n) {
     if (n->text == "self" && constructing && constructed.size() < owner->fields.size())
       fail(n->span, "self cannot escape before every field is initialized", "E230");
     const auto &l = locals[i];
+    indexSymbol(n->span, l.declaration);
     auto origin = l.origin;
     if (l.reference || p.hasReference(l.type)) origin.via = i;
     return {l.type, nullptr, l.slot, l.writable, i, true, false, origin};
@@ -219,15 +220,20 @@ ValueAt Body::name(const Ast &n) {
     }
   auto defs = p.resolve(file, n->text, n->span);
   if (defs.size() == 1 && defs[0].decl->kind == DeclKind::Global) {
+    if (auto *hints = p.options.editorHints; hints && hints->workspace && !defs[0].file->standard)
+      indexSymbol(n->span, defs[0].decl->nameSpan, false);
     auto &g = p.global(defs[0]);
     return {g.type, nullptr, g.ir, !defs[0].decl->readOnly, -1, true};
   }
   if (defs.size() == 1 && defs[0].decl->kind == DeclKind::Function && defs[0].decl->generics.empty()) {
     if (defs[0].decl->unsafe || defs[0].decl->comptime || hasComptimeParameters(*defs[0].decl))
       fail(n->span, "unsafe and comptime functions require a direct call");
+    if (auto *hints = p.options.editorHints; hints && hints->workspace && !defs[0].file->standard &&
+        !defs[0].decl->external && !defs[0].decl->exported)
+      indexSymbol(n->span, defs[0].decl->nameSpan, false);
     auto &f = p.function(defs[0]);
     p.lower(f);
-    return {p.signature(f), f.ir};
+    return {p.signature(f), f.cBridge ? f.cBridge : f.ir};
   }
   if (defs.size() > 1) fail(n->span, "overloaded name requires a call with arguments");
   fail(n->span, "unknown value '" + n->text + "'");
@@ -319,12 +325,15 @@ ValueAt Body::member(const Ast &n) {
   auto basePath = path(target);
   if (!basePath.empty() && findLocal(basePath.substr(0, basePath.find('.'))) < 0) {
     auto defs = p.resolve(file, basePath, n->span);
-    if (target == base && defs.size() == 1 && defs[0].decl->kind == DeclKind::Error)
+    if (target == base && defs.size() == 1 && defs[0].decl->kind == DeclKind::Error) {
+      if (auto *hints = p.options.editorHints; hints && hints->workspace && !defs[0].file->standard)
+        indexSymbol(target->span, defs[0].decl->nameSpan, false);
       return {p.errorTy, ir.getInt32(p.errorCode(defs[0], n->text))};
+    }
     if (defs.size() == 1 && defs[0].decl->kind == DeclKind::Enum) {
       std::vector<Ast> args;
       if (target != base) args.assign(base->children.begin() + 1, base->children.end());
-      auto *t = p.named(basePath, file, n->span, generics, args, visibleConstants());
+      auto *t = p.named(basePath, file, n->span, generics, args, visibleConstants(), target->span);
       p.ensureSized(t, n->span);
       auto v = std::ranges::find(t->variants, n->text, &Variant::name);
       if (v == t->variants.end() || !v->fields.empty())
@@ -334,15 +343,20 @@ ValueAt Body::member(const Ast &n) {
     if (target == base && !p.import(file, basePath).empty()) {
       auto full = p.resolve(file, basePath + "." + n->text, n->span);
       if (full.size() == 1 && full[0].decl->kind == DeclKind::Global) {
+        if (auto *hints = p.options.editorHints; hints && hints->workspace && !full[0].file->standard)
+          indexSymbol(n->span, full[0].decl->nameSpan, false);
         auto &g = p.global(full[0]);
         return {g.type, nullptr, g.ir, !full[0].decl->readOnly, -1, true};
       }
       if (full.size() == 1 && full[0].decl->kind == DeclKind::Function && full[0].decl->generics.empty()) {
         if (full[0].decl->unsafe || full[0].decl->comptime || hasComptimeParameters(*full[0].decl))
           fail(n->span, "function requires a direct call");
+        if (auto *hints = p.options.editorHints; hints && hints->workspace && !full[0].file->standard &&
+            !full[0].decl->external && !full[0].decl->exported)
+          indexSymbol(n->span, full[0].decl->nameSpan, false);
         auto &f = p.function(full[0]);
         p.lower(f);
-        return {p.signature(f), f.ir};
+        return {p.signature(f), f.cBridge ? f.cBridge : f.ir};
       }
       fail(n->span, "unresolved imported symbol '" + basePath + "." + n->text + "'");
     }
@@ -751,7 +765,10 @@ ValueAt Body::fallback(const Ast &n, Type *expected) {
   ir.CreateBr(end);
   ir.SetInsertPoint(no);
   enter();
-  if (!n->names.empty()) bind(n->names[0], p.errorTy, false, tag, n->span);
+  if (!n->names.empty()) {
+    auto id = bind(n->names[0], p.errorTy, false, tag, n->span);
+    indexLocal(id, n->bindingSpans[0]);
+  }
   auto alt = expression(n->children[1], inner);
   Value *other = live() ? read(alt, n->span) : nullptr;
   leave();
@@ -762,10 +779,9 @@ ValueAt Body::fallback(const Ast &n, Type *expected) {
   phi->addIncoming(value, good);
   if (other) phi->addIncoming(other, bad);
   merge(other ? std::vector{initial, initialized} : std::vector<std::vector<bool>>{initial}, initial.size());
-  bool sameSource = !other || (v.origin.root == alt.origin.root && v.origin.via == alt.origin.via &&
-                               v.origin.raw == alt.origin.raw);
-  if (p.hasReference(inner) && !sameSource)
-    fail(n->span, "reference alternatives must have the same borrow source", "E230");
+  Borrow origin = v.origin;
+  if (other && !(v.origin == alt.origin))
+    origin = p.hasReference(inner) ? joinBorrow(v.origin, alt.origin, inner, n->span) : Borrow{};
   return {inner,
           phi,
           nullptr,
@@ -773,7 +789,7 @@ ValueAt Body::fallback(const Ast &n, Type *expected) {
           -1,
           false,
           v.temporaryBorrow || alt.temporaryBorrow,
-          sameSource ? v.origin : Borrow{}};
+          origin};
 }
 
 ValueAt Body::castNumber(Type *to, const Ast &arg, Span span) {
@@ -1210,6 +1226,13 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
     fail(n->span, message, "E202");
   }
   auto &d = *best->definition.decl;
+  if (auto *hints = p.options.editorHints; hints && hints->workspace && !classType &&
+      !best->definition.file->standard && !d.external && !d.exported && d.name != "main") {
+    auto callee = n->children.front();
+    if (callee->kind == NodeKind::Generic) callee = callee->children.front();
+    if (callee->kind == NodeKind::Name || callee->kind == NodeKind::Member)
+      indexSymbol(callee->span, d.nameSpan, false);
+  }
   unsigned offset = receiver.has_value();
   for (unsigned i = 0; i < d.params.size(); ++i) {
     const auto &param = d.params[i];
@@ -1258,10 +1281,16 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
     auto *address = asPointer(*receiver, n->span).value;
     if (dynamic) {
       auto *table = ir.CreateExtractValue(address, 1);
-      const auto &methods = declaring->def.decl->members;
-      auto slot = static_cast<unsigned>(&d - methods.data());
-      auto *pointer = PointerType::getUnqual(p.context);
-      callee = ir.CreateLoad(pointer, ir.CreateConstGEP1_32(pointer, table, slot));
+      if (!d.generics.empty() || hasComptimeParameters(d)) {
+        if (evaluating) fail(n->span, "generic dispatch through an interface needs a runtime receiver", "E220");
+        auto *lookup = p.genericInterfaceLookup(declaring, d, best->substitutions, best->constants);
+        callee = ir.CreateCall(lookup, {table});
+      } else {
+        const auto &methods = declaring->def.decl->members;
+        auto slot = static_cast<unsigned>(&d - methods.data());
+        auto *pointer = PointerType::getUnqual(p.context);
+        callee = ir.CreateLoad(pointer, ir.CreateConstGEP1_32(pointer, table, slot));
+      }
       address = ir.CreateExtractValue(address, 0);
     }
     auto *type = receiver->type;
@@ -1416,6 +1445,7 @@ void Body::bindCapture(const Capture &capture, Value *environment, Span span) {
   locals.push_back({capture.name, capture.type, address, nullptr, flag, capture.reference, scopes.size() - 1,
                     capture.writable});
   scopes.back().push_back(i);
+  locals.back().declaration = capture.declaration;
   initialized.push_back(true);
   (void)span;
 }
@@ -1449,13 +1479,14 @@ ValueAt Body::lambda(const Ast &n, Type *expected) {
       if (i < 0) fail(item->span, "capture requires a local binding");
       if (!names.insert(original->text).second) fail(item->span, "duplicate lambda capture");
       auto &local = locals[i];
+      indexSymbol(original->span, local.declaration);
       if ((local.reference && item->kind != NodeKind::Name) || p.hasReference(local.type))
         fail(item->span, "safe references cannot be captured by a closure", "E230");
       bool reference = item->kind == NodeKind::Unary;
       if (!reference && !p.movable(local.type))
         fail(item->span, "immovable values require a reference capture", "E290");
       captures.push_back(
-          {original->text, local.type, reference, local.writable, static_cast<unsigned>(fields.size())});
+          {original->text, local.type, reference, local.writable, static_cast<unsigned>(fields.size()), local.declaration});
       fields.push_back(p.storage(reference ? p.pointer(local.type, !local.writable) : local.type));
       fields.push_back(p.boolTy->ir);
     }
@@ -1475,14 +1506,19 @@ ValueAt Body::lambda(const Ast &n, Type *expected) {
   if (hasCaptures)
     for (const auto &c : captures)
       body.bindCapture(c, function->getArg(0), n->span);
+  std::vector<int> parameterLocals;
   unsigned arg = hasCaptures ? 1 : 0;
   for (unsigned i = 0; i < n->parameters.size(); ++i) {
     const auto &param = n->parameters[i];
     auto *value = function->getArg(arg++);
     value->setName(param.name);
     auto id = body.bind(param.name, signature[i], true, value, param.span);
-    if (signature[i]->kind == Kind::Reference) body.locals[id].origin.root = id;
+    body.indexLocal(id, param.span);
+    parameterLocals.push_back(id);
+    if (p.hasReference(signature[i])) body.locals[id].origin.root = id;
   }
+  auto source = result ? p.functionBorrow(signature, result, expected ? expected->count : 0, n->span) : 0;
+  if (source) body.returnRoot = parameterLocals[source - 1];
   auto returned = body.expression(n->tail, result);
   if (!result) {
     result = returned.type == p.neverTy ? p.voidTy : returned.type;
@@ -1498,10 +1534,13 @@ ValueAt Body::lambda(const Ast &n, Type *expected) {
       function = typed;
     }
     body.result = result;
+    source = p.functionBorrow(signature, result, 0, n->span);
+    if (source) body.returnRoot = parameterLocals[source - 1];
   }
   if (body.live()) body.emitReturn(returned, n->span);
   signature.push_back(result);
-  if (!hasCaptures) return {p.aggregate(Kind::Function, signature), function};
+  if (!hasCaptures) return {p.aggregate(Kind::Function, signature, source), function};
+  t->count = source;
   t->callable = signature;
   t->callEntry = function;
   Value *environment = Constant::getNullValue(t->ir);
@@ -1685,7 +1724,7 @@ ValueAt Body::call(const Ast &n, Type *expected) {
         return invoke(n, ds, types);
       }
       if (d->kind == DeclKind::Class || d->kind == DeclKind::Alias) {
-        auto *t = p.named(key, file, n->span, generics, types, visibleConstants());
+        auto *t = p.named(key, file, n->span, generics, types, visibleConstants(), callee->span);
         if (t->kind == Kind::Class) return construct(n, t, p.methods(t, "init", false));
         if (n->children.size() != 2) fail(n->span, "conversion requires one value");
         return castNumber(t, n->children[1], n->span);
@@ -1753,6 +1792,12 @@ ValueAt Body::call(const Ast &n, Type *expected) {
     }
     auto target = base->kind == NodeKind::Generic ? base->children[0] : base;
     auto basePath = path(target);
+    if (target == base && findLocal(basePath) < 0 && generics.contains(basePath)) {
+      auto *type = generics.at(basePath);
+      p.ensureSized(type, n->span);
+      if (type->kind == Kind::Class)
+        return invoke(n, p.methods(type, callee->text, true), types, std::nullopt, type);
+    }
     auto ds = basePath.empty() || findLocal(basePath.substr(0, basePath.find('.'))) >= 0
                   ? std::vector<Definition>{}
                   : p.resolve(file, basePath, n->span);
@@ -1760,7 +1805,7 @@ ValueAt Body::call(const Ast &n, Type *expected) {
                            ds[0].decl->kind == DeclKind::Alias)) {
       std::vector<Ast> args;
       if (target != base) args.assign(base->children.begin() + 1, base->children.end());
-      auto *t = p.named(basePath, file, n->span, generics, args, visibleConstants());
+      auto *t = p.named(basePath, file, n->span, generics, args, visibleConstants(), target->span);
       p.ensureSized(t, n->span);
       if (t->kind == Kind::Class) return invoke(n, p.methods(t, callee->text, true), types, std::nullopt, t);
       if (t->kind != Kind::Enum) fail(n->span, "associated functions require a class or enum type");
@@ -1920,6 +1965,9 @@ ValueAt Body::call(const Ast &n, Type *expected) {
     irTypes.push_back(env->getType());
   }
   std::vector<int> drops;
+  Borrow returnOrigin{};
+  bool returnTemporary = false;
+  bool temporaryBorrow = target.temporaryBorrow;
   for (std::size_t i = 0; i + 1 < parts.size(); ++i) {
     auto v = argument(n->children[i + 1], parts[i]);
     if (!live()) {
@@ -1927,6 +1975,11 @@ ValueAt Body::call(const Ast &n, Type *expected) {
       return neverValue();
     }
     auto *value = read(v, n->span);
+    temporaryBorrow |= v.temporaryBorrow;
+    if (target.type->count == i + 1) {
+      returnOrigin = v.origin;
+      returnTemporary = v.temporaryBorrow;
+    }
     if (parts[i]->kind == Kind::Reference) {
       checkAccess(v, !parts[i]->readOnly, n->span);
       if (!parts[i]->readOnly) invalidateOwnedAddresses(v);
@@ -1941,7 +1994,15 @@ ValueAt Body::call(const Ast &n, Type *expected) {
   for (auto i : drops)
     setAlive(i, false);
   auto *ret = parts.back();
-  if (p.hasReference(ret)) fail(n->span, "indirect reference returns require a borrow contract", "E230");
+  if (target.type->cAbi) {
+    auto params = ArrayRef<Type *>(parts).drop_back();
+    p.validateCAbi(ret, params, n->span);
+    if (p.hasAggregateCAbi(ret, params)) {
+      auto *value = p.callIndirectC(ir, address, ret, params, values, n->span);
+      leave();
+      return ret == p.voidTy ? voidValue() : ValueAt{ret, value};
+    }
+  }
   auto *f = ir.CreateCall(FunctionType::get(ret->ir, irTypes, false), address, values);
   if (target.type->cAbi && p.extendCNarrowInteger()) {
     if (ret->kind == Kind::Int && ret->bits < 32)
@@ -1955,7 +2016,12 @@ ValueAt Body::call(const Ast &n, Type *expected) {
     ir.CreateUnreachable();
     return neverValue();
   }
-  return ret == p.voidTy ? voidValue() : ValueAt{ret, f};
+  return ret == p.voidTy
+             ? voidValue()
+             : ValueAt{ret, f, nullptr, false, -1, false,
+                       p.hasReference(ret) ? returnTemporary || returnOrigin.root < 0
+                                           : temporaryBorrow && carriesBorrow(ret),
+                       returnOrigin};
 }
 
 } // namespace vqr::detail

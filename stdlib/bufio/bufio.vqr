@@ -1,7 +1,7 @@
 package bufio
-import (io, coll, text, mem, parse)
+import (io, coll, core, text, mem, parse)
 
-pub error BufferError { InvalidCapacity, BufferFull, UnreadUnavailable, TokenTooLong }
+pub error BufferError { InvalidCapacity, BufferFull, UnreadUnavailable, TokenTooLong, PendingRead }
 
 pub class BufferedReader {
     #copy: disabled
@@ -13,9 +13,12 @@ pub class BufferedReader {
     var capacity: usize;
     var eof: bool;
     var lastByte: ?u8;
+    var pending: coll.Vec<u8>;
+    var pendingDelimiter: u8;
 public:
     func init(reader: *io.Reader, size: usize) !void
-        : source(reader), data(coll.Vec<u8>()), position(0), filled(0), capacity(size), eof(false), lastByte(null) {
+        : source(reader), data(coll.Vec<u8>()), position(0), filled(0), capacity(size), eof(false), lastByte(null),
+          pending(coll.Vec<u8>()), pendingDelimiter(0) {
         if size == 0 { return BufferError.InvalidCapacity; }
         data.reserve(size)!;
         for index in usize(0)..size { data.push(0)!; }
@@ -35,6 +38,7 @@ public:
         filled += count;
     }
     func read(dst: []u8) !usize {
+        if !pending.isEmpty() { return BufferError.PendingRead; }
         if dst.len() == 0 { return 0; }
         if position == filled { fill()!; }
         var available = filled - position;
@@ -53,6 +57,7 @@ public:
         some(one[0])
     }
     func unreadByte(value: u8) !void {
+        if !pending.isEmpty() { return BufferError.PendingRead; }
         if position == 0 { return BufferError.UnreadUnavailable; }
         switch lastByte {
             null => return BufferError.UnreadUnavailable,
@@ -62,6 +67,7 @@ public:
         lastByte = null;
     }
     func peek(count: usize) ![]const u8 {
+        if !pending.isEmpty() { return BufferError.PendingRead; }
         if count > capacity { return BufferError.BufferFull; }
         for filled - position < count && !eof {
             var before = filled - position;
@@ -72,6 +78,7 @@ public:
         data.asConstSlice()[position..position + count]
     }
     func discard(count: usize) !usize {
+        if !pending.isEmpty() { return BufferError.PendingRead; }
         var skipped: usize = 0;
         for skipped < count {
             if position == filled { fill()!; }
@@ -86,32 +93,33 @@ public:
         skipped
     }
     func readUntil(delimiter: u8, maxBytes: usize) !?coll.Vec<u8> {
-        var output = coll.Vec<u8>();
+        if !pending.isEmpty() && pendingDelimiter != delimiter { return BufferError.PendingRead; }
+        pendingDelimiter = delimiter;
+        if pending.len() > maxBytes { return BufferError.PendingRead; }
         for {
             if position == filled { fill()!; }
             if position == filled {
-                if output.len() == 0 { return null; }
-                return some(move(output));
+                if pending.isEmpty() { return null; }
+                return some(core.replace<coll.Vec<u8>>(&pending, coll.Vec<u8>()));
             }
             var buffer = data.asConstSlice();
-            var end = position;
-            var limit = maxBytes - output.len();
-            for end < filled && buffer[end] != delimiter {
-                if end - position >= limit {
-                    position = end + 1;
-                    lastByte = some(buffer[end]);
+            for position < filled {
+                var byte = buffer[position];
+                if byte == delimiter {
+                    position++;
+                    lastByte = some(byte);
+                    return some(core.replace<coll.Vec<u8>>(&pending, coll.Vec<u8>()));
+                }
+                if pending.len() == maxBytes {
+                    pending.clear();
+                    position++;
+                    lastByte = some(byte);
                     return BufferError.TokenTooLong;
                 }
-                end++;
+                pending.push(byte)!;
+                position++;
+                lastByte = some(byte);
             }
-            for byte in buffer[position..end] { output.push(byte)!; }
-            if end < filled {
-                position = end + 1;
-                lastByte = some(delimiter);
-                return some(move(output));
-            }
-            position = end;
-            lastByte = some(buffer[end - 1]);
         }
     }
     func readString(delimiter: u8, maxBytes: usize) !?string {
@@ -140,6 +148,7 @@ public:
         filled = 0;
         eof = false;
         lastByte = null;
+        pending.clear();
     }
 }
 
@@ -249,22 +258,22 @@ pub class Scanner {
     var maximum: usize;
     var consumed: u64;
     var mode: SplitMode;
+    var pending: coll.Vec<u8>;
+    var tokenStart: u64;
 public:
     func init(source: *io.Reader) !void
-        : reader(BufferedReader(source, 4096)!), maximum(1048576), consumed(0), mode(SplitMode.AsciiWhitespace) {}
+        : reader(BufferedReader(source, 4096)!), maximum(1048576), consumed(0), mode(SplitMode.AsciiWhitespace),
+          pending(coll.Vec<u8>()), tokenStart(0) {}
     func setMaxToken(value: usize) void { maximum = value; }
     func setSplitMode(value: SplitMode) void { mode = value; }
     const func position() u64 { consumed }
     func nextBytes() !?ByteToken {
-        var output = coll.Vec<u8>();
-        var started = false;
-        var start = consumed;
         for {
             var next = reader.readByte()!;
             switch next {
                 null => {
-                    if !started { return null; }
-                    return some(ByteToken(move(output), start, consumed));
+                    if pending.isEmpty() { return null; }
+                    return some(finishToken(consumed));
                 },
                 some(byte) => {
                     consumed++;
@@ -273,16 +282,29 @@ public:
                         SplitMode.Delimiter(separator) => byte == separator,
                     };
                     if delimiter {
-                        if !started { start = consumed; continue; }
-                        return some(ByteToken(move(output), start, consumed - 1));
+                        if pending.isEmpty() { continue; }
+                        return some(finishToken(consumed - 1));
                     }
-                    if !started { started = true; start = consumed - 1; }
-                    if output.len() >= maximum { return BufferError.TokenTooLong; }
-                    output.push(byte)!;
+                    if pending.isEmpty() { tokenStart = consumed - 1; }
+                    if pending.len() >= maximum {
+                        pending.clear();
+                        return BufferError.TokenTooLong;
+                    }
+                    pending.push(byte) catch (reason) {
+                        reader.unreadByte(byte)!;
+                        consumed--;
+                        return reason;
+                    };
                 },
             }
         }
     }
+private:
+    func finishToken(end: u64) ByteToken {
+        var bytes = core.replace<coll.Vec<u8>>(&pending, coll.Vec<u8>());
+        ByteToken(move(bytes), tokenStart, end)
+    }
+public:
     func next() !?Token {
         var item = nextBytes()! ?? { return null; };
         var textValue = text.fromBytes(item.bytes())!;
@@ -318,6 +340,8 @@ public:
     func reset(source: *io.Reader) void {
         reader.reset(source);
         consumed = 0;
+        pending.clear();
+        tokenStart = 0;
     }
 }
 

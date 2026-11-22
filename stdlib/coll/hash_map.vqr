@@ -78,28 +78,85 @@ public:
 }
 
 pub class MapIterRef<K: Movable, V: Movable> {
-    var entries: Vec<(*const K, *const V)>;
+    var buckets: []const HashBucket<K, V>;
     var frontIndex: usize;
     var backIndex: usize;
+    var count: usize;
+    var snapshot: ?IteratorSnapshot<(*const K, *const V)>;
 public:
-    func init(items: Vec<(*const K, *const V)>, count: usize)
-        : entries(move(items)), frontIndex(0), backIndex(count) {}
+    func init(buckets: []const HashBucket<K, V>, count: usize)
+        : buckets(buckets), frontIndex(0), backIndex(buckets.len()), count(count), snapshot(null) {}
 
+    func init(items: Vec<(*const K, *const V)>, count: usize)
+        : buckets(unsafe { __vqr_const_slice<HashBucket<K, V>>(null, 0) }),
+          frontIndex(0), backIndex(0), count(0),
+          snapshot(some(IteratorSnapshot<(*const K, *const V)>(move(items), count))) {}
     func next() ?(*const K, *const V) {
-        if frontIndex == backIndex { return null; }
-        var entry = entries.getPtr(frontIndex).unwrap();
-        frontIndex++;
-        some(((*entry).0, (*entry).1))
+        switch __vqr_optional_pointer(&snapshot) {
+            some(saved) => return saved.take(false),
+            null => {},
+        }
+        if count == 0 { return null; }
+        for frontIndex < backIndex {
+            var bucket = &buckets[frontIndex];
+            frontIndex++;
+            if bucket.isOccupied() {
+                count--;
+                return some((bucket.keyRef(), bucket.valueRef()));
+            }
+        }
+        null
     }
 
     func nextBack() ?(*const K, *const V) {
-        if frontIndex == backIndex { return null; }
-        backIndex--;
-        var entry = entries.getPtr(backIndex).unwrap();
-        some((entry.0, entry.1))
+        switch __vqr_optional_pointer(&snapshot) {
+            some(saved) => return saved.take(true),
+            null => {},
+        }
+        if count == 0 { return null; }
+        for frontIndex < backIndex {
+            backIndex--;
+            var bucket = &buckets[backIndex];
+            if bucket.isOccupied() {
+                count--;
+                return some((bucket.keyRef(), bucket.valueRef()));
+            }
+        }
+        null
     }
 
-    const func remaining() usize { backIndex - frontIndex }
+    const func remaining() usize {
+        switch __vqr_optional_pointer(&snapshot) {
+            some(saved) => saved.remaining(),
+            null => count,
+        }
+    }
+}
+
+pub class Keys<K: Movable, V: Movable> {
+    var source: MapIterRef<K, V>;
+public:
+    func init(source: MapIterRef<K, V>) : source(move(source)) {}
+    func next() ?*const K {
+        switch source.next() { some(entry) => some(entry.0), null => null, }
+    }
+    func nextBack() ?*const K {
+        switch source.nextBack() { some(entry) => some(entry.0), null => null, }
+    }
+    const func remaining() usize { source.remaining() }
+}
+
+pub class Values<K: Movable, V: Movable> {
+    var source: MapIterRef<K, V>;
+public:
+    func init(source: MapIterRef<K, V>) : source(move(source)) {}
+    func next() ?*const V {
+        switch source.next() { some(entry) => some(entry.1), null => null, }
+    }
+    func nextBack() ?*const V {
+        switch source.nextBack() { some(entry) => some(entry.1), null => null, }
+    }
+    const func remaining() usize { source.remaining() }
 }
 
 func hashTableCapacity(entries: usize) !usize {
@@ -119,14 +176,29 @@ pub class HashMap<K: Movable, V: Movable> {
     var tombstones: usize;
     var seed: u32;
     var allocator: ?mem.AllocatorRef;
-    var hashFunction: func(*const K, u32) usize;
+    var hashFunction: ?func(*const K, u32) usize;
+    var keyed: ?(hashing.HashSeed, func(*const K, *hashing.Hasher) void);
     var equalsFunction: func(*const K, *const K) bool;
 public:
     func init(
         hashFunction: func(*const K, u32) usize,
         equalsFunction: func(*const K, *const K) bool
     ) : buckets(Vec<HashBucket<K, V>>()), length(0), tombstones(0), seed(0),
-        allocator(null), hashFunction(hashFunction), equalsFunction(equalsFunction) {}
+        allocator(null), hashFunction(some(hashFunction)), keyed(null), equalsFunction(equalsFunction) {}
+
+    func init(
+        seed: hashing.HashSeed,
+        feed: func(*const K, *hashing.Hasher) void,
+        equalsFunction: func(*const K, *const K) bool
+    ) : buckets(Vec<HashBucket<K, V>>()), length(0), tombstones(0), seed(0),
+        allocator(null), hashFunction(null), keyed(some((seed, feed))), equalsFunction(equalsFunction) {}
+
+    static func withSecureHasher(
+        feed: func(*const K, *hashing.Hasher) void,
+        equalsFunction: func(*const K, *const K) bool
+    ) !Self {
+        HashMap<K, V>(hashing.processSeed()!, feed, equalsFunction)
+    }
 
     static func withHasher(
         hashFunction: func(*const K, u32) usize,
@@ -204,7 +276,18 @@ public:
 
 private:
     const func hashKey(key: *const K) usize {
-        hashFunction(key, seed)
+        switch keyed {
+            some(config) => {
+                var hasher = hashing.SipHasher(config.0);
+                var feed = config.1;
+                feed(key, &hasher);
+                hasher.finish()
+            },
+            null => {
+                var regular = hashFunction.unwrap();
+                regular(key, seed)
+            },
+        }
     }
 
     const func probe(key: *const K, hash: usize) (?usize, ?usize) {
@@ -356,7 +439,20 @@ public:
         unsafe { __vqr_borrow_from_self(address) }
     }
 
-private:
+    #return_borrow: self
+    func getOrInsertWith<F: Movable>(key: K, create: F) !&V {
+        var index = findIndex(&key, hashKey(&key));
+        switch index {
+            some(at) => {
+                return unsafe { __vqr_borrow_from_self(buckets.getMutPtr(at).unwrap().valueMut()) };
+            },
+            null => {},
+        }
+        var initial: V = move(create)();
+        var address = getOrInsertPtr(move(key), move(initial))!;
+        unsafe { __vqr_borrow_from_self(address) }
+    }
+
     func getOrInsertPtr(key: K, initial: V) !*V {
         var hash = hashKey(&key);
         var location = probe(&key, hash);
@@ -370,6 +466,14 @@ private:
     }
 
 public:
+    // Keep the map at this address and use this entry exclusively while it is live.
+    unsafe func entry(key: K) Entry<K, V> { unsafe { Entry<K, V>(self, move(key)) } }
+
+    func getMutPtr(key: *const K) ?*V {
+        var index = findIndex(key, hashKey(key)) ?? { return null; };
+        some(buckets.getMutPtr(index).unwrap().valueMut())
+    }
+
     const func getKeyValue(key: *const K) ?(*const K, *const V) {
         var hash = hashKey(key);
         switch findIndex(key, hash) {
@@ -437,21 +541,78 @@ public:
     }
 
     const func iterRef() !MapIterRef<K, V> {
-        var entries = switch allocator {
-            null => Vec<(*const K, *const V)>(),
-            some(owner) => Vec<(*const K, *const V)>.withAllocator(owner),
-        };
-        entries.reserve(length)!;
-        for i in usize(0)..buckets.len() {
-            var bucket = buckets.getPtr(i).unwrap();
-            if bucket.isOccupied() {
-                entries.push((bucket.keyRef(), bucket.valueRef()))!;
-            }
-        }
-        MapIterRef<K, V>(move(entries), length)
+        MapIterRef<K, V>(buckets.asConstSlice(), length)
     }
 
+    const func keys() Keys<K, V> { Keys<K, V>(MapIterRef<K, V>(buckets.asConstSlice(), length)) }
+    const func values() Values<K, V> { Values<K, V>(MapIterRef<K, V>(buckets.asConstSlice(), length)) }
+
     func deinit() void { clear(); }
+}
+
+pub class Entry<K: Movable, V: Movable> {
+    #copy: disabled
+    var map: *HashMap<K, V>;
+    var query: ?K;
+public:
+    unsafe func init(map: *HashMap<K, V>, key: K) : map(map), query(some(move(key))) {}
+
+    const func key() *const K {
+        var lookup = queryPtr();
+        switch map.getKeyValue(lookup) {
+            some(found) => found.0,
+            null => lookup,
+        }
+    }
+    const func isOccupied() bool { map.getKeyValue(queryPtr()) != null }
+    const func isVacant() bool { !isOccupied() }
+    const func get() ?*const V {
+        switch map.getKeyValue(queryPtr()) {
+            some(found) => some(found.1),
+            null => null,
+        }
+    }
+    func getMut() ?*V { map.getMutPtr(queryPtr()) }
+    func andModify<F: Movable>(callback: F) *Self {
+        switch getMut() {
+            some(address) => { move(callback)(address); },
+            null => {},
+        }
+        self
+    }
+    func orInsert(value: V) !*V { map.getOrInsertPtr(takeKey(), move(value)) }
+    func orInsertWith<F: Movable>(create: F) !*V {
+        switch getMut() {
+            some(value) => {
+                var used = takeKey();
+                return value;
+            },
+            null => {},
+        }
+        var initial: V = move(create)();
+        map.getOrInsertPtr(takeKey(), move(initial))
+    }
+    func removeEntry() ?(K, V) {
+        var key = takeKey();
+        map.removeEntry(&key)
+    }
+    func remove() ?V {
+        switch removeEntry() {
+            some(pair) => {
+                key, value := move(pair);
+                some(move(value))
+            },
+            null => null,
+        }
+    }
+private:
+    const func queryPtr() *const K {
+        __vqr_optional_pointer(&query) ?? { panic("hash map entry has already been consumed"); }
+    }
+    func takeKey() K {
+        var value = core.replace<?K>(&query, null);
+        move(value).unwrap()
+    }
 }
 
 pub class SetIterRef<T: Movable> {

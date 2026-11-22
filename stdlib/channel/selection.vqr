@@ -1,0 +1,212 @@
+package channel
+import (atomic, mem, opt, time)
+
+var choiceLock: u32 = 0;
+var choiceVersion: u32 = 0;
+var activeChoices: u32 = 0;
+var choiceRotation: usize = 0;
+
+class ChoiceLock {
+    #copy: disabled
+public:
+    func init() {
+        for __vqr_atomic_swap(&choiceLock, 1u32, atomic.Order.Acquire) != 0 {
+            __vqr_sync_wait(&choiceLock, 1u32);
+        }
+    }
+    func deinit() void {
+        __vqr_atomic_store(&choiceLock, 0u32, atomic.Order.Release);
+        __vqr_sync_wake(&choiceLock, 1u32);
+    }
+}
+
+class Choice {
+    #copy: disabled
+    pub var index: usize;
+    pub var failure: ?ErrorId;
+public:
+    func init() : index(~usize(0)), failure(null) {
+        var old = __vqr_atomic_add(&activeChoices, 1u32, atomic.Order.Relaxed);
+        if old == ~u32(0) { panic("too many active selections"); }
+    }
+    func deinit() void {
+        var old = __vqr_atomic_sub(&activeChoices, 1u32, atomic.Order.Relaxed);
+    }
+    // Caller holds ChoiceLock while accessing these fields.
+    const func pending() bool { index == ~usize(0) && failure == null }
+    func observeCancellation() void {
+        if !__vqr_task_channel_cancelled() { return; }
+        var guard = ChoiceLock();
+        if pending() { failure = some(ChannelError.Cancelled); }
+    }
+    const func decided() bool {
+        var guard = ChoiceLock();
+        !pending()
+    }
+    const func decision() !usize {
+        var guard = ChoiceLock();
+        if failure != null { return failure.unwrap(); }
+        index
+    }
+    func choose(candidate: usize) void {
+        var guard = ChoiceLock();
+        if pending() { index = candidate; }
+    }
+}
+
+func notifyChoices() void {
+    if __vqr_atomic_load(&activeChoices, atomic.Order.Relaxed) == 0 { return; }
+    var old = __vqr_atomic_add(&choiceVersion, 1u32, atomic.Order.Release);
+    __vqr_task_channel_notify(&choiceVersion);
+    __vqr_sync_wake(&choiceVersion, 0x7fffffffu32);
+}
+
+func choiceSnapshot() u32 { __vqr_atomic_load(&choiceVersion, atomic.Order.Acquire) }
+func choiceStart(count: usize) usize {
+    __vqr_atomic_add(&choiceRotation, usize(1), atomic.Order.Relaxed) % count
+}
+
+func choiceWait(version: u32, deadline: ?time.Deadline) void {
+    seconds, nanos := switch deadline {
+        some(alarm) => unsafe { alarm.instant().monotonicParts() },
+        null => (i64(-1), i32(0)),
+    };
+    if !__vqr_task_channel_wait(&choiceVersion, version, seconds, i64(nanos)) {
+        if seconds < 0 { __vqr_sync_wait(&choiceVersion, version); }
+        else { var timedOut = __vqr_sync_wait_until(&choiceVersion, version, seconds, i64(nanos)); }
+    }
+}
+
+func choiceClock(choice: *Choice) ?time.Instant {
+    var start = time.Instant.now() catch (reason) {
+        choice.failure = some(reason);
+        return null;
+    };
+    some(start)
+}
+func choiceDeadline(choice: *Choice, base: ?time.Instant, delay: time.Duration) ?time.Deadline {
+    var start = base ?? { return null; };
+    if delay.isNegative() || delay.isZero() { return some(time.Deadline.at(start)); }
+    var target = start.checkedAdd(delay) catch (reason) {
+        if choice.failure == null { choice.failure = some(reason); }
+        return null;
+    };
+    some(time.Deadline.at(target))
+}
+func choiceEarlier(first: ?time.Deadline, second: ?time.Deadline) ?time.Deadline {
+    if second == null { return first; }
+    if first == null { return second; }
+    firstSecond, firstNano := unsafe { first.unwrap().instant().monotonicParts() };
+    secondSecond, secondNano := unsafe { second.unwrap().instant().monotonicParts() };
+    if secondSecond < firstSecond || (secondSecond == firstSecond && secondNano < firstNano) { return second; }
+    first
+}
+func choiceTimer(choice: *Choice, index: usize, alarm: ?time.Deadline) void {
+    if alarm == null { return; }
+    if alarm.unwrap().expired() catch true { choice.choose(index); }
+}
+
+class SelectNode<T: Movable & Sendable> {
+    pub var choice: *Choice;
+    pub var index: usize;
+    pub var source: ?*T;
+    pub var value: ?T;
+    pub var next: ?*SelectNode<T>;
+public:
+    func init(choice: *Choice, index: usize, source: ?*T)
+        : choice(choice), index(index), source(source), value(null), next(null) {}
+}
+
+func takeOffered<T: Movable & Sendable>(node: *SelectNode<T>) T {
+    unsafe { __vqr_slot_take<T>(node.source.unwrap()) }
+}
+
+class Ticket<T: Movable & Sendable> {
+    var state: mem.Shared<State<T>>;
+    var node: SelectNode<T>;
+    var linked: bool;
+public:
+    func init(state: mem.Shared<State<T>>, choice: *Choice, index: usize, source: ?*T)
+        : state(move(state)), node(SelectNode<T>(choice, index, source)), linked(false) {}
+
+    func link() void {
+        var channel = state.asPtr();
+        var guard = channel.lock();
+        var box = guard.get();
+        if !box.queue.isRendezvous() { return; }
+        node.next = box.choices;
+        box.choices = some(&node);
+        linked = true;
+        channel.notifyAll();
+    }
+
+    func unlink() void {
+        if !linked { return; }
+        var channel = state.asPtr();
+        var guard = channel.lock();
+        var box = guard.get();
+        var cursor = &box.choices;
+        for *cursor != null {
+            var candidate = (*cursor).unwrap();
+            if candidate == &node {
+                *cursor = node.next;
+                break;
+            }
+            cursor = &candidate.next;
+        }
+        linked = false;
+    }
+
+    func deinit() void { unlink(); }
+    func take() ?T { opt.take<T>(&node.value) }
+
+    func probe() void {
+        var channel = state.asPtr();
+        var guard = channel.lock();
+        var box = guard.get();
+        var claim = ChoiceLock();
+        if !node.choice.pending() { return; }
+        var changed = if node.source != null { probeSend(box) } else { probeReceive(box) };
+        if changed { channel.notifyAll(); }
+    }
+private:
+    func probeSend(box: *Mailbox<T>) bool {
+        if box.closed {
+            node.choice.failure = some(ChannelError.Closed);
+            return true;
+        }
+        if !box.queue.isRendezvous() {
+            if box.queue.isFull() { return false; }
+            box.queue.prepare() catch {
+                node.choice.failure = some(ChannelError.OutOfMemory);
+                return true;
+            };
+            box.queue.push(takeOffered<T>(&node));
+        } else {
+            if box.offer != Offer.Empty { return false; }
+            if box.readyReceiver() {
+                box.deliver(takeOffered<T>(&node), Offer.Committed, null);
+            } else {
+                var receiver = box.findChoice(false, some(node.choice)) ?? { return false; };
+                receiver.value = some(takeOffered<T>(&node));
+                receiver.choice.index = receiver.index;
+            }
+        }
+        node.choice.index = node.index;
+        true
+    }
+
+    func probeReceive(box: *Mailbox<T>) bool {
+        switch box.receiveQueue() {
+            TryRecv.Value(item) => { node.value = some(move(item)); },
+            TryRecv.Closed => {},
+            TryRecv.Empty => {
+                var sender = box.findChoice(true, some(node.choice)) ?? { return false; };
+                node.value = some(takeOffered<T>(sender));
+                sender.choice.index = sender.index;
+            },
+        }
+        node.choice.index = node.index;
+        true
+    }
+}

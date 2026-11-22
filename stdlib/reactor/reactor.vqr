@@ -60,6 +60,11 @@ public:
         if fd < 0 { return io.systemError(reason); }
         Reactor(fd)
     }
+    // Wait for readability, then use wait() to recover the ready watch.
+    const func systemDescriptor() !i32 {
+        if epoll < 0 { return io.IoError.Closed; }
+        epoll
+    }
     func register(descriptor: i32, interest: Interest) !WatchId {
         if epoll < 0 { return io.IoError.Closed; }
         if generation == ~u64(0) { return ReactorError.WatchLimit; }

@@ -2,13 +2,27 @@ package grpc
 import (binary, coll)
 
 pub func frame(message: []const u8, limit: usize) !coll.Vec<u8> {
+    frameWire(message, limit, 0)
+}
+
+func frameWire(message: []const u8, limit: usize, flag: u8) !coll.Vec<u8> {
     if message.len() > limit || message.len() > 0x7fffffff { return RpcError.MessageTooLarge; }
     var encoded = coll.Vec<u8>.withCapacity(message.len() + 5)!;
-    encoded.push(0)!;
+    encoded.push(flag)!;
     var length = binary.u32ToBytes(u32(message.len())!, binary.Endian.Big);
     for byte in length[:] { encoded.push(byte)!; }
     for byte in message { encoded.push(byte)!; }
     move(encoded)
+}
+
+func frameMessage(message: []const u8, limit: usize, compression: Compression) !coll.Vec<u8> {
+    if message.len() > limit || message.len() > 0x7fffffff { return RpcError.MessageTooLarge; }
+    if compression == Compression.Identity || message.len() == 0 { return frame(message, limit); }
+    var compressed = gzip(message, message.len() - 1, true) catch (reason) {
+        if reason == RpcError.MessageTooLarge { return frame(message, limit); }
+        return reason;
+    };
+    frameWire(compressed.asConstSlice(), limit, 1)
 }
 
 pub class MessageReader {
@@ -16,9 +30,13 @@ pub class MessageReader {
     var data: coll.Vec<u8>;
     var offset: usize;
     var limit: usize;
+    var encoding: MessageEncoding;
 public:
     func init(limit: usize) : data(coll.Vec<u8>()), offset(0),
-        limit(if limit > 0x7fffffff { 0x7fffffff } else { limit }) {}
+        limit(if limit > 0x7fffffff { 0x7fffffff } else { limit }), encoding(MessageEncoding.Identity) {}
+    func useCompression(value: Compression) void {
+        encoding = if value == Compression.Gzip { MessageEncoding.Gzip } else { MessageEncoding.Identity };
+    }
     func feed(fragment: []const u8) !void {
         var unread = data.len() - offset;
         // A 4 KiB transport read can complete one message and contain several more.
@@ -40,14 +58,16 @@ public:
     func next() !?coll.Vec<u8> {
         var available = data.len() - offset;
         if available < 5 { return null; }
-        if data[offset] == 1 { return RpcError.UnsupportedEncoding; }
-        if data[offset] != 0 { return RpcError.Protocol; }
+        var flag = data[offset];
+        if flag == 1 && encoding != MessageEncoding.Gzip { return RpcError.UnsupportedEncoding; }
+        if flag > 1 { return RpcError.Protocol; }
         var wire = data.asConstSlice();
         var size = usize(binary.readU32(wire[offset + 1..offset + 5], binary.Endian.Big)!);
         if size > limit { return RpcError.MessageTooLarge; }
         if size > available - 5 { return null; }
         var end = offset + 5 + size;
-        var message = coll.Vec<u8>.fromSlice(wire[offset + 5..end])!;
+        var payload = wire[offset + 5..end];
+        var message = if flag == 1 { gzip(payload, limit, false)! } else { coll.Vec<u8>.fromSlice(payload)! };
         offset = end;
         some(move(message))
     }

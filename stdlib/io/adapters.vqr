@@ -1,4 +1,5 @@
 package io
+import (coll, mem)
 
 pub class LimitedReader {
     #implements: Reader
@@ -78,32 +79,74 @@ public:
 }
 
 pub class MultiWriter {
+    #copy: disabled
     #implements: Writer
     var targets: []const *Writer;
+    var pending: coll.Vec<u8>;
+    var targetIndex: usize;
+    var processed: usize;
 public:
-    func init(targets: []const *Writer) : targets(targets) {}
+    func init(targets: []const *Writer)
+        : targets(targets), pending(coll.Vec<u8>()), targetIndex(0), processed(0) {}
 
+    // After an error, retry with the same unacknowledged prefix.
     func write(data: []const u8) !usize {
-        for target in targets { writeAll(target, data)!; }
-        data.len()
+        if data.len() == 0 || targets.len() == 0 { return data.len(); }
+        if pending.isEmpty() {
+            pending.reserve(data.len())!;
+            for byte in data { pending.push(byte)!; }
+        } else {
+            if data.len() < pending.len() { return IoError.InvalidArgument; }
+            for i in usize(0)..pending.len() {
+                if data[i] != pending[i] { return IoError.InvalidArgument; }
+            }
+        }
+        for targetIndex < targets.len() {
+            writeAll(targets[targetIndex], pending.asConstSlice(), &processed)!;
+            targetIndex++;
+            processed = 0;
+        }
+        var count = pending.len();
+        pending.clear();
+        targetIndex = 0;
+        count
     }
 
     func flush() !void {
+        if !pending.isEmpty() { return IoError.WouldBlock; }
         for target in targets { target.flush()!; }
     }
 }
 
 pub class TeeReader {
+    #copy: disabled
     #implements: Reader
     var source: *Reader;
     var mirror: *Writer;
+    var pending: [4096]u8;
+    var filled: usize;
+    var written: usize;
+    var delivered: usize;
 public:
-    func init(reader: *Reader, writer: *Writer) : source(reader), mirror(writer) {}
+    func init(reader: *Reader, writer: *Writer)
+        : source(reader), mirror(writer), pending(mem.zeroedBytes<4096>()), filled(0), written(0), delivered(0) {}
     func read(dst: []u8) !usize {
         if dst.len() == 0 { return 0; }
-        var count = source.read(dst)!;
-        if count > dst.len() { return IoError.InvalidCount; }
-        if count != 0 { writeAll(mirror, dst[0..count])!; }
+        var buffer = pending[:];
+        if delivered == filled {
+            var limit = if dst.len() < buffer.len() { dst.len() } else { buffer.len() };
+            var count = source.read(buffer[0..limit])!;
+            if count > limit { return IoError.InvalidCount; }
+            filled = count;
+            written = 0;
+            delivered = 0;
+            if filled == 0 { return 0; }
+        }
+        writeAll(mirror, buffer[0..filled], &written)!;
+        var available = filled - delivered;
+        var count = if dst.len() < available { dst.len() } else { available };
+        mem.copyBytes(buffer[delivered..delivered + count], dst[0..count])!;
+        delivered += count;
         count
     }
 }

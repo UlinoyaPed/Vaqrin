@@ -1,0 +1,142 @@
+package grpc
+import (cmp, coll, core, http2, reactor, task, text, time)
+
+class ConcurrentInput {
+    #copy: disabled
+    var handler: *const ConcurrentUnaryHandler;
+    var request: UnaryRequest;
+    pub func init(handler: *const ConcurrentUnaryHandler, request: UnaryRequest)
+        : handler(handler), request(move(request)) {}
+    pub func run(limit: usize) !ConcurrentOutput {
+        var input = core.replace<UnaryRequest>(&request,
+            UnaryRequest{path: "", metadata: Metadata(), deadline: null, body: coll.Vec<u8>()});
+        var result = handler.call(move(input)) catch {
+            var code = if task.isCancelled() { StatusCode.Cancelled } else { StatusCode.Internal };
+            reply(status(code, ""))
+        };
+        ConcurrentOutput(&result, limit)
+    }
+}
+
+// Copy values returned by application handlers because their original
+// vectors may use an allocator that is local to the current worker.
+class ConcurrentOutput {
+    #copy: disabled
+    pub var result: UnaryResponse;
+    pub func init(source: *const UnaryResponse, limit: usize) !void
+        : result(copyResponse(source, limit)!) {}
+}
+
+func copyResponse(source: *const UnaryResponse, limit: usize) !UnaryResponse {
+    var content: ?coll.Vec<u8> = null;
+    switch source.body {
+        some(ref body) => {
+            if body.len() > limit { return reply(status(StatusCode.ResourceExhausted, "")); }
+            content = some(coll.Vec<u8>.fromSlice(body.asConstSlice())!);
+        },
+        null => {},
+    };
+    var message = text.fromBytes(source.status.message.asBytes())!;
+    var details = coll.Vec<u8>.fromSlice(source.status.details.asConstSlice())!;
+    var code = Status{code: source.status.code, message: move(message), details: move(details)};
+    UnaryResponse{initial: source.initial.cloneOwned()!, trailing: source.trailing.cloneOwned()!,
+                  status: move(code), body: move(content)}
+}
+
+class PendingCall {
+    #copy: disabled
+    pub var stream: i32;
+    pub var deadline: ?time.Deadline;
+    pub var job: task.Task<ConcurrentOutput>;
+    pub var compression: Compression;
+    pub var replyable: bool;
+    pub func init(stream: i32, deadline: ?time.Deadline, job: task.Task<ConcurrentOutput>, compression: Compression)
+        : stream(stream), deadline(deadline), job(move(job)), compression(compression), replyable(true) {}
+}
+
+class CompletionWatch {
+    #copy: disabled
+    var watched: reactor.Reactor;
+    pub func init(socket: i32, completed: i32) !void : watched(reactor.Reactor.open()!) {
+        watched.register(socket, reactor.Interest.read())!;
+        watched.register(completed, reactor.Interest.read())!;
+    }
+    pub func wait(deadline: time.Deadline) !void {
+        task.waitDescriptor(watched.systemDescriptor()!, reactor.Interest.read(), some(deadline))!;
+        watched.wait(some(time.Duration.zero()))!;
+    }
+}
+
+class ConcurrentCalls {
+    #copy: disabled
+    var group: task.TaskGroup;
+    var running: coll.Vec<PendingCall>;
+    pub func init(workers: usize) !void
+        : group(task.TaskGroup.withWorkers(workers)!), running(coll.Vec<PendingCall>()) {}
+
+    pub const func count() usize { running.len() }
+    pub const func pending() bool { running.len() != 0 }
+
+    pub func completionDescriptor() !i32 { group.completionDescriptor() }
+    pub func clearCompletionSignal() !void { group.clearCompletionSignal() }
+    pub const func nextDeadline(ceiling: time.Deadline) time.Deadline {
+        var first = ceiling;
+        for index in usize(0)..running.len() {
+            var call = running.at(index);
+            if call.replyable && call.deadline != null {
+                var candidate = call.deadline.unwrap();
+                if candidate.instant().compare(first.instant()) == cmp.Ordering.Less { first = candidate; }
+            }
+        }
+        first
+    }
+    pub func start(stream: i32, handler: *const ConcurrentUnaryHandler, request: UnaryRequest,
+                   compression: Compression, limit: usize) !void {
+        running.reserve(running.len() + 1)!;
+        var deadline = request.deadline;
+        var input = ConcurrentInput(handler, move(request));
+        var run = [move(input), limit]() !ConcurrentOutput => {
+            var owned = move(input);
+            owned.run(limit)
+        };
+        var job = group.spawn<ConcurrentOutput>(move(run))!;
+        running.push(PendingCall(stream, deadline, move(job), compression))
+    }
+
+    pub func cancel(stream: i32) void {
+        for index in usize(0)..running.len() {
+            var call = running.atMut(index);
+            if call.stream == stream {
+                call.replyable = false;
+                call.job.cancel();
+                return;
+            }
+        }
+    }
+
+    pub func collect(session: *http2.Connection, limit: usize) !void {
+        var index = usize(0);
+        for index < running.len() {
+            var call = running.atMut(index);
+            if call.replyable && call.deadline != null && call.deadline.unwrap().expired()! {
+                call.replyable = false;
+                call.job.cancel();
+                sendError(session, call.stream, StatusCode.DeadlineExceeded) catch (reason) {
+                    if reason != http2.Http2Error.StreamClosed { return reason; }
+                };
+            }
+            if !call.job.isFinished() { index++; continue; }
+            var completed = running.swapRemove(index).unwrap();
+            var result = completed.job.join() catch {
+                if !completed.replyable { continue; }
+                sendError(session, completed.stream, StatusCode.Internal) catch (reason) {
+                    if reason != http2.Http2Error.StreamClosed { return reason; }
+                };
+                continue;
+            };
+            if !completed.replyable { continue; }
+            sendUnaryResult(session, completed.stream, &result.result, limit, completed.compression)
+                catch (reason) { if reason != http2.Http2Error.StreamClosed { return reason; } };
+        }
+    }
+}

@@ -44,7 +44,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             "clang-$LLVM_MAJOR" "llvm-$LLVM_MAJOR-dev" \
-            cmake ninja-build python3 gcc-arm-none-eabi openssl libssl-dev libnghttp2-dev
+            cmake ninja-build python3 gcc-arm-none-eabi openssl libssl-dev libnghttp2-dev zlib1g-dev
           printf '/usr/lib/llvm-%s/bin\n' "$LLVM_MAJOR" >> "$GITHUB_PATH"
 
       - name: Install protocol test dependencies
@@ -68,16 +68,24 @@ jobs:
         run: |
           clang++ -std=c++20 -Wall -Wextra -pedantic-errors \
             -fno-exceptions -fno-rtti -fsyntax-only \
-            compiler/runtime/io_posix.cpp compiler/runtime/tls_openssl.cpp compiler/runtime/http2_nghttp2.cpp
+            compiler/runtime/io_posix.cpp compiler/runtime/tls_openssl.cpp compiler/runtime/http2_nghttp2.cpp compiler/runtime/gzip_zlib.cpp
 
       - name: Run all acceptance suites
         run: ctest --test-dir build/ci --output-on-failure --no-tests=error --parallel 1
+
+      - name: Verify Unicode 17.0 conformance
+        run: |
+          base=https://raw.githubusercontent.com/unicode-org/unicodetools/main/unicodetools/data/ucd/17.0.0
+          mkdir -p "$RUNNER_TEMP/ucd17"
+          curl --fail --silent --show-error --retry 3 "$base/NormalizationTest.txt" -o "$RUNNER_TEMP/ucd17/NormalizationTest.txt"
+          curl --fail --silent --show-error --retry 3 "$base/auxiliary/GraphemeBreakTest.txt" -o "$RUNNER_TEMP/ucd17/GraphemeBreakTest.txt"
+          python3 compiler/tests/unicode_conformance.py build/ci/vaqc "$RUNNER_TEMP/ucd17"
 
       - name: Verify installed compiler and standard library
         run: |
           cmake --install build/ci --prefix "$RUNNER_TEMP/vaqrin"
           compiler="$RUNNER_TEMP/vaqrin/bin/vaqc"
-          python3 compiler/tests/acceptance.py "$compiler" Acceptance.test_shipped_packages_load_together
+          python3 compiler/tests/acceptance.py "$compiler" Acceptance.test_shipped_packages_load_together Acceptance.test_task_channel_single_worker Acceptance.test_spec_task_example
           python3 compiler/tests/io_acceptance.py "$compiler" IoAcceptance.test_task_and_io_runtimes_link_together
           python3 compiler/tests/stdlib_acceptance.py "$compiler" StandardLibraryAcceptance.test_https_client
           python3 compiler/tests/io_v2_acceptance.py "$compiler"

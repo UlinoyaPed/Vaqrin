@@ -1,5 +1,5 @@
 package channel
-import (mem, opt, sync, time)
+import (atomic, mem, opt, sync, time)
 
 pub error ChannelError { Closed, OutOfMemory, Cancelled, Timeout }
 pub enum SendResult<T> { Sent, Closed(T), Cancelled(T), OutOfMemory(T) }
@@ -24,11 +24,12 @@ class Mailbox<T: Movable & Sendable> {
     pub var recvDeadline: ?time.Deadline;
     pub var senders: usize;
     pub var closed: bool;
+    pub var choices: ?*SelectNode<T>;
 public:
     func init(queue: Queue<T>) : queue(move(queue)), offer(Offer.Empty), handoff(null), sendDeadline(null),
-                                receiverWaiting(false), recvDeadline(null), senders(1), closed(false) {}
+                                receiverWaiting(false), recvDeadline(null), senders(1), closed(false), choices(null) {}
 
-    func receive() TryRecv<T> {
+    func receiveQueue() TryRecv<T> {
         if offer == Offer.Committed || (offer == Offer.Pending && !closed && !hasExpired(sendDeadline)) {
             var item = opt.take<T>(&handoff);
             offer = if offer == Offer.Pending { Offer.Claimed } else { Offer.Empty };
@@ -38,6 +39,47 @@ public:
             some(item) => TryRecv<T>.Value(move(item)),
             null => if closed { TryRecv<T>.Closed } else { TryRecv<T>.Empty },
         }
+    }
+
+    // Caller guards both the mailbox and the pending choice.
+    func findChoice(sending: bool, excluding: ?*Choice) ?*SelectNode<T> {
+        if offer != Offer.Empty || closed { return null; }
+        var current = choices;
+        for current != null {
+            var node = current.unwrap();
+            var isSend = node.source != null;
+            if isSend == sending && node.choice.pending() &&
+               (excluding == null || excluding.unwrap() != node.choice) {
+                return current;
+            }
+            current = node.next;
+        }
+        null
+    }
+
+    func receive() TryRecv<T> {
+        var outcome = receiveQueue();
+        if choices == null { return move(outcome); }
+        switch move(outcome) {
+            TryRecv.Value(item) => TryRecv<T>.Value(move(item)),
+            TryRecv.Closed => TryRecv<T>.Closed,
+            TryRecv.Empty => {
+                var guard = ChoiceLock();
+                var sender = findChoice(true, null) ?? { return TryRecv<T>.Empty; };
+                var item = takeOffered<T>(sender);
+                sender.choice.index = sender.index;
+                TryRecv<T>.Value(move(item))
+            },
+        }
+    }
+
+    func deliverToChoice(value: *?T) bool {
+        if choices == null { return false; }
+        var guard = ChoiceLock();
+        var receiver = findChoice(false, null) ?? { return false; };
+        receiver.value = opt.take<T>(value);
+        receiver.choice.index = receiver.index;
+        true
     }
 
     const func readyReceiver() bool { receiverWaiting && !hasExpired(recvDeadline) }
@@ -52,31 +94,43 @@ public:
 
 class State<T: Movable & Sendable> {
     pub var data: sync.Mutex<Mailbox<T>>;
-    pub var changed: sync.CondVar;
+    var sequence: u32;
 public:
     func init(queue: Queue<T>) : data(sync.Mutex<Mailbox<T>>.new(Mailbox<T>(move(queue)))),
-                                changed(sync.CondVar.new()) {}
+                                sequence(0) {}
 
     const func lock() sync.MutexGuard<Mailbox<T>> {
         data.lock() catch { panic("failed to acquire a channel lock"); }
     }
 
     const func wait(guard: sync.MutexGuard<Mailbox<T>>, deadline: ?time.Deadline) sync.MutexGuard<Mailbox<T>> {
-        switch deadline {
-            some(alarm) => {
-                acquired, timedOut := changed.waitUntilDeadline<Mailbox<T>>(move(guard), alarm)
-                                    catch { panic("failed to wait on a timed channel"); };
-                return move(acquired);
-            },
-            null => {},
-        }
-        changed.wait<Mailbox<T>>(move(guard)) catch { panic("failed to wait on a channel"); }
+        var address = &sequence;
+        var version = __vqr_atomic_load(address, atomic.Order.Relaxed);
+        seconds, nanos := switch deadline {
+            some(alarm) => unsafe { alarm.instant().monotonicParts() },
+            null => (i64(-1), i32(0)),
+        };
+        var awaitChange = [address, version, seconds, nanos]() void => {
+            if !__vqr_task_channel_wait(address, version, seconds, i64(nanos)) {
+                if seconds < 0 { __vqr_sync_wait(address, version); }
+                else { var timedOut = __vqr_sync_wait_until(address, version, seconds, i64(nanos)); }
+            }
+        };
+        unsafe { sync.MutexGuard<Mailbox<T>>.unlockWhile(move(guard), awaitChange) }
+    }
+
+    const func notifyAll() void {
+        var address = unsafe { constCast<*u32>(&sequence) };
+        var previous = __vqr_atomic_add(address, 1u32, atomic.Order.Relaxed);
+        __vqr_task_channel_notify(address);
+        __vqr_sync_wake(address, 0x7fffffffu32);
+        notifyChoices();
     }
 
     const func close() void {
         var guard = lock();
         guard.get().closed = true;
-        changed.notifyAll();
+        notifyAll();
     }
 }
 
@@ -107,6 +161,11 @@ public:
         data.senders++;
         Sender<T>(shared.clone())
     }
+private:
+    const func selectTicket(choice: *Choice, index: usize, source: *T) Ticket<T> {
+        Ticket<T>(shared.clone(), choice, index, some(source))
+    }
+public:
     const func clone() Self { copy() }
 
     const func send(value: T) !void {
@@ -124,14 +183,18 @@ public:
         var data = guard.get();
         if data.closed { return TrySendResult<T>.Closed(move(value)); }
         if data.queue.isRendezvous() {
-            if data.offer != Offer.Empty || !data.readyReceiver() { return TrySendResult<T>.Full(move(value)); }
-            data.deliver(move(value), Offer.Committed, null);
+            if data.offer != Offer.Empty { return TrySendResult<T>.Full(move(value)); }
+            if data.readyReceiver() { data.deliver(move(value), Offer.Committed, null); }
+            else {
+                var offered = some(move(value));
+                if !data.deliverToChoice(&offered) { return TrySendResult<T>.Full(move(offered).unwrap()); }
+            }
         } else {
             if data.queue.isFull() { return TrySendResult<T>.Full(move(value)); }
             data.queue.prepare() catch { return TrySendResult<T>.OutOfMemory(move(value)); };
             data.queue.push(move(value));
         }
-        state.changed.notifyAll();
+        state.notifyAll();
         TrySendResult<T>.Sent
     }
 
@@ -153,10 +216,11 @@ private:
         for {
             var data = guard.get();
             if data.closed { return SendResult<T>.Closed(move(value)); }
+            if __vqr_task_channel_cancelled() { return SendResult<T>.Cancelled(move(value)); }
             if !data.queue.isFull() {
                 data.queue.prepare() catch { return SendResult<T>.OutOfMemory(move(value)); };
                 data.queue.push(move(value));
-                state.changed.notifyAll();
+                state.notifyAll();
                 return SendResult<T>.Sent;
             }
             if hasExpired(deadline) { return SendResult<T>.Cancelled(move(value)); }
@@ -186,7 +250,7 @@ public:
         data.senders--;
         if data.senders == 0 {
             data.closed = true;
-            state.changed.notifyAll();
+            state.notifyAll();
         }
     }
 private:
@@ -196,15 +260,21 @@ private:
         for {
             var data = guard.get();
             if data.closed { return SendResult<T>.Closed(move(value)); }
+            if __vqr_task_channel_cancelled() { return SendResult<T>.Cancelled(move(value)); }
             if data.offer == Offer.Empty {
                 if data.readyReceiver() {
                     data.deliver(move(value), Offer.Committed, null);
-                    state.changed.notifyAll();
+                    state.notifyAll();
                     return SendResult<T>.Sent;
                 }
                 if hasExpired(deadline) { return SendResult<T>.Cancelled(move(value)); }
-                data.deliver(move(value), Offer.Pending, deadline);
-                state.changed.notifyAll();
+                var offered = some(move(value));
+                if data.deliverToChoice(&offered) {
+                    state.notifyAll();
+                    return SendResult<T>.Sent;
+                }
+                data.deliver(move(offered).unwrap(), Offer.Pending, deadline);
+                state.notifyAll();
                 return waitForClaim(state, move(guard), deadline);
             }
             if hasExpired(deadline) { return SendResult<T>.Cancelled(move(value)); }
@@ -218,14 +288,14 @@ private:
             var data = guard.get();
             if data.offer == Offer.Claimed {
                 data.offer = Offer.Empty;
-                state.changed.notifyAll();
+                state.notifyAll();
                 return SendResult<T>.Sent;
             }
             var closed = data.closed;
-            if closed || hasExpired(deadline) {
+            if closed || __vqr_task_channel_cancelled() || hasExpired(deadline) {
                 var recovered = opt.take<T>(&data.handoff);
                 data.offer = Offer.Empty;
-                state.changed.notifyAll();
+                state.notifyAll();
                 if closed { return SendResult<T>.Closed(move(recovered).unwrap()); }
                 return SendResult<T>.Cancelled(move(recovered).unwrap());
             }
@@ -240,6 +310,12 @@ pub class Receiver<T: Movable & Sendable> {
 public:
     func init(state: mem.Shared<State<T>>) : shared(move(state)) {}
 
+private:
+    func selectTicket(choice: *Choice, index: usize) Ticket<T> {
+        Ticket<T>(shared.clone(), choice, index, null)
+    }
+
+public:
     func recv() !?T { recvBefore(null) }
     func recvTimeout(timeout: time.Duration) !?T { recvBefore(some(time.Deadline.after(timeout)!)) }
 
@@ -251,10 +327,11 @@ private:
             var data = guard.get();
             data.receiverWaiting = false;
             switch data.receive() {
-                TryRecv.Value(item) => { state.changed.notifyAll(); return some(move(item)); },
+                TryRecv.Value(item) => { state.notifyAll(); return some(move(item)); },
                 TryRecv.Closed => return null,
                 TryRecv.Empty => {},
             }
+            if __vqr_task_channel_cancelled() { return ChannelError.Cancelled; }
             if hasExpired(deadline) { return ChannelError.Timeout; }
             data.receiverWaiting = true;
             data.recvDeadline = deadline;
@@ -268,7 +345,7 @@ public:
         var guard = state.lock();
         var outcome = guard.get().receive();
         switch outcome {
-            TryRecv.Value(ref item) => { state.changed.notifyAll(); },
+            TryRecv.Value(ref item) => { state.notifyAll(); },
             _ => {},
         }
         move(outcome)
@@ -300,7 +377,7 @@ public:
             completed = opt.take<T>(&data.handoff);
             data.offer = Offer.Empty;
         }
-        state.changed.notifyAll();
+        state.notifyAll();
         guard.unlock();
     }
 }

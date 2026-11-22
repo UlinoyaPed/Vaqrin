@@ -4,19 +4,26 @@
 #define _DEFAULT_SOURCE
 #define _FILE_OFFSET_BITS 64
 
+#if defined(__linux__)
 #include "reactor_linux.h"
+#include <sys/random.h>
+#elif defined(__APPLE__)
+#include <crt_externs.h>
+#include <mach-o/dyld.h>
+#include <sys/random.h>
+#endif
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <locale.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/random.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -30,6 +37,37 @@ static auto retry_interrupted(Operation operation) {
     auto result = operation();
     while (result < 0 && errno == EINTR) result = operation();
     return result;
+}
+
+static ssize_t write_without_sigpipe(int fd, const void *data, size_t length, int32_t &reason) {
+    sigset_t set, previous, pending;
+    sigemptyset(&set);
+    sigaddset(&set, SIGPIPE);
+    reason = pthread_sigmask(SIG_BLOCK, &set, &previous);
+    if (reason != 0) return -1;
+    const int pending_result = sigpending(&pending);
+    if (pending_result < 0) {
+        reason = errno;
+        pthread_sigmask(SIG_SETMASK, &previous, nullptr);
+        return -1;
+    }
+    const auto written = retry_interrupted([&] { return write(fd, data, length); });
+    reason = written < 0 ? errno : 0;
+    if (reason == EPIPE && sigismember(&pending, SIGPIPE) == 0) {
+#if defined(__APPLE__)
+        // Darwin has no sigtimedwait. A write-induced SIGPIPE belongs to this thread.
+        sigset_t generated;
+        if (sigpending(&generated) == 0 && sigismember(&generated, SIGPIPE) == 1) {
+            int signal_number = 0;
+            sigwait(&set, &signal_number);
+        }
+#else
+        struct timespec now{};
+        retry_interrupted([&] { return sigtimedwait(&set, nullptr, &now); });
+#endif
+    }
+    pthread_sigmask(SIG_SETMASK, &previous, nullptr);
+    return written;
 }
 
 static int file_kind(mode_t mode) {
@@ -46,7 +84,11 @@ static void write_metadata(const struct stat *value, uint64_t *size, uint32_t *m
                            uint64_t *device, uint64_t *inode) {
     if (size) *size = value->st_size < 0 ? 0u : (uint64_t)value->st_size;
     if (mode) *mode = (uint32_t)(value->st_mode & 07777);
-    if (modified) *modified = (int64_t)value->st_mtim.tv_sec;
+#if defined(__APPLE__)
+    if (modified) *modified = static_cast<int64_t>(value->st_mtimespec.tv_sec);
+#else
+    if (modified) *modified = static_cast<int64_t>(value->st_mtim.tv_sec);
+#endif
     if (kind) *kind = (int32_t)file_kind(value->st_mode);
     if (device) *device = static_cast<uint64_t>(value->st_dev);
     if (inode) *inode = static_cast<uint64_t>(value->st_ino);
@@ -55,6 +97,9 @@ static void write_metadata(const struct stat *value, uint64_t *size, uint32_t *m
 namespace {
 
 pthread_mutex_t environment_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_once_t hash_seed_once = PTHREAD_ONCE_INIT;
+uint64_t hash_seed[2];
+int32_t hash_seed_error;
 
 struct EnvironmentLock {
     const int status = pthread_mutex_lock(&environment_mutex);
@@ -72,6 +117,35 @@ void free_environment(char **entries, size_t count) {
 
 extern "C" {
 
+int32_t __vqr_io_random(uint8_t *dst, size_t length) {
+    while (length > 0) {
+        const size_t chunk = length < 256 ? length : 256;
+#if defined(__APPLE__)
+        if (retry_interrupted([&] { return getentropy(dst, chunk); }) < 0) return errno;
+        const auto count = chunk;
+#else
+        const ssize_t count = retry_interrupted([&] { return getrandom(dst, chunk, 0); });
+        if (count < 0) return errno;
+        if (count == 0) return EIO;
+#endif
+        dst += count;
+        length -= static_cast<size_t>(count);
+    }
+    return 0;
+}
+
+int32_t __vqr_io_hash_seed(uint64_t *low, uint64_t *high) {
+    const int status = pthread_once(&hash_seed_once, [] {
+        hash_seed_error = __vqr_io_random(reinterpret_cast<uint8_t *>(hash_seed), sizeof(hash_seed));
+    });
+    if (status != 0) return status;
+    if (hash_seed_error != 0) return hash_seed_error;
+    *low = hash_seed[0];
+    *high = hash_seed[1];
+    return 0;
+}
+
+#if defined(__linux__)
 int32_t __vqr_io_reactor_open(int32_t *out_error) {
     const int fd = epoll_create1(EPOLL_CLOEXEC);
     set_error(out_error, fd < 0 ? errno : 0);
@@ -117,6 +191,8 @@ int32_t __vqr_io_reactor_wait(int32_t epoll, int32_t millis, uint64_t *token,
     return count;
 }
 
+#endif
+
 int32_t __vqr_io_open(const char *path, uint32_t flags, uint32_t mode, int32_t *out_error) {
     int native_flags = O_CLOEXEC;
     int reading = (flags & 1u) != 0;
@@ -156,12 +232,9 @@ intptr_t __vqr_io_file_write(int32_t descriptor, const uint8_t *src, size_t leng
         set_error(out_error, 0);
         return 0;
     }
-    ssize_t count = retry_interrupted([&] { return write(descriptor, src, length); });
-    if (count < 0) {
-        set_error(out_error, errno);
-        return -1;
-    }
-    set_error(out_error, 0);
+    int32_t reason;
+    const auto count = write_without_sigpipe(descriptor, src, length, reason);
+    set_error(out_error, reason);
     return (intptr_t)count;
 }
 
@@ -228,7 +301,12 @@ int32_t __vqr_io_file_close(int32_t descriptor, int32_t *out_error) {
 }
 
 int32_t __vqr_io_file_sync(int32_t descriptor, int32_t data_only, int32_t *out_error) {
+#if defined(__APPLE__)
+    (void)data_only;
+    int result = fsync(descriptor);
+#else
     int result = data_only ? fdatasync(descriptor) : fsync(descriptor);
+#endif
     if (result != 0) {
         set_error(out_error, errno);
         return -1;
@@ -387,9 +465,9 @@ int32_t __vqr_io_temp_at(int32_t directory, uint8_t *name, int32_t create_direct
     memcpy(name, prefix, sizeof(prefix) - 1);
     for (int retry = 0; retry < 64; ++retry) {
         uint8_t nonce[8];
-        const ssize_t count = retry_interrupted([&] { return getrandom(nonce, sizeof(nonce), 0); });
-        if (count != sizeof(nonce)) {
-            set_error(reason, count < 0 ? errno : EIO);
+        const auto random_error = __vqr_io_random(nonce, sizeof(nonce));
+        if (random_error != 0) {
+            set_error(reason, random_error);
             return -1;
         }
         for (size_t index = 0; index < sizeof(nonce); ++index) {
@@ -606,15 +684,20 @@ uintptr_t __vqr_io_env_snapshot(size_t *length, int32_t *out_error) {
     EnvironmentLock lock;
     set_error(out_error, lock.status);
     if (lock.status != 0) return 0;
+#if defined(__APPLE__)
+    char **entries = *_NSGetEnviron();
+#else
+    char **entries = environ;
+#endif
     size_t count = 0;
-    while (environ && environ[count]) ++count;
+    while (entries && entries[count]) ++count;
     auto **copy = static_cast<char **>(calloc(count == 0 ? 1 : count, sizeof(char *)));
     if (!copy) {
         set_error(out_error, errno);
         return 0;
     }
     for (size_t index = 0; index < count; ++index) {
-        copy[index] = strdup(environ[index]);
+        copy[index] = strdup(entries[index]);
         if (!copy[index]) {
             set_error(out_error, errno);
             free_environment(copy, index);
@@ -636,11 +719,22 @@ void __vqr_io_env_free_snapshot(uintptr_t entries, size_t count) {
 }
 
 intptr_t __vqr_io_env_current_exe(uint8_t *buffer, size_t capacity, int32_t *out_error) {
+#if defined(__APPLE__)
+    uint32_t size = capacity > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(capacity);
+    if (_NSGetExecutablePath(reinterpret_cast<char *>(buffer), &size) != 0) {
+        // The Vaqrin caller grows the destination when the buffer fills.
+        set_error(out_error, 0);
+        return static_cast<intptr_t>(capacity);
+    }
+    set_error(out_error, 0);
+    return static_cast<intptr_t>(strlen(reinterpret_cast<char *>(buffer)));
+#else
     auto size = retry_interrupted([&] {
         return readlink("/proc/self/exe", reinterpret_cast<char *>(buffer), capacity);
     });
     set_error(out_error, size < 0 ? errno : 0);
     return size;
+#endif
 }
 
 } // extern "C"

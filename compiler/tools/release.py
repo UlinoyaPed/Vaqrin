@@ -7,11 +7,13 @@ import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[2]
 BUILD = ROOT / "build"
 WINDOWS = os.name == "nt"
+MSVC_RUNTIME = "MultiThreadedDLL"
 
 
 def run(*args, **options):
@@ -40,7 +42,8 @@ def build_llvm():
         "LLVM_PARALLEL_LINK_JOBS": "1",
     }
     if WINDOWS:
-        options["LLVM_USE_CRT_RELEASE"] = "MT"
+        options["CMAKE_POLICY_DEFAULT_CMP0091"] = "NEW"
+        options["CMAKE_MSVC_RUNTIME_LIBRARY"] = MSVC_RUNTIME
     run("cmake", "-S", BUILD / "llvm-project/llvm", "-B", output, "-G", "Ninja",
         *(f"-D{key}={value}" for key, value in options.items()))
     run("cmake", "--build", output, "--parallel", "2")
@@ -59,7 +62,7 @@ def smoke(compiler, prefix):
     run(compiler, "build", "--emit=obj", source, "-o", obj)
     exe = BUILD / ("release-smoke.exe" if WINDOWS else "release-smoke")
     if WINDOWS:
-        run("link.exe", "/nologo", f"/out:{exe}", obj, "libcmt.lib", "kernel32.lib")
+        run("link.exe", "/nologo", f"/out:{exe}", obj, "msvcrt.lib", "vcruntime.lib", "ucrt.lib", "kernel32.lib")
     else:
         run(compiler, "build", source, "-o", exe)
     run(exe)
@@ -72,6 +75,34 @@ def smoke(compiler, prefix):
         raise RuntimeError("installed SDK is missing protoc-gen-vaqrin")
     if not (prefix / "share/vaqrin/stdlib/linalg/linalg.vqr").is_file():
         raise RuntimeError("installed standard library is missing linalg")
+    if sys.platform in ("darwin", "linux"):
+        smoke_posix_io(compiler)
+
+
+def smoke_posix_io(compiler):
+    source = """
+import (env, fs, io, mem, random)
+func main() !i32 {
+    fs.writeFile("sample.txt", "installed runtime".asBytes())!;
+    var data = fs.readText("sample.txt", 128)!;
+    var executable = env.currentExe()!;
+    var seed = mem.zeroedBytes<16>();
+    random.fillSystem(seed[:])!;
+    fs.remove("sample.txt")!;
+    if data != "installed runtime" { return 1; }
+    io.println(data)!;
+    0
+}
+"""
+    with tempfile.TemporaryDirectory(prefix="release-io-", dir=BUILD) as workspace:
+        root = Path(workspace)
+        entry = root / "posix.vqr"
+        entry.write_text(source, encoding="utf-8")
+        executable = root / "posix"
+        run(compiler, "build", entry, "-o", executable)
+        tested = subprocess.run([str(executable)], cwd=root, text=True, capture_output=True, check=True)
+        if tested.stdout != "installed runtime\n" or (root / "sample.txt").exists():
+            raise RuntimeError("installed POSIX runtime smoke test failed")
 
 
 def package():
@@ -91,7 +122,7 @@ def package():
         "-DBUILD_TESTING=OFF",
     ]
     if WINDOWS:
-        options.append("-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded")
+        options.append(f"-DCMAKE_MSVC_RUNTIME_LIBRARY={MSVC_RUNTIME}")
     run("cmake", "-S", ROOT / "compiler", "-B", output, "-G", "Ninja", *options)
     run("cmake", "--build", output, "--parallel", "2")
     run("cmake", "--install", output, "--prefix", prefix)

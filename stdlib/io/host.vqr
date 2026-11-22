@@ -80,7 +80,7 @@ pub func isInterrupted(reason: ErrorId) bool {
 
 pub func isWouldBlock(reason: ErrorId) bool {
     if reason == IoError.WouldBlock { return true; }
-    switch systemErrorCode(reason) { some(code) => code == 11, null => false }
+    switch systemErrorCode(reason) { some(code) => code == __vqr_posix_would_block(), null => false }
 }
 
 pub class FileIdentity {

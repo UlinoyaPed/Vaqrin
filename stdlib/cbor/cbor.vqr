@@ -1,0 +1,364 @@
+package cbor
+import (binary, coll, convert, core, fmt, parse, serde, text)
+
+class Frame {
+    pub var major: u8;
+    pub var remaining: ?usize;
+    pub var key: bool;
+    pub func init(major: u8, remaining: ?usize) : major(major), remaining(remaining), key(major == 5) {}
+}
+
+pub class Encoder {
+    #implements: serde.Serializer, serde.ByteSerializer
+    var frames: coll.Vec<Frame>;
+    var output: coll.Vec<u8>;
+    var root: bool;
+    var limits: serde.DecodeLimits;
+    var items: usize;
+public:
+    func init()
+        : frames(coll.Vec<Frame>()), output(coll.Vec<u8>()), root(false), limits(serde.DecodeLimits()), items(0) {}
+    func init(limits: serde.DecodeLimits)
+        : frames(coll.Vec<Frame>()), output(coll.Vec<u8>()), root(false), limits(limits), items(0) {}
+    func serializer() *serde.Serializer { self }
+
+    func writeNull() !void { value()!; byte(246) }
+    func writeBool(content: bool) !void { value()!; byte(if content { 245 } else { 244 }) }
+    func writeU64(content: u64) !void { value()!; argument(0, content) }
+    func writeI64(content: i64) !void {
+        value()!;
+        if content < 0 { return argument(1, u64(-(content + 1))!); }
+        argument(0, u64(content)!)
+    }
+    func writeF64(content: f64) !void {
+        value()!;
+        byte(251)!;
+        var encoded = binary.u64ToBytes(bitCast<u64>(content), binary.Endian.Big);
+        bytes(encoded[:])
+    }
+    func writeNumber(content: str) !void {
+        var floating = false;
+        for ch in content.asBytes() {
+            if ch == 46 || ch == 69 || ch == 101 { floating = true; break; }
+        }
+        if floating { return writeF64(parse.parseFloat<f64>(content)!); }
+        if content.byteLen() == 0 { return serde.SerdeError.InvalidValue; }
+        if content.asBytes()[0] == 45 {
+            var negative = parse.parseInt<i128>(content)!;
+            if negative == 0 { return writeU64(0); }
+            var magnitude = u64(-(negative + 1)) catch { return serde.SerdeError.IntegerOutOfRange; };
+            value()!;
+            return argument(1, magnitude);
+        }
+        var unsigned = parse.parseUint<u64>(content)!;
+        writeU64(unsigned)
+    }
+    func writeString(content: str) !void { value()!; writeText(content) }
+    func beginSeq(length: ?usize) !void { begin(4, length) }
+    func endSeq() !void { end(4) }
+    func beginMap(length: ?usize) !void { begin(5, length) }
+    func endMap() !void { end(5) }
+
+    func writeKey(content: str) !void {
+        if frames.len() == 0 { return serde.SerdeError.InvalidState; }
+        var parent = frames.atMut(frames.len() - 1);
+        if parent.major != 5 || !parent.key || (parent.remaining != null && parent.remaining.unwrap() == 0) {
+            return serde.SerdeError.InvalidState;
+        }
+        writeText(content)!;
+        parent.key = false;
+    }
+
+    func takeBytes() !coll.Vec<u8> {
+        if !root || frames.len() != 0 { return serde.SerdeError.InvalidState; }
+        root = false;
+        items = 0;
+        core.replace<coll.Vec<u8>>(&output, coll.Vec<u8>())
+    }
+private:
+    func byte(value: u8) !void {
+        if output.len() == limits.maxBytes { return serde.SerdeError.ByteLimit; }
+        output.push(value)
+    }
+    func bytes(data: []const u8) !void {
+        if data.len() > limits.maxBytes - output.len() { return serde.SerdeError.ByteLimit; }
+        for item in data { output.push(item)!; }
+    }
+    func argument(major: u8, value: u64) !void {
+        var prefix = usize(major) * 32;
+        if value < 24 { return byte(u8(prefix + usize(u8(value)!))!); }
+        if value <= 255 {
+            byte(u8(prefix + 24)!)!;
+            return byte(u8(value)!);
+        }
+        if value <= 65535 {
+            byte(u8(prefix + 25)!)!;
+            var encoded = binary.u16ToBytes(u16(value)!, binary.Endian.Big);
+            return bytes(encoded[:]);
+        }
+        if value <= 4294967295 {
+            byte(u8(prefix + 26)!)!;
+            var encoded = binary.u32ToBytes(u32(value)!, binary.Endian.Big);
+            return bytes(encoded[:]);
+        }
+        byte(u8(prefix + 27)!)!;
+        var encoded = binary.u64ToBytes(value, binary.Endian.Big);
+        bytes(encoded[:])
+    }
+    func writeText(content: str) !void {
+        argument(3, u64(content.byteLen()))!;
+        bytes(content.asBytes())
+    }
+    func value() !void {
+        if items == limits.maxElements { return serde.SerdeError.ElementLimit; }
+        if frames.len() == 0 {
+            if root { return serde.SerdeError.InvalidState; }
+            root = true;
+        } else {
+            var parent = frames.atMut(frames.len() - 1);
+            if parent.major == 5 && parent.key { return serde.SerdeError.InvalidState; }
+            if parent.remaining != null {
+                var left = parent.remaining.unwrap();
+                if left == 0 { return serde.SerdeError.InvalidLength; }
+                parent.remaining = some(left - 1);
+            }
+            parent.key = parent.major == 5;
+        }
+        items++;
+    }
+    func begin(major: u8, count: ?usize) !void {
+        if frames.len() == limits.maxDepth { return serde.SerdeError.DepthLimit; }
+        value()!;
+        if count != null { argument(major, u64(count.unwrap()))!; }
+        else { byte(u8(usize(major) * 32 + 31)!)!; }
+        frames.push(Frame(major, count))
+    }
+    func end(major: u8) !void {
+        if frames.len() == 0 { return serde.SerdeError.InvalidState; }
+        var parent = frames.at(frames.len() - 1);
+        if parent.major != major || (major == 5 && !parent.key) { return serde.SerdeError.InvalidState; }
+        if parent.remaining == null { byte(255)!; }
+        else if parent.remaining.unwrap() != 0 { return serde.SerdeError.InvalidLength; }
+        frames.pop();
+    }
+}
+
+pub class Decoder {
+    #implements: serde.Deserializer, serde.ByteDeserializer
+    var input: coll.Vec<u8>;
+    var frames: coll.Vec<Frame>;
+    var position: usize;
+    var ready: bool;
+    var budget: serde.DecodeBudget;
+    var limits: serde.DecodeLimits;
+public:
+    func init()
+        : input(coll.Vec<u8>()), frames(coll.Vec<Frame>()), position(0), ready(false),
+          budget(serde.DecodeBudget(serde.DecodeLimits())), limits(serde.DecodeLimits()) {}
+    func init(limits: serde.DecodeLimits)
+        : input(coll.Vec<u8>()), frames(coll.Vec<Frame>()), position(0), ready(false),
+          budget(serde.DecodeBudget(limits)), limits(limits) {}
+
+    func load(data: []const u8) !void {
+        var checked = serde.DecodeBudget(limits);
+        checked.consumeBytes(data.len())!;
+        input = coll.Vec<u8>.fromSlice(data)!;
+        frames.clear();
+        position = 0;
+        ready = true;
+        budget = move(checked);
+    }
+    func deserializer() *serde.Deserializer { self }
+    func finish() !void {
+        if frames.len() != 0 || ready { return serde.SerdeError.InvalidState; }
+        if position != input.len() { return serde.SerdeError.TrailingInput; }
+    }
+    func kind() !serde.DataKind {
+        if !ready { return serde.SerdeError.InvalidState; }
+        var head = peek()!;
+        switch head >> 5 {
+            0 => serde.DataKind.Number,
+            1 => serde.DataKind.Number,
+            3 => serde.DataKind.String,
+            4 => serde.DataKind.Sequence,
+            5 => serde.DataKind.Map,
+            7 => {
+                if head == 246 { return serde.DataKind.Null; }
+                if head == 244 || head == 245 { return serde.DataKind.Bool; }
+                if head == 249 || head == 250 || head == 251 { return serde.DataKind.Number; }
+                return serde.SerdeError.Unsupported;
+            },
+            _ => { return serde.SerdeError.Unsupported; },
+        }
+    }
+    func readNull() !void {
+        require(serde.DataKind.Null)!;
+        position++;
+    }
+    func readBool() !bool {
+        require(serde.DataKind.Bool)!;
+        readByte()! == 245
+    }
+    func readI64() !i64 {
+        var number = integer()!;
+        i64(number) catch { return serde.SerdeError.IntegerOutOfRange; }
+    }
+    func readU64() !u64 {
+        var number = integer()!;
+        u64(number) catch { return serde.SerdeError.IntegerOutOfRange; }
+    }
+    func readF64() !f64 {
+        if kind()! != serde.DataKind.Number { return serde.SerdeError.TypeMismatch; }
+        var head = peek()!;
+        if head < 64 {
+            var number = integer()!;
+            return convert.narrow<f64>(number);
+        }
+        require(serde.DataKind.Number)!;
+        position++;
+        floatValue(head)
+    }
+    func readNumber() !string {
+        if kind()! != serde.DataKind.Number { return serde.SerdeError.TypeMismatch; }
+        if peek()! < 64 {
+            var number = integer()!;
+            return fmt.formatInt(number, 10);
+        }
+        fmt.formatShortestScientific(readF64()!)
+    }
+    func readString() !string {
+        require(serde.DataKind.String)!;
+        readText()
+    }
+    func beginSeq() !?usize { begin(4, serde.DataKind.Sequence) }
+    func beginMap() !?usize { begin(5, serde.DataKind.Map) }
+    func endSeq() !void { end(4) }
+    func endMap() !void { end(5) }
+    func nextElement() !bool {
+        if !available(4)! { return false; }
+        ready = true;
+        true
+    }
+    func nextKey() !?string {
+        if !available(5)! { return null; }
+        var key = readText()!;
+        ready = true;
+        some(move(key))
+    }
+private:
+    const func peek() !u8 {
+        if position == input.len() { return serde.SerdeError.UnexpectedEnd; }
+        input[position]
+    }
+    func readByte() !u8 {
+        var head = peek()!;
+        position++;
+        head
+    }
+    func readBytes(count: usize) ![]const u8 {
+        if count > input.len() - position { return serde.SerdeError.UnexpectedEnd; }
+        var start = position;
+        position += count;
+        var bytes = input.asConstSlice();
+        bytes[start..position]
+    }
+    func argument(head: u8) !u64 {
+        var argument = head & 31;
+        if argument < 24 { return u64(argument); }
+        switch argument {
+            24 => u64(readByte()!),
+            25 => u64(binary.readU16(readBytes(2)!, binary.Endian.Big)!),
+            26 => u64(binary.readU32(readBytes(4)!, binary.Endian.Big)!),
+            27 => binary.readU64(readBytes(8)!, binary.Endian.Big),
+            _ => { return serde.SerdeError.Unsupported; },
+        }
+    }
+    func require(expected: serde.DataKind) !void {
+        if kind()! != expected { return serde.SerdeError.TypeMismatch; }
+        budget.consumeElement()!;
+        ready = false;
+    }
+    func integer() !i128 {
+        var head = peek()!;
+        if head >= 64 { return serde.SerdeError.TypeMismatch; }
+        require(serde.DataKind.Number)!;
+        position++;
+        var value = i128(argument(head)!);
+        if head >= 32 { return -1i128 - value; }
+        value
+    }
+    func floatValue(head: u8) !f64 {
+        if head == 251 { return bitCast<f64>(binary.readU64(readBytes(8)!, binary.Endian.Big)!); }
+        if head == 250 {
+            var bits = binary.readU32(readBytes(4)!, binary.Endian.Big)!;
+            var single: f32 = bitCast<f32>(bits);
+            return convert.widen<f64>(single);
+        }
+        var bits = binary.readU16(readBytes(2)!, binary.Endian.Big)!;
+        var sign = (u64(bits) & 0x8000u64) << 48;
+        var exponent = (u64(bits) >> 10) & 31u64;
+        var fraction = u64(bits) & 1023u64;
+        if exponent == 0 {
+            if fraction == 0 { return bitCast<f64>(sign); }
+            var magnitude = convert.narrow<f64>(fraction)! * 0.000000059604644775390625;
+            if sign != 0 { return -magnitude; }
+            return magnitude;
+        }
+        var biased = if exponent == 31 { 2047u64 } else { exponent + 1008 };
+        bitCast<f64>(sign | (biased << 52) | (fraction << 42))
+    }
+    func readText() !string {
+        var head = readByte()!;
+        if head >> 5 != 3 { return serde.SerdeError.TypeMismatch; }
+        var rawLength = argument(head)!;
+        var length = convert.narrow<usize>(rawLength) catch { return serde.SerdeError.ByteLimit; };
+        text.fromBytes(readBytes(length)!)
+    }
+    func begin(major: u8, expected: serde.DataKind) !?usize {
+        require(expected)!;
+        budget.enter()!;
+        var head = readByte()!;
+        var count: ?usize = null;
+        if (head & 31) != 31 {
+            var rawLength = argument(head)!;
+            var length = convert.narrow<usize>(rawLength) catch { return serde.SerdeError.ElementLimit; };
+            if length > limits.maxElements - budget.elementCount() { return serde.SerdeError.ElementLimit; }
+            count = some(length);
+        }
+        frames.push(Frame(major, count))!;
+        count
+    }
+    func available(major: u8) !bool {
+        if frames.len() == 0 || ready { return serde.SerdeError.InvalidState; }
+        var frame = frames.atMut(frames.len() - 1);
+        if frame.major != major { return serde.SerdeError.InvalidState; }
+        if frame.remaining == null { return peek()! != 255; }
+        var count = frame.remaining.unwrap();
+        if count == 0 { return false; }
+        frame.remaining = some(count - 1);
+        true
+    }
+    func end(major: u8) !void {
+        if frames.len() == 0 || ready { return serde.SerdeError.InvalidState; }
+        var frame = frames.at(frames.len() - 1);
+        if frame.major != major { return serde.SerdeError.InvalidState; }
+        if frame.remaining == null {
+            if peek()! != 255 { return serde.SerdeError.InvalidLength; }
+            position++;
+        } else if frame.remaining.unwrap() != 0 {
+            return serde.SerdeError.InvalidLength;
+        }
+        frames.pop();
+        budget.leave();
+    }
+}
+
+pub func marshal<T>(value: *const T, codec: *serde.Codec<T>) !coll.Vec<u8> {
+    var output = Encoder();
+    serde.encodeToBytes<T>(value, &output, codec)
+}
+
+pub func unmarshal<T>(data: []const u8, codec: *serde.Codec<T>) !T {
+    var input = Decoder();
+    serde.decodeFromBytes<T>(data, &input, codec)
+}

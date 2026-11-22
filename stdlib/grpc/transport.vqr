@@ -1,7 +1,7 @@
 package grpc
-import (bytes, fmt, http2, io, net, text, time, tls, url)
+import (bytes, fmt, http2, io, net, reactor, text, time, tls, url)
 
-enum StreamSocket { Clear(net.TcpStream), Secure(tls.TlsStream) }
+enum StreamSocket { Clear(net.TcpStream), Secure(tls.TlsStream), AsyncClear(net.AsyncTcpStream), AsyncSecure(tls.TlsStream) }
 
 class Transport {
     #copy: disabled
@@ -10,16 +10,36 @@ class Transport {
 public:
     func init(socket: StreamSocket) : stream(move(socket)) {}
     func read(dst: []u8) !usize {
-        switch stream { StreamSocket.Clear(ref raw) => raw.read(dst), StreamSocket.Secure(ref secure) => secure.read(dst) }
+        switch stream {
+            StreamSocket.Clear(ref raw) => raw.read(dst),
+            StreamSocket.Secure(ref secure) => secure.read(dst),
+            StreamSocket.AsyncClear(ref raw) => raw.read(dst),
+            StreamSocket.AsyncSecure(ref secure) => secure.read(dst),
+        }
     }
     func write(src: []const u8) !usize {
-        switch stream { StreamSocket.Clear(ref raw) => raw.write(src), StreamSocket.Secure(ref secure) => secure.write(src) }
+        switch stream {
+            StreamSocket.Clear(ref raw) => raw.write(src),
+            StreamSocket.Secure(ref secure) => secure.write(src),
+            StreamSocket.AsyncClear(ref raw) => raw.write(src),
+            StreamSocket.AsyncSecure(ref secure) => secure.write(src),
+        }
     }
     func flush() !void {
-        switch stream { StreamSocket.Clear(ref raw) => raw.flush(), StreamSocket.Secure(ref secure) => secure.flush() }
+        switch stream {
+            StreamSocket.Clear(ref raw) => raw.flush(),
+            StreamSocket.Secure(ref secure) => secure.flush(),
+            StreamSocket.AsyncClear(ref raw) => raw.flush(),
+            StreamSocket.AsyncSecure(ref secure) => secure.flush(),
+        }
     }
     func close() !void {
-        switch stream { StreamSocket.Clear(ref raw) => raw.close(), StreamSocket.Secure(ref secure) => secure.close() }
+        switch stream {
+            StreamSocket.Clear(ref raw) => raw.close(),
+            StreamSocket.Secure(ref secure) => secure.close(),
+            StreamSocket.AsyncClear(ref raw) => raw.close(),
+            StreamSocket.AsyncSecure(ref secure) => secure.close(),
+        }
     }
     func setTimeout(timeout: time.Duration) !void {
         switch stream {
@@ -31,7 +51,37 @@ public:
                 secure.setReadTimeout(some(timeout))!;
                 secure.setWriteTimeout(some(timeout))!;
             },
+            StreamSocket.AsyncClear(ref raw) => {
+                var deadline = some(time.Deadline.after(timeout)!);
+                raw.setReadDeadline(deadline);
+                raw.setWriteDeadline(deadline);
+            },
+            StreamSocket.AsyncSecure(ref secure) => {
+                var deadline = some(time.Deadline.after(timeout)!);
+                secure.setReadDeadline(deadline);
+                secure.setWriteDeadline(deadline);
+            },
         };
+    }
+    const func descriptor() !i32 {
+        switch stream {
+            StreamSocket.AsyncClear(ref raw) => raw.systemDescriptor(),
+            StreamSocket.AsyncSecure(ref secure) => secure.systemDescriptor(),
+            _ => { return io.IoError.Unsupported; },
+        }
+    }
+    func tryRead(dst: []u8) !(usize, ?reactor.Interest) {
+        switch stream {
+            StreamSocket.AsyncClear(ref raw) => {
+                var count = raw.tryRead(dst) catch (reason) {
+                    if io.isWouldBlock(reason) { return (usize(0), some(reactor.Interest.read())); }
+                    return reason;
+                };
+                return (count, null);
+            },
+            StreamSocket.AsyncSecure(ref secure) => { return secure.tryRead(dst); },
+            _ => { return io.IoError.Unsupported; },
+        }
     }
 }
 
@@ -40,15 +90,17 @@ pub class DialOptions {
     pub var trustedRoots: ?str;
     pub var timeout: time.Duration;
     pub var maxMessageBytes: usize;
+    pub var maxConcurrentCalls: usize;
     pub func init() : allowH2c(false), trustedRoots(null), timeout(time.Duration.fromSeconds(15)),
-        maxMessageBytes(4 * 1024 * 1024) {}
+        maxMessageBytes(4 * 1024 * 1024), maxConcurrentCalls(16) {}
 }
 
 pub class CallOptions {
     #copy: disabled
     pub var metadata: Metadata;
     pub var deadline: ?time.Deadline;
-    pub func init() : metadata(Metadata()), deadline(null) {}
+    pub var compression: Compression;
+    pub func init() : metadata(Metadata()), deadline(null), compression(Compression.Identity) {}
 }
 
 func connectTcp(host: str, port: u16, duration: time.Duration) !net.TcpStream {

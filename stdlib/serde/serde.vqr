@@ -4,7 +4,7 @@ import (coll)
 pub error SerdeError {
     TypeMismatch, InvalidState, InvalidLength, InvalidValue, UnexpectedEnd,
     TrailingInput, DuplicateKey, DepthLimit, ElementLimit, ByteLimit,
-    Unsupported, InexactNumber, IntegerOutOfRange,
+    Unsupported, InexactNumber, IntegerOutOfRange, UnknownField, MissingField,
 }
 
 pub enum DataKind { Null, Bool, Number, String, Sequence, Map }

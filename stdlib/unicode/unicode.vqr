@@ -4,7 +4,7 @@ import (coll, convert, text)
 pub enum GeneralCategory { Cn, Cc, Cf, Cs, Co, Ll, Lm, Lo, Lt, Lu, Mc, Me, Mn, Nd, Nl, No, Pc, Pd, Pe, Pf, Pi, Po, Ps, Sc, Sk, Sm, So, Zl, Zp, Zs }
 pub enum NormalForm { NFC, NFD, NFKC, NFKD }
 pub enum GraphemeBreak { Other, CR, LF, Control, Extend, ZWJ, RegionalIndicator, Prepend, SpacingMark, L, V, T, LV, LVT }
-pub error UnicodeError { InvalidUtf8, InvalidScalar, OutputTooSmall, AllocationFailed }
+pub error UnicodeError { InvalidUtf8, InvalidScalar, OutputTooSmall, AllocationFailed, SegmentTooLong, OutputPending, Finished }
 
 const flagAlphabetic: u16 = 1;
 const flagDigit: u16 = 2;

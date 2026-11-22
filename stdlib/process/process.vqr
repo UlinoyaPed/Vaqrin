@@ -1,5 +1,5 @@
 package process
-import (coll, env, fs, io, path, text)
+import (coll, env, fs, io, path, reactor, task, text, time)
 
 pub error ProcessError { InvalidProgram, InvalidArgument, InvalidDirectory, OutputLimit }
 
@@ -8,6 +8,7 @@ extern "C" func __vqr_process_spawn(args: *const u8, count: usize, cwd: *const u
 extern "C" func __vqr_process_child_free(handle: usize) void;
 extern "C" func __vqr_process_child_id(handle: usize) u64;
 extern "C" func __vqr_process_child_has_pipe(handle: usize, stream: i32) i32;
+extern "C" func __vqr_process_child_nonblocking(handle: usize, stream: i32, status: *i32) i32;
 extern "C" func __vqr_process_child_close(handle: usize, stream: i32) void;
 extern "C" func __vqr_process_child_read(handle: usize, stream: i32, dst: *u8, length: usize, status: *i32) isize;
 extern "C" func __vqr_process_child_write(handle: usize, src: *const u8, length: usize, status: *i32) isize;
@@ -92,6 +93,19 @@ func hasPipe(handle: usize, stream: i32) bool {
     unsafe { __vqr_process_child_has_pipe(handle, stream) != 0 }
 }
 
+func nonblockingPipe(handle: usize, stream: i32) !i32 {
+    if !hasPipe(handle, stream) { return io.IoError.Closed; }
+    var reason: i32 = 0;
+    var descriptor = unsafe { __vqr_process_child_nonblocking(handle, stream, &reason) };
+    if reason != 0 { return io.systemError(reason); }
+    descriptor
+}
+
+func checkPipeDeadline(deadline: ?time.Deadline) !void {
+    if task.isCancelled() { return io.IoError.Cancelled; }
+    if deadline != null && deadline.unwrap().expired()! { return io.IoError.DeadlineExceeded; }
+}
+
 class ChildHandle {
     pub var address: usize;
 }
@@ -102,6 +116,22 @@ pub class ChildInput {
     var handle: usize;
 public:
     func init(token: ChildHandle) : handle(token.address) {}
+    // The owned pipe stays nonblocking after its first asynchronous operation.
+    func writeAsync(source: []const u8, deadline: ?time.Deadline) !usize {
+        if !hasPipe(handle, 0) { return io.IoError.Closed; }
+        if source.len() == 0 { return 0; }
+        checkPipeDeadline(deadline)!;
+        var fd = nonblockingPipe(handle, 0)!;
+        for {
+            checkPipeDeadline(deadline)!;
+            var count = write(source) catch (reason) {
+                if !io.isWouldBlock(reason) { return reason; }
+                task.waitDescriptor(fd, reactor.Interest.write(), deadline)!;
+                continue;
+            };
+            return count;
+        }
+    }
     func write(source: []const u8) !usize {
         if !hasPipe(handle, 0) { return io.IoError.Closed; }
         if source.len() == 0 { return 0; }
@@ -123,6 +153,22 @@ pub class ChildOutput {
     var stream: i32;
 public:
     func init(token: ChildHandle, stream: i32) : handle(token.address), stream(stream) {}
+    // The owned pipe stays nonblocking after its first asynchronous operation.
+    func readAsync(destination: []u8, deadline: ?time.Deadline) !usize {
+        if !hasPipe(handle, stream) { return io.IoError.Closed; }
+        if destination.len() == 0 { return 0; }
+        checkPipeDeadline(deadline)!;
+        var fd = nonblockingPipe(handle, stream)!;
+        for {
+            checkPipeDeadline(deadline)!;
+            var count = read(destination) catch (reason) {
+                if !io.isWouldBlock(reason) { return reason; }
+                task.waitDescriptor(fd, reactor.Interest.read(), deadline)!;
+                continue;
+            };
+            return count;
+        }
+    }
     func read(destination: []u8) !usize {
         if !hasPipe(handle, stream) { return io.IoError.Closed; }
         if destination.len() == 0 { return 0; }

@@ -1,0 +1,97 @@
+package http
+import (coll, core, io, time)
+
+class IdleConnection {
+    pub var secure: bool;
+    pub var authority: string;
+    pub var connection: AsyncConnection;
+    pub var expires: time.Deadline;
+    pub func init(secure: bool, authority: string, connection: AsyncConnection, expires: time.Deadline)
+        : secure(secure), authority(move(authority)), connection(move(connection)), expires(expires) {}
+}
+
+// Each pool is owned by one task. The list is ordered from least to most
+// recently returned. It contains only connections at HTTP message boundaries.
+pub class AsyncPool {
+    #copy: disabled
+    var client: AsyncClient;
+    var entries: coll.Vec<IdleConnection>;
+    var capacity: usize;
+    var idleTimeout: time.Duration;
+    var closed: bool;
+    func init(client: AsyncClient, entries: coll.Vec<IdleConnection>, capacity: usize,
+              idleTimeout: time.Duration)
+        : client(move(client)), entries(move(entries)), capacity(capacity), idleTimeout(idleTimeout),
+          closed(false) {}
+public:
+    static func new(client: AsyncClient, capacity: usize, idleTimeout: time.Duration) !Self {
+        if idleTimeout.isNegative() { return io.IoError.InvalidArgument; }
+        var entries = coll.Vec<IdleConnection>.withCapacity(capacity)!;
+        AsyncPool(move(client), move(entries), capacity, idleTimeout)
+    }
+
+    func close() void {
+        closed = true;
+        entries.clear();
+    }
+
+    func request(address: str, method: Method, body: Body) !Response {
+        var target = parseUrl(address)!;
+        var path = pathTarget(&target)!;
+        var request = Request.new(method, path)!;
+        request.setBody(move(body));
+        send(address, &request)
+    }
+
+    func get(address: str) !Response { request(address, Method.GET, Body()) }
+
+    func send(address: str, request: *Request) !Response {
+        var deadline = some(time.Deadline.after(client.limits.timeout)!);
+        secure, authority, connection := acquire(address, deadline)!;
+        var response = connection.sendUntil(request, deadline)!;
+        recycle(secure, move(authority), move(connection));
+        move(response)
+    }
+
+    func sendStreaming(address: str, request: *Request, source: ?*io.Reader,
+                       consumer: *ResponseConsumer) !void {
+        var deadline = some(time.Deadline.after(client.limits.timeout)!);
+        secure, authority, connection := acquire(address, deadline)!;
+        connection.sendStreamUntil(request, source, consumer, deadline)!;
+        recycle(secure, move(authority), move(connection));
+    }
+
+private:
+    func acquire(address: str, deadline: ?time.Deadline) !(bool, string, AsyncConnection) {
+        if closed { return io.IoError.Closed; }
+        var target = parseUrl(address)!;
+        var secure = sameName(target.scheme(), "https");
+        if !secure && !sameName(target.scheme(), "http") { return HttpError.UnsupportedScheme; }
+        var host = httpHost(&target)!;
+        var authority = hostHeader(&target, host)!;
+        var index = usize(0);
+        for index < entries.len() {
+            var idle = entries.at(index);
+            if idle.expires.expired()! {
+                var expired = entries.remove(index);
+                continue;
+            }
+            if idle.secure == secure && sameName(idle.authority, authority) {
+                var taken = entries.remove(index).unwrap();
+                var connection = core.replace<AsyncConnection>(&taken.connection,
+                    AsyncConnection(null, null, "", client.limits));
+                return (secure, move(authority), move(connection));
+            }
+            index++;
+        }
+        var connection = client.connectUntil(address, deadline)!;
+        (secure, move(authority), move(connection))
+    }
+
+    func recycle(secure: bool, authority: string, connection: AsyncConnection) void {
+        if capacity == 0 || idleTimeout.isZero() || !connection.isOpen() { return; }
+        var expiry = time.Deadline.after(idleTimeout) catch { return; };
+        if entries.len() == capacity { var evicted = entries.remove(0); }
+        entries.push(IdleConnection(secure, move(authority), move(connection), expiry)) catch {};
+    }
+}

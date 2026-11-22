@@ -13,12 +13,12 @@ public:
         var compatibility = form == NormalForm.NFKC || form == NormalForm.NFKD;
         var expanded = coll.Vec<u32>();
         decomposeScalar(cp, compatibility, &expanded, 0)!;
-        for scalar in expanded.asSlice() { insertOrdered(scalar)!; }
+        for scalar in expanded.asSlice() { insertOrdered(&pending, scalar)!; }
     }
 
     func finish() !string {
         var compose = form == NormalForm.NFC || form == NormalForm.NFKC;
-        var scalars = if compose { composePending()! } else { pending.clone()! };
+        var scalars = if compose { composeSegment(pending.asConstSlice())! } else { pending.clone()! };
         var output = coll.Vec<u8>();
         for cp in scalars.asSlice() { appendNormalizedScalarUtf8(cp, &output)!; }
         text.fromBytes(output.asConstSlice())
@@ -32,73 +32,73 @@ public:
         bytes.len()
     }
 
-private:
-    func insertOrdered(cp: u32) !void {
-        var cls = combiningClass(__vqr_char(cp));
-        if cls == 0 { pending.push(cp)!; return; }
-        var at = pending.len();
-        for at > 0 {
-            var previous = combiningClass(__vqr_char(pending[at - 1]));
-            if previous == 0 || previous <= cls { break; }
-            at--;
-        }
-        pending.insert(at, cp)!;
-    }
+}
 
-    func decomposeScalar(cp: u32, compatibility: bool, out: *coll.Vec<u32>, depth: usize) !void {
-        if depth > 32 { return UnicodeError.InvalidScalar; }
-        // Hangul decomposition is algorithmic.
-        if cp >= 0xac00 && cp <= 0xd7a3 {
-            var s = cp - 0xac00;
-            var l = 0x1100 + s / 588;
-            var v = 0x1161 + (s % 588) / 28;
-            var t = s % 28;
-            out.push(l)!; out.push(v)!;
-            if t != 0 { out.push(0x11a7 + t)!; }
+func insertOrdered(pending: *coll.Vec<u32>, cp: u32) !void {
+    var cls = combiningClass(__vqr_char(cp));
+    if cls == 0 { pending.push(cp)!; return; }
+    var at = pending.len();
+    for at > 0 {
+        var previous = combiningClass(__vqr_char(pending.asConstSlice()[at - 1]));
+        if previous == 0 || previous <= cls { break; }
+        at--;
+    }
+    pending.insert(at, cp)!;
+}
+
+func decomposeScalar(cp: u32, compatibility: bool, out: *coll.Vec<u32>, depth: usize) !void {
+    if depth > 32 { return UnicodeError.InvalidScalar; }
+    // Hangul decomposition is algorithmic.
+    if cp >= 0xac00 && cp <= 0xd7a3 {
+        var s = cp - 0xac00;
+        var l = 0x1100 + s / 588;
+        var v = 0x1161 + (s % 588) / 28;
+        var t = s % 28;
+        out.push(l)!; out.push(v)!;
+        if t != 0 { out.push(0x11a7 + t)!; }
+        return;
+    }
+    var lo: usize = 0;
+    var hi = decompositionIndex.len() / 3;
+    for lo < hi {
+        var mid = lo + (hi - lo) / 2;
+        var key = decompositionIndex[mid * 3];
+        if cp < key { hi = mid; }
+        else if cp > key { lo = mid + 1; }
+        else {
+            var offset = __vqr_parse_bits<usize>(u128(decompositionIndex[mid * 3 + 1]));
+            var flags = decompositionIndex[mid * 3 + 2];
+            var compat = (flags & 0x100) != 0;
+            if compat && !compatibility { out.push(cp)!; return; }
+            var count = __vqr_parse_bits<usize>(u128(flags & 0xff));
+            for i in usize(0)..count {
+                decomposeScalar(decompositionScalars[offset + i], compatibility, out, depth + 1)!;
+            }
             return;
         }
-        var lo: usize = 0;
-        var hi = decompositionIndex.len() / 3;
-        for lo < hi {
-            var mid = lo + (hi - lo) / 2;
-            var key = decompositionIndex[mid * 3];
-            if cp < key { hi = mid; }
-            else if cp > key { lo = mid + 1; }
-            else {
-                var offset = __vqr_parse_bits<usize>(u128(decompositionIndex[mid * 3 + 1]));
-                var flags = decompositionIndex[mid * 3 + 2];
-                var compat = (flags & 0x100) != 0;
-                if compat && !compatibility { out.push(cp)!; return; }
-                var count = __vqr_parse_bits<usize>(u128(flags & 0xff));
-                for i in usize(0)..count {
-                    decomposeScalar(decompositionScalars[offset + i], compatibility, out, depth + 1)!;
-                }
-                return;
-            }
-        }
-        out.push(cp)!
     }
+    out.push(cp)!
+}
 
-    func composePending() !coll.Vec<u32> {
-        var out = coll.Vec<u32>();
-        var starterIndex: ?usize = null;
-        var lastClass: u8 = 0;
-        for cp in pending.asSlice() {
-            var cls = combiningClass(__vqr_char(cp));
-            var combined: ?u32 = null;
-            if core.isSome<usize>(&starterIndex) && (lastClass < cls || lastClass == 0) {
-                combined = composePair(out[starterIndex.unwrap()], cp);
-            }
-            if core.isSome<u32>(&combined) {
-                out[starterIndex.unwrap()] = combined.unwrap();
-            } else {
-                if cls == 0 { starterIndex = some(out.len()); }
-                out.push(cp)!;
-                lastClass = cls;
-            }
+func composeSegment(segment: []const u32) !coll.Vec<u32> {
+    var out = coll.Vec<u32>();
+    var starterIndex: ?usize = null;
+    var lastClass: u8 = 0;
+    for cp in segment {
+        var cls = combiningClass(__vqr_char(cp));
+        var combined: ?u32 = null;
+        if core.isSome<usize>(&starterIndex) && (lastClass < cls || lastClass == 0) {
+            combined = composePair(out[starterIndex.unwrap()], cp);
         }
-        move(out)
+        if core.isSome<u32>(&combined) {
+            out[starterIndex.unwrap()] = combined.unwrap();
+        } else {
+            if cls == 0 { starterIndex = some(out.len()); }
+            out.push(cp)!;
+            lastClass = cls;
+        }
     }
+    move(out)
 }
 
 func composePair(a: u32, b: u32) ?u32 {
@@ -138,5 +138,98 @@ func appendNormalizedScalarUtf8(cp: u32, output: *coll.Vec<u8>) !void {
         output.push(u8(0x80 | ((cp >> 12) & 0x3f))!)!;
         output.push(u8(0x80 | ((cp >> 6) & 0x3f))!)!;
         output.push(u8(0x80 | (cp & 0x3f))!)!;
+    }
+}
+
+// The caller drains completed UTF-8 before supplying another input scalar.
+// Only the unfinished normalization segment is retained across pushes.
+pub class StreamingNormalizer {
+    #copy: disabled
+    var form: NormalForm;
+    var maximum: usize;
+    var segment: coll.Vec<u32>;
+    var ready: coll.Vec<u8>;
+    var position: usize;
+    var finished: bool;
+    var failure: ?ErrorId;
+public:
+    func init(form: NormalForm, maxSegmentScalars: usize)
+        : form(form), maximum(maxSegmentScalars), segment(coll.Vec<u32>()), ready(coll.Vec<u8>()),
+          position(0), finished(false), failure(null) {}
+
+    const func available() usize { ready.len() - position }
+
+    func readOutput(dst: []u8) usize {
+        var count = if dst.len() < available() { dst.len() } else { available() };
+        var source = ready.asConstSlice();
+        for i in usize(0)..count { dst[i] = source[position + i]; }
+        position += count;
+        if position == ready.len() {
+            ready.clear();
+            position = 0;
+        }
+        count
+    }
+
+    func push(ch: char) !void {
+        if failure != null { return failure.unwrap(); }
+        if finished { return UnicodeError.Finished; }
+        if available() != 0 { return UnicodeError.OutputPending; }
+        var expanded = coll.Vec<u32>();
+        var compatibility = form == NormalForm.NFKC || form == NormalForm.NFKD;
+        decomposeScalar(convert.fromChar(ch), compatibility, &expanded, 0)!;
+        for cp in expanded.asConstSlice() {
+            append(cp) catch (reason) {
+                failure = some(reason);
+                ready.clear();
+                return reason;
+            };
+        }
+    }
+
+    func finish() !void {
+        if failure != null { return failure.unwrap(); }
+        if finished { return; }
+        if available() != 0 { return UnicodeError.OutputPending; }
+        flushSegment(null) catch (reason) {
+            failure = some(reason);
+            ready.clear();
+            return reason;
+        };
+        finished = true;
+    }
+
+private:
+    const func composes() bool { form == NormalForm.NFC || form == NormalForm.NFKC }
+
+    func append(cp: u32) !void {
+        if combiningClass(__vqr_char(cp)) == 0 && !segment.isEmpty() {
+            if flushSegment(some(cp))! { return; }
+        }
+        if segment.len() >= maximum { return UnicodeError.SegmentTooLong; }
+        insertOrdered(&segment, cp)
+    }
+
+    // A zero-class scalar can still combine with the previous starter.
+    // The composed segment must consist of just that starter for this to happen.
+    func flushSegment(next: ?u32) !bool {
+        if segment.isEmpty() { return false; }
+        if composes() {
+            var normalized = composeSegment(segment.asConstSlice())!;
+            if next != null && normalized.len() == 1 &&
+               combiningClass(__vqr_char(normalized[0])) == 0 {
+                var candidate = composePair(normalized[0], next.unwrap());
+                if candidate != null {
+                    segment.truncate(1);
+                    segment[0] = candidate.unwrap();
+                    return true;
+                }
+            }
+            for cp in normalized.asConstSlice() { appendNormalizedScalarUtf8(cp, &ready)!; }
+        } else {
+            for cp in segment.asConstSlice() { appendNormalizedScalarUtf8(cp, &ready)!; }
+        }
+        segment.clear();
+        false
     }
 }

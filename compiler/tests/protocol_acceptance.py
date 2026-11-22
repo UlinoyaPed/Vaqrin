@@ -76,6 +76,243 @@ class ProtocolAcceptance(CompilerCase):
                      "-keyout", key, "-out", cert)
         return cert, key
 
+    def test_async_http_stream_and_connection_reuse(self):
+        with socket.create_server(("127.0.0.1", 0)) as listener:
+            listener.settimeout(5)
+            url = json.dumps(f"http://127.0.0.1:{listener.getsockname()[1]}")
+            program = self.source("stream.vqr", r"""
+                import (http, io)
+                class Count {
+                    #implements: http.ResponseConsumer
+                    pub var total: usize;
+                    pub func consume(head: *const http.Response, body: *io.Reader) !void {
+                        if head.status().value() != 200 { panic("bad head"); }
+                        var buf = [3]u8{0,0,0};
+                        for {
+                            var got = io.read(body, buf[:])!;
+                            if got == 0 { break; }
+                            for byte in buf[0..got] { if byte != 120 { panic("bad payload"); } }
+                            total += got;
+                        }
+                    }
+                }
+                class Payload {
+                    #implements: io.Reader
+                    pub var remaining: usize;
+                    pub func read(dst: []u8) !usize {
+                        var count = if remaining < dst.len() { remaining } else { dst.len() };
+                        for i in usize(0)..count { dst[i] = 121; }
+                        remaining -= count;
+                        count
+                    }
+                }
+                func main() !void {
+                    var client = http.AsyncClient();
+                    var connection = client.connect(URL)!;
+                    var first = http.Request.new(http.Method.POST, "/one")!;
+                    var count = Count{total: 0};
+                    var upload = Payload{remaining: 9005};
+                    connection.sendWithBodyStream(&first, &upload, &count)!;
+                    io.println(connection.isOpen() && count.total == 5005)!;
+                    var second = http.Request.new(http.Method.GET, "/two")!;
+                    var response = connection.send(&second)!;
+                    io.println(response.status().value() == 204 && !connection.isOpen())!;
+                }
+            """.replace("URL", url))
+            self.process(VAQC, program, "-o", "stream")
+
+            def serve():
+                peer, _ = listener.accept()
+                with peer, peer.makefile("rb") as requests:
+                    peer.settimeout(5)
+                    for path in (b"/one", b"/two"):
+                        method = b"POST" if path == b"/one" else b"GET"
+                        self.assertEqual(requests.readline(), method + b" " + path + b" HTTP/1.1\r\n")
+                        headers = {}
+                        for line in requests:
+                            if line == b"\r\n":
+                                break
+                            name, value = line.split(b":", 1)
+                            headers[name.lower()] = value.strip()
+                        if path == b"/one":
+                            self.assertEqual(headers[b"transfer-encoding"], b"chunked")
+                            for chunk_size in (8192, 813, 0):
+                                self.assertEqual(int(requests.readline().strip(), 16), chunk_size)
+                                self.assertEqual(requests.read(chunk_size), b"y" * chunk_size)
+                                self.assertEqual(requests.read(2), b"\r\n")
+                            peer.sendall(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
+                            for chunk in (b"5\r\nxxxxx\r\n", b"1388\r\n" + b"x" * 5000 + b"\r\n"):
+                                peer.sendall(chunk)
+                            peer.sendall(b"0\r\nTrailer-Value: done\r\n\r\n")
+                        else:
+                            peer.sendall(b"HTTP/1.1 204 No Content\r\nConnection: upgrade, Close\r\n\r\n")
+
+            with ThreadPoolExecutor(max_workers=1) as worker:
+                served = worker.submit(serve)
+                self.assertEqual(self.process("./stream").stdout, b"true\n" * 2)
+                served.result(timeout=6)
+
+    def test_async_http_pool_reuses_and_evicts_connections(self):
+        with socket.create_server(("127.0.0.1", 0)) as first, \
+             socket.create_server(("127.0.0.1", 0)) as second:
+            program = self.source("pool.vqr", r"""
+                import (http, io, result, time)
+                func main() !void {
+                    var client = http.AsyncClient();
+                    var pool = http.AsyncPool.new(move(client), 1, time.Duration.fromSeconds(15))!;
+                    var first = pool.get(URL_ONE)!;
+                    var reused = pool.get(URL_TWO)!;
+                    var other = pool.get(URL_THREE)!;
+                    var reopened = pool.get(URL_FOUR)!;
+                    io.println(first.status().value() == 204 && reused.status().value() == 204 &&
+                               other.status().value() == 204 && reopened.status().value() == 204)!;
+                    pool.close();
+                    var closed = pool.get(FIRST);
+                    io.println(result.errorOf(&closed).unwrap() == io.IoError.Closed)!;
+                }
+            """.replace('URL_ONE', json.dumps(f"http://127.0.0.1:{first.getsockname()[1]}/one"))
+                .replace('URL_TWO', json.dumps(f"http://127.0.0.1:{first.getsockname()[1]}/two"))
+                .replace('URL_THREE', json.dumps(f"http://127.0.0.1:{second.getsockname()[1]}/three"))
+                .replace('URL_FOUR', json.dumps(f"http://127.0.0.1:{first.getsockname()[1]}/four"))
+                .replace("FIRST", json.dumps(f"http://127.0.0.1:{first.getsockname()[1]}")))
+            self.process(VAQC, program, "-o", "pool")
+
+            def serve(listener, connections):
+                listener.settimeout(8)
+                for paths in connections:
+                    peer, _ = listener.accept()
+                    peer.settimeout(8)
+                    with peer, peer.makefile("rb") as reader:
+                        for path in paths:
+                            self.assertEqual(reader.readline(), b"GET " + path + b" HTTP/1.1\r\n")
+                            while (line := reader.readline()) != b"\r\n":
+                                self.assertTrue(line)
+                            peer.sendall(b"HTTP/1.1 204 No Content\r\n\r\n")
+                        self.assertEqual(reader.read(1), b"")  # eviction or explicit pool close
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                pending = [executor.submit(serve, first, ((b"/one", b"/two"), (b"/four",))),
+                           executor.submit(serve, second, ((b"/three",),))]
+                self.assertEqual(self.process("./pool").stdout, b"true\ntrue\n")
+                for task in pending:
+                    task.result(timeout=9)
+
+    def test_async_http_server_streams_request_body(self):
+        program = self.source("upload.vqr", r"""
+            import (http, io, net)
+            class Upload {
+                #implements: http.RequestConsumer
+                pub func consume(head: *const http.Request, body: *io.Reader) !http.Response {
+                    if head.target() != "/upload" { panic("unexpected target"); }
+                    var storage = [2]u8{0, 0};
+                    var count = usize(0);
+                    for {
+                        var got = io.read(body, storage[:])!;
+                        if got == 0 { break; }
+                        for byte in storage[0..got] {
+                            if byte != 120 { panic("unexpected byte"); }
+                        }
+                        count += got;
+                    }
+                    if count != 5005 { panic("unexpected length"); }
+                    http.Response.new(204)
+                }
+            }
+
+            func main() !void {
+                var server = http.AsyncServer.bind(net.parseSocketAddr("127.0.0.1:0")!)!;
+                io.println(server.localAddr()!.port())!;
+                var handler = Upload{};
+                server.serveOneStreaming(&handler, null)!;
+            }
+        """)
+        self.process(VAQC, program, "-o", "upload")
+        with subprocess.Popen([self.root / "upload"], stdout=subprocess.PIPE, stderr=subprocess.PIPE) as server:
+            try:
+                with ThreadPoolExecutor(max_workers=1) as worker:
+                    port = int(worker.submit(server.stdout.readline).result(timeout=5))
+                with socket.create_connection(("127.0.0.1", port), timeout=5) as client:
+                    client.sendall(b"POST /upload HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n"
+                                   b"5\r\nxxxxx\r\n1388\r\n" + b"x" * 5000 + b"\r\n0\r\n\r\n")
+                    with client.makefile("rb") as reply:
+                        self.assertTrue(reply.readline().startswith(b"HTTP/1.1 204 "))
+                out, err = server.communicate(timeout=5)
+                self.assertEqual(server.returncode, 0, (out, err))
+            finally:
+                if server.poll() is None:
+                    server.kill()
+
+    def test_async_https_one_worker_and_handshake_deadline(self):
+        cert, key = self.make_certificate()
+        program = self.source("async_https.vqr", r"""
+            import (bytes, fmt, http, io, net, result, task, text, time, tls)
+
+            class Echo {
+                #implements: http.Handler
+                pub func handle(request: http.Request) !http.Response {
+                    var reply = http.Response.new(201)!;
+                    reply.setBody(http.Body.fromBytes(request.bodyBytes())!);
+                    move(reply)
+                }
+            }
+
+            func url(address: net.SocketAddr) !string {
+                var builder = text.StringBuilder();
+                builder.append("https://localhost:")!;
+                var port = fmt.formatUint(address.port(), 10)!;
+                builder.append(port)!;
+                builder.append("/echo")!;
+                builder.build()
+            }
+
+            func main() !void {
+                var group = task.TaskGroup.withWorkers(1)!;
+                var endpoint = net.parseSocketAddr("127.0.0.1:0")!;
+                var listener = http.AsyncServer.bind(endpoint)!;
+                var target = url(listener.localAddr()!)!;
+                var serve = [move(listener)]() !void => {
+                    var config = tls.TlsConfig();
+                    var acceptor = tls.TlsAcceptor.fromPem(CERT, KEY, move(config))!;
+                    var server = move(listener);
+                    var handler = Echo{};
+                    var deadline = some(time.Deadline.after(time.Duration.fromSeconds(4))!);
+                    server.serveOneTls(&handler, &acceptor, deadline)
+                };
+                var call = [move(target)]() !bool => {
+                    var client = http.AsyncClient();
+                    client.setRootFile(CERT)!;
+                    var request = http.Body.fromBytes("payload".asBytes())!;
+                    var reply = client.post(target, move(request))!;
+                    reply.status().value() == 201 && bytes.equal(reply.bodyBytes(), "payload".asBytes())
+                };
+                var serverJob = group.spawn<void>(move(serve))!;
+                var clientJob = group.spawn<bool>(move(call))!;
+                io.println(clientJob.join()!)!;
+                serverJob.join()!;
+
+                var idle = net.AsyncTcpListener.bind(endpoint)!;
+                var idleTarget = url(idle.localAddr()!)!;
+                var stall = [move(idle)]() !void => {
+                    var listener = move(idle);
+                    socket, peer := listener.accept(null)!;
+                    task.sleep(time.Duration.fromMillis(300))!;
+                };
+                var request = [move(idleTarget)]() !bool => {
+                    var client = http.AsyncClient();
+                    client.setRootFile(CERT)!;
+                    client.setTimeout(time.Duration.fromMillis(100));
+                    var outcome = client.get(idleTarget);
+                    result.errorOf(&outcome).unwrap() == io.IoError.DeadlineExceeded
+                };
+                var stalled = group.spawn<void>(move(stall))!;
+                var timed = group.spawn<bool>(move(request))!;
+                io.println(timed.join()!)!;
+                stalled.join()!;
+            }
+        """.replace("CERT", json.dumps(str(cert))).replace("KEY", json.dumps(str(key))))
+        self.process(VAQC, program, "-o", "async-https")
+        self.assertEqual(self.process("./async-https").stdout, b"true\n" * 2)
+
     def test_tls_client_alpn(self):
         cert, key = self.make_certificate()
         enabled = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -631,6 +868,128 @@ class ProtocolAcceptance(CompilerCase):
             finally:
                 if server.poll() is None:
                     server.kill()
+
+    def test_grpc_concurrent_unary_calls_and_cancellation(self):
+        self.compile_fixture("grpc_concurrent.vqr", "concurrent")
+        self.check_grpc_concurrent()
+        self.check_grpc_concurrent(self.make_certificate())
+
+    def check_grpc_concurrent(self, certificate=None):
+        import grpc
+
+        environment = os.environ.copy()
+        environment.pop("VAQRIN_RPC_CERT", None)
+        if certificate:
+            cert, key = certificate
+            environment.update(VAQRIN_RPC_CERT=str(cert), VAQRIN_RPC_KEY=str(key))
+        with subprocess.Popen([self.root / "concurrent"], stdout=subprocess.PIPE, env=environment,
+                              stderr=subprocess.PIPE) as server, ThreadPoolExecutor(max_workers=1) as reader:
+            def read_line():
+                return reader.submit(server.stdout.readline).result(timeout=6)
+
+            try:
+                port = int(read_line())
+                endpoint = f"127.0.0.1:{port}"
+                if certificate:
+                    credentials = grpc.ssl_channel_credentials(root_certificates=cert.read_bytes())
+                    connection = grpc.secure_channel(endpoint, credentials)
+                else:
+                    connection = grpc.insecure_channel(endpoint)
+                with connection as channel:
+                    wait = channel.unary_unary("/interop.Concurrent/Wait")
+                    fast = channel.unary_unary("/interop.Concurrent/Fast")
+                    slow = wait.future(b"slow", timeout=5)
+                    self.assertEqual(read_line(), b"waiting\n")
+                    response, call = fast.with_call(b"fast", timeout=1)
+                    self.assertEqual(response, b"fast")
+                    self.assertEqual(dict(call.initial_metadata())["x-worker"], "ready")
+                    self.assertFalse(slow.done())
+                    self.assertTrue(slow.cancel())
+                    self.assertEqual(read_line(), b"cancelled\n")
+
+                    slow = wait.future(b"deadline", timeout=0.4)
+                    self.assertEqual(read_line(), b"waiting\n")
+                    with self.assertRaises(grpc.RpcError) as deadline:
+                        slow.result()
+                    self.assertEqual(deadline.exception.code(), grpc.StatusCode.DEADLINE_EXCEEDED)
+                    self.assertEqual(read_line(), b"cancelled\n")
+                    self.assertEqual(fast(b"reused", timeout=2), b"reused")
+                out, err = server.communicate(timeout=6)
+                self.assertEqual(server.returncode, 0, (out, err))
+            finally:
+                if server.poll() is None:
+                    server.kill()
+
+    def test_grpc_gzip_python_interoperability(self):
+        import grpc
+
+        self.compile_fixture("grpc_gzip.vqr", "echo")
+        with ThreadPoolExecutor(max_workers=2) as worker:
+            server = grpc.server(worker, compression=grpc.Compression.Gzip)
+            server.add_generic_rpc_handlers((
+                grpc.method_handlers_generic_handler("interop.Raw", {
+                    "Echo": grpc.unary_unary_rpc_method_handler(lambda request, context: request),
+                }),
+            ))
+            port = server.add_insecure_port("127.0.0.1:0")
+            server.start()
+            try:
+                process = subprocess.run(
+                    [self.root / "echo"], capture_output=True, timeout=10,
+                    env={**os.environ, "VAQRIN_RPC_ADDRESS": f"http://127.0.0.1:{port}"},
+                )
+                self.assertEqual(process.returncode, 0, (process.stdout, process.stderr))
+            finally:
+                server.stop(0).wait(5)
+
+        environment = {k: v for k, v in os.environ.items() if k != "VAQRIN_RPC_ADDRESS"}
+        with subprocess.Popen([self.root / "echo"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              env=environment) as process:
+            try:
+                with ThreadPoolExecutor(max_workers=1) as worker:
+                    port = int(worker.submit(process.stdout.readline).result(timeout=5))
+                with grpc.insecure_channel(f"127.0.0.1:{port}", compression=grpc.Compression.Gzip) as channel:
+                    request = b"b" * 8192
+                    self.assertEqual(channel.unary_unary("/interop.Raw/Echo")(request, timeout=5), request)
+                out, err = process.communicate(timeout=6)
+                self.assertEqual(process.returncode, 0, (out, err))
+            finally:
+                if process.poll() is None:
+                    process.kill()
+
+    def test_grpc_gzip_malformed_and_bounded_messages(self):
+        import gzip
+
+        encoded = gzip.compress(b"a" * 32768, mtime=0)
+        corrupt = encoded[:-2] + b"!!"
+        def vector(data):
+            encoded_frame = bytes([1]) + len(data).to_bytes(4, "big") + data
+            return ", ".join(str(byte) for byte in encoded_frame)
+        self.hosted(f"""
+            import (grpc, result)
+            func main() !void {{
+                var wire = [_]u8{{{vector(encoded)}}};
+                var bounded = grpc.MessageReader(64);
+                bounded.useCompression(grpc.Compression.Gzip);
+                bounded.feed(wire[:])!;
+                var oversized = bounded.next();
+                io.println(result.errorOf(&oversized).unwrap() == grpc.RpcError.MessageTooLarge)!;
+
+                var broken = grpc.MessageReader(32768);
+                broken.useCompression(grpc.Compression.Gzip);
+                var corrupt = [_]u8{{{vector(corrupt)}}};
+                broken.feed(corrupt[:])!;
+                var malformed = broken.next();
+                io.println(result.errorOf(&malformed).unwrap() == grpc.RpcError.Protocol)!;
+
+                var full = grpc.MessageReader(32768);
+                full.useCompression(grpc.Compression.Gzip);
+                full.feed(wire[:])!;
+                var decoded = full.next()!.unwrap();
+                io.println(decoded.len() == 32768 && decoded[32767] == 97)!;
+                full.finish()!;
+            }}
+        """, "true\n" * 3)
 
     def test_grpc_message_boundaries(self):
         self.hosted(r"""

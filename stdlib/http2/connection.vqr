@@ -39,6 +39,8 @@ extern "C" func __vqr_http2_next(session: usize, out: *u32, size: *usize) usize;
 extern "C" func __vqr_http2_copy_event(event: usize, dst: *u8) void;
 extern "C" func __vqr_http2_drop_event(event: usize) void;
 extern "C" func __vqr_http2_consume(session: usize, stream: i32, size: usize) i32;
+extern "C" func __vqr_http2_consume_connection(session: usize, size: usize) i32;
+extern "C" func __vqr_http2_consume_stream(session: usize, stream: i32, size: usize) i32;
 extern "C" func __vqr_http2_headers(session: usize, stream: i32, end: i32, data: *const u8, size: usize) i32;
 extern "C" func __vqr_http2_send(session: usize, stream: i32, data: *const u8, size: usize, end: i32) i32;
 extern "C" func __vqr_http2_trailers(session: usize, stream: i32, data: *const u8, size: usize) i32;
@@ -153,6 +155,17 @@ public:
         checkOpen()!;
         if stream <= 0 { return Http2Error.InvalidArgument; }
         checkStatus(unsafe { __vqr_http2_consume(handle, stream, count) })
+    }
+    // Credit the connection while an application queues a DATA event. Release
+    // stream credit separately when the stream's consumer processes it.
+    func consumeConnection(count: usize) !void {
+        checkOpen()!;
+        checkStatus(unsafe { __vqr_http2_consume_connection(handle, count) })
+    }
+    func consumeStream(stream: i32, count: usize) !void {
+        checkOpen()!;
+        if stream <= 0 { return Http2Error.InvalidArgument; }
+        checkStatus(unsafe { __vqr_http2_consume_stream(handle, stream, count) })
     }
     func request(headers: *const HeaderBlock, end: bool) !i32 { sendHeaders(-1, headers, end) }
     func respond(stream: i32, headers: *const HeaderBlock, end: bool) !void {

@@ -63,24 +63,61 @@ void Body::requireInit(ValueAt v, Span span) {
     fail(span, "local '" + locals[v.local].name + "' is not initialized on every incoming path", "E230");
 }
 
+bool Borrow::protects(int owner) const {
+  return root == owner || (alternatives && std::ranges::binary_search(*alternatives, owner));
+}
+
+bool Borrow::operator==(const Borrow &other) const {
+  if (root != other.root || via != other.via || raw != other.raw) return false;
+  return alternatives == other.alternatives ||
+         (alternatives && other.alternatives && *alternatives == *other.alternatives);
+}
+
+Borrow Body::joinBorrow(Borrow left, Borrow right, Type *type, Span span) {
+  if (left == right) return left;
+  if (left.root < 0 || right.root < 0 || left.raw || right.raw || !p.copyable(type))
+    fail(span, "reference alternatives must have compatible read-only borrow sources", "E230");
+  std::vector<int> roots;
+  for (const auto &source : {left, right}) {
+    roots.push_back(source.root);
+    if (source.alternatives)
+      roots.insert(roots.end(), source.alternatives->begin(), source.alternatives->end());
+  }
+  std::ranges::sort(roots);
+  auto tail = std::ranges::unique(roots);
+  roots.erase(tail.begin(), tail.end());
+  auto primary = roots.front();
+  auto via = left.via == right.via ? left.via : -1;
+  if (roots.size() == 1) return {primary, via};
+  roots.erase(roots.begin());
+  return {primary, via, false, std::make_shared<const std::vector<int>>(std::move(roots))};
+}
+
 void Body::checkAccess(ValueAt v, bool write, Span span) {
   bool ownSlot =
       v.origin.raw && v.local >= 0 && !locals[v.local].reference && v.address == locals[v.local].slot;
   int root = !ownSlot && v.origin.root >= 0 ? v.origin.root : v.local;
   if (root < 0) return;
+  checkRootAccess(root, v.origin, write, span);
+  if (!ownSlot && v.origin.alternatives)
+    for (int alternative : *v.origin.alternatives)
+      checkRootAccess(alternative, v.origin, write, span);
+}
+
+void Body::checkRootAccess(int root, Borrow origin, bool write, Span span) {
   const auto scope = locals[root].scope;
   if (!initialized[root] || scope >= scopes.size() ||
       std::ranges::find(scopes[scope], root) == scopes[scope].end()) {
-    if (v.origin.raw) return;
+    if (origin.raw) return;
     fail(span, "borrowed owner is no longer initialized", "E230");
   }
   for (const auto &scope : scopes)
     for (int id : scope) {
       const auto &loan = locals[id];
-      if (id == root || !initialized[id] || loan.origin.root != root || loan.origin.raw ||
+      if (id == root || !initialized[id] || !loan.origin.protects(root) || loan.origin.raw ||
           (!loan.reference && !p.hasReference(loan.type)))
         continue;
-      int via = v.origin.via;
+      int via = origin.via;
       while (via >= 0 && via != id)
         via = locals[via].origin.via;
       if (via == id) continue;
@@ -93,14 +130,16 @@ void Body::invalidateOwnedAddresses(ValueAt owner) {
   int root = owner.origin.root >= 0 ? owner.origin.root : owner.local;
   if (root < 0 || !p.drops(locals[root].type)) return;
   for (auto &local : locals)
-    if (local.origin.raw && local.origin.root == root) local.origin = {};
+    if (local.origin.raw && local.origin.protects(root)) local.origin = {};
 }
 
 void Body::recordBorrow(int id, ValueAt v, Span span) {
   if (p.hasReference(v.type) || locals[id].reference) {
     if (v.temporaryBorrow)
       fail(span, "borrow from a temporary cannot escape this expression; bind the owner first", "E230");
-    if (v.origin.root >= 0 && locals[v.origin.root].scope > locals[id].scope)
+    const auto outlivesOwner = [&](int root) { return root >= 0 && locals[root].scope > locals[id].scope; };
+    if (outlivesOwner(v.origin.root) ||
+        (v.origin.alternatives && std::ranges::any_of(*v.origin.alternatives, outlivesOwner)))
       fail(span, "reference would outlive its owner", "E230");
     v.origin.raw = false;
     bool mutableLoan = locals[id].reference ? !locals[id].reference->readOnly : !p.copyable(v.type);
@@ -112,7 +151,9 @@ void Body::recordBorrow(int id, ValueAt v, Span span) {
 ValueAt Body::referenceName(int id, Span span) {
   const auto &local = locals[id];
   if (!initialized[id]) fail(span, "reference is not initialized", "E230");
-  return {local.reference, local.slot, nullptr, false, -1, false, false, {local.origin.root, id}};
+  auto origin = local.origin;
+  origin.via = id;
+  return {local.reference, local.slot, nullptr, false, -1, false, false, origin};
 }
 
 ValueAt Body::dereference(ValueAt v, Span span) {
@@ -124,6 +165,8 @@ ValueAt Body::dereference(ValueAt v, Span span) {
       v = {t, nullptr, locals[id].slot, true, id, true, true};
     }
     auto *raw = read(v, span, false);
+    if (v.origin.root < 0) v.origin.root = v.local;
+    v.origin.raw = false;
     return {t->parts[0],
             nullptr,
             ir.CreateExtractValue(raw, 0),
@@ -131,7 +174,7 @@ ValueAt Body::dereference(ValueAt v, Span span) {
             -1,
             true,
             v.temporaryBorrow,
-            {v.origin.root >= 0 ? v.origin.root : v.local, v.origin.via}};
+            v.origin};
   }
   if (t->kind != Kind::Pointer && t->kind != Kind::Reference)
     fail(span, "dereference requires a pointer, reference or Box");
@@ -236,9 +279,21 @@ static std::string bindingType(Type *type, const Source *source) {
   }
 }
 
+void Body::indexSymbol(Span occurrence, Span declaration, bool definition) {
+  auto *hints = p.options.editorHints;
+  if (hints && hints->symbols && (!hints->workspace || !file.standard || (occurrence.source && occurrence.source->path == hints->source)))
+    hints->index(occurrence, declaration, definition);
+}
+
+void Body::indexLocal(int id, Span declaration) {
+  if (locals[id].name.starts_with(" ")) return;
+  locals[id].declaration = declaration;
+  indexSymbol(declaration, declaration, true);
+}
+
 void Body::hintBinding(Span span, Type *type, EditorHints::BindingKind kind) {
   auto *hints = p.options.editorHints;
-  if (hints && span.source && span.source->path == hints->source)
+  if (hints && !hints->symbols && span.source && span.source->path == hints->source)
     hints->bindings.push_back({span.begin, span.end, bindingType(type, span.source), kind});
 }
 
@@ -701,7 +756,7 @@ void Body::emitReturn(ValueAt value, Span span) {
   rejectTemporaryBorrow(value, span);
   if (p.hasReference(result) && !value.noPayload &&
       !(isa_and_nonnull<Constant>(value.value) && cast<Constant>(value.value)->isNullValue()) &&
-      (returnRoot < 0 || value.origin.root != returnRoot))
+      (returnRoot < 0 || value.origin.root != returnRoot || value.origin.alternatives))
     fail(span, "returned reference must borrow from its declared source", "E230");
   auto *returned = read(value, span);
   clean(0);
@@ -872,6 +927,7 @@ void Body::build(FunctionEntry &entry) {
       auto *arg = fn->getArg(runtime++);
       arg->setName(param.name);
       auto id = bind(param.name, t, true, arg, param.span);
+      indexLocal(id, param.span);
       if (p.hasReference(t)) locals[id].origin.root = id;
       if (borrowArgument == static_cast<int>(index) - 1) returnRoot = id;
       debugLocal(id, param.span, runtime);
@@ -969,6 +1025,7 @@ ValueAt Body::conditional(const Ast &n, Type *expected) {
   std::vector<std::vector<bool>> states;
   std::vector<std::pair<Value *, BasicBlock *>> edges;
   bool temporaryBorrow = false;
+  Borrow origin{};
   auto arm = [&](BasicBlock *target, const Ast &body) {
     ir.SetInsertPoint(target);
     merge({initial}, initial.size());
@@ -986,6 +1043,8 @@ ValueAt Body::conditional(const Ast &n, Type *expected) {
     if (!t) t = v.type;
     v = coerce(v, t, body ? body->span : n->span);
     temporaryBorrow |= v.temporaryBorrow;
+    if (p.hasReference(t))
+      origin = edges.empty() ? v.origin : joinBorrow(origin, v.origin, t, n->span);
     auto *value = read(v, body ? body->span : n->span);
     leave();
     states.push_back(initialized);
@@ -1001,11 +1060,10 @@ ValueAt Body::conditional(const Ast &n, Type *expected) {
   }
   merge(states, initial.size());
   if (t == p.voidTy) return voidValue();
-  if (p.hasReference(t)) fail(n->span, "reference-valued branches require explicit returns", "E230");
   auto *phi = ir.CreatePHI(p.storage(t), edges.size());
   for (auto [value, from] : edges)
     phi->addIncoming(value, from);
-  return {t, phi, nullptr, false, -1, false, temporaryBorrow};
+  return {t, phi, nullptr, false, -1, false, temporaryBorrow, origin};
 }
 
 void Body::statement(const Ast &n) {
@@ -1035,7 +1093,12 @@ void Body::statementContents(const Ast &n, std::size_t bindingScope) {
       bool alias = n->names.size() == 1 && n->names[0].starts_with('&');
       if ((t && t->kind == Kind::Reference) || alias) {
         auto id = init->kind == NodeKind::Name ? findLocal(init->text) : -1;
-        v = id >= 0 && locals[id].reference ? referenceName(id, init->span) : expression(init);
+        if (id >= 0 && locals[id].reference)
+          v = referenceName(id, init->span);
+        else if (t && (init->kind == NodeKind::If || init->kind == NodeKind::Switch))
+          v = expression(init, t);
+        else
+          v = expression(init);
         if (v.type == p.neverTy) return;
         if (alias) {
           if (v.type->kind != Kind::Pointer && v.type->kind != Kind::Box && v.type->kind != Kind::Reference)
@@ -1058,6 +1121,7 @@ void Body::statementContents(const Ast &n, std::size_t bindingScope) {
       rejectTemporaryBorrow(v, n->span);
       auto id = bind(n->names[0], v.type, writable, (v.value || v.address) ? read(v, n->span) : nullptr,
                      n->span, bindingScope);
+      indexLocal(id, n->bindingSpans[0]);
       recordBorrow(id, v, n->span);
       debugLocal(id, n->span);
       if (!n->type)
@@ -1088,6 +1152,7 @@ void Body::statementContents(const Ast &n, std::size_t bindingScope) {
         }
         rejectTemporaryBorrow(element, n->span);
         auto id = bind(n->names[i], element.type, writable, read(element, n->span), n->span, bindingScope);
+        indexLocal(id, n->bindingSpans[i]);
         recordBorrow(id, element, n->span);
         hintBinding(n->bindingSpans[i], element.type, EditorHints::BindingKind::Short);
       }
@@ -1331,6 +1396,7 @@ ValueAt Body::loop(const Ast &n) {
       value = borrow(place, p.reference(place.type, !place.writable), n->span, false);
     }
     auto id = bind(n->names[index], value.type, true, read(value, n->span), n->span);
+    indexLocal(id, n->bindingSpans[index]);
     recordBorrow(id, value, n->span);
     hintBinding(n->bindingSpans[index], locals[id].reference ? locals[id].reference : locals[id].type,
                 EditorHints::BindingKind::Loop);
@@ -1503,6 +1569,7 @@ ValueAt Body::expression(const Ast &n, Type *expected) {
     }
     if (!array && t && t->parts.size() != n->children.size()) fail(n->span, "tuple arity mismatch");
     std::vector<Type *> types;
+    std::vector<Value *> elements;
     std::vector<int> temporaries;
     bool temporaryBorrow = false;
     enter();
@@ -1516,15 +1583,32 @@ ValueAt Body::expression(const Ast &n, Type *expected) {
         fail(n->span, "reference storage in array and tuple literals is not supported", "E230");
       types.push_back(item.type);
       temporaryBorrow |= item.temporaryBorrow;
-      temporaries.push_back(bind("", item.type, true, read(item, n->span), n->span));
-      locals[temporaries.back()].name = " <element " + std::to_string(i) + ">";
+      auto *value = read(item, n->span);
+      int temporary = -1;
+      if (p.drops(item.type)) {
+        // Retain ownership until the remaining elements have been evaluated.
+        temporary = bind("", item.type, true, value, n->span);
+        locals[temporary].name = " <element " + std::to_string(i) + ">";
+      }
+      elements.push_back(value);
+      temporaries.push_back(temporary);
     }
     if (!t) t = p.aggregate(Kind::Tuple, types);
     Value *out = Constant::getNullValue(t->ir);
-    for (unsigned i = 0; i < temporaries.size(); ++i) {
-      auto j = temporaries[i];
-      out = ir.CreateInsertValue(out, ir.CreateLoad(p.storage(types[i]), locals[j].slot), i);
-      setAlive(j, false);
+    if (array) {
+      // Building an LLVM constant one insertvalue at a time copies the
+      // entire aggregate on each fold.
+      std::vector<Constant *> initial;
+      initial.reserve(elements.size());
+      for (auto *item : elements) {
+        auto *constant = dyn_cast<Constant>(item);
+        initial.push_back(constant ? constant : PoisonValue::get(p.storage(element)));
+      }
+      out = ConstantArray::get(cast<ArrayType>(t->ir), initial);
+    }
+    for (unsigned i = 0; i < elements.size(); ++i) {
+      if (!array || !isa<Constant>(elements[i])) out = ir.CreateInsertValue(out, elements[i], i);
+      if (temporaries[i] != -1) setAlive(temporaries[i], false);
     }
     leave();
     v = {t, out, nullptr, false, -1, false, temporaryBorrow};
@@ -1537,7 +1621,7 @@ ValueAt Body::expression(const Ast &n, Type *expected) {
       args.assign(target->children.begin() + 1, target->children.end());
       target = target->children[0];
     }
-    auto *t = p.named(path(target), file, target->span, generics, args, visibleConstants());
+    auto *t = p.named(path(target), file, target->span, generics, args, visibleConstants(), target->span);
     v = construct(n, t);
     break;
   }
@@ -1565,6 +1649,9 @@ ValueAt Body::expression(const Ast &n, Type *expected) {
     break;
   case NodeKind::Switch:
     v = match(n, expected);
+    break;
+  case NodeKind::Select:
+    v = selection(n, expected);
     break;
   case NodeKind::Lambda:
     v = lambda(n, literal);

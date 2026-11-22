@@ -1,0 +1,74 @@
+package hash
+import (bits)
+
+pub class HashSeed {
+    pub var low: u64;
+    pub var high: u64;
+}
+
+extern "C" func __vqr_io_hash_seed(low: *u64, high: *u64) i32;
+
+pub func processSeed() !HashSeed {
+    var seed = HashSeed{low: 0, high: 0};
+    var status = unsafe { __vqr_io_hash_seed(&seed.low, &seed.high) };
+    if status != 0 { return __vqr_encode_system_error(status); }
+    seed
+}
+
+pub class SipHasher {
+    #implements: Hasher
+    var v0: u64;
+    var v1: u64;
+    var v2: u64;
+    var v3: u64;
+    var tail: u64;
+    var used: usize;
+    var length: u64;
+public:
+    func init(seed: HashSeed)
+        : v0(seed.low ^ 0x736f6d6570736575u64), v1(seed.high ^ 0x646f72616e646f6du64),
+          v2(seed.low ^ 0x6c7967656e657261u64), v3(seed.high ^ 0x7465646279746573u64),
+          tail(0), used(0), length(0) {}
+
+    func write(bytes: []const u8) void {
+        for byte in bytes {
+            tail |= u64(byte) << (used * 8);
+            length +%= 1;
+            used++;
+            if used == 8 {
+                compress(tail);
+                tail = 0;
+                used = 0;
+            }
+        }
+    }
+
+    const func finish64() u64 {
+        var finalized = *self;
+        finalized.compress(tail | (length << 56));
+        finalized.v2 ^= 0xffu64;
+        for i in 0..4 { finalized.round(); }
+        finalized.v0 ^ finalized.v1 ^ finalized.v2 ^ finalized.v3
+    }
+    const func finish() usize { __vqr_parse_bits<usize>(u128(finish64())) }
+
+private:
+    func round() void {
+        v0 +%= v1;
+        v1 = bits.rotateLeft<u64>(v1, 13) ^ v0;
+        v0 = bits.rotateLeft<u64>(v0, 32);
+        v2 +%= v3;
+        v3 = bits.rotateLeft<u64>(v3, 16) ^ v2;
+        v0 +%= v3;
+        v3 = bits.rotateLeft<u64>(v3, 21) ^ v0;
+        v2 +%= v1;
+        v1 = bits.rotateLeft<u64>(v1, 17) ^ v2;
+        v2 = bits.rotateLeft<u64>(v2, 32);
+    }
+    func compress(word: u64) void {
+        v3 ^= word;
+        round();
+        round();
+        v0 ^= word;
+    }
+}

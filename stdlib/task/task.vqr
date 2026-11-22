@@ -1,5 +1,5 @@
 package task
-import (opt, result, time)
+import (io, opt, result, time)
 
 pub error TaskError { StartFailed, BadWorkerCount, AlreadyJoined, GroupClosed, JoinInterrupted, SelfJoin, Cancelled }
 
@@ -9,6 +9,8 @@ pub class TaskId {
 
 extern "C" func __vqr_rt_group_cancel(group: *u8) void;
 extern "C" func __vqr_rt_group_active(group: *u8) usize;
+extern "C" func __vqr_rt_group_completion_fd(group: *u8, status: *i32) i32;
+extern "C" func __vqr_rt_group_clear_completion(group: *u8) i32;
 extern "C" func __vqr_rt_group_wait(group: *u8) c_int;
 extern "C" func __vqr_rt_group_close(group: *u8) c_int;
 extern "C" func __vqr_rt_task_cancel(handle: *u8) void;
@@ -136,6 +138,24 @@ public:
         switch runtime {
             some(group) => unsafe { __vqr_rt_group_active(group) },
             null => 0,
+        }
+    }
+
+    // The group owns this descriptor. Do not close it or read it directly.
+    func completionDescriptor() !i32 {
+        var group = ensure()!;
+        var reason: i32 = 0;
+        var descriptor = unsafe { __vqr_rt_group_completion_fd(group, &reason) };
+        if descriptor < 0 { return io.systemError(reason); }
+        descriptor
+    }
+
+    // Clear before scanning completed handles to avoid losing a wakeup.
+    func clearCompletionSignal() !void {
+        if closed { return TaskError.GroupClosed; }
+        if runtime != null {
+            var reason = unsafe { __vqr_rt_group_clear_completion(runtime.unwrap()) };
+            if reason != 0 { return io.systemError(reason); }
         }
     }
 

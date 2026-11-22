@@ -1,0 +1,144 @@
+package http
+import (coll, io, text)
+
+enum BodyPhase { End, Fixed, UntilClose, ChunkSize, ChunkData, ChunkCrlf, Trailer }
+
+// The source must remain valid and exclusively readable until the end of this body.
+pub class BodyReader {
+    #copy: disabled
+    #implements: io.Reader
+    var source: *io.Reader;
+    var phase: BodyPhase;
+    var remaining: usize;
+    var allowance: usize;
+    var metadataAllowance: usize;
+    var maxLineBytes: usize;
+    var maxHeaders: usize;
+    var trailers: usize;
+    var line: coll.Vec<u8>;
+    var seenCr: bool;
+    var failure: ?ErrorId;
+public:
+    func init(reader: *io.Reader, framing: Framing, limits: HttpLimits, budget: ReadBudget,
+              noBody: bool, untilClose: bool) !void
+        : source(reader), phase(BodyPhase.End), remaining(framing.length ?? 0),
+          allowance(limits.maxBodyBytes), metadataAllowance(budget.remaining),
+          maxLineBytes(limits.maxLineBytes), maxHeaders(limits.maxHeaders), trailers(0),
+          line(coll.Vec<u8>()), seenCr(false), failure(null) {
+        if noBody { return; }
+        if framing.chunked { phase = BodyPhase.ChunkSize; }
+        else if framing.length == null && untilClose { phase = BodyPhase.UntilClose; }
+        else {
+            if remaining > allowance { return HttpError.BodyLimit; }
+            if remaining != 0 { phase = BodyPhase.Fixed; }
+        }
+    }
+
+    const func isComplete() bool { phase == BodyPhase.End && failure == null }
+
+    func read(dst: []u8) !usize {
+        if dst.len() == 0 { return 0; }
+        if failure != null { return failure.unwrap(); }
+        advance(dst) catch (reason) {
+            if !io.isWouldBlock(reason) && !io.isInterrupted(reason) { failure = some(reason); }
+            return reason;
+        }
+    }
+
+private:
+    func advance(dst: []u8) !usize {
+        for {
+            switch phase {
+                BodyPhase.End => return 0,
+                BodyPhase.Fixed, BodyPhase.ChunkData => {
+                    var count = if dst.len() < remaining { dst.len() } else { remaining };
+                    var readCount = io.read(source, dst[0..count])!;
+                    if readCount == 0 { return io.IoError.UnexpectedEof; }
+                    remaining -= readCount;
+                    allowance -= readCount;
+                    if remaining == 0 {
+                        phase = if phase == BodyPhase.Fixed { BodyPhase.End } else { BodyPhase.ChunkCrlf };
+                    }
+                    return readCount;
+                },
+                BodyPhase.UntilClose => {
+                    if allowance == 0 {
+                        var probe = [1]u8{0};
+                        if io.read(source, probe[:])! != 0 { return HttpError.BodyLimit; }
+                        phase = BodyPhase.End;
+                        return 0;
+                    }
+                    var count = if dst.len() < allowance { dst.len() } else { allowance };
+                    var received = io.read(source, dst[0..count])!;
+                    allowance -= received;
+                    if received == 0 { phase = BodyPhase.End; }
+                    return received;
+                },
+                BodyPhase.ChunkCrlf => {
+                    if !seenCr {
+                        if readByte(source)! != 13 { return HttpError.InvalidFraming; }
+                        seenCr = true;
+                    }
+                    if readByte(source)! != 10 { return HttpError.InvalidFraming; }
+                    seenCr = false;
+                    phase = BodyPhase.ChunkSize;
+                },
+                BodyPhase.ChunkSize => {
+                    readMetadataLine()!;
+                    var size = chunkLength(line.asConstSlice())!;
+                    line.clear();
+                    if size > allowance { return HttpError.BodyLimit; }
+                    remaining = size;
+                    phase = if size == 0 { BodyPhase.Trailer } else { BodyPhase.ChunkData };
+                },
+                BodyPhase.Trailer => {
+                    readMetadataLine()!;
+                    if line.isEmpty() {
+                        phase = BodyPhase.End;
+                    } else {
+                        if trailers == maxHeaders { return HttpError.HeaderLimit; }
+                        checkTrailer(line.asConstSlice())!;
+                        trailers++;
+                        line.clear();
+                    }
+                },
+            }
+        }
+    }
+
+    func readMetadataLine() !void {
+        for {
+            if metadataAllowance == 0 { return HttpError.HeaderLimit; }
+            var byte = readByte(source)!;
+            metadataAllowance--;
+            if seenCr {
+                if byte != 10 { return HttpError.InvalidFraming; }
+                seenCr = false;
+                return;
+            }
+            if byte == 13 { seenCr = true; continue; }
+            if byte == 10 { return HttpError.InvalidFraming; }
+            if line.len() == maxLineBytes { return HttpError.HeaderLimit; }
+            line.push(byte)!;
+        }
+    }
+}
+
+func chunkLength(raw: []const u8) !usize {
+    var end = byteAt(raw, 59);
+    for byte in raw[end..raw.len()] {
+        if (byte < 32 && byte != 9) || byte >= 127 { return HttpError.InvalidFraming; }
+    }
+    digits(unsafe { __vqr_text_borrow_utf8(raw[0..end]) }, 16)
+}
+
+func checkTrailer(raw: []const u8) !void {
+    var colon = byteAt(raw, 58);
+    if colon == raw.len() || colon == 0 { return HttpError.InvalidHeader; }
+    var name = text.fromBytes(raw[0..colon])!;
+    var value = text.fromBytes(raw[colon + 1..raw.len()])!;
+    validateName(name)!;
+    validateValue(value)!;
+    if sameName(name, "Content-Length") || sameName(name, "Transfer-Encoding") ||
+       sameName(name, "Host") || sameName(name, "Connection") { return HttpError.InvalidFraming; }
+}

@@ -56,6 +56,101 @@ class IoV2Acceptance(CompilerCase):
         self.assertEqual((self.root / "new-empty").read_bytes(), b"")
         self.assertFalse((denied / "rejected").exists())
 
+    def test_body_and_scanner_preserve_partial_progress(self):
+        self.hosted(r"""
+            import (bufio, bytes, http, result)
+            class SplitWriter {
+                #implements: io.Writer
+                pub var sink: io.MemoryWriter;
+                pub var calls: i32;
+                pub func write(src: []const u8) !usize {
+                    calls++;
+                    switch calls {
+                        1 => sink.write(src[0..2]),
+                        2 => io.IoError.WouldBlock,
+                        _ => sink.write(src),
+                    }
+                }
+                pub func flush() !void {}
+            }
+            class SplitReader {
+                #implements: io.Reader
+                pub var source: io.MemoryReader;
+                pub var calls: i32;
+                pub func read(dst: []u8) !usize {
+                    calls++;
+                    switch calls {
+                        1 => source.read(dst[0..2]),
+                        2 => io.IoError.WouldBlock,
+                        _ => source.read(dst),
+                    }
+                }
+            }
+            func main() !void {
+                var writer = SplitWriter{sink: io.MemoryWriter(), calls: 0};
+                var body = http.Body.fromBytes("payload".asBytes())!;
+                var interrupted = body.writeTo(&writer);
+                io.println(result.errorOf(&interrupted).unwrap() == io.IoError.WouldBlock)!;
+                io.println(body.len() == 5 && body.writeTo(&writer)! == 5 && body.isComplete())!;
+                io.println(bytes.equal(writer.sink.asSlice(), "payload".asBytes()))!;
+
+                var input = SplitReader{source: io.MemoryReader(" payload rest".asBytes()), calls: 0};
+                var scanner = bufio.Scanner(&input)!;
+                var partial = scanner.next();
+                io.println(result.errorOf(&partial).unwrap() == io.IoError.WouldBlock)!;
+                var token = scanner.next()!.unwrap();
+                io.println(token.text() == "payload" && token.start() == 1 && token.end() == 8)!;
+                io.println(scanner.next()!.unwrap().text() == "rest")!;
+
+                var lines = SplitReader{source: io.MemoryReader("payload\nsecond".asBytes()), calls: 0};
+                var buffered = bufio.BufferedReader(&lines, 4)!;
+                var interruptedLine = buffered.readLine(7);
+                io.println(result.errorOf(&interruptedLine).unwrap() == io.IoError.WouldBlock)!;
+                io.println(buffered.readLine(7)!.unwrap() == "payload")!;
+                io.println(buffered.readLine(7)!.unwrap() == "second")!;
+
+                var first = io.MemoryWriter();
+                var second = SplitWriter{sink: io.MemoryWriter(), calls: 0};
+                var targets = [2]*io.Writer{&first, &second};
+                var fanout = io.MultiWriter(targets[:]);
+                var payload = "payload".asBytes();
+                var interruptedWrite = fanout.write(payload);
+                io.println(result.errorOf(&interruptedWrite).unwrap() == io.IoError.WouldBlock)!;
+                var wrong = fanout.write("changed".asBytes());
+                io.println(result.errorOf(&wrong).unwrap() == io.IoError.InvalidArgument)!;
+                io.println(fanout.write(payload)! == 7)!;
+                io.println(bytes.equal(first.asSlice(), payload) && bytes.equal(second.sink.asSlice(), payload))!;
+
+                var teeInput = io.MemoryReader(payload);
+                var mirror = SplitWriter{sink: io.MemoryWriter(), calls: 0};
+                var tee = io.tee(&teeInput, &mirror);
+                var dst = [7]u8{0, 0, 0, 0, 0, 0, 0};
+                var interruptedRead = tee.read(dst[:]);
+                io.println(result.errorOf(&interruptedRead).unwrap() == io.IoError.WouldBlock)!;
+                io.println(tee.read(dst[0..1])! == 1 && tee.read(dst[1..7])! == 6)!;
+                io.println(bytes.equal(dst[:], payload) && bytes.equal(mirror.sink.asSlice(), payload))!;
+            }
+        """, "true\n" * 16)
+
+    def test_stdout_broken_pipe_is_catchable(self):
+        source = self.source("broken_pipe.vqr", f"""
+            import (io)
+            func main() i32 {{
+                io.print("payload") catch (reason) {{
+                    return if reason == io.systemError({errno.EPIPE}) {{ 0 }} else {{ 2 }};
+                }};
+                1
+            }}
+        """)
+        self.process(VAQC, "build", source, "-o", "broken_pipe")
+        read_end, write_end = os.pipe()
+        os.close(read_end)
+        try:
+            process = subprocess.run([self.root / "broken_pipe"], stdout=write_end, timeout=5)
+            self.assertEqual(process.returncode, 0)
+        finally:
+            os.close(write_end)
+
     def test_progress_and_resumption(self):
         self.hosted(r"""
             import (bytes, result)
@@ -249,6 +344,61 @@ class IoV2Acceptance(CompilerCase):
         finally:
             for fd in (first_read, first_write, next_read, next_write):
                 os.close(fd)
+
+    def test_async_udp_and_process_pipes(self):
+        self.hosted(r"""
+            import (bytes, net, path, process, task, time)
+            func main() !void {
+                var group = task.TaskGroup.withWorkers(1)!;
+                var local = net.parseSocketAddr("127.0.0.1:0")!;
+                var receiver = net.AsyncUdpSocket.bind(local)!;
+                var address = receiver.localAddr()!;
+                var collect = [move(receiver)]() !bool => {
+                    var receiver = move(receiver);
+                    var scratch = [3]u8{0, 0, 0};
+                    var deadline = some(time.Deadline.after(time.Duration.fromSeconds(2))!);
+                    var packet = receiver.recvFrom(scratch[:], deadline)!;
+                    packet.len == 3 && packet.truncated && bytes.equal(scratch[:], "abc".asBytes())
+                };
+                var deliver = [local, address]() !void => {
+                    var sender = net.AsyncUdpSocket.bind(local)!;
+                    var count = sender.sendTo("abcdef".asBytes(), address, null)!;
+                    if count != 6 { panic("UDP datagram was split"); }
+                };
+                var recv = group.spawn<bool>(move(collect))!;
+                var send = group.spawn<void>(move(deliver))!;
+                io.println(recv.join()!)!;
+                send.join()!;
+
+                var echo = () !bool => {
+                    var command = process.Command.new(path.fromString("/bin/cat")!);
+                    command.stdin(process.Stdio.Piped);
+                    command.stdout(process.Stdio.Piped);
+                    var child = command.spawn()!;
+                    var deadline = some(time.Deadline.after(time.Duration.fromSeconds(2))!);
+                    {
+                        var input = child.stdin().unwrap();
+                        if input.writeAsync("abc".asBytes(), deadline)! != 3 { return false; }
+                        input.close()!;
+                    }
+                    var dst = [3]u8{0, 0, 0};
+                    {
+                        var output = child.stdout().unwrap();
+                        var count: usize = 0;
+                        for count < dst.len() {
+                            var n = output.readAsync(dst[count..dst.len()], deadline)!;
+                            if n == 0 { return false; }
+                            count += n;
+                        }
+                        var eof = [1]u8{0};
+                        if output.readAsync(eof[:], deadline)! != 0 { return false; }
+                    }
+                    child.wait()!.success() && bytes.equal(dst[:], "abc".asBytes())
+                };
+                var child = group.spawn<bool>(move(echo))!;
+                io.println(child.join()!)!;
+            }
+        """, "true\n" * 2)
 
     def test_async_tcp_one_worker_and_deadlines(self):
         self.hosted(r"""

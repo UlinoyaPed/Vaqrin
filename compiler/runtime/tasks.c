@@ -16,7 +16,7 @@
 #include "reactor_linux.h"
 
 enum task_status { TASK_OK, TASK_RUNNING, TASK_JOINED, TASK_CLOSED, TASK_INTERRUPTED, TASK_SELF };
-enum wait_kind { WAIT_NONE, WAIT_TASK, WAIT_GROUP, WAIT_TIME, WAIT_IO };
+enum wait_kind { WAIT_NONE, WAIT_TASK, WAIT_GROUP, WAIT_TIME, WAIT_IO, WAIT_CHANNEL };
 
 struct task;
 struct worker;
@@ -44,6 +44,7 @@ struct group {
     bool closed;
     void (*report)(uint32_t);
     pthread_t reactor_thread;
+    int completion_fd;
     int reactor_fd;
     int reactor_wake;
     int reactor_error;
@@ -63,6 +64,7 @@ struct task {
     struct group *group;
     struct worker *worker;
     struct task *next_group;
+    struct task **group_link;
     struct task *next_ready;
     struct task *next_waiting;
     struct task **wait_link;
@@ -82,7 +84,7 @@ struct task {
     uint32_t io_slot;
     int io_fd;
     int io_status;
-    bool io_timed;
+    bool timed;
     bool interruptible;
     bool finished;
     bool returned;
@@ -164,7 +166,8 @@ static bool expire_timers(struct timespec *next) {
     bool has_next = false;
     for (struct task **entry = &waiting; *entry;) {
         struct task *task = *entry;
-        if (task->wait_kind == WAIT_TIME || (task->wait_kind == WAIT_IO && task->io_timed)) {
+        if (task->wait_kind == WAIT_TIME ||
+            ((task->wait_kind == WAIT_IO || task->wait_kind == WAIT_CHANNEL) && task->timed)) {
             if (!earlier(now, task->deadline)) {
                 if (task->wait_kind == WAIT_IO) task->io_status = ETIMEDOUT;
                 awaken(entry);
@@ -200,6 +203,28 @@ static void wait_for(enum wait_kind kind, const void *target, bool interruptible
     pthread_mutex_unlock(&mutex);
     suspend();
     pthread_mutex_lock(&mutex);
+}
+
+// The mailbox protects the version snapshot. Checking it again under the
+// scheduler lock makes registration atomic with respect to task notification.
+int __vqr_rt_channel_wait(const uint32_t *sequence, uint32_t version, int64_t seconds, int64_t nanos) {
+    if (!current) return 0;
+    const struct timespec deadline = {seconds, nanos};
+    const bool timed = seconds >= 0;
+    pthread_mutex_lock(&mutex);
+    if (!current->cancelled && __atomic_load_n(sequence, __ATOMIC_RELAXED) == version) {
+        current->timed = timed;
+        current->deadline = deadline;
+        wait_for(WAIT_CHANNEL, sequence, true);
+    }
+    pthread_mutex_unlock(&mutex);
+    return 1;
+}
+
+void __vqr_rt_channel_notify(const uint32_t *sequence) {
+    pthread_mutex_lock(&mutex);
+    awaken_waiters(WAIT_CHANNEL, sequence);
+    pthread_mutex_unlock(&mutex);
 }
 
 static void *run_reactor(void *context) {
@@ -339,7 +364,7 @@ int __vqr_rt_wait_io(int32_t fd, uint32_t interest, int64_t seconds, int64_t nan
     }
     if (status == 0) status = register_io(current, fd, interest);
     if (status == 0) {
-        current->io_timed = seconds >= 0;
+        current->timed = seconds >= 0;
         current->deadline = deadline;
         current->io_status = 0;
         wait_for(WAIT_IO, NULL, true);
@@ -391,6 +416,12 @@ static void *run_worker(void *context) {
         if (task->returned) {
             task->finished = true;
             group->pending--;
+            if (group->completion_fd >= 0) {
+                int rc;
+                do rc = eventfd_write(group->completion_fd, 1);
+                while (rc < 0 && errno == EINTR);
+                // EAGAIN means the descriptor is already readable.
+            }
             awaken_waiters(WAIT_TASK, task);
             if (group->pending == 0) awaken_waiters(WAIT_GROUP, group);
             pthread_cond_broadcast(&changed);
@@ -410,6 +441,7 @@ void *__vqr_rt_group_create(size_t workers, void (*report)(uint32_t)) {
         return NULL;
     }
     group->references = 1;
+    group->completion_fd = -1;
     group->reactor_fd = -1;
     group->reactor_wake = -1;
     group->io_free = UINT32_MAX;
@@ -481,6 +513,27 @@ size_t __vqr_rt_group_active(struct group *group) {
     return pending;
 }
 
+int __vqr_rt_group_completion_fd(struct group *group, int *error) {
+    pthread_mutex_lock(&mutex);
+    if (group->completion_fd < 0) group->completion_fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+    int fd = group->completion_fd;
+    *error = fd < 0 ? errno : 0;
+    pthread_mutex_unlock(&mutex);
+    return fd;
+}
+
+int __vqr_rt_group_clear_completion(struct group *group) {
+    pthread_mutex_lock(&mutex);
+    int fd = group->completion_fd;
+    pthread_mutex_unlock(&mutex);
+    if (fd < 0) return 0;
+    eventfd_t value;
+    int rc;
+    do rc = eventfd_read(fd, &value);
+    while (rc < 0 && errno == EINTR);
+    return rc < 0 && errno != EAGAIN ? errno : 0;
+}
+
 int __vqr_rt_group_wait(struct group *group) {
     if (current && current->group == group) return TASK_SELF;
     pthread_mutex_lock(&mutex);
@@ -515,6 +568,7 @@ int __vqr_rt_group_close(struct group *group) {
         close(group->reactor_wake);
         close(group->reactor_fd);
     }
+    if (group->completion_fd >= 0) close(group->completion_fd);
     while (task) {
         struct task *next = task->next_group;
         if (!task->claimed && task->result) {
@@ -562,6 +616,8 @@ void *__vqr_rt_task_submit(struct group *group, void *work, void (*run)(void *),
     }
     group->references++;
     task->next_group = group->tasks;
+    task->group_link = &group->tasks;
+    if (task->next_group) task->next_group->group_link = &task->next_group;
     group->tasks = task;
     group->pending++;
     enqueue(&group->incoming, task);
@@ -579,6 +635,10 @@ int __vqr_rt_task_join(struct task *task, int block) {
         else if (task->claimed) status = TASK_JOINED;
         else if (task->finished) {
             task->claimed = true;
+            *task->group_link = task->next_group;
+            if (task->next_group) task->next_group->group_link = task->group_link;
+            task->next_group = NULL;
+            task->group_link = NULL;
             status = TASK_OK;
         } else if (!block) status = TASK_RUNNING;
         else if (current && current->cancelled) status = TASK_INTERRUPTED;
@@ -587,6 +647,7 @@ int __vqr_rt_task_join(struct task *task, int block) {
             continue;
         }
         pthread_mutex_unlock(&mutex);
+        if (status == TASK_OK) __vqr_rt_task_release(task);
         return status;
     }
 }
@@ -619,6 +680,8 @@ int __vqr_rt_task_cancelled(void) {
     pthread_mutex_unlock(&mutex);
     return cancelled;
 }
+
+int __vqr_rt_channel_cancelled(void) { return __vqr_rt_task_cancelled(); }
 
 void __vqr_rt_yield(void) {
     if (!current) {

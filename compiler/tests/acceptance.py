@@ -1,10 +1,14 @@
 """Exercise the compiler as installed, including independent native consumers."""
 import pathlib
+import json
+import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 VAQC = pathlib.Path(sys.argv.pop(1)).resolve()
 REPOSITORY = pathlib.Path(__file__).resolve().parents[2]
@@ -43,6 +47,131 @@ class Acceptance(CompilerCase):
         packages = sorted({source.parent.name for source in (REPOSITORY / "stdlib").glob("*/*.vqr")})
         program = self.source("packages.vqr", "import (" + ", ".join(packages) + ")\nfunc f() void {}")
         self.process(VAQC, "check", program)
+
+    def test_persistent_standard_library_syntax_cache(self):
+        source = self.source("run.vqr", "import (fixture)\nfunc main() i32 { fixture.value() }\n")
+        package = self.source("stdlib/fixture/module.vqr",
+                              "package fixture\n" + " // cached source\n" * 2200 +
+                              "pub func value() i32 { 19 }\n")
+        cache = self.root / "syntax"
+        with patch.dict(os.environ, VAQRIN_AST_CACHE=str(cache),
+                        VAQRIN_STDLIB_DIR=str(package.parents[1]),
+                        VAQRIN_RUNTIME_DIR=str(REPOSITORY / "compiler/runtime")):
+            self.process(VAQC, source, "-o", "from-source")
+            self.assertEqual(self.process("./from-source", good=False).returncode, 19)
+            entry, = cache.glob("*.ast")
+            signature = entry.stat().st_ino, entry.stat().st_mtime_ns
+            self.process(VAQC, source, "-o", "from-cache")
+            self.assertEqual(self.process("./from-cache", good=False).returncode, 19)
+            self.assertEqual((entry.stat().st_ino, entry.stat().st_mtime_ns), signature)
+
+            entry.write_bytes(b"broken syntax record")
+            self.process(VAQC, source, "-o", "after-corruption")
+            self.assertEqual(self.process("./after-corruption", good=False).returncode, 19)
+            self.assertGreater(entry.stat().st_size, 64)
+
+            package.write_text(package.read_text().replace("{ 19 }", "{ 27 }"), encoding="utf-8")
+            self.process(VAQC, source, "-o", "after-edit")
+            self.assertEqual(self.process("./after-edit", good=False).returncode, 27)
+            self.assertEqual(len(list(cache.glob("*.ast"))), 2)
+
+    def test_large_constant_compilation(self):
+        def timings(path):
+            run = self.process(VAQC, "check", "--timings", path)
+            result = dict(re.findall(r"vaqc: (compile[.a-z]*) (\d+(?:\.\d+)?(?:[eE][+-]?\d+)?) ms",
+                                     run.stderr.decode()))
+            self.assertTrue({"compile", "compile.types", "compile.instantiation",
+                             "compile.ctfe", "compile.lowering"}.issubset(result))
+            return float(result["compile"])
+
+        samples = []
+        for size in (4096, 8192):
+            values = ",".join(str(index) for index in range(size))
+            path = self.source(f"const{size}.vqr", f"const values: [{size}]u32 = [{size}]u32{{{values}}};")
+            samples.append(timings(path))
+        self.assertLess(samples[1], samples[0] * 3 + 200)
+        self.assertLess(timings(REPOSITORY / "examples/unicode-regex.vqr"), 6000)
+
+    def test_git_and_registry_dependencies_build_offline(self):
+        if not shutil.which("git"):
+            self.skipTest("git is required to prepare dependency fixtures")
+
+        def repository(directory, package, number):
+            folder = self.root / directory
+            self.source(f"{directory}/src/{package}.vqr",
+                        f"package {package}\npub func number() i32 {{ {number} }}")
+            self.process("git", "-C", folder, "init", "--quiet")
+            self.process("git", "-C", folder, "add", "--", "src")
+            self.process("git", "-C", folder, "-c", "user.name=Acceptance",
+                         "-c", "user.email=acceptance@example.invalid", "commit", "--quiet", "-m", "Fixture")
+            return self.process("git", "-C", folder, "rev-parse", "HEAD").stdout.decode().strip()
+
+        revision = repository("git-source", "model", 40)
+        indexed = repository("index-source", "offset", 2)
+        project = self.root / "offline"
+        entry = self.source("offline/main.vqr",
+                            "import (model, offset)\nfunc main() i32 { model.number() + offset.number() - 42 }")
+        self.source("offline/package.toml", f"""
+            [build]
+            entry = "main.vqr"
+            [registry]
+            index = "index.json"
+            [dependencies]
+            model = {{ git = "../git-source", rev = "{revision}", path = "src" }}
+            offset = {{ version = "1.2.3" }}
+        """)
+        index = self.source("offline/index.json", json.dumps({
+            "offset": {"1.2.3": {"git": "../index-source", "rev": indexed, "path": "src"}}
+        }))
+        cache = self.root / "cache"
+        environment = {**os.environ, "VAQRIN_PACKAGE_CACHE": str(cache)}
+
+        def compiler(*args, good=True):
+            result = subprocess.run([str(VAQC), *(str(x) for x in args)], env=environment,
+                                    cwd=self.root, capture_output=True, timeout=25)
+            self.assertEqual(result.returncode == 0, good, result.stderr.decode(errors="replace"))
+            return result
+
+        self.assertIn(b"offline cache", compiler("check", entry, good=False).stderr)
+        compiler("lock", project)
+        lock = (project / "package.lock").read_text()
+        self.assertIn(revision, lock)
+        self.assertIn('registry "." "offset" "1.2.3"', lock)
+        index.unlink()
+        shutil.move(self.root / "git-source", self.root / "unavailable-git")
+        shutil.move(self.root / "index-source", self.root / "unavailable-index")
+        relocated = self.root / "relocated-cache"
+        shutil.move(cache, relocated)
+        environment["VAQRIN_PACKAGE_CACHE"] = str(relocated)
+        compiler("build", project, "-o", "offline-build")
+        self.process("./offline-build")
+        generated = next(relocated.glob("*/src/model.vqr"))
+        generated.write_text("package model\npub func number() i32 { 99 }", encoding="utf-8")
+        self.assertIn(b"missing or stale", compiler("check", entry, good=False).stderr)
+
+    def test_local_path_dependencies_and_lock(self):
+        project = self.root / "app"
+        self.source("app/package.toml", '[build]\nentry = "main.vqr"\n'
+                    '[dependencies]\nmodels = { path = "../model-files" }\n')
+        main = self.source("app/main.vqr", "import (models)\nfunc main() i32 { models.answer() - 42 }")
+        self.source("model-files/package.toml", "[dependencies]\nbase = { path = '../base-files' }\n")
+        self.source("model-files/models.vqr",
+                    "package models\nimport (base)\npub func answer() i32 { base.answer() }")
+        base = self.source("base-files/base.vqr", "package base\npub func answer() i32 { 42 }")
+        self.assertIn(b"missing or stale", self.process(VAQC, "check", main, good=False).stderr)
+        self.process(VAQC, "lock", project)
+        lock = project / "package.lock"
+        first_lock = lock.read_bytes()
+        self.assertIn(b"base.vqr", first_lock)
+        self.process(VAQC, "lock", project)
+        self.assertEqual(lock.read_bytes(), first_lock)
+        self.process(VAQC, "build", project, "-o", "locked")
+        self.process("./locked")
+        base.write_text("package base\npub func answer() i32 { 43 }", encoding="utf-8")
+        self.assertIn(b"missing or stale", self.process(VAQC, "check", main, good=False).stderr)
+        self.process(VAQC, "lock", project)
+        self.process(VAQC, "check", main)
+        self.assertNotEqual(lock.read_bytes(), first_lock)
 
     def test_tuple_projections_and_optional_tag_without_copy(self):
         self.hosted('''
@@ -531,6 +660,103 @@ class Acceptance(CompilerCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn(b"IoError.WriteFailed", result.stderr)
 
+    def test_c_aggregate_abi_and_function_pointers(self):
+        source = self.source("aggregate.vqr", r"""
+            class Mixed {
+                #repr: C
+                pub var gain: f64;
+                pub var count: i32;
+            }
+            class Pair {
+                #repr: C
+                pub var x: f32;
+                pub var y: f32;
+            }
+            class Homogeneous {
+                #repr: C
+                pub var pairs: [2]Pair;
+            }
+            class Large {
+                #repr: C
+                pub var a: u64;
+                pub var b: u64;
+                pub var c: u64;
+            }
+            class Bytes {
+                #repr: C
+                pub var a: u8;
+                pub var b: u8;
+                pub var c: u8;
+            }
+            extern "C" func transform(value: Mixed) Mixed;
+            extern "C" func pressure(a,b,c,d,e,f: i64, value: Mixed, tail: i8) Mixed;
+            extern "C" func callbackHost(value: Homogeneous,
+                action: extern "C" func(Homogeneous) Homogeneous) Homogeneous;
+            extern "C" func makeLarge(value: Large) Large;
+            extern "C" func bytes(value: Bytes) Bytes;
+            export "C" func modifyFours(value: Homogeneous) Homogeneous {
+                value.pairs[1].y += 7.0;
+                value
+            }
+            export "C" func echoLarge(value: Large) Large {
+                unsafe { makeLarge(value) }
+            }
+            export "C" func exercise() i32 {
+                var input = Mixed{gain: 2.5, count: 17};
+                var changed = unsafe { transform(input) };
+                if changed.gain != 5.0 || changed.count != 20 { return 1; }
+                var callback = transform;
+                var indirect = unsafe { callback(input) };
+                if indirect.gain != 5.0 || indirect.count != 20 { return 2; }
+                var forced = unsafe { pressure(1,2,3,4,5,6,input,-3) };
+                if forced.count != 35 || forced.gain != 2.5 { return 3; }
+                var pairs = Homogeneous{pairs: [2]Pair{Pair{x: 1.0, y: 2.0}, Pair{x: 3.0, y: 4.0}}};
+                var floats = unsafe { callbackHost(pairs, modifyFours) };
+                if floats.pairs[0].x != 1.0 || floats.pairs[1].y != 11.0 { return 4; }
+                var packed = unsafe { bytes(Bytes{a: 1, b: 2, c: 3}) };
+                if packed.a != 3 || packed.b != 2 || packed.c != 1 { return 5; }
+                0
+            }
+        """)
+        c = self.source("caller.c", r"""
+            #include <stdint.h>
+            typedef struct { double gain; int32_t count; } Mixed;
+            typedef struct { float x, y; } Pair;
+            typedef struct { Pair pairs[2]; } Homogeneous;
+            typedef struct { uint64_t a, b, c; } Large;
+            typedef struct { uint8_t a,b,c; } Bytes;
+            Mixed transform(Mixed v) { return (Mixed){v.gain * 2, v.count + 3}; }
+            Mixed pressure(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, int64_t f,
+                           Mixed v, int8_t tail) {
+                v.count += a + b + c + d + e + f + tail;
+                return v;
+            }
+            Homogeneous callbackHost(Homogeneous v, Homogeneous (*f)(Homogeneous)) { return f(v); }
+            Large makeLarge(Large v) { return (Large){v.c, v.a, v.b}; }
+            Bytes bytes(Bytes v) { return (Bytes){v.c, v.b, v.a}; }
+            extern Large echoLarge(Large);
+            extern int32_t exercise(void);
+            int main(void) {
+                Large v = echoLarge((Large){1,2,3});
+                if (v.a != 3 || v.b != 1 || v.c != 2) return 6;
+                return exercise();
+            }
+        """)
+        for flags in (("-g",), ("-O2",)):
+            self.process(VAQC, source, "--emit=obj", *flags, "-o", "aggregate.o")
+            self.process("cc", c, "aggregate.o", "-o", "caller")
+            self.process("./caller")
+        for triple in ("aarch64-unknown-linux-gnu", "arm64-apple-darwin",
+                       "x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"):
+            self.process(VAQC, source, "--emit=obj", f"--target={triple}", "-o", "foreign.o")
+
+        invalid = self.source("invalid.vqr", """
+            class Native { pub var payload: i32; }
+            extern "C" func bad(value: Native) Native;
+        """)
+        result = self.process(VAQC, "check", invalid, good=False)
+        self.assertIn(b"#repr: C", result.stderr)
+
     def test_ffi_debug(self):
         if not shutil.which("llvm-dwarfdump"):
             self.skipTest("llvm-dwarfdump is unavailable")
@@ -841,6 +1067,84 @@ class Acceptance(CompilerCase):
         self.assertIn("@llvm.trap", ir)
         for symbol in ("@fprintf", "@fflush", "@stderr"):
             self.assertNotIn(symbol, ir)
+
+    def test_readonly_reference_joins_pin_all_sources(self):
+        self.hosted(r"""
+            func choose(a, b: i32, first: bool) !void {
+                var left: &const i32 = &a;
+                var right: &const i32 = &b;
+                var selected: &const i32 = if first { left } else { right };
+                var switched: &const i32 = switch first { true => right, false => selected };
+                io.println(selected)!;
+                io.println(switched)!;
+            }
+            func main() !void {
+                choose(7, 42, true)!;
+                choose(7, 42, false)!;
+            }
+        """, "7\n42\n42\n42\n")
+        for target in ("a", "b"):
+            source = self.source("borrow.vqr", f"""
+                func invalid(flag: bool) i32 {{
+                    var a = 1;
+                    var b = 2;
+                    var view: &const i32 = if flag {{
+                        var left: &const i32 = &a;
+                        left
+                    }} else {{
+                        var right: &const i32 = &b;
+                        right
+                    }};
+                    {target} = 3;
+                    view
+                }}
+            """)
+            error = self.process(VAQC, "check", source, good=False)
+            self.assertIn(b"access conflicts with active borrow", error.stderr)
+
+    def test_indirect_reference_return_contract(self):
+        self.hosted(r"""
+            type Pick = func(&const i32, &const i32) borrow(2) &const i32;
+            #return_borrow: right
+            func pick(left, right: &const i32) &const i32 { right }
+            #return_borrow: right
+            func forward(fn: Pick, left, right: &const i32) &const i32 { fn(left, right) }
+            func main() !void {
+                var number = 42;
+                var first = 7;
+                var call: Pick = pick;
+                var left: &const i32 = &first;
+                var right: &const i32 = &number;
+                var checked: &const i32 = forward(call, left, right);
+                io.println(checked)!;
+                var identity = [](value: &const i32) &const i32 => value;
+                io.println(*identity(checked))!;
+                var bias = 1;
+                var closure = [bias](value: &const i32) &const i32 => {
+                    if bias == 1 { return value; }
+                    value
+                };
+                io.println(*closure(checked))!;
+            }
+        """, "42\n" * 3)
+        mismatched = self.source("mismatch.vqr", r"""
+            type Pick = func(&const i32, &const i32) borrow(1) &const i32;
+            #return_borrow: right
+            func pick(left, right: &const i32) &const i32 { right }
+            func test() void { var invalid: Pick = pick; }
+        """)
+        self.process(VAQC, "check", mismatched, good=False)
+        escapes = self.source("escapes.vqr", r"""
+            func identity(value: &const i32) &const i32 { value }
+            func invalid(other: &const i32) &const i32 {
+                var call: func(&const i32) &const i32 = identity;
+                var value = 42;
+                var loan: &const i32 = &value;
+                call(loan)
+            }
+        """)
+        error = self.process(VAQC, "check", escapes, good=False)
+        self.assertIn(b"E230", error.stderr)
 
     def test_reference_contracts(self):
         source = REPOSITORY / "examples/references.vqr"
@@ -1497,6 +1801,48 @@ class Acceptance(CompilerCase):
         assembly = (self.root / "mmio.s").read_text()
         self.assertRegex(assembly, r"\bdmb\b")
         self.assertRegex(assembly, r"\bisb\b")
+
+    def test_generic_interface_methods(self):
+        self.hosted(r"""
+            interface Transformer<C> {
+                const func apply<T: Movable & Copyable>(value: T, fallback: C) T;
+                const func block<comptime N: usize>(value: [N]u8) [N]u8;
+                const func number() i32;
+            }
+            class Identity {
+                #implements: Transformer<i32>
+                pub const func apply<U: Copyable & Movable>(value: U, unused: i32) U { value }
+                pub const func block<comptime Count: usize>(value: [Count]u8) [Count]u8 { value }
+                pub const func number() i32 { 1 }
+            }
+            class Forward {
+                #implements: Transformer<i32>
+                pub embed inner: Identity;
+                pub const func number() i32 { 2 }
+            }
+            func use(value: *const Transformer<i32>) !void {
+                io.println(value.apply<i16>(13, 0))!;
+                io.println(value.apply<f64>(2.5, 0) == 2.5)!;
+                var bytes = value.block<3>([3]u8{1, 5, 9});
+                io.println(bytes[1])!;
+                io.println(value.number())!;
+            }
+            func main() !void {
+                var direct = Identity{};
+                var embedded = Forward{inner: Identity{}};
+                use(&direct)!;
+                use(&embedded)!;
+            }
+        """, "13\ntrue\n5\n1\n13\ntrue\n5\n2\n")
+        invalid = self.source("bad-generic-interface.vqr", """
+            interface Transform { const func apply<T: Movable>(x: T) T; }
+            class Bad {
+                #implements: Transform
+                pub const func apply<U: Copyable & Movable>(x: U) U { x }
+            }
+        """)
+        failure = self.process(VAQC, "check", invalid, good=False)
+        self.assertIn(b"one public implementation", failure.stderr)
 
     def test_interfaces_and_embedded_receivers(self):
         self.hosted("""
@@ -2683,6 +3029,254 @@ class Acceptance(CompilerCase):
         self.process(VAQC, source, "--emit=obj", "-O2", "-o", "queue.o")
         self.process("cc", client, "queue.o", "-Wl,--wrap=malloc,--wrap=aligned_alloc", "-o", "allocation")
         self.process("./allocation")
+
+    def test_select_buffered_timeout_and_moves(self):
+        self.hosted(r"""
+            import (channel, time)
+            class Owned {
+                #copy: disabled
+                pub var value: i32;
+                func deinit() void { io.println(value) catch {}; }
+            }
+            func main() !void {
+                sendA, recvA := channel.bounded<i32>(1)!;
+                sendB, recvB := channel.bounded<i32>(1)!;
+                var count: i32 = 0;
+                for round in 0..8 {
+                    sendA.send(1)!;
+                    sendB.send(2)!;
+                    var selected = (select {
+                        item := recvA.recv() => item.unwrap(),
+                        item := recvB.recv() => item.unwrap(),
+                    })!;
+                    count += selected;
+                    if selected == 1 { var unused = recvB.recv()!; }
+                    else { var unused = recvA.recv()!; }
+                }
+                io.println(count == 12)!;
+                var immediate = (select {
+                    item := recvB.recv() => 1,
+                    else => 71,
+                })!;
+                io.println(immediate)!;
+                var expired = (select {
+                    item := recvA.recv() => 1,
+                    after(time.Duration.fromMillis(2)) => 72,
+                })!;
+                io.println(expired)!;
+                sendA.close();
+                io.println((select { item := recvA.recv() => item == null })!)!;
+
+                tx, rx := channel.bounded<Owned>(1)!;
+                tx.send(Owned{value: 101})!;
+                {
+                    var pending = Owned{value: 102};
+                    var lost = (select {
+                        tx.send(move(pending)) => 0,
+                        else => pending.value,
+                    })!;
+                    io.println(lost == 102)!;
+                }
+                {
+                    var first = rx.recv()!.unwrap();
+                    io.println(first.value == 101)!;
+                }
+                {
+                    var outgoing = Owned{value: 103};
+                    (select { tx.send(move(outgoing)) => {} })!;
+                    var received = rx.recv()!.unwrap();
+                    io.println(received.value == 103)!;
+                }
+            }
+        """, "true\n71\n72\ntrue\ntrue\n102\ntrue\n101\ntrue\n103\n")
+
+    def test_select_rendezvous_and_cancellation(self):
+        self.hosted(r"""
+            import (channel, result, task, time)
+            func main() !void {
+                var group = task.TaskGroup.withWorkers(1)!;
+                tx, rx := channel.bounded<i32>(0)!;
+                sideTx, sideRx := channel.bounded<i32>(0)!;
+                var sending = [move(tx), move(sideTx)]() !i32 => {
+                    var message = 41;
+                    (select {
+                        tx.send(move(message)) => 7,
+                        sideTx.send(move(message)) => 8,
+                    })!
+                };
+                var listening = [move(rx)]() !i32 => {
+                    var reader = move(rx);
+                    (select { item := reader.recv() => item.unwrap() })!
+                };
+                var a = group.spawn<i32>(move(sending))!;
+                var b = group.spawn<i32>(move(listening))!;
+                io.println(a.join()! + b.join()!)!;
+
+                ordinaryTx, selectedRx := channel.bounded<i32>(0)!;
+                var received = [move(selectedRx)]() !i32 => {
+                    var reader = move(selectedRx);
+                    (select { item := reader.recv() => item.unwrap() })!
+                };
+                var observe = group.spawn<i32>(move(received))!;
+                ordinaryTx.send(52)!;
+                io.println(observe.join()!)!;
+
+                selectedTx, ordinaryRx := channel.bounded<i32>(0)!;
+                var output = [move(selectedTx)]() !void => {
+                    (select { selectedTx.send(63) => {} })!;
+                };
+                var sendingJob = group.spawn<void>(move(output))!;
+                io.println(ordinaryRx.recv()!.unwrap())!;
+                sendingJob.join()!;
+
+                waitingTx, waitingRx := channel.bounded<i32>(0)!;
+                var both = [move(waitingTx), move(waitingRx)]() !i32 => {
+                    var reader = move(waitingRx);
+                    var value = 1;
+                    (select {
+                        waitingTx.send(move(value)) => 2,
+                        got := reader.recv() => 3,
+                    })!
+                };
+                var waiting = group.spawn<i32>(move(both))!;
+                var checkpoint = () !void => {};
+                var fence = group.spawn<void>(move(checkpoint))!;
+                fence.join()!;
+                waiting.cancel();
+                var outcome = waiting.join();
+                io.println(result.errorOf(&outcome).unwrap() == channel.ChannelError.Cancelled)!;
+            }
+        """, "48\n52\n63\ntrue\n")
+
+    def test_task_channel_single_worker(self):
+        self.hosted(r"""
+            import (channel, task, time)
+            func exchange(capacity: usize, receiveFirst: bool) !void {
+                var group = task.TaskGroup.withWorkers(1)!;
+                tx, rx := channel.bounded<i32>(capacity)!;
+                var put = [move(tx)]() !void => {
+                    tx.send(41)!;
+                    tx.send(42)!;
+                    tx.close();
+                };
+                var get = [move(rx)]() !i32 => {
+                    var reader = move(rx);
+                    var first = reader.recv()!.unwrap();
+                    var next = reader.recv()!.unwrap();
+                    if reader.recv()! != null { panic("receiver did not close"); }
+                    first + next
+                };
+                if receiveFirst {
+                    var reader = group.spawn<i32>(move(get))!;
+                    var writer = group.spawn<void>(move(put))!;
+                    io.println(reader.join()!)!;
+                    writer.join()!;
+                } else {
+                    var writer = group.spawn<void>(move(put))!;
+                    var reader = group.spawn<i32>(move(get))!;
+                    io.println(reader.join()!)!;
+                    writer.join()!;
+                }
+            }
+            func main() !void {
+                exchange(1, true)!;
+                exchange(1, false)!;
+                exchange(0, true)!;
+                exchange(0, false)!;
+
+                var group = task.TaskGroup.withWorkers(1)!;
+                tx, rx := channel.bounded<i32>(0)!;
+                var waitReceiver = [move(rx)]() !bool => {
+                    var reader = move(rx);
+                    reader.recv() catch (reason) { return reason == channel.ChannelError.Cancelled; };
+                    false
+                };
+                var receiver = group.spawn<bool>(move(waitReceiver))!;
+                var marker = () bool => true;
+                var parked = group.spawn<bool>(marker)!;
+                if !parked.join()! { panic("worker did not make progress"); }
+                receiver.cancel();
+                io.println(receiver.join()!)!;
+
+                delayed, sink := channel.bounded<i32>(0)!;
+                var waitSender = [move(delayed)]() !i32 => {
+                    switch delayed.sendPreserving(73) {
+                        channel.SendResult.Cancelled(value) => value,
+                        _ => -1,
+                    }
+                };
+                var sender = group.spawn<i32>(move(waitSender))!;
+                var checkpoint = group.spawn<bool>(marker)!;
+                if !checkpoint.join()! { panic("worker did not make progress"); }
+                sender.cancel();
+                io.println(sender.join()!)!;
+                switch sink.tryRecv() {
+                    channel.TryRecv.Closed => {},
+                    _ => panic("cancelled offer is still present"),
+                }
+
+                timeoutTx, timeoutRx := channel.bounded<i32>(0)!;
+                var timeout = [move(timeoutRx)]() !bool => {
+                    var reader = move(timeoutRx);
+                    reader.recvTimeout(time.Duration.fromMillis(5)) catch (reason) {
+                        return reason == channel.ChannelError.Timeout;
+                    };
+                    false
+                };
+                var timer = group.spawn<bool>(move(timeout))!;
+                io.println(timer.join()!)!;
+
+                timedTx, timedRx := channel.bounded<i32>(1)!;
+                timedTx.send(7)!;
+                var sendWithDeadline = [move(timedTx)]() !i32 => {
+                    switch timedTx.sendTimeout(11, time.Duration.fromMillis(5)) {
+                        channel.SendResult.Cancelled(value) => value,
+                        _ => -1,
+                    }
+                };
+                var expired = group.spawn<i32>(move(sendWithDeadline))!;
+                io.println(expired.join()!)!;
+                io.println(timedRx.recv()!.unwrap())!;
+            }
+        """, "83\n" * 4 + "true\n73\ntrue\n11\n7\n", "-O2")
+
+    def test_spec_standalone_and_project_examples(self):
+        spec = (REPOSITORY / "docs/language-spec-v0.1.5.md").read_text(encoding="utf-8")
+
+        def blocks(section):
+            return re.findall(r"```cpp\n(.*?)```", section, flags=re.S)
+
+        section = spec.split("### 4.1", 1)[1].split("### 4.2", 1)[0]
+        examples = [block for block in blocks(section) if "func main()" in block]
+        self.assertEqual(len(examples), 2)
+        for index, (example, expected) in enumerate(zip(examples, ("Hello", "single file"))):
+            source = self.source(f"standalone{index}.vqr", example)
+            self.process(VAQC, "build", source, "-o", "standalone")
+            self.assertEqual(self.process("./standalone").stdout.decode().strip(), expected)
+
+        section = spec.split("## 附录 D", 1)[1].split("## 附录 E", 1)[0]
+        helper, hello, sort = blocks(section)
+        self.source("scratch/helpers.vqr", helper)
+        hello_file = self.source("scratch/hello.vqr", hello)
+        self.source("scratch/sort.vqr", sort)
+        self.process(VAQC, "build", hello_file, "-o", "example")
+        self.assertEqual(self.process("./example").stdout, b"42\n")
+        self.assertIn(b"multiple entry files", self.process(VAQC, "build", "scratch", good=False).stderr)
+        manifest, = re.findall(r"```toml\n(.*?)```", section, flags=re.S)
+        self.source("scratch/package.toml", manifest)
+        self.process(VAQC, "build", "scratch", "-o", "example")
+        self.assertEqual(self.process("./example").stdout, b"42\n")
+        self.process(VAQC, "build", "scratch", "--entry", "sort.vqr", "-o", "example")
+        self.assertEqual(self.process("./example").stdout, b"sort demo\n")
+
+    def test_spec_task_example(self):
+        spec = (REPOSITORY / "docs/language-spec-v0.1.5.md").read_text(encoding="utf-8")
+        section = spec.split("## 19.", 1)[1].split("## 20.", 1)[0]
+        example = next(block.removeprefix("cpp\n") for block in section.split("```")
+                       if "package main\nimport (io, task, channel)" in block)
+        source = self.source("spec.vqr", example)
+        self.process(VAQC, "build", source, "-o", "spec")
+        self.assertEqual(self.process("./spec").stdout.decode(), "".join(f"{i*i}\n" for i in range(10)))
 
     def test_lightweight_tasks_yield_sleep_cancel_and_join(self):
         self.hosted('''

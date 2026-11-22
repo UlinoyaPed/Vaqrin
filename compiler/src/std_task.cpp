@@ -8,6 +8,39 @@ ValueAt Body::taskIntrinsic(std::string_view op, const Ast &n, const std::vector
   auto *pointer = ir.getPtrTy();
   auto *raw = p.pointer(p.integer(8, false), false);
   if (op == "validate" && n->children.size() == 1 && types.empty()) return voidValue();
+  if (op.starts_with("channel_") && file.standard && file.package == "channel" && types.empty()) {
+    const bool wait = op == "channel_wait", notify = op == "channel_notify";
+    if ((!wait && !notify && op != "channel_cancelled") ||
+        n->children.size() != (wait ? 5U : notify ? 2U : 1U))
+      fail(n->span, "invalid channel task operation");
+    SmallVector<llvm::Type *> parameters;
+    SmallVector<Value *> arguments;
+    for (unsigned i = 1; i < n->children.size(); ++i) {
+      auto *type = i == 1 ? p.pointer(p.integer(32, false), true)
+                : i == 2 ? p.integer(32, false) : p.integer(64, true);
+      auto arg = expression(n->children[i], type);
+      if (!live()) return neverValue();
+      parameters.push_back(type->ir);
+      arguments.push_back(read(arg, n->span));
+    }
+    auto signature = FunctionType::get(notify ? ir.getVoidTy() : ir.getInt32Ty(), parameters, false);
+    auto callee = p.module->getOrInsertFunction("__vqr_rt_" + std::string(op), signature);
+    auto *function = cast<Function>(callee.getCallee());
+    // Thread-only executables and native object consumers can use the futex path.
+    function->setLinkage(GlobalValue::ExternalWeakLinkage);
+    auto *called = block("channel.task"), *done = block("channel.done");
+    auto *initial = ir.GetInsertBlock();
+    ir.CreateCondBr(ir.CreateIsNotNull(function), called, done);
+    ir.SetInsertPoint(called);
+    auto *value = ir.CreateCall(callee, arguments);
+    ir.CreateBr(done);
+    ir.SetInsertPoint(done);
+    if (notify) return voidValue();
+    auto *result = ir.CreatePHI(ir.getInt32Ty(), 2);
+    result->addIncoming(ir.getInt32(0), initial);
+    result->addIncoming(value, called);
+    return {p.boolTy, ir.CreateIsNotNull(result)};
+  }
   auto optionalPointer = [&](Value *address) -> ValueAt {
     auto *type = p.aggregate(Kind::Optional, {raw});
     return {type, ir.CreateSelect(ir.CreateIsNotNull(address), wrap(type, address, true).value,

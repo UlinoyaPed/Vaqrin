@@ -27,6 +27,340 @@ class StandardLibraryAcceptance(CompilerCase):
         self.assertEqual(compiled.returncode, 0, compiled.stderr.decode(errors="replace"))
         return self.process("./example").stdout.decode()
 
+    def test_cbor_adapter_and_decode_limits(self):
+        self.hosted(r"""
+            import (bytes, cbor, result, serde)
+            class Point {
+                #derive: serde
+            public:
+                var x: i16;
+                var y: f64;
+            }
+
+            func main() !void {
+                var data = Point{x: -42, y: 1.25};
+                var codec = serde.DerivedCodec<Point>{};
+                var encoded = cbor.marshal<Point>(&data, &codec)!;
+                var wire = [16]u8{162, 97, 120, 56, 41, 97, 121, 251, 63, 244, 0, 0, 0, 0, 0, 0};
+                io.println(bytes.equal(encoded.asConstSlice(), wire[:]))!;
+
+                // Indefinite map with reversed keys, binary16 value, and a break.
+                var reference = [11]u8{191, 97, 121, 249, 61, 0, 97, 120, 56, 41, 255};
+                var decoded = cbor.unmarshal<Point>(reference[:], &codec)!;
+                io.println(decoded.x == -42 && decoded.y == 1.25)!;
+                var truncated = cbor.unmarshal<Point>(reference[0..10], &codec);
+                io.println(result.errorOf(&truncated).unwrap() == serde.SerdeError.UnexpectedEnd)!;
+
+                var input = cbor.Decoder(serde.DecodeLimits.withLimits(8, 8, 5));
+                var tooManyBytes = serde.decodeFromBytes<Point>(wire[:], &input, &codec);
+                io.println(result.errorOf(&tooManyBytes).unwrap() == serde.SerdeError.ByteLimit)!;
+                var sequence = cbor.Encoder();
+                sequence.beginSeq(null)!;
+                sequence.writeBool(true)!;
+                sequence.writeNull()!;
+                sequence.endSeq()!;
+                var items = sequence.takeBytes()!;
+                var expected = [4]u8{159, 245, 246, 255};
+                io.println(bytes.equal(items.asConstSlice(), expected[:]))!;
+            }
+        """, "true\n" * 5)
+
+    def test_derived_serde_records_and_field_metadata(self):
+        self.hosted(r"""
+            import (json, result, serde as codec)
+            class Entry {
+                #derive: serde
+            public:
+                var id: i128;
+                #serde_name: "display-name"
+                var name: string;
+            }
+            class Record<T> {
+                #derive: serde
+            public:
+                var entry: Entry;
+                var data: T;
+                var maybe: ?i8;
+            }
+
+            func main() !void {
+                var adapter = codec.DerivedCodec<Record<u16>>{};
+                var value = Record<u16>{entry: Entry{id: -9223372036854775810i128, name: "hello"},
+                                        data: 32, maybe: null};
+                var serialized = json.marshal<Record<u16>>(&value, &adapter)!;
+                io.println(serialized)!;
+                var decoded = json.unmarshal<Record<u16>>(serialized, &adapter)!;
+                io.println(decoded.entry.name == "hello" && decoded.data == 32 &&
+                           decoded.entry.id == -9223372036854775810i128 && decoded.maybe == null)!;
+                io.println(Entry.serdeFieldCount() == 2 &&
+                           Entry.serdeFieldName(1).unwrap() == "display-name")!;
+                var withoutOptional = json.unmarshal<Record<u16>>(
+                    "{\"data\":3,\"entry\":{\"id\":1,\"display-name\":\"name\"}}", &adapter)!;
+                io.println(withoutOptional.maybe == null && withoutOptional.data == 3)!;
+                var missing = json.unmarshal<Record<u16>>("{}", &adapter);
+                io.println(result.errorOf(&missing).unwrap() == codec.SerdeError.MissingField)!;
+                var extra = json.unmarshal<Record<u16>>("{\"extra\":1}", &adapter);
+                io.println(result.errorOf(&extra).unwrap() == codec.SerdeError.UnknownField)!;
+            }
+        """, '{"entry":{"id":-9223372036854775810,"display-name":"hello"},"data":32,"maybe":null}\n'
+             + "true\n" * 5)
+
+    def test_json_and_async_logging(self):
+        self.hosted(r"""
+            import (channel, log)
+            class Counting {
+                #implements: log.Handler
+                var sender: channel.Sender<i32>;
+            public:
+                func init(value: channel.Sender<i32>) : sender(move(value)) {}
+                const func enabled(level: log.Level) bool { true }
+                func handle(record: *const log.Record) !void { sender.send(42) }
+                func flush() !void {}
+            }
+
+            func main() !void {
+                var out = io.stdout();
+                var json = log.JsonHandler.new(&out);
+                var first = log.Logger.new(&json)!;
+                var attrs = [1]log.Attr{log.Attr.int("value", 7)!};
+                first.log(log.Level.Info, "first", attrs[:])!;
+                json.flush()!;
+                tx, rx := channel.bounded<i32>(1)!;
+                var handler = log.AsyncHandler.new(Counting(move(tx)), 4)!;
+                var second = log.Logger.new(&handler)!;
+                second.log(log.Level.Info, "second", attrs[:])!;
+                handler.flush()!;
+                io.println(rx.recv()!.unwrap() == 42 && handler.dropped() == 0)!;
+                handler.close()!;
+            }
+        """, '{"level":"INFO","message":"first","attrs":{"value":7}}\ntrue\n')
+
+    @unittest.skipUnless(os.path.isfile("/usr/share/zoneinfo/America/New_York"), "requires host IANA time zones")
+    def test_time_zone_calendar_and_posix_future_rules(self):
+        self.hosted(r"""
+            import (core, time)
+            func main() !void {
+                var zone = time.TimeZone.load("America/New_York")!;
+                var summer = time.UtcDateTime.fromUnixSeconds(2540918400, 123)!;
+                io.println(zone.offsetAt(summer).seconds())!;
+                var local = time.LocalDateTime.new(time.Date.new(2024, 11, 3)!,
+                                                  time.TimeOfDay.new(1, 30, 0, 123)!);
+                var first = time.toUtc(local, &zone, time.LocalTimePolicy.Earlier)!;
+                var second = time.toUtc(local, &zone, time.LocalTimePolicy.Later)!;
+                io.println(second.unixSeconds() - first.unixSeconds())!;
+                var gap = time.LocalDateTime.new(time.Date.new(2024, 3, 10)!,
+                                                time.TimeOfDay.new(2, 30, 0, 123)!);
+                var rejected = time.toUtc(gap, &zone, time.LocalTimePolicy.RejectGap);
+                var invalid = time.TimeZone.load("../zoneinfo/America/New_York");
+                io.println(core.isErr(&rejected) && core.isErr(&invalid))!;
+                var moved = time.ZonedDateTime.fromLocal(gap, move(zone), time.LocalTimePolicy.ShiftForward)!;
+                var formatted = time.formatDateTime(&moved, "%Y-%m-%d %H:%M:%S.%f %z %%")!;
+                io.println(formatted)!;
+            }
+        """, "-14400\n3600\ntrue\n2024-03-10 03:30:00.000000123 -0400 %\n")
+
+    def test_arena_pool_and_copy_on_write(self):
+        self.hosted(r"""
+            import (mem)
+            func main() !void {
+                var allocator = mem.GlobalAllocator();
+                var arena = mem.Arena(&allocator);
+                var tight = mem.Layout.fromSizeAlign(32, 32)!;
+                var memory = arena.alloc(tight)!.unwrap();
+                io.println(mem.isAligned(memory, 32) && arena.used() == 32)!;
+                var mark = arena.mark();
+                var huge = mem.Layout.fromSizeAlign(5000, 64)!;
+                var other = arena.alloc(huge)!.unwrap();
+                io.println(mem.isAligned(other, 64) && arena.used() >= 5032)!;
+                unsafe { arena.rewind(mark); }
+                io.println(arena.used() == 32 && arena.capacity() == 4096)!;
+                unsafe { arena.reset(); }
+                io.println(arena.used() == 0 && arena.capacity() == 0)!;
+
+                var pool = mem.Pool<i64>(&allocator);
+                var first = pool.acquire()!.unwrap();
+                unsafe { mem.write<i64>(first, 7); }
+                io.println(*first == 7 && pool.allocated() == 1 && pool.live() == 1)!;
+                unsafe { pool.release(first); }
+                var second = pool.acquire()!.unwrap();
+                io.println(first == second && pool.allocated() == 1)!;
+                unsafe { pool.release(second); }
+                pool.clear();
+
+                var original = 41;
+                var value = unsafe { mem.Cow<i32>.borrow(&original) };
+                io.println(value.isBorrowed() && *value.asRef() == 41)!;
+                var writable = value.toMut();
+                *writable += 1;
+                io.println(value.isOwned() && original == 41 && mem.Cow<i32>.intoOwned(move(value)) == 42)!;
+            }
+        """, "true\n" * 8)
+
+    def test_os_random_and_siphash(self):
+        self.hosted(r"""
+            import (hash, mem, random, bytes, coll)
+            func feed(value: *const u16, state: *hash.Hasher) void {
+                var encoded = [2]u8{u8(*value & 255) catch { panic("byte conversion"); }, u8(*value >> 8) catch { panic("byte conversion"); }};
+                state.write(encoded[:]);
+            }
+            func main() !void {
+                var rng = random.OsRng();
+                var one = mem.zeroedBytes<512>();
+                var two = mem.zeroedBytes<512>();
+                rng.fillSecure(one[:])!;
+                random.fillSystem(two[:])!;
+                io.println(!bytes.equal(one[:], two[:]))!;
+
+                var seed = hash.HashSeed{low: 0x0706050403020100, high: 0x0f0e0d0c0b0a0908};
+                var sip = hash.SipHasher(seed);
+                io.println(sip.finish64() == 0x726fdb47dd0e0e31u64)!;
+                var input = [15]u8{0,1,2,3,4,5,6,7,8,9,10,11,12,13,14};
+                sip.write(input[0..5]);
+                sip.write(input[5..15]);
+                io.println(sip.finish64() == 0xa129ca6149be45e5u64)!;
+                var first = hash.processSeed()!;
+                var second = hash.processSeed()!;
+                io.println(first.low == second.low && first.high == second.high)!;
+                var table = coll.HashMap<u16, i32>.withSecureHasher(feed, hash.eqU16)!;
+                var old = table.insert(200, 13)!;
+                var key: u16 = 200;
+                io.println(*table.get(&key).unwrap() == 13)!;
+            }
+        """, "true\n" * 5)
+
+    def test_regex_named_captures(self):
+        self.hosted(r"""
+            import (regex, result)
+            func main() !void {
+                var pattern = regex.Regex.compile("(?<kind>[a-z]+)(?P<suffix>[0-9]+)?")!;
+                var hit = pattern.captures("box42")!.unwrap();
+                io.println(pattern.captureNamed(&hit, "kind").unwrap().asStr() == "box")!;
+                io.println(pattern.captureNamed(&hit, "suffix").unwrap().asStr() == "42")!;
+                io.println(pattern.captureIndex("unknown") == null)!;
+                var missing = pattern.captures("box")!.unwrap();
+                io.println(pattern.captureNamed(&missing, "suffix") == null)!;
+                var duplicate = regex.Regex.compile("(?<x>a)(?<x>b)");
+                io.println(result.errorOf(&duplicate).unwrap() == regex.RegexError.DuplicateCaptureName)!;
+                var lookbehind = regex.Regex.compile("(?<=x)y");
+                io.println(result.errorOf(&lookbehind).unwrap() == regex.RegexError.UnsupportedConstruct)!;
+            }
+        """, "true\n" * 6)
+
+    def test_toml_multiline_values_table_arrays_and_redefinitions(self):
+        self.hosted(r"""
+            import (toml, result, text)
+            func childName(value: *const toml.Value) !string {
+                switch *value {
+                    toml.Value.Table(ref table) => {
+                        switch *table.get("name").unwrap() {
+                            toml.Value.String(ref name) => return text.fromBytes(name.asBytes()),
+                            _ => return toml.TomlError.TypeMismatch,
+                        }
+                    },
+                    _ => return toml.TomlError.TypeMismatch,
+                }
+            }
+            func main() !void {
+                var source = "list = [\n 1, # one\n 2,\n]\nbasic = \"\"\"\r\nalpha\\\r\n  beta\r\ngamma\"\"\"\nliteral = \u{27}\u{27}\u{27}\n# kept\ntext\u{27}\u{27}\u{27}\n[[product]]\nname = 'one'\n[product.origin]\nx = 1\n[[product]]\nname = 'two'\n[product.origin]\nx = 2\n";
+                var table = toml.parse(source)!;
+                switch *table.get("list").unwrap() {
+                    toml.Value.Array(ref list) => io.println(list.len() == 2)!,
+                    _ => panic("array missing"),
+                }
+                switch *table.get("basic").unwrap() {
+                    toml.Value.String(ref value) => io.println(text.equal(value, "alphabeta\ngamma"))!,
+                    _ => panic("basic string missing"),
+                }
+                switch *table.get("literal").unwrap() {
+                    toml.Value.String(ref value) => io.println(text.equal(value, "# kept\ntext"))!,
+                    _ => panic("literal string missing"),
+                }
+                switch *table.get("product").unwrap() {
+                    toml.Value.Array(ref entries) => {
+                        io.println(entries.len() == 2)!;
+                        io.println(childName(entries.getPtr(0).unwrap())! == "one")!;
+                        io.println(childName(entries.getPtr(1).unwrap())! == "two")!;
+                    },
+                    _ => panic("array of tables missing"),
+                }
+                var earlier = toml.parse("[a.b]\nx = 1\n[a]\ny = 2\n");
+                io.println(result.errorOf(&earlier) == null)!;
+                var duplicate = toml.parse("a.b = 1\n[a]\nc = 2\n");
+                io.println(result.errorOf(&duplicate).unwrap() == toml.TomlError.DuplicateTable)!;
+                var frozen = toml.parse("a = { b = 1 }\n[a.c]\nz = 3\n");
+                io.println(result.errorOf(&frozen).unwrap() == toml.TomlError.DuplicateTable)!;
+                var conflict = toml.parse("a = []\n[[a]]\n");
+                io.println(result.errorOf(&conflict).unwrap() == toml.TomlError.TypeConflict)!;
+            }
+        """, "true\n" * 10)
+
+    def test_public_generic_integer_widths(self):
+        signed = ("i8", "i16", "i32", "i64", "i128", "isize")
+        unsigned = ("u8", "u16", "u32", "u64", "u128", "usize")
+        calls = "\n".join(f"exercise<{s}, {u}>()!;" for s, u in zip(signed, unsigned))
+        self.hosted(r"""
+            import (coll, json, parse, serde)
+            class Pair<S, U> {
+                #derive: serde
+            public:
+                var signed: S;
+                var unsigned: U;
+            }
+
+            func exercise<S, U>() !void {
+                var first = parse.parseInt<S>("-42")!;
+                var second = parse.parseUint<U>("42")!;
+                var pair = Pair<S, U>{signed: first, unsigned: second};
+                var codec = serde.DerivedCodec<Pair<S, U>>{};
+                var wire = json.marshal<Pair<S, U>>(&pair, &codec)!;
+                var decoded = json.unmarshal<Pair<S, U>>(wire, &codec)!;
+                var values = coll.Vec<U>();
+                values.push(decoded.unsigned)!;
+                io.println(decoded.signed == first && values.pop().unwrap() == second)!;
+            }
+
+            func main() !void { CALLS }
+        """.replace("CALLS", calls), "true\n" * len(signed))
+
+    def test_public_float_generic_boundaries(self):
+        self.hosted(r"""
+            import (math, result)
+            func exercise<T>(huge: T, tiny: T) !void {
+                var shared = math.Complex<T>.new(huge, huge);
+                var unit = shared.div(shared)!;
+                io.println(unit.real() == T(1) && unit.imag() == T(0))!;
+                var small = math.Complex<T>.new(tiny, tiny);
+                var ratio = small.div(small)!;
+                io.println(ratio.real() == T(1) && ratio.imag() == T(0))!;
+                var mixed = math.Complex<T>.new(huge, tiny);
+                var normalized = mixed.div(math.Complex<T>.new(T(1), T(0)))!;
+                io.println(normalized.real() == huge && normalized.imag() == tiny)!;
+                var zero = math.Complex<T>.new(T(0), -T(0));
+                var rejected = small.div(zero);
+                io.println(result.errorOf(&rejected).unwrap() == math.MathError.DivisionByZero)!;
+                io.println(math.signbit(zero.sqrt().imag()))!;
+                var root = shared.sqrt();
+                io.println(math.isFinite(root.real()) && root.real() > math.sqrt(huge))!;
+                var tinyRoot = small.sqrt();
+                io.println(tinyRoot.real() > T(0) && tinyRoot.imag() > T(0))!;
+                var nanRoot = math.Complex<T>.new(math.nan<T>(), T(0)).sqrt();
+                io.println(math.isNan(nanRoot.real()) && math.isNan(nanRoot.imag()))!;
+                var infiniteRoot = math.Complex<T>.new(-math.inf<T>(), -T(0)).sqrt();
+                io.println(infiniteRoot.real() == T(0) && infiniteRoot.imag() == -math.inf<T>())!;
+                io.println(math.beta<T>(T(1), T(1)) == T(1))!;
+            }
+            func main() !void {
+                exercise<f32>(3.3e38, 1.0e-43)!;
+                exercise<f64>(1.7e308, 1.0e-320)!;
+                var b = math.beta<f64>(100.0, 100.0);
+                io.println(b > 2.20876e-61 && b < 2.20877e-61)!;
+                var a = math.beta<f64>(1.0, 1.0e308);
+                io.println(a > 0.99999e-308 && a < 1.00001e-308)!;
+                var root = math.Complex<f64>.new(1.0e308, 0.0).sqrt();
+                io.println(root.real() > 0.99999e154 && root.real() < 1.00001e154 && root.imag() == 0.0)!;
+            }
+        """, "true\n" * 23)
+
     def test_numerics(self):
         self.assertEqual(
             self.example("examples/numerics/main.vqr"),
@@ -473,17 +807,19 @@ class StandardLibraryAcceptance(CompilerCase):
                 pass
 
         with HTTPServer(("127.0.0.1", 0), Handler) as server:
+            source = self.source("http_client.vqr", f"""
+                import (http, io, text)
+                func main() !void {{
+                    var response = http.get("http://127.0.0.1:{server.server_port}/value?x=1")!;
+                    io.println(response.status().value())!;
+                    io.println(text.fromBytes(response.bodyBytes())!)!;
+                }}
+            """)
+            self.process(VAQC, source, "-o", "client")
             server.timeout = 8
             with ThreadPoolExecutor(max_workers=1) as thread:
                 handled = thread.submit(server.handle_request)
-                self.hosted(f"""
-                    import (http, text)
-                    func main() !void {{
-                        var response = http.get("http://127.0.0.1:{server.server_port}/value?x=1")!;
-                        io.println(response.status().value())!;
-                        io.println(text.fromBytes(response.bodyBytes())!)!;
-                    }}
-                """, "200\n/value?x=1\n")
+                self.assertEqual(self.process("./client").stdout, b"200\n/value?x=1\n")
                 handled.result(timeout=10)
 
     def test_https_client(self):

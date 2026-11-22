@@ -26,3 +26,23 @@ build/host/vaqc build examples/hello.vqr -o build/hello
 | [docs/](docs/) | 语言规范、实现设计和使用文档索引 |
 
 当前功能范围、安装和交叉编译说明见[编译器使用说明](compiler/README.md)。
+
+
+### 本地项目依赖
+
+在项目目录的 `package.toml` 中声明依赖。依赖目录须含声明了对应包名的 `.vqr` 源文件，也可在自己的 `package.toml` 中声明传递依赖。
+
+```toml
+[build]
+entry = "main.vqr"
+
+[dependencies]
+models = { path = "../shared/models" }
+```
+
+运行 `vaqc lock .` 后，将 `package.lock` 与清单一同提交。构建和语义检查会核对锁文件中的相对依赖路径和 SHA-256 源文件摘要。依赖路径或内容更新后，重新运行 `vaqc lock .`。这套流程使用本地目录，可离线执行。
+
+大型标准库模块的语法树会按源码内容与编译器版本存入本机缓存。可用绝对路径形式的
+`VAQRIN_AST_CACHE` 指定目录，默认使用 `$XDG_CACHE_HOME/vaqrin/syntax` 或
+`~/.cache/vaqrin/syntax`。将该变量设为 `0` 可禁用缓存。编译器仍会检查模块类型和
+跨模块依赖。

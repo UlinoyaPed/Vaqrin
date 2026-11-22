@@ -77,6 +77,61 @@ pub func sort<T: Movable>(values: []T) void {
     sortBy<T, func(*const T, *const T) bool>(values, less);
 }
 
+// Merge adjacent sorted runs with rotations. Split the longer run and use
+// complementary lower/upper bounds to keep equal elements in input order.
+func mergeStable<T: Movable, F>(values: []T, middle: usize, less: *F) void {
+    if middle == 0 || middle == values.len() { return; }
+    if !(*less)(&values[middle], &values[middle - 1]) { return; }
+    if values.len() == 2 {
+        core.swap<T>(&values[0], &values[1]);
+        return;
+    }
+    var left: usize;
+    var right: usize;
+    if middle >= values.len() - middle {
+        left = middle / 2;
+        var lo = middle;
+        var hi = values.len();
+        for lo < hi {
+            var mid = lo + (hi - lo) / 2;
+            if (*less)(&values[mid], &values[left]) { lo = mid + 1; }
+            else { hi = mid; }
+        }
+        right = lo;
+    } else {
+        right = middle + (values.len() - middle) / 2;
+        var lo: usize = 0;
+        var hi = middle;
+        for lo < hi {
+            var mid = lo + (hi - lo) / 2;
+            if (*less)(&values[right], &values[mid]) { hi = mid; }
+            else { lo = mid + 1; }
+        }
+        left = lo;
+    }
+    rotate<T>(values[left..right], middle - left);
+    var pivot = left + (right - middle);
+    mergeStable<T, F>(values[0..pivot], left, less);
+    mergeStable<T, F>(values[pivot..values.len()], middle - left, less);
+}
+
+func sortStableRange<T: Movable, F>(values: []T, less: *F) void {
+    if values.len() < 2 { return; }
+    var middle = values.len() / 2;
+    sortStableRange<T, F>(values[0..middle], less);
+    sortStableRange<T, F>(values[middle..values.len()], less);
+    mergeStable<T, F>(values, middle, less);
+}
+
+pub func stableSortBy<T: Movable, F: Movable>(values: []T, less: F) void {
+    sortStableRange<T, F>(values, &less);
+}
+
+pub func stableSort<T: Movable>(values: []T) void {
+    var less = (a, b: *const T) bool => *a < *b;
+    stableSortBy<T, func(*const T, *const T) bool>(values, less);
+}
+
 pub func isHeapUntil<T, F: Movable>(values: []const T, less: F) usize {
     for i in usize(1)..values.len() {
         if less(&values[(i - 1) / 2], &values[i]) { return i; }

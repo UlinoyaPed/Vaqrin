@@ -28,6 +28,55 @@ class EditorAcceptance(CompilerCase):
         self.assertEqual(diagnostic["range"]["start"]["character"],
                          len('func f() void { var text = "📚"; '.encode("utf-16-le")) // 2)
 
+    def test_formatter_preserves_expression_roles(self):
+        source = self.source("style.vqr", """func main() i32 {
+var n=1+2*3;
+var b=n<12&&n>0;
+n+=4;
+var value = target("first thirty-character argument here", "the second argument makes this call longer still", negative(-n));
+var selected=generic<i32>(1,2);
+n
+}
+""")
+        expected = """func main() i32 {
+    var n = 1 + 2 * 3;
+    var b = n < 12 && n > 0;
+    n += 4;
+    var value = target(
+        "first thirty-character argument here",
+        "the second argument makes this call longer still",
+        negative(-n)
+    );
+    var selected = generic<i32>(1,2);
+    n
+}
+"""
+        self.assertEqual(self.process(VAQC, "fmt", source).stdout.decode(), expected)
+        source.write_text(expected, encoding="utf-8")
+        self.process(VAQC, "fmt", "--check", source)
+        self.process(VAQC, "check", "--syntax-only", source)
+
+    def test_multi_file_overlays_and_compiler_local_symbols(self):
+        entry = self.source("app/main.vqr", "func main() void {}")
+        helper = self.root / "app/helper.vqr"
+        content = ("func main() i32 {\n"
+                   '    /* 📚 */ var n = helper.read();\n'
+                   "    var call = [n]() i32 => n;\n"
+                   "    call()\n"
+                   "}\n")
+        edited = self.source("buffers/main.vqr", content)
+        new_helper = self.source("buffers/helper.vqr", "pub func read() i32 { 42 }")
+        overlays = self.source("overlays.json", json.dumps({str(entry): str(edited), str(helper): str(new_helper)}))
+        result = self.process(VAQC, "check", "--editor-symbols", "--overlay-map", overlays, entry)
+        symbols = json.loads(result.stdout)
+        data = content.encode()
+        binding = data.index(b"n =")
+        points = [item for item in symbols if item["declaration"] == binding]
+        self.assertEqual(len(points), 3)
+        self.assertEqual(sum(item["definition"] for item in points), 1)
+        self.assertTrue(all(data[item["begin"]:item["end"]] == b"n" for item in points))
+        self.assertFalse(helper.exists())
+
     def test_editor_features_on_unsaved_source(self):
         original = self.source("main.vqr", "func f() void {}\n")
         source = "import (parse as reader)\nfunc f() void {\n    var value = 10;\n    reader.\n}\n"
@@ -132,6 +181,28 @@ func sample(value: i32) !i32 {
             self.assertEqual({hint["position"]["line"]: hint["label"] for hint in hints},
                              {9: ": i32", 10: ": GreeterImpl", 11: ": i32", 12: ": i32"})
 
+            cursor = position(9, "number")
+            actions = request("codeAction", range={"start": cursor, "end": cursor},
+                              context={"only": ["refactor.rewrite"], "diagnostics": []})
+            action, = actions
+            change, = action["edit"]["documentChanges"]
+            self.assertEqual(action["kind"], "refactor.rewrite")
+            self.assertEqual(change["textDocument"]["version"], 2)
+            self.assertEqual(change["edits"][0]["newText"], ": i32")
+
+            found = request("references", position=position(13, "number"),
+                            context={"includeDeclaration": True})
+            self.assertEqual([item["range"]["start"]["line"] for item in found], [9, 13])
+            prepared = request("prepareRename", position=position(13, "number"))
+            self.assertEqual(prepared["start"], position(13, "number"))
+            renamed = request("rename", position=position(13, "number"), newName="totalCount")
+            change, = renamed["documentChanges"]
+            self.assertEqual(change["textDocument"], {"uri": uri, "version": 2})
+            self.assertEqual([item["newText"] for item in change["edits"]], ["totalCount", "totalCount"])
+            send("textDocument/rename", {"textDocument": {"uri": uri},
+                                         "position": position(13, "number"), "newName": "value"}, 4)
+            self.assertIn("error", receive())
+
             invalid_type = source.replace('reader.parseInt<i32>("7")!', 'reader.parseInt<i32>(true)!')
             send("textDocument/didChange", {"textDocument": {"uri": uri, "version": 3},
                                            "contentChanges": [{"text": invalid_type}]})
@@ -219,6 +290,29 @@ func forward(value: ?i32) !?i32 {
             self.assertIn("unknownName", receive()["params"]["diagnostics"][0]["message"])
             hover = request("hover", position=position(5, "b"))
             self.assertIn("b: i32", hover["contents"]["value"])
+            helper = self.source("helper.vqr", "pub func count() i32 { 4 }\n")
+            source = "func f() i32 { helper.count() }\n"
+            send("textDocument/didChange", {"textDocument": {"uri": uri, "version": 8},
+                                           "contentChanges": [{"text": source}]})
+            self.assertEqual(receive()["params"]["diagnostics"], [])
+            found = request("references", position=position(0, "count"),
+                            context={"includeDeclaration": True})
+            self.assertEqual({item["uri"] for item in found}, {uri, helper.as_uri()})
+            rename = request("rename", position=position(0, "count"), newName="countItems")
+            self.assertEqual({item["textDocument"]["uri"] for item in rename["documentChanges"]},
+                             {uri, helper.as_uri()})
+            self.assertTrue(all(item["edits"][0]["newText"] == "countItems"
+                                for item in rename["documentChanges"]))
+
+            helper.write_text("pub class Element { pub var value: i32; }\n", encoding="utf-8")
+            source = "func f() i32 { var x: helper.Element = helper.Element{value: 4}; x.value }\n"
+            send("textDocument/didChange", {"textDocument": {"uri": uri, "version": 9},
+                                           "contentChanges": [{"text": source}]})
+            self.assertEqual(receive()["params"]["diagnostics"], [])
+            changed = request("rename", position=position(0, "Element"), newName="Value")
+            self.assertEqual({edit["textDocument"]["uri"]: len(edit["edits"])
+                              for edit in changed["documentChanges"]}, {uri: 2, helper.as_uri(): 1})
+
             send("shutdown", identifier=3)
             self.assertEqual(receive()["id"], 3)
             send("exit")

@@ -318,7 +318,34 @@ pub func j0(x: f64) f64 { unsafe { ffi.j0(x) } }
 pub func j1(x: f64) f64 { unsafe { ffi.j1(x) } }
 pub func y0(x: f64) f64 { unsafe { ffi.y0(x) } }
 pub func y1(x: f64) f64 { unsafe { ffi.y1(x) } }
-pub func beta<T>(x: T, y: T) T { gamma(x) * gamma(y) / gamma(x + y) }
+// Correction to Stirling's log-Gamma formula for arguments >= 16.
+func stirlingCorrection(x: f64) f64 {
+    var inv = 1.0 / x;
+    var square = inv * inv;
+    inv * (1.0 / 12.0 + square * (-1.0 / 360.0 + square * (1.0 / 1260.0
+           + square * (-1.0 / 1680.0 + square * (1.0 / 1188.0 - square * 691.0 / 360360.0)))))
+}
+pub func beta<T>(x: T, y: T) T {
+    var a = toF64<T>(x);
+    var b = toF64<T>(y);
+    if isNan<f64>(a) || isNan<f64>(b) { return nan<T>(); }
+    if a <= 0.0 || b <= 0.0 { return gamma<T>(x) * gamma<T>(y) / gamma<T>(x + y); }
+    if isInfinite<f64>(a) || isInfinite<f64>(b) { return T(0); }
+    var p = minNum<f64>(a, b);
+    var q = maxNum<f64>(a, b);
+    if q < 16.0 { return fromF64<T>(exp<f64>(logGamma<f64>(p) + logGamma<f64>(q) - logGamma<f64>(p + q))); }
+    // Use log1p<f64>(p/q) to avoid subtracting nearly equal log-Gamma values.
+    var ratioLog = log1p<f64>(p / q);
+    var ratioTerm = q * ratioLog + (p - 0.5) * ratioLog;
+    var correction = stirlingCorrection(q) - stirlingCorrection(p + q);
+    if p < 16.0 {
+        return fromF64<T>(exp<f64>(logGamma<f64>(p) - p * log<f64>(q) + p - ratioTerm + correction));
+    }
+    var logRatio = log<f64>(p) - log<f64>(q);
+    if p / q >= 0.5 { logRatio = log<f64>(p / q); }
+    fromF64<T>(exp<f64>((p - 0.5) * logRatio - 0.5 * log<f64>(q) - ratioTerm
+        + 0.91893853320467274178 + stirlingCorrection(p) + correction))
+}
 
 pub func sinCos<T>(x: T) (T, T) { (sin(x), cos(x)) }
 pub func ulp<T>(x: T) T {
@@ -365,6 +392,27 @@ pub func distance2D<T>(x1: T, y1: T, x2: T, y2: T) T {
 }
 pub func reduceAngle<T>(x: T) T { remainder(x, tau<T>()) }
 
+// Keep the exponent separate so even products of subnormal or maximum
+// finite operands can participate in the quotient.
+func scaledProduct(x: f64, y: f64) (f64, c_int) {
+    var xExponent: c_int = 0;
+    var yExponent: c_int = 0;
+    var xFraction = unsafe { ffi.frexp(x, &xExponent) };
+    var yFraction = unsafe { ffi.frexp(y, &yExponent) };
+    (xFraction * yFraction, xExponent + yExponent)
+}
+func scaledDot(a: f64, b: f64, c: f64, d: f64) (f64, c_int) {
+    x, xExponent := scaledProduct(a, c);
+    y, yExponent := scaledProduct(b, d);
+    if x == 0.0 { return (if y == 0.0 { x + y } else { y }, yExponent); }
+    if y == 0.0 { return (x, xExponent); }
+    if xExponent >= yExponent {
+        return (x + unsafe { ffi.scalbn(y, yExponent - xExponent) }, xExponent);
+    }
+    (y + unsafe { ffi.scalbn(x, xExponent - yExponent) }, yExponent)
+}
+func infiniteComponent(x: f64) f64 { copysign(if isInfinite(x) { 1.0 } else { 0.0 }, x) }
+
 pub class Complex<T> {
     pub var re: T;
     pub var im: T;
@@ -383,28 +431,49 @@ pub class Complex<T> {
     }
     pub const func div(other: Self) !Self {
         if other.re == T(0) && other.im == T(0) { return MathError.DivisionByZero; }
-        if abs(other.re) >= abs(other.im) {
-            var ratio = other.im / other.re;
-            var denominator = other.re + other.im * ratio;
-            Complex<T>((re + im * ratio) / denominator,
-                       (im - re * ratio) / denominator)
-        } else {
-            var ratio = other.re / other.im;
-            var denominator = other.im + other.re * ratio;
-            Complex<T>((re * ratio + im) / denominator,
-                       (im * ratio - re) / denominator)
+        var a = toF64<T>(re);
+        var b = toF64<T>(im);
+        var c = toF64<T>(other.re);
+        var d = toF64<T>(other.im);
+        if isFinite(a) && isFinite(b) && (isInfinite(c) || isInfinite(d)) {
+            c = infiniteComponent(c);
+            d = infiniteComponent(d);
+            realPart, realExponent := scaledDot(a, b, c, d);
+            imagPart, imagExponent := scaledDot(b, -a, c, d);
+            return Complex<T>(fromF64<T>(copysign(0.0, realPart)), fromF64<T>(copysign(0.0, imagPart)));
         }
+        if (isInfinite(a) || isInfinite(b)) && isFinite(c) && isFinite(d) {
+            a = infiniteComponent(a);
+            b = infiniteComponent(b);
+            realPart, realExponent := scaledDot(a, b, c, d);
+            imagPart, imagExponent := scaledDot(b, -a, c, d);
+            return Complex<T>(fromF64<T>(inf<f64>() * realPart), fromF64<T>(inf<f64>() * imagPart));
+        }
+        if !isFinite(a) || !isFinite(b) || !isFinite(c) || !isFinite(d) {
+            return Complex<T>(nan<T>(), nan<T>());
+        }
+        denominator, exponent := scaledDot(c, d, c, d);
+        realPart, realExponent := scaledDot(a, b, c, d);
+        imagPart, imagExponent := scaledDot(b, -a, c, d);
+        Complex<T>(fromF64<T>(unsafe { ffi.scalbn(realPart / denominator, realExponent - exponent) }),
+                   fromF64<T>(unsafe { ffi.scalbn(imagPart / denominator, imagExponent - exponent) }))
     }
     pub const func sqrt() Self {
         if re == T(0) && im == T(0) { return Complex<T>(T(0), im); }
-        var radius = abs();
-        if re >= T(0) {
-            var realPart = sqrtValue((radius + re) / T(2));
-            Complex<T>(realPart, im / (T(2) * realPart))
-        } else {
-            var imaginaryPart = copysignValue(sqrtValue((radius - re) / T(2)), im);
-            Complex<T>(absValue(im) / (T(2) * absValue(imaginaryPart)), imaginaryPart)
+        if isInfinite(im) { return Complex<T>(inf<T>(), im); }
+        if isInfinite(re) {
+            if re > T(0) {
+                return Complex<T>(re, if isNan(im) { im } else { copysignValue(T(0), im) });
+            }
+            return Complex<T>(if isNan(im) { im } else { T(0) }, copysignValue(inf<T>(), im));
         }
+        if isNan(re) || isNan(im) { return Complex<T>(nan<T>(), nan<T>()); }
+        var scale = maxNum<T>(absValue<T>(re), absValue<T>(im));
+        var x = absValue(re) / scale;
+        var y = im / scale;
+        var major = sqrtValue<T>(scale) * sqrtValue<T>((hypot<T>(x, y) + x) / T(2));
+        if re >= T(0) { return Complex<T>(major, im / (T(2) * major)); }
+        Complex<T>(absValue(im) / (T(2) * major), copysignValue(major, im))
     }
     pub const func exp() Self {
         var scale = expValue(re);
@@ -447,7 +516,7 @@ pub class Interval<T> {
         var b = low * other.high;
         var c = high * other.low;
         var d = high * other.high;
-        if isNan(a) || isNan(b) || isNan(c) || isNan(d) { return MathError.Domain; }
+        if isNan<f64>(a) || isNan<f64>(b) || isNan(c) || isNan(d) { return MathError.Domain; }
         var lower = minNum(minNum(a, b), minNum(c, d));
         var upper = maxNum(maxNum(a, b), maxNum(c, d));
         Interval<T>(lower, upper)

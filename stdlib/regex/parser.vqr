@@ -18,12 +18,18 @@ pub class Escaped {
     pub var builtinMask: u8;
 }
 
+pub class CaptureName {
+    pub var name: string;
+    pub var index: usize;
+}
+
 pub class ParsedPattern {
     pub var root: i32;
     pub var nodes: coll.Vec<AstNode>;
     pub var classes: coll.Vec<CharacterClass>;
     pub var ranges: coll.Vec<CharRange>;
     pub var captureCount: usize;
+    pub var captureNames: coll.Vec<CaptureName>;
 }
 
 pub class Patch {
@@ -44,11 +50,12 @@ pub class RegexParser {
     var classes: coll.Vec<CharacterClass>;
     var ranges: coll.Vec<CharRange>;
     var captureCount: usize;
+    var captureNames: coll.Vec<CaptureName>;
 public:
     func init(pattern: str, maxNodes: usize)
         : source(pattern), position(0), nodeLimit(maxNodes),
           nodes(coll.Vec<AstNode>()), classes(coll.Vec<CharacterClass>()),
-          ranges(coll.Vec<CharRange>()), captureCount(0) {}
+          ranges(coll.Vec<CharRange>()), captureCount(0), captureNames(coll.Vec<CaptureName>()) {}
 
     func parse() !ParsedPattern {
         if nodeLimit == 0 { return RegexError.TooManyStates; }
@@ -59,7 +66,8 @@ public:
             nodes: core.replace<coll.Vec<AstNode>>(&nodes, coll.Vec<AstNode>()),
             classes: core.replace<coll.Vec<CharacterClass>>(&classes, coll.Vec<CharacterClass>()),
             ranges: core.replace<coll.Vec<CharRange>>(&ranges, coll.Vec<CharRange>()),
-            captureCount: captureCount
+            captureCount: captureCount,
+            captureNames: core.replace<coll.Vec<CaptureName>>(&captureNames, coll.Vec<CaptureName>())
         }
     }
 
@@ -178,6 +186,25 @@ private:
         value
     }
 
+    func parseCaptureName() !string {
+        var start = position;
+        for !atEnd() && currentByte() != 62 {
+            var byte = currentByte();
+            var letter = (65 <= byte && byte <= 90) || (97 <= byte && byte <= 122);
+            if !letter && byte != 95 && !(position > start && 48 <= byte && byte <= 57) {
+                return RegexError.InvalidCapture;
+            }
+            position++;
+        }
+        var end = position;
+        if end == start || !consumeByte(62) { return RegexError.InvalidCapture; }
+        var name = text.fromBytes(source.asBytes()[start..end])!;
+        for entry in captureNames.iterRef() {
+            if text.equal(entry.name, name) { return RegexError.DuplicateCaptureName; }
+        }
+        name
+    }
+
     func parseAtom(depth: usize) !i32 {
         if depth > 256 { return RegexError.TooManyStates; }
         if atEnd() { return RegexError.UnexpectedEnd; }
@@ -185,15 +212,27 @@ private:
         if byte == 40 {
             position++;
             var capturing = true;
+            var name: ?string = null;
             if consumeByte(63) {
                 if consumeByte(58) { capturing = false; }
-                else { return RegexError.UnsupportedConstruct; }
+                else if consumeByte(60) {
+                    if !atEnd() && (currentByte() == 61 || currentByte() == 33) {
+                        return RegexError.UnsupportedConstruct;
+                    }
+                    name = some(parseCaptureName()!);
+                } else if consumeByte(80) && consumeByte(60) {
+                    name = some(parseCaptureName()!);
+                } else { return RegexError.UnsupportedConstruct; }
             }
             var groupIndex: usize = 0;
             if capturing {
                 captureCount++;
                 if captureCount > 32 { return RegexError.CaptureLimit; }
                 groupIndex = captureCount;
+                switch move(name) {
+                    some(label) => captureNames.push(CaptureName{name: move(label), index: groupIndex})!,
+                    null => {},
+                }
             }
             var inner = parseExpression(depth + 1)!;
             if !consumeByte(41) { return RegexError.UnclosedGroup; }
@@ -356,6 +395,7 @@ pub class NfaCompiler {
     var states: coll.Vec<State>;
     var stateLimit: usize;
     var captureCount: usize;
+    var captureNames: coll.Vec<CaptureName>;
     var flags: u8;
     var maxInput: usize;
     var maxSteps: usize;
@@ -364,7 +404,8 @@ public:
               maxInput: usize, maxSteps: usize)
         : root(parsed.root), nodes(core.replace<coll.Vec<AstNode>>(&parsed.nodes, coll.Vec<AstNode>())), classes(core.replace<coll.Vec<CharacterClass>>(&parsed.classes, coll.Vec<CharacterClass>())),
           ranges(core.replace<coll.Vec<CharRange>>(&parsed.ranges, coll.Vec<CharRange>())), states(coll.Vec<State>()),
-          stateLimit(maxStates), captureCount(parsed.captureCount), flags(flags),
+          stateLimit(maxStates), captureCount(parsed.captureCount),
+          captureNames(core.replace<coll.Vec<CaptureName>>(&parsed.captureNames, coll.Vec<CaptureName>())), flags(flags),
           maxInput(maxInput), maxSteps(maxSteps) {}
 
     func compile(pattern: str) !Regex {
@@ -375,7 +416,8 @@ public:
         Regex(core.replace<coll.Vec<State>>(&states, coll.Vec<State>()),
               core.replace<coll.Vec<CharacterClass>>(&classes, coll.Vec<CharacterClass>()),
               core.replace<coll.Vec<CharRange>>(&ranges, coll.Vec<CharRange>()), move(ownedPattern),
-              flags, maxInput, maxSteps, captureCount, fragment.start)
+              flags, maxInput, maxSteps, captureCount, fragment.start,
+              core.replace<coll.Vec<CaptureName>>(&captureNames, coll.Vec<CaptureName>()))
     }
 
 private:

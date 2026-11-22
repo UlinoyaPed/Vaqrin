@@ -71,78 +71,157 @@ func btreeLowerIndex<K: Movable, V: Movable>(
     index
 }
 
-func collectBTreePointers<K: Movable, V: Movable>(
-    node: *BTreeNode<K, V>, output: *Vec<*const (K, V)>
-) !void {
-    for i in usize(0)..node.entryCount() {
-        if !node.isLeaf() { collectBTreePointers<K, V>(node.childAt(i), output)!; }
-        output.push(node.entryAt(i))!;
+class BTreeCursor<K: Movable, V: Movable> {
+    // A degree-four B-tree with a usize entry count has at most 32 levels.
+    var stack: FixedVec<(*BTreeNode<K, V>, usize), 32>;
+    var reverse: bool;
+public:
+    func init(root: ?*BTreeNode<K, V>, reverse: bool)
+        : stack(FixedVec<(*BTreeNode<K, V>, usize), 32>()), reverse(reverse) {
+        switch root {
+            some(node) => push(node),
+            null => {},
+        }
     }
-    if !node.isLeaf() {
-        collectBTreePointers<K, V>(node.childAt(node.entryCount()), output)!;
+
+    func push(node: *BTreeNode<K, V>) void {
+        var eventCount = if node.isLeaf() { node.entryCount() } else { node.entryCount() * 2 + 1 };
+        switch stack.push((node, if reverse { eventCount } else { 0 })) {
+            PushResult.Stored => {},
+            _ => panic("BTree cursor depth invariant"),
+        }
+    }
+
+    func seekLower(key: *const K, less: func(*const K, *const K) bool) void {
+        for !stack.isEmpty() {
+            var frame = stack.lastMut().unwrap();
+            var node = frame.0;
+            var index = btreeLowerIndex<K, V>(node, key, less);
+            if node.isLeaf() {
+                frame.1 = index;
+                return;
+            }
+            frame.1 = index * 2 + 1;
+            push(node.childAt(index));
+        }
+    }
+
+    func next() ?*(K, V) {
+        for !stack.isEmpty() {
+            var frame = stack.lastMut().unwrap();
+            var node = frame.0;
+            var leaf = node.isLeaf();
+            var eventCount = if leaf { node.entryCount() } else { node.entryCount() * 2 + 1 };
+            if (reverse && frame.1 == 0) || (!reverse && frame.1 == eventCount) {
+                var done = stack.pop();
+                continue;
+            }
+            if reverse { frame.1--; }
+            var event = frame.1;
+            if !reverse { frame.1++; }
+            if leaf { return some(node.entryAtMut(event)); }
+            if event % 2 == 1 { return some(node.entryAtMut(event / 2)); }
+            push(node.childAt(event / 2));
+        }
+        null
     }
 }
 
-func collectBTreePointersMut<K: Movable, V: Movable>(
-    node: *BTreeNode<K, V>, output: *Vec<*(K, V)>
-) !void {
-    for i in usize(0)..node.entryCount() {
-        if !node.isLeaf() { collectBTreePointersMut<K, V>(node.childAt(i), output)!; }
-        output.push(node.entryAtMut(i))!;
+class BTreeCursors<K: Movable, V: Movable> {
+    var front: BTreeCursor<K, V>;
+    var back: BTreeCursor<K, V>;
+    var count: usize;
+public:
+    func init(root: ?*BTreeNode<K, V>, count: usize)
+        : front(BTreeCursor<K, V>(root, false)), back(BTreeCursor<K, V>(root, true)), count(count) {}
+    func next(reverse: bool) ?*(K, V) {
+        if count == 0 { return null; }
+        count--;
+        if reverse { back.next() } else { front.next() }
     }
-    if !node.isLeaf() {
-        collectBTreePointersMut<K, V>(node.childAt(node.entryCount()), output)!;
-    }
+    const func remaining() usize { count }
 }
 
 pub class BTreeIterRef<K: Movable, V: Movable> {
-    var entries: Vec<*const (K, V)>;
-    var frontIndex: usize;
-    var backIndex: usize;
+    var cursors: BTreeCursors<K, V>;
+    var snapshot: ?IteratorSnapshot<*const (K, V)>;
 public:
+    func init(root: ?*BTreeNode<K, V>, count: usize)
+        : cursors(BTreeCursors<K, V>(root, count)), snapshot(null) {}
     func init(items: Vec<*const (K, V)>, count: usize)
-        : entries(move(items)), frontIndex(0), backIndex(count) {}
-
-    func next() ?(*const K, *const V) {
-        if frontIndex == backIndex { return null; }
-        var entry = *entries.getPtr(frontIndex).unwrap();
-        frontIndex++;
-        some((&(*entry).0, &(*entry).1))
+        : cursors(BTreeCursors<K, V>(null, 0)), snapshot(some(IteratorSnapshot<*const (K, V)>(move(items), count))) {}
+    func next() ?(*const K, *const V) { take(false) }
+    func nextBack() ?(*const K, *const V) { take(true) }
+    const func remaining() usize {
+        switch __vqr_optional_pointer(&snapshot) {
+            some(saved) => saved.remaining(),
+            null => cursors.remaining(),
+        }
     }
-
-    func nextBack() ?(*const K, *const V) {
-        if frontIndex == backIndex { return null; }
-        backIndex--;
-        var entry = *entries.getPtr(backIndex).unwrap();
-        some((&(*entry).0, &(*entry).1))
+private:
+    func take(reverse: bool) ?(*const K, *const V) {
+        var entry: *const (K, V);
+        switch __vqr_optional_pointer(&snapshot) {
+            some(saved) => { entry = saved.take(reverse) ?? { return null; }; },
+            null => { entry = cursors.next(reverse) ?? { return null; }; },
+        }
+        some((&entry.0, &entry.1))
     }
-
-    const func remaining() usize { backIndex - frontIndex }
 }
 
 pub class BTreeIterMut<K: Movable, V: Movable> {
-    var entries: Vec<*(K, V)>;
-    var frontIndex: usize;
-    var backIndex: usize;
+    var cursors: BTreeCursors<K, V>;
+    var snapshot: ?IteratorSnapshot<*(K, V)>;
 public:
+    func init(root: ?*BTreeNode<K, V>, count: usize)
+        : cursors(BTreeCursors<K, V>(root, count)), snapshot(null) {}
     func init(items: Vec<*(K, V)>, count: usize)
-        : entries(move(items)), frontIndex(0), backIndex(count) {}
-
-    func next() ?(*const K, *V) {
-        if frontIndex == backIndex { return null; }
-        var entry = entries.getPtr(frontIndex).unwrap();
-        frontIndex++;
+        : cursors(BTreeCursors<K, V>(null, 0)), snapshot(some(IteratorSnapshot<*(K, V)>(move(items), count))) {}
+    func next() ?(*const K, *V) { take(false) }
+    func nextBack() ?(*const K, *V) { take(true) }
+    const func remaining() usize {
+        switch __vqr_optional_pointer(&snapshot) {
+            some(saved) => saved.remaining(),
+            null => cursors.remaining(),
+        }
+    }
+private:
+    func take(reverse: bool) ?(*const K, *V) {
+        var entry: *(K, V);
+        switch __vqr_optional_pointer(&snapshot) {
+            some(saved) => { entry = saved.take(reverse) ?? { return null; }; },
+            null => { entry = cursors.next(reverse) ?? { return null; }; },
+        }
         some((&entry.0, &entry.1))
     }
+}
 
-    func nextBack() ?(*const K, *V) {
-        if frontIndex == backIndex { return null; }
-        backIndex--;
-        var entry = entries.getPtr(backIndex).unwrap();
-        some((&entry.0, &entry.1))
+pub class BTreeRangeRef<K: Movable, V: Movable> {
+    var cursor: BTreeCursor<K, V>;
+    var endKey: ?*const K;
+    var done: bool;
+public:
+    func init(root: ?*BTreeNode<K, V>, lower: ?*const K, endKey: ?*const K,
+              less: func(*const K, *const K) bool, empty: bool)
+        : cursor(BTreeCursor<K, V>(root, false)), endKey(endKey), done(empty) {
+        switch lower {
+            some(key) => { if !empty { cursor.seekLower(key, less); } },
+            null => {},
+        }
     }
 
-    const func remaining() usize { backIndex - frontIndex }
+    func next() ?(*const K, *const V) {
+        if done { return null; }
+        var entry = cursor.next() ?? { done = true; return null; };
+        switch endKey {
+            some(key) => {
+                var address: *const K = &entry.0;
+                if key == address { done = true; return null; }
+            },
+            null => {},
+        }
+        some((&entry.0, &entry.1))
+    }
 }
 
 pub class BTreeSetIterRef<T: Movable> {
@@ -374,13 +453,13 @@ private:
         }
     }
 
-    func minimumEntry(node: *BTreeNode<K, V>) *const (K, V) {
+    const func minimumEntry(node: *BTreeNode<K, V>) *const (K, V) {
         var current = node;
         for !current.isLeaf() { current = current.childAt(0); }
         current.entryAt(0)
     }
 
-    func maximumEntry(node: *BTreeNode<K, V>) *const (K, V) {
+    const func maximumEntry(node: *BTreeNode<K, V>) *const (K, V) {
         var current = node;
         for !current.isLeaf() { current = current.childAt(current.childCount() - 1); }
         current.entryAt(current.entryCount() - 1)
@@ -554,22 +633,25 @@ public:
         candidate
     }
 
-    const func iterRef() !BTreeIterRef<K, V> {
-        var pointers = Vec<*const (K, V)>.withCapacity(length)!;
-        switch root {
-            null => {},
-            some(node) => { collectBTreePointers<K, V>(node, &pointers)!; },
-        }
-        BTreeIterRef<K, V>(move(pointers), length)
-    }
+    const func iterRef() !BTreeIterRef<K, V> { BTreeIterRef<K, V>(root, length) }
 
-    func iterMut() !BTreeIterMut<K, V> {
-        var pointers = Vec<*(K, V)>.withCapacity(length)!;
-        switch root {
+    func iterMut() !BTreeIterMut<K, V> { BTreeIterMut<K, V>(root, length) }
+
+    // Each non-null bound is inclusive at the start and exclusive at the end.
+    const func range(lower: ?*const K, upper: ?*const K) BTreeRangeRef<K, V> {
+        var empty = false;
+        var stop: ?*const K = null;
+        switch upper {
+            some(limit) => {
+                stop = lowerBound(limit);
+                switch lower {
+                    some(start) => { empty = !less(start, limit); },
+                    null => {},
+                }
+            },
             null => {},
-            some(node) => { collectBTreePointersMut<K, V>(node, &pointers)!; },
         }
-        BTreeIterMut<K, V>(move(pointers), length)
+        BTreeRangeRef<K, V>(root, lower, stop, less, empty)
     }
 
     static func intoIter(value: Self) IntoBTreeIter<K, V> {

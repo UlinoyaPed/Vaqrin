@@ -73,9 +73,11 @@ namespace fs = std::filesystem;
 struct Request {
   Options options;
   std::vector<fs::path> inputs, linkInputs, packagePaths;
-  fs::path output, sysroot, linkerScript, entry, overlay, dependencies;
+  fs::path output, sysroot, linkerScript, entry, overlay, overlayMap, dependencies;
   bool timings = false;
   bool editorHints = false;
+  bool editorSymbols = false;
+  bool workspaceSymbols = false;
   bool syntaxOnly = false;
   std::string cDriver, archiver;
 };
@@ -84,6 +86,7 @@ void help() {
   std::cout << "Vaqrin native compiler\n"
                "Usage: vaqc [build|check] [options] source.vqr [source.vqr ...]\n"
                "       vaqc build [options] package-directory\n"
+               "       vaqc lock package-directory\n"
                "       vaqc fmt [--check | --write] FILE... | vaqc fmt -\n"
                "  --emit=exe|obj|llvm-ir|bc|asm|staticlib|sharedlib|ast\n"
                "  -o PATH                 Output path\n"
@@ -95,9 +98,12 @@ void help() {
                "  --profile PROFILE       hosted or freestanding\n"
                "  --entry FILE            Select a file-local main\n"
                "  --overlay FILE          Read replacement contents for one .vqr in check mode\n"
+               "  --overlay-map FILE      Read a JSON object mapping source paths to replacement files\n"
                "  --syntax-only          Check syntax without resolving imports or types\n"
                "  --diagnostics=json     Emit a JSON diagnostic with a UTF-16 range\n"
                "  --editor-hints         Report inferred binding types as JSON in check mode\n"
+               "  --editor-symbols       Report local binding occurrences as JSON in check mode\n"
+               "  --editor-workspace-symbols  Report binding and top-level references with paths\n"
                "  --dependencies FILE     List source inputs and directory probes for one .vqr\n"
                "  --timings              Report build stage durations on stderr\n"
                "  --package-path DIR      Search additional local package roots\n"
@@ -121,6 +127,8 @@ Request arguments(int argc, char **argv) {
     if (a == "--syntax-only") { r.syntaxOnly = true; continue; }
     if (a == "--diagnostics=json") continue;
     if (a == "--editor-hints") { r.editorHints = true; continue; }
+    if (a == "--editor-symbols") { r.editorSymbols = true; continue; }
+    if (a == "--editor-workspace-symbols") { r.workspaceSymbols = true; continue; }
     if (a == "--check") {
       r.options.check = true;
       continue;
@@ -160,6 +168,8 @@ Request arguments(int argc, char **argv) {
       r.entry = value();
     else if (flag == "--overlay")
       r.overlay = value();
+    else if (flag == "--overlay-map")
+      r.overlayMap = value();
     else if (flag == "--dependencies")
       r.dependencies = value();
     else if (flag == "--package-path")
@@ -181,12 +191,18 @@ Request arguments(int argc, char **argv) {
   if ((!r.overlay.empty() || !r.dependencies.empty()) &&
       (r.inputs.size() != 1 || r.inputs.front().extension() != ".vqr" || fs::is_directory(r.inputs.front())))
     fail({}, "--overlay and --dependencies require exactly one .vqr input", "E300");
-  if (r.syntaxOnly && (!r.options.check || r.editorHints || !r.dependencies.empty() || r.options.emit == "ast"))
+  if (r.syntaxOnly && (!r.options.check || r.editorHints || r.editorSymbols || r.workspaceSymbols || !r.dependencies.empty() || r.options.emit == "ast"))
     fail({}, "--syntax-only requires check mode and accepts source files and an optional overlay", "E300");
+  if (!r.overlayMap.empty() && (!r.options.check || r.syntaxOnly || !r.overlay.empty()))
+    fail({}, "--overlay-map requires semantic check mode and is exclusive with --overlay", "E300");
   if (!r.overlay.empty() && !r.options.check) fail({}, "--overlay requires check mode", "E300");
-  if (r.editorHints && (!r.options.check || r.options.emit == "ast" || r.inputs.size() != 1 ||
+  if ((r.editorHints || r.editorSymbols) && (!r.options.check || r.options.emit == "ast" || r.inputs.size() != 1 ||
                         r.inputs.front().extension() != ".vqr" || fs::is_directory(r.inputs.front())))
-    fail({}, "--editor-hints requires check mode and one .vqr input", "E300");
+    fail({}, "editor output requires semantic check mode and one .vqr input", "E300");
+  if (r.workspaceSymbols && (!r.options.check || r.options.emit == "ast"))
+    fail({}, "--editor-workspace-symbols requires semantic check mode", "E300");
+  if (static_cast<int>(r.editorHints) + r.editorSymbols + r.workspaceSymbols > 1)
+    fail({}, "editor output modes are mutually exclusive", "E300");
   if (r.options.profile != "hosted" && r.options.profile != "freestanding")
     fail({}, "unknown target profile '" + r.options.profile + "'", "E300");
   const std::set<std::string> emits{"exe", "obj", "llvm-ir", "bc", "asm", "staticlib", "sharedlib", "ast"};
@@ -423,6 +439,7 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
     const bool usesProcessRuntime = usesRuntime("__vqr_process_");
     const bool usesNetRuntime = usesRuntime("__vqr_net_");
     const bool usesHttp2Runtime = usesRuntime("__vqr_http2_");
+    const bool usesGzipRuntime = usesRuntime("__vqr_gzip_");
     const bool usesTlsRuntime = usesRuntime("__vqr_tls_");
     const bool usesIoRuntime = usesProcessRuntime || usesRuntime("__vqr_io_");
     const bool usesDecimalRuntime = usesRuntime("__vqr_decimal_");
@@ -430,16 +447,23 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
         r.options.profile == "hosted" && target.isOSLinux() && target.isGNUEnvironment() &&
         module.getDataLayout().getPointerSizeInBits() == 64 &&
         (target.getArch() == llvm::Triple::x86_64 || target.getArch() == llvm::Triple::aarch64);
+    const bool supportsPosixIo = supportsHostRuntime ||
+        (r.options.profile == "hosted" && target.isMacOSX() &&
+         (target.getArch() == llvm::Triple::x86_64 || target.getArch() == llvm::Triple::aarch64));
+    if (usesRuntime("__vqr_io_reactor_") && !supportsHostRuntime)
+      fail({}, "the epoll reactor requires hosted GNU/Linux x86-64 or AArch64", "E290");
     if (usesProcessRuntime && !supportsHostRuntime)
       fail({}, "process execution requires hosted GNU/Linux x86-64 or AArch64", "E290");
     if (usesNetRuntime && !supportsHostRuntime)
       fail({}, "host networking requires hosted GNU/Linux x86-64 or AArch64", "E290");
     if (usesHttp2Runtime && !supportsHostRuntime)
       fail({}, "HTTP/2 requires hosted GNU/Linux x86-64 or AArch64", "E290");
+    if (usesGzipRuntime && !supportsHostRuntime)
+      fail({}, "gRPC gzip requires hosted GNU/Linux x86-64 or AArch64", "E290");
     if (usesTlsRuntime && !supportsHostRuntime)
       fail({}, "TLS requires hosted GNU/Linux x86-64 or AArch64", "E290");
-    if (usesIoRuntime && !supportsHostRuntime)
-      fail({}, "host I/O currently requires hosted GNU/Linux x86-64 or AArch64", "E290");
+    if (usesIoRuntime && !supportsPosixIo)
+      fail({}, "host I/O requires hosted GNU/Linux or macOS on x86-64 or AArch64", "E290");
     if (usesDecimalRuntime && !supportsHostRuntime)
       fail({}, "decimal conversion requires hosted GNU/Linux x86-64 or AArch64", "E290");
     const auto codegen = std::chrono::steady_clock::now();
@@ -470,9 +494,11 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
     auto processRuntime = intermediates / "vaqrin-process-runtime.o";
     if (usesProcessRuntime) compileCppRuntime(inputs.processRuntimeSource(), processRuntime, true);
     auto netRuntime = intermediates / "vaqrin-net-runtime.o";
-    if (usesNetRuntime) compileCppRuntime(inputs.netRuntimeSource(), netRuntime, false);
+    if (usesNetRuntime) compileCppRuntime(inputs.netRuntimeSource(), netRuntime, true);
     auto http2Runtime = intermediates / "vaqrin-http2-runtime.o";
     if (usesHttp2Runtime) compileCppRuntime(inputs.http2RuntimeSource(), http2Runtime, false);
+    auto gzipRuntime = intermediates / "vaqrin-gzip-runtime.o";
+    if (usesGzipRuntime) compileCppRuntime(inputs.gzipRuntimeSource(), gzipRuntime, false);
     auto tlsRuntime = intermediates / "vaqrin-tls-runtime.o";
     if (usesTlsRuntime) compileCppRuntime(inputs.tlsRuntimeSource(), tlsRuntime, true);
     auto decimalRuntime = intermediates / "vaqrin-decimal-runtime.o";
@@ -486,6 +512,7 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
       if (usesProcessRuntime) args.push_back(processRuntime.string());
       if (usesNetRuntime) args.push_back(netRuntime.string());
       if (usesHttp2Runtime) args.push_back(http2Runtime.string());
+      if (usesGzipRuntime) args.push_back(gzipRuntime.string());
       if (usesTlsRuntime) args.push_back(tlsRuntime.string());
       if (usesDecimalRuntime) args.push_back(decimalRuntime.string());
       execute(r.archiver.empty() ? "llvm-ar" : r.archiver, args);
@@ -509,15 +536,17 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
       if (usesProcessRuntime) args.push_back(processRuntime.string());
       if (usesNetRuntime) args.push_back(netRuntime.string());
       if (usesHttp2Runtime) args.push_back(http2Runtime.string());
+      if (usesGzipRuntime) args.push_back(gzipRuntime.string());
       if (usesTlsRuntime) args.push_back(tlsRuntime.string());
       if (usesDecimalRuntime) args.push_back(decimalRuntime.string());
       for (const auto &input : r.linkInputs)
         args.push_back(fs::absolute(input).string());
       if (usesDecimalRuntime) args.push_back("-lstdc++");
       if (usesHttp2Runtime) args.push_back("-lnghttp2");
+      if (usesGzipRuntime) args.push_back("-lz");
       if (usesTlsRuntime) args.push_back("-ldl");
       if (r.options.profile == "hosted" && target.isOSLinux() &&
-          (usesTasks || usesIoRuntime || usesTlsRuntime || module.getFunction("pthread_create") ||
+          (usesTasks || usesIoRuntime || usesNetRuntime || usesTlsRuntime || module.getFunction("pthread_create") ||
            module.getFunction("pthread_self")))
         args.push_back("-pthread");
       if (r.options.profile == "hosted" && target.isOSLinux() &&
@@ -536,6 +565,38 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
   fs::rename(product, output, error);
   if (error) fail({}, "cannot publish output '" + output.string() + "': " + error.message(), "E302");
 }
+Inputs::Overlays sourceOverlays(const Request &r) {
+  Inputs::Overlays result;
+  if (!r.overlay.empty()) result.emplace(fs::weakly_canonical(fs::absolute(r.inputs.front())), r.overlay);
+  if (r.overlayMap.empty()) return result;
+  auto file = llvm::MemoryBuffer::getFile(r.overlayMap.string());
+  if (!file) fail({}, "cannot read overlay map " + r.overlayMap.string(), "E301");
+  auto parsed = llvm::json::parse((*file)->getBuffer());
+  if (!parsed) fail({}, llvm::toString(parsed.takeError()), "E301");
+  const auto *entries = parsed->getAsObject();
+  if (!entries) fail({}, "overlay map must be a JSON object", "E301");
+  for (const auto &[source, value] : *entries) {
+    auto replacement = value.getAsString();
+    auto path = fs::weakly_canonical(fs::absolute(fs::path(source.str())));
+    if (!replacement || replacement->empty() || path.extension() != ".vqr" ||
+        fs::is_directory(path) || !fs::is_directory(path.parent_path()) ||
+        !result.emplace(path, fs::path(replacement->str())).second)
+      fail({}, "invalid or duplicate source in overlay map: " + source.str(), "E301");
+  }
+  return result;
+}
+
+void printEditorSymbols(const EditorHints &hints) {
+  llvm::json::Array occurrences;
+  for (const auto &[path, begin, end, declarationPath, declaration, definition] : hints.workspaceOccurrences)
+    occurrences.emplace_back(llvm::json::Object{{"path", path}, {"begin", begin}, {"end", end},
+        {"declarationPath", declarationPath}, {"declaration", declaration}, {"definition", definition}});
+  for (const auto &[begin, end, declaration, definition] : hints.occurrences)
+    occurrences.emplace_back(llvm::json::Object{{"begin", begin}, {"end", end},
+                                                {"declaration", declaration}, {"definition", definition}});
+  llvm::outs() << llvm::json::Value(std::move(occurrences)) << '\n';
+}
+
 void printEditorHints(const EditorHints &hints) {
   llvm::json::Array bindings;
   for (const auto &binding : hints.bindings) {
@@ -570,6 +631,13 @@ int main(int argc, char **argv) {
   Source syntaxSource;
   EditorHints hints;
   try {
+    static int executableAnchor;
+    auto executable = llvm::sys::fs::getMainExecutable(argv[0], &executableAnchor);
+    if (argc >= 2 && std::string_view(argv[1]) == "lock") {
+      if (argc != 3) fail({}, "usage: vaqc lock package-directory", "E300");
+      Inputs(executable).writeLock(argv[2]);
+      return 0;
+    }
     auto request = arguments(argc, argv);
     if (request.syntaxOnly) {
       for (const auto &path : request.inputs) {
@@ -580,8 +648,6 @@ int main(int argc, char **argv) {
       }
       return 0;
     }
-    static int executableAnchor;
-    auto executable = llvm::sys::fs::getMainExecutable(argv[0], &executableAnchor);
     auto start = std::chrono::steady_clock::now();
     auto stage = [&](std::string_view label) {
       auto now = std::chrono::steady_clock::now();
@@ -590,8 +656,7 @@ int main(int argc, char **argv) {
                   << " ms\n";
       start = now;
     };
-    auto overlayPath = request.overlay.empty() ? fs::path{} : fs::weakly_canonical(request.inputs.front());
-    inputs = std::make_unique<Inputs>(executable, overlayPath, request.overlay);
+    inputs = std::make_unique<Inputs>(executable, sourceOverlays(request));
     inputs->load(request.inputs, request.packagePaths, request.entry, !request.options.check &&
                  request.options.emit == "exe" && request.options.profile == "hosted");
     if (request.options.emit == "ast") {
@@ -602,13 +667,24 @@ int main(int argc, char **argv) {
     stage("inputs");
     auto machine = makeTarget(request.options);
     stage("target");
-    if (request.editorHints) {
-      hints.source = fs::weakly_canonical(request.inputs.front()).string();
+    if (request.editorHints || request.editorSymbols || request.workspaceSymbols) {
+      hints.source = fs::weakly_canonical(fs::absolute(request.inputs.front())).string();
+      hints.symbols = request.editorSymbols || request.workspaceSymbols;
+      hints.workspace = request.workspaceSymbols;
       request.options.editorHints = &hints;
     }
     llvm::LLVMContext context;
+    CompileTimings compileTimings;
+    if (request.timings) request.options.compileTimings = &compileTimings;
     auto module = compile(context, *machine, request.options, *inputs);
+    if (request.timings) compileTimings.advance(CompileTimings::Other);
     stage("compile");
+    if (request.timings) {
+      constexpr std::array labels{"other", "types", "instantiation", "ctfe", "lowering"};
+      for (std::size_t i = 0; i < labels.size(); ++i)
+        std::cerr << "vaqc: compile." << labels[i] << ' '
+                  << std::chrono::duration<double, std::milli>(compileTimings.durations[i]).count() << " ms\n";
+    }
     if (!request.options.check) {
       optimize(*module, *machine, request.options);
       stage("optimize");
@@ -634,6 +710,7 @@ int main(int argc, char **argv) {
       if (!output) fail({}, "cannot write dependency manifest", "E302");
     }
     if (request.editorHints) printEditorHints(hints);
+    if (request.editorSymbols || request.workspaceSymbols) printEditorSymbols(hints);
     return 0;
   } catch (const Diagnostic &error) {
     if (!hints.bindings.empty()) printEditorHints(hints);

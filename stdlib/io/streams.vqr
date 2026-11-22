@@ -111,18 +111,14 @@ pub func writeString(writer: *Writer, value: str) !void { writeAll(writer, value
 
 pub func readToEnd(reader: *Reader, limit: usize) !coll.Vec<u8> {
     var out = coll.Vec<u8>();
-    var scratch = mem.zeroedBytes<256>();
+    var scratch = mem.zeroedBytes<4096>();
     for {
         var available = limit - out.len();
         var chunk = scratch.len();
-        if available < scratch.len() {
-            if available == ~usize(0) { chunk = scratch.len(); }
-            else { chunk = available + 1; }
-        }
+        if available < scratch.len() { chunk = available + 1; }
         var count = read(reader, scratch[0..chunk])!;
         if count == 0 { return move(out); }
         if count > available { return IoError.LimitExceeded; }
-        out.reserveAdditional(count)!;
         for byte in scratch[0..count] { out.push(byte)!; }
     }
 }

@@ -341,9 +341,7 @@ Token Lexer::quoted(std::size_t begin) {
 }
 
 void Lexer::run(std::vector<Token> &tokens, bool indexOnly) {
-  if (!indexOnly)
-  for (std::size_t i = 0; i < input.size();)
-    scalar(input, i, {&source, i, i + 1});
+  if (!indexOnly) validateUtf8(source);
   for (;;) {
     newline = false;
     trivia();
@@ -396,6 +394,17 @@ void Lexer::run(std::vector<Token> &tokens, bool indexOnly) {
   }
 }
 } // namespace
+
+void validateUtf8(const Source &source) {
+  std::string_view input(source.bytes);
+  for (std::size_t i = 0; i < input.size();) {
+    if (static_cast<unsigned char>(input[i]) < 0x80) {
+      ++i;
+    } else {
+      scalar(input, i, {&source, i, i + 1});
+    }
+  }
+}
 
 std::vector<Token> lex(const Source &source, bool indexOnly) {
   std::vector<Token> tokens;

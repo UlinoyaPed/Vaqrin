@@ -1,5 +1,5 @@
 package random
-import (coll, convert, math, meta, text)
+import (coll, convert, io, math, mem, meta, text)
 
 pub error RandomError {
     EmptyRange,
@@ -19,6 +19,33 @@ pub interface Rng {
 
 pub interface CryptoRng {
     func fillSecure(dst: []u8) !void;
+}
+
+extern "C" func __vqr_io_random(destination: *u8, length: usize) i32;
+
+pub class OsRng {
+    #implements: CryptoRng
+public:
+    func init() {}
+    func fillSecure(dst: []u8) !void { fillSystem(dst) }
+}
+
+pub func fillSystem(dst: []u8) !void {
+    if dst.len() == 0 { return; }
+    var status = unsafe { __vqr_io_random(&dst[0], dst.len()) };
+    if status != 0 { return io.systemError(status); }
+}
+
+pub func systemSeed() !Seed {
+    var raw = mem.zeroedBytes<16>();
+    fillSystem(raw[:])!;
+    var low: u64 = 0;
+    var high: u64 = 0;
+    for i in usize(0)..8 {
+        low |= u64(raw[i]) << (i * 8);
+        high |= u64(raw[i + 8]) << (i * 8);
+    }
+    Seed(low, high)
 }
 
 func mixSeed(value: u64) u64 {
@@ -206,6 +233,9 @@ private:
     }
 }
 
+pub func newSystem() !Pcg64 { Pcg64.fromSeed(systemSeed()!) }
+
+// Reproducible generator for callers that need a deterministic stream.
 pub func newDefault() Pcg64 { Pcg64.seed(0x4d595df4d0f33173u64) }
 func indexFromU64(value: u64) usize {
     (__vqr_parse_bits<usize>(u128(value)))

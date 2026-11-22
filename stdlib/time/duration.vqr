@@ -1,7 +1,7 @@
 package time
 import (cmp)
 
-pub error TimeError { Overflow, DivisionByZero, InvalidDate, InvalidTime, ClockUnavailable, TimerCancelled }
+pub error TimeError { Overflow, DivisionByZero, InvalidDate, InvalidTime, ClockUnavailable, TimerCancelled, InvalidZone, NonexistentLocalTime, InvalidFormat }
 
 const nanosPerSecond: i128 = 1000000000i128;
 const smallestSecond: i64 = -9223372036854775807i64 - 1;

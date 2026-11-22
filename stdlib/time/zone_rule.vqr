@@ -1,0 +1,178 @@
+package time
+
+func asciiLetter(byte: u8) bool { (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122) }
+func asciiDigit(byte: u8) bool { byte >= 48 && byte <= 57 }
+
+enum RuleKind { Calendar, Julian, Ordinal }
+enum RuleClock { Wall, Standard, Utc }
+
+class ZoneRule {
+    var kind: RuleKind;
+    var day: i64;
+    var month: u8;
+    var week: u8;
+    var seconds: i64;
+    var clock: RuleClock;
+    pub func init(kind: RuleKind, day: i64, month, week: u8, seconds: i64, clock: RuleClock)
+        : kind(kind), day(day), month(month), week(week), seconds(seconds), clock(clock) {}
+
+    pub const func timestamp(year: i32, standard, previous: i32) i64 {
+        var start = beforeYear(i64(year)) - epochOrdinal;
+        var ordinal = start;
+        switch kind {
+            RuleKind.Calendar => {
+                var first = Date.new(year, month, 1) catch { panic("invalid zone rule month"); };
+                var firstDay = (first.toOrdinal() + 4) % 7;
+                if firstDay < 0 { firstDay += 7; }
+                var offset = (day - firstDay + 7) % 7 + 7i64 * (i64(week) - 1);
+                if offset >= i64(daysInMonth(year, month) catch { panic("invalid zone rule month"); }) { offset -= 7; }
+                ordinal = first.toOrdinal() + offset;
+            },
+            RuleKind.Julian => {
+                ordinal += day - 1;
+                if leapYear(year) && day >= 60 { ordinal++; }
+            },
+            RuleKind.Ordinal => { ordinal += day; },
+        }
+        var offset = switch clock {
+            RuleClock.Wall => previous,
+            RuleClock.Standard => standard,
+            RuleClock.Utc => 0,
+        };
+        ordinal * secondsPerDay + seconds - i64(offset)
+    }
+}
+
+class RecurringZone {
+    pub var standard: i32;
+    pub var daylight: i32;
+    var start: ?ZoneRule;
+    var end: ?ZoneRule;
+    pub func init(standard, daylight: i32, start, end: ?ZoneRule)
+        : standard(standard), daylight(daylight), start(start), end(end) {}
+
+    pub const func offsetAt(seconds: i64) i32 {
+        if start == null { return standard; }
+        var ordinal = floorDiv(seconds, secondsPerDay);
+        var date = Date.fromOrdinal(ordinal) catch {
+            if seconds < 0 { return standard; }
+            return daylight;
+        };
+        var current = i64(date.year());
+        var latest: ?i64 = null;
+        var offset = standard;
+        for year in current - 1..=current + 1 {
+            if year < firstYear || year >= pastLastYear { continue; }
+            var civilYear = i32(year) catch { continue; };
+            var first = start.unwrap().timestamp(civilYear, standard, standard);
+            var second = end.unwrap().timestamp(civilYear, standard, daylight);
+            if first <= seconds && (latest == null || latest.unwrap() < first) {
+                latest = some(first);
+                offset = daylight;
+            }
+            if second <= seconds && (latest == null || latest.unwrap() <= second) {
+                latest = some(second);
+                offset = standard;
+            }
+        }
+        offset
+    }
+}
+
+class RuleParser {
+    var source: []const u8;
+    var index: usize;
+    pub func init(source: []const u8) : source(source), index(0) {}
+
+    pub const func finished() bool { index == source.len() }
+    const func peek() u8 {
+        if finished() { return 0; }
+        source[index]
+    }
+    pub func take(byte: u8) bool {
+        if peek() != byte { return false; }
+        index++;
+        true
+    }
+
+    pub func name() !void {
+        var quoted = take(60);
+        var start = index;
+        for {
+            var byte = peek();
+            if !asciiLetter(byte) && !(quoted && (asciiDigit(byte) || byte == 43 || byte == 45)) { break; }
+            index++;
+        }
+        if index - start < 3 || (quoted && !take(62)) { return TimeError.InvalidZone; }
+    }
+
+    func number(limit: i64) !i64 {
+        if !asciiDigit(peek()) { return TimeError.InvalidZone; }
+        var value = 0i64;
+        for asciiDigit(peek()) {
+            value = value * 10 + i64(peek() - 48);
+            if value > limit { return TimeError.InvalidZone; }
+            index++;
+        }
+        value
+    }
+
+    pub func clockTime(maxHours: i64) !i64 {
+        var negative = take(45);
+        if !negative { take(43); }
+        var hours = number(maxHours)!;
+        var result = hours * 3600;
+        if take(58) {
+            result += number(59)! * 60;
+            if take(58) { result += number(59)!; }
+        }
+        if negative { return -result; }
+        result
+    }
+
+    pub func rule() !ZoneRule {
+        var kind = RuleKind.Ordinal;
+        var month = u8(1);
+        var week = u8(1);
+        var day = 0i64;
+        if take(77) {
+            kind = RuleKind.Calendar;
+            month = u8(number(12)!)!;
+            if month == 0 || !take(46) { return TimeError.InvalidZone; }
+            week = u8(number(5)!)!;
+            if week == 0 || !take(46) { return TimeError.InvalidZone; }
+            day = number(6)!;
+        } else if take(74) {
+            kind = RuleKind.Julian;
+            day = number(365)!;
+            if day == 0 { return TimeError.InvalidZone; }
+        } else { day = number(365)!; }
+        var seconds = 7200i64;
+        var clock = RuleClock.Wall;
+        if take(47) {
+            seconds = clockTime(167)!;
+            if take(115) { clock = RuleClock.Standard; }
+            else if take(117) || take(103) || take(122) { clock = RuleClock.Utc; }
+            else { take(119); }
+        }
+        ZoneRule(kind, day, month, week, seconds, clock)
+    }
+}
+
+func parseRecurring(source: []const u8) !RecurringZone {
+    var parser = RuleParser(source);
+    parser.name()!;
+    var standard = i32(-parser.clockTime(24)!)!;
+    if parser.finished() { return RecurringZone(standard, standard, null, null); }
+    parser.name()!;
+    var daylight = standard + 3600;
+    if !parser.take(44) {
+        daylight = i32(-parser.clockTime(24)!)!;
+        if !parser.take(44) { return TimeError.InvalidZone; }
+    }
+    var start = parser.rule()!;
+    if !parser.take(44) { return TimeError.InvalidZone; }
+    var end = parser.rule()!;
+    if !parser.finished() { return TimeError.InvalidZone; }
+    RecurringZone(standard, daylight, some(start), some(end))
+}

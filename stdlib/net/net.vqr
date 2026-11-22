@@ -361,6 +361,8 @@ public:
     }
     func recv(dst: []u8) !Datagram { recvFrom(dst) }
     func setBroadcast(value: bool) !void { socket.option(2, value) }
+    func setNonblocking(value: bool) !void { socket.option(0, value) }
+    const func systemDescriptor() !i32 { socket.fd() }
     const func localAddr() !SocketAddr { socket.address(0) }
     func close() !void { socket.close() }
 }

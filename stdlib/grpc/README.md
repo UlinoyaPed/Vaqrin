@@ -3,8 +3,10 @@
 `grpc.dial("https://host:port", options)` negotiates `h2` over authenticated
 TLS. `allowH2c` is false by default. Enable it explicitly with an `http://`
 endpoint for cleartext prior knowledge. `ClientConn` reuses one HTTP/2
-connection. Its methods are single-owner and a connection carries one active
-application call at a time.
+connection. The caller owns the connection and can interleave multiple active
+calls with the low-level API. Each active stream has its own message decoder.
+`DialOptions.maxConcurrentCalls` bounds the number of active calls. Read or
+cancel each call to release its slot.
 
 `ClientConn.unary(path, requestBytes, &callOptions)` sends one message. The
 path uses the fully qualified service and method, such as
@@ -26,15 +28,29 @@ On the server, create `grpc.Server()` and register each path with a
 processing. Use `acceptTls(&listener, &acceptor, options)` or pass a connected
 stream to `serveTls` or `serveH2c`. The server decodes each request envelope,
 passes metadata and deadline to the handler, and encodes one response message
-or an error status. Both roles use the five-byte gRPC envelope. The supported
-compression format is identity.
+or an error status. Both roles use the five-byte gRPC envelope and accept
+identity or gzip messages. Set `CallOptions.compression` to
+`Compression.Gzip` to request gzip encoding. A server with
+`ServeOptions.compressResponses` enabled uses it when the peer advertises
+support. Each message has an independent gzip member. Both wire and decoded
+sizes are bounded by `maxMessageBytes`.
+
+Register read-only, shareable unary handlers with
+`registerConcurrent<H>` and use `serveConcurrentH2c` or
+`acceptConcurrentTls`. The unsafe registration borrows the handler, so it
+must stay alive at a stable address until the server no longer uses it.
+`ServeOptions.applicationWorkers` bounds the worker count and
+`maxConcurrentStreams` bounds the number of outstanding calls. Each
+connection has one HTTP/2 I/O owner. Workers report completion through the
+reactor. A peer reset or local deadline cancels the corresponding task.
+A cancelled handler releases its slot when it finishes.
 
 For streaming, register a `StreamingHandler` with `registerStreaming`.
 A `ServerStream` reads and writes individual messages and exposes initial
 and trailing metadata. End of the sending half returns `null` from
 `recvMessage` while the responding half remains usable. Return a `Status`
 to finish the call. The APIs support server-streaming, client-streaming
-and bidirectional calls. Application handlers execute synchronously.
+and bidirectional calls. Streaming handlers and handlers registered with `register` execute synchronously.
 While a handler reads its stream, events for other streams are deferred
 within a fixed bound and dispatched when the handler returns.
 
@@ -45,7 +61,9 @@ Implement the generated service interface and keep its generated server
 adapter at a stable address while registered. The adapter owns the
 individual method registrations. See the [Greeter example](../../examples/grpc/README.md).
 
-The transport uses OpenSSL 3 and nghttp2 on hosted GNU/Linux. Reference
+The transport uses OpenSSL 3, nghttp2 and zlib on hosted GNU/Linux. Building
+gRPC applications requires zlib development headers (`zlib1g-dev` on
+Debian and Ubuntu). Reference
 acceptance tests use Python grpcio for both directions plus a Vaqrin-to-Vaqrin
 loopback with real Protobuf messages.
 

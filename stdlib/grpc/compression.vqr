@@ -1,0 +1,49 @@
+package grpc
+import (bytes, coll)
+
+pub enum Compression { Identity, Gzip }
+enum MessageEncoding { Identity, Gzip, Unsupported }
+
+extern "C" func __vqr_gzip_transform(encode: i32, input: *const u8, length: usize,
+                               limit: usize, address: *usize, size: *usize) i32;
+extern "C" func __vqr_gzip_free(address: usize) void;
+
+class GzipBuffer {
+    #copy: disabled
+    var address: usize;
+    var size: usize;
+    pub func init(address, size: usize) : address(address), size(size) {}
+    func deinit() void { unsafe { __vqr_gzip_free(address); } }
+    pub const func toVector() !coll.Vec<u8> {
+        if size == 0 { return coll.Vec<u8>(); }
+        var view = unsafe { __vqr_const_slice<u8>(some(ptrFromInt<*u8>(address)), size) };
+        coll.Vec<u8>.fromSlice(view)
+    }
+}
+
+func gzip(input: []const u8, limit: usize, encode: bool) !coll.Vec<u8> {
+    var empty = u8(0);
+    var source: *const u8 = if input.len() == 0 { &empty } else { &input[0] };
+    var address = usize(0);
+    var size = usize(0);
+    var mode = if encode { 1 } else { 0 };
+    var code = unsafe { __vqr_gzip_transform(mode, source, input.len(), limit, &address, &size) };
+    if code == 1 { return RpcError.MessageTooLarge; }
+    if code == 3 { return RpcError.ResourceExhausted; }
+    if code != 0 { return RpcError.Protocol; }
+    var output = GzipBuffer(address, size);
+    output.toVector()
+}
+
+func acceptsGzip(value: []const u8) bool {
+    var start = usize(0);
+    for index in usize(0)..=value.len() {
+        if index < value.len() && value[index] != 44 { continue; }
+        var finish = index;
+        for start < finish && (value[start] == 32 || value[start] == 9) { start++; }
+        for start < finish && (value[finish - 1] == 32 || value[finish - 1] == 9) { finish--; }
+        if bytes.equal(value[start..finish], "gzip".asBytes()) { return true; }
+        start = index + 1;
+    }
+    false
+}

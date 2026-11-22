@@ -66,7 +66,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: build/llvm-sdk
-          key: llvm-sdk-v2-${{ matrix.runner }}-${{ env.LLVM_TAG }}-x86-aarch64-arm
+          key: llvm-sdk-v3-${{ matrix.runner }}-${{ env.LLVM_TAG }}-x86-aarch64-arm
 
       - if: steps.sdk.outputs.cache-hit != 'true'
         uses: actions/checkout@v4
@@ -84,6 +84,17 @@ jobs:
         env:
           VAQRIN_RELEASE_PLATFORM: ${{ matrix.platform }}
         run: python compiler/tools/release.py package
+
+      - name: Verify Linux runtime and protocol packages from the installation
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang openssl libssl-dev libnghttp2-dev zlib1g-dev
+          python -m pip install 'grpcio-tools>=1.62,<2' 'h2>=4.1,<5'
+          compiler="$PWD/build/release-root/vaqrin/bin/vaqc"
+          python compiler/tests/io_v2_acceptance.py "$compiler"
+          python compiler/tests/protocol_acceptance.py "$compiler"
 
       - uses: actions/upload-artifact@v4
         with:

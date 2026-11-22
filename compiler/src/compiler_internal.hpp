@@ -81,6 +81,7 @@ struct Capture {
   bool reference;
   bool writable;
   unsigned index;
+  Span declaration{};
 };
 
 struct Type {
@@ -113,6 +114,11 @@ struct Borrow {
   int root = -1;
   int via = -1;
   bool raw = false;
+  // A read-only merge conservatively pins every possible source.
+  std::shared_ptr<const std::vector<int>> alternatives{};
+
+  bool protects(int owner) const;
+  bool operator==(const Borrow &other) const;
 };
 
 struct ValueAt {
@@ -137,6 +143,7 @@ struct FunctionEntry {
   Type *owner = nullptr;
   bool lowering = false;
   bool lowered = false;
+  Function *cBridge = nullptr;
 };
 struct GlobalEntry {
   Definition def;
@@ -158,6 +165,7 @@ struct Local {
   bool debugParameter = false;
   Type *reference = nullptr;
   Borrow origin{};
+  Span declaration{};
 };
 struct Loop {
   BasicBlock *leave, *next;
@@ -214,6 +222,8 @@ private:
            std::optional<std::size_t> scope = {});
   bool carriesBorrow(Type *t);
   void rejectTemporaryBorrow(ValueAt value, Span span);
+  void indexSymbol(Span occurrence, Span declaration, bool definition = false);
+  void indexLocal(int id, Span declaration);
   void hintBinding(Span span, Type *type, EditorHints::BindingKind kind = EditorHints::BindingKind::Local);
   int findLocal(std::string_view name) const;
   void enter() { scopes.emplace_back(); }
@@ -223,6 +233,8 @@ private:
   void dropLocal(int index);
   void requireInit(ValueAt v, Span span);
   void checkAccess(ValueAt v, bool write, Span span);
+  void checkRootAccess(int root, Borrow origin, bool write, Span span);
+  Borrow joinBorrow(Borrow left, Borrow right, Type *type, Span span);
   void invalidateOwnedAddresses(ValueAt owner);
   ValueAt dereference(ValueAt v, Span span);
   void checkUnwrap(Value *present, Span span);
@@ -269,6 +281,7 @@ private:
   Value *textView(ValueAt value, Span span);
   void disposeTemporary(ValueAt value, Span span);
   ValueAt match(const Ast &n, Type *expected);
+  ValueAt selection(const Ast &n, Type *expected);
   void checkPattern(const Ast &pattern, ValueAt subject, BasicBlock *failure,
                     std::vector<std::pair<Ast, ValueAt>> &bindings);
   void assertCondition(Value *test, BasicBlock *failure);
@@ -305,6 +318,15 @@ public:
   unsigned lambdaCount = 0, matchCount = 0;
   std::map<std::string, Constant *> strings;
   std::map<Type *, Function *> dropFunctions, copyFunctions;
+  struct GenericInterfaceLookup {
+    Type *interface;
+    const Decl *method;
+    Types types;
+    Constants values;
+    Function *function;
+    std::map<GlobalVariable *, Function *> targets;
+  };
+  std::deque<GenericInterfaceLookup> genericInterfaceLookups;
   std::map<std::pair<Type *, Type *>, GlobalVariable *> interfaceTables;
   std::map<std::pair<Type *, Type *>, Function *> allocatorReleaseFunctions;
   Type *allocationContext = nullptr;
@@ -320,6 +342,8 @@ public:
 
   Type *add(Kind kind, llvm::Type *ir, std::string name, std::vector<Type *> parts = {});
   Type *integer(unsigned bits, bool sign);
+  std::size_t functionBorrow(llvm::ArrayRef<Type *> parameters, Type *result, std::size_t explicitSource,
+                             Span span);
   Type *aggregate(Kind kind, std::vector<Type *> parts, std::uint64_t count = 0, bool cAbi = false);
   Type *pointer(Type *t, bool readOnly);
   Type *reference(Type *t, bool readOnly, bool compatible = false);
@@ -332,7 +356,7 @@ public:
   Type *rawStorage(Type *element, Span span);
   Type *type(const Ast &n, const File &file, const Types &generics = {}, const Constants &values = {});
   Type *named(std::string name, const File &file, Span span, const Types &generics = {},
-              const std::vector<Ast> &args = {}, const Constants &values = {});
+              const std::vector<Ast> &args = {}, const Constants &values = {}, Span occurrence = {});
   Type *nominal(Definition def, const std::vector<Type *> &args, bool complete = true,
                 const Constants &values = {});
   std::pair<Type *, Constant *> genericValue(const Ast &arg, const File &file, Type *expected,
@@ -340,6 +364,14 @@ public:
   void fill(Type *t, const Types &substitutions);
   void validatePromotions(Type *type);
   void validateInterfaces(Type *type);
+  bool matchesGenericInterface(Definition required, const Types &requiredTypes,
+                               const Constants &requiredValues, Definition method,
+                               const Types &methodTypes, const Constants &methodValues);
+  Function *genericInterfaceLookup(Type *interface, const Decl &method, const Types &types,
+                                   const Constants &values);
+  Function *interfaceThunk(Type *type, const Definition &method, FunctionEntry &entry);
+  void prepareGenericInterfaces();
+  void emitGenericInterfaces();
   GlobalVariable *interfaceTable(Type *type, Type *interface, Span span);
   void ensureSized(Type *t, Span span);
   bool copyable(Type *t);
@@ -370,6 +402,11 @@ public:
   std::uint32_t errorCode(Definition def, std::string_view member);
   llvm::Type *storage(Type *t) { return t->ir->isVoidTy() ? StructType::get(context) : t->ir; }
   Triple targetTriple() const { return Triple(module->getTargetTriple()); }
+  bool hasAggregateCAbi(Type *result, ArrayRef<Type *> params);
+  void validateCAbi(Type *result, ArrayRef<Type *> params, Span span);
+  Function *bridgeC(Function *body, Type *result, ArrayRef<Type *> params, Definition definition);
+  Value *callIndirectC(IRBuilder<> &builder, Value *target, Type *result, ArrayRef<Type *> params,
+                       ArrayRef<Value *> args, Span span);
   bool scalarCAbi() const;
   bool extendCNarrowInteger() const;
   bool hostedLinux64() const {
@@ -377,7 +414,14 @@ public:
     return options.profile == "hosted" && target.isOSLinux() && target.isGNUEnvironment() &&
            (target.getArch() == Triple::x86_64 || target.getArch() == Triple::aarch64) && pointerBits() == 64;
   }
-  bool heapAvailable() const { return options.profile == "hosted" && targetTriple().isOSLinux(); }
+  bool hostedMac64() const {
+    auto target = targetTriple();
+    return options.profile == "hosted" && target.isMacOSX() &&
+           (target.getArch() == llvm::Triple::x86_64 || target.getArch() == llvm::Triple::aarch64);
+  }
+  bool heapAvailable() const {
+    return options.profile == "hosted" && (targetTriple().isOSLinux() || hostedMac64());
+  }
   unsigned pointerBits() const { return module->getDataLayout().getPointerSizeInBits(); }
   std::string key(Definition d) const {
     return d.file->module +

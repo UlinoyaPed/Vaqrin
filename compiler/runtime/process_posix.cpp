@@ -15,6 +15,7 @@
 #include <time.h>
 #include <unistd.h>
 
+extern "C" intptr_t __vqr_io_file_write(int32_t, const uint8_t *, size_t, int32_t *);
 extern "C" int __vqr_io_env_lock();
 extern "C" void __vqr_io_env_unlock();
 
@@ -233,28 +234,6 @@ void release_child(Child *child) {
     free(child);
 }
 
-ssize_t write_without_sigpipe(int fd, const void *data, size_t length, int32_t *reason) {
-    sigset_t set, previous, pending;
-    sigemptyset(&set);
-    sigaddset(&set, SIGPIPE);
-    *reason = pthread_sigmask(SIG_BLOCK, &set, &previous);
-    if (*reason != 0) return -1;
-    const int pending_result = sigpending(&pending);
-    if (pending_result < 0) {
-        *reason = errno;
-        pthread_sigmask(SIG_SETMASK, &previous, nullptr);
-        return -1;
-    }
-    const auto written = retry_interrupted([&] { return write(fd, data, length); });
-    *reason = written < 0 ? errno : 0;
-    if (*reason == EPIPE && sigismember(&pending, SIGPIPE) == 0) {
-        struct timespec now{};
-        retry_interrupted([&] { return sigtimedwait(&set, nullptr, &now); });
-    }
-    pthread_sigmask(SIG_SETMASK, &previous, nullptr);
-    return written;
-}
-
 int append_captured_bytes(CapturedBytes &stream, const uint8_t *data, size_t length, size_t limit) {
     const size_t needed = stream.length + length;
     if (needed > stream.capacity) {
@@ -337,6 +316,18 @@ int32_t __vqr_process_child_has_pipe(uintptr_t address, int32_t stream) {
     return reinterpret_cast<Child *>(address)->streams[stream] >= 0;
 }
 
+int32_t __vqr_process_child_nonblocking(uintptr_t address, int32_t stream, int32_t *status) {
+    const int fd = reinterpret_cast<Child *>(address)->streams[stream];
+    const int flags = retry_interrupted([&] { return fcntl(fd, F_GETFL); });
+    if (flags < 0 || (!(flags & O_NONBLOCK) &&
+        retry_interrupted([&] { return fcntl(fd, F_SETFL, flags | O_NONBLOCK); }) < 0)) {
+        *status = errno;
+        return -1;
+    }
+    *status = 0;
+    return fd;
+}
+
 void __vqr_process_child_close(uintptr_t address, int32_t stream) {
     close_child_stream(*reinterpret_cast<Child *>(address), stream);
 }
@@ -352,7 +343,7 @@ intptr_t __vqr_process_child_read(uintptr_t address, int32_t stream, void *data,
 intptr_t __vqr_process_child_write(uintptr_t address, const void *data, size_t length,
                                   int32_t *out_error) {
     const int fd = reinterpret_cast<Child *>(address)->streams[0];
-    return write_without_sigpipe(fd, data, length, out_error);
+    return __vqr_io_file_write(fd, static_cast<const uint8_t *>(data), length, out_error);
 }
 
 int32_t __vqr_process_child_wait(uintptr_t address, int32_t mode, int32_t *ready,

@@ -1,0 +1,122 @@
+package mem
+import (core)
+
+class PoolNode<T> {
+    pub var all: ?*PoolNode<T>;
+    pub var free: ?*PoolNode<T>;
+    pub var acquired: bool;
+}
+
+pub class Pool<T> {
+    #copy: disabled
+    var backing: AllocatorRef;
+    var nodes: ?*PoolNode<T>;
+    var available: ?*PoolNode<T>;
+    var count: usize;
+    var active: usize;
+public:
+    func init(backing: AllocatorRef)
+        : backing(backing), nodes(null), available(null), count(0), active(0) {}
+
+    const func allocated() usize { count }
+    const func live() usize { active }
+
+    // The returned slot is raw storage. The caller manages the T stored there.
+    func acquire() !?*T {
+        var node: *PoolNode<T>;
+        switch available {
+            some(cached) => {
+                node = cached;
+                available = cached.free;
+            },
+            null => {
+                if count == ~usize(0) { return LayoutError.Overflow; }
+                var memory = backing.alloc(nodeLayout()!)! ?? { return AllocationError.OutOfMemory; };
+                node = unsafe { ptrCast<*PoolNode<T>>(memory) };
+                *node = PoolNode<T>{all: nodes, free: null, acquired: false};
+                nodes = some(node);
+                count++;
+            },
+        }
+        node.acquired = true;
+        node.free = null;
+        active++;
+        unsafe { some(ptrCast<*T>(ptrCast<*u8>(node).offset(slotOffset()))) }
+    }
+
+    // Destroy an initialized value before releasing its slot.
+    unsafe func release(address: *T) void {
+        var offset = slotOffset();
+        var raw = __vqr_pointer_address(address);
+        if raw < offset { panic("invalid pool slot"); }
+        var node = unsafe { ptrFromInt<*PoolNode<T>>(raw - offset) };
+        if !node.acquired { panic("pool slot has already been released"); }
+        node.acquired = false;
+        node.free = available;
+        available = some(node);
+        active--;
+    }
+
+    func clear() void {
+        if active != 0 { panic("cannot clear a pool with live slots"); }
+        var allocation = nodeLayout() catch { panic("invalid pool node layout"); };
+        for nodes != null {
+            var node = nodes.unwrap();
+            nodes = node.all;
+            var memory = unsafe { ptrCast<*u8>(node) };
+            backing.free(memory, allocation);
+        }
+        available = null;
+        count = 0;
+    }
+
+    func deinit() void { clear(); }
+
+private:
+    const func slotOffset() usize {
+        alignUp(layout<PoolNode<T>>().size(), layout<T>().align()) catch { panic("invalid pool slot offset"); }
+    }
+    const func nodeLayout() !Layout {
+        var item = layout<T>();
+        if item.size() == 0 { item = Layout.fromSizeAlign(1, item.align())!; }
+        layout<PoolNode<T>>().extend(item)
+    }
+}
+
+pub class Cow<T: Copyable & Movable> {
+    #copy: disabled
+    var borrowed: ?*const T;
+    var owned: ?T;
+    func init(source: ?*const T, value: ?T) : borrowed(source), owned(move(value)) {}
+public:
+    static func fromOwned(value: T) Self { Cow<T>(null, some(move(value))) }
+    unsafe static func borrow(source: *const T) Self { Cow<T>(some(source), null) }
+
+    const func isBorrowed() bool { borrowed != null }
+    const func isOwned() bool { borrowed == null }
+
+    const func asRef() *const T {
+        switch borrowed {
+            some(source) => source,
+            null => __vqr_optional_pointer(&owned).unwrap(),
+        }
+    }
+
+    func toMut() *T {
+        switch borrowed {
+            some(source) => { owned = some(*source); borrowed = null; },
+            null => {},
+        }
+        __vqr_optional_pointer(&owned).unwrap()
+    }
+
+    static func intoOwned(value: Self) T {
+        switch value.borrowed {
+            some(source) => *source,
+            null => {
+                var owned = core.replace<?T>(&value.owned, null);
+                move(owned).unwrap()
+            },
+        }
+    }
+}

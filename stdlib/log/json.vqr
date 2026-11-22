@@ -1,0 +1,72 @@
+package log
+import (coll, io, json, text)
+
+func keyword(value: str) !json.Value { json.Value.String(text.fromBytes(value.asBytes())!) }
+
+func encodeAttributes(values: []const Attr, depth: usize) !json.JsonObject {
+    if depth >= 128 { return json.JsonError.DepthLimit; }
+    var attributes = json.JsonObject();
+    for i in usize(0)..values.len() {
+        var attr = &values[i];
+        var encoded = switch attr.kind() {
+            AttrKind.String => keyword(attr.asString().unwrap())!,
+            AttrKind.Int => {
+                var raw = formatInt(attr.asInt().unwrap())!;
+                json.Value.Number(json.JsonNumber.parse(raw)!)
+            },
+            AttrKind.Bool => json.Value.Bool(attr.asBool().unwrap()),
+            AttrKind.Error => keyword("ErrorId")!,
+            AttrKind.Group => json.Value.Object(encodeAttributes(attr.asGroup(), depth + 1)!),
+        };
+        var previous = attributes.insert(text.fromBytes(attr.key().asBytes())!, move(encoded))!;
+    }
+    move(attributes)
+}
+
+pub class JsonHandler {
+    #copy: disabled
+    #implements: Handler
+    var writer: *io.Writer;
+    var pending: coll.Vec<u8>;
+    var position: usize;
+    func init(writer: *io.Writer) : writer(writer), pending(coll.Vec<u8>()), position(0) {}
+public:
+    static func new(writer: *io.Writer) Self { JsonHandler(writer) }
+    const func enabled(level: Level) bool { true }
+
+    func handle(record: *const Record) !void {
+        drain()!;
+        var object = json.JsonObject();
+        var oldLevel = object.insert("level", keyword(levelText(record.level()))!)!;
+        var oldMessage = object.insert("message", keyword(record.message())!)!;
+        var oldAttrs = object.insert("attrs", json.Value.Object(encodeAttributes(record.attrs(), 0)!))!;
+        switch record.timestamp() {
+            some(mark) => {
+                seconds, nanos := unsafe { mark.monotonicParts() };
+                var first = formatInt(seconds)!;
+                var second = formatInt(i64(nanos))!;
+                var oldSeconds = object.insert("monotonicSeconds", json.Value.Number(json.JsonNumber.parse(first)!))!;
+                var oldNanos = object.insert("monotonicNanos", json.Value.Number(json.JsonNumber.parse(second)!))!;
+            },
+            null => {},
+        };
+        var value = json.Value.Object(move(object));
+        var line = json.stringify(&value)!;
+        var encoded = coll.Vec<u8>.withCapacity(line.byteLen() + 1)!;
+        for byte in line.asBytes() { encoded.push(byte)!; }
+        encoded.push(10)!;
+        pending = move(encoded);
+        drain()
+    }
+
+    func flush() !void {
+        drain()!;
+        writer.flush()
+    }
+private:
+    func drain() !void {
+        io.writeAll(writer, pending.asConstSlice(), &position)!;
+        pending.clear();
+        position = 0;
+    }
+}

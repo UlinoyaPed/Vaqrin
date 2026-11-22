@@ -216,7 +216,7 @@ HashMap 操作：
 
 HashSet 构造使用相同的哈希与相等回调，提供 `init`、`withHasher`、`withCapacity`、`withSeed`、`withAllocator`、`withCapacityAndAllocator`、`withSeedAndAllocator`。操作包括 `len/capacity/isEmpty/insert/remove/take/contains/reserve/clear/iterRef/deinit`；`iterRef()` 返回 `!SetIterRef<T>`。
 
-哈希表采用开放寻址和线性探测。删除留下 tombstone，查找越过 tombstone，插入优先复用第一个 tombstone；扩容在新表完整分配后重新插入活键值，失败时原表不变。桶类型为包内私有，公开迭代器不暴露桶布局。`iterRef()` 为构造指针索引分配一段小型 Vec，因此返回 `!MapIterRef<K,V>`；索引只保存键和值的借用指针，容器结构修改会使迭代器失效。键通过相等回调比较，哈希与相等一致性由调用方负责。键不提供可变借用接口。insert 是消费式接口；insertPreserving 在增长失败时返回原 key/value。
+哈希表采用开放寻址和线性探测。删除留下 tombstone，查找越过 tombstone，插入优先复用第一个 tombstone；扩容在新表完整分配后重新插入活键值，失败时原表不变。桶类型为包内私有，公开迭代器不暴露桶布局。`iterRef()` 使用双向桶索引，`keys()` 和 `values()` 复用同一游标。容器结构修改会使借用迭代器失效。键通过相等回调比较，哈希与相等一致性由调用方负责。键不提供可变借用接口。insert 是消费式接口；insertPreserving 在增长失败时返回原 key/value。
 
 ### BTreeMap<K,V> / BTreeSet<T>
 
@@ -234,7 +234,7 @@ BTreeMap 构造必须提供严格弱序回调 `less: func(*const K,*const K) boo
 
 BTreeSet 提供 `init(less)`、`withComparator(less)`、`len/isEmpty/contains/insert/remove/take/first/last/popFirst/popLast/lowerBound/upperBound/iterRef/clear/deinit`。
 
-树节点最多 7 个键、8 个子节点，最小度数为 4。插入在降层前分裂满子节点。删除先定位键，再自底向上借用兄弟节点、合并节点或收缩根。比较等价定义为 `!less(a,b) && !less(b,a)`。`remove` 和 `removeEntry` 可使用同一棵树借出的键作为查询，比较在任何修改之前完成。删除成功后应重新获取借用。迭代器创建时分配有序指针索引，失败会返回分配错误。当前 BTree 节点使用默认 Box 分配器，自定义分配器入口仍待实现。
+树节点最多 7 个键、8 个子节点，最小度数为 4。插入在降层前分裂满子节点。删除先定位键，再自底向上借用兄弟节点、合并节点或收缩根。比较等价定义为 `!less(a,b) && !less(b,a)`。`remove` 和 `removeEntry` 可使用同一棵树借出的键作为查询，比较在任何修改之前完成。删除成功后应重新获取借用。双向迭代器保存两条树路径，遍历过程中无需分配堆内存。`range(lower, upper)` 定位左闭右开范围。当前 BTree 节点使用默认 Box 分配器，自定义分配器入口仍待实现。
 
 ## 6. 内存、所有权和迭代器合同
 
@@ -251,7 +251,7 @@ Vec 的 `getPtr/getMutPtr` 保留底层裸地址访问，指针迭代器、BTree
 - HashMap rehash 后旧桶被清理；删除/retain 后 tombstone 参与探测。
 - BTree split 先申请右节点再改动树；删除不分配。
 - 借用迭代器不拥有元素。容器结构修改、扩容、删除或重排会使相应迭代器/指针失效；编译器当前不做容器借用生命周期静态检查。
-- intoIter 接管容器；尚未消费的元素由迭代器持有的源容器析构。
+- intoIter 接管容器。Vec 的双向消费游标只析构尚未交付的槽位。`drain(start, end)` 和`spliceOwned` 返回持有所移除元素的消费游标，可在源 Vec 继续使用时独立消费。它们在移动元素前完成容量预留。
 
 ## 7. 依赖关系
 

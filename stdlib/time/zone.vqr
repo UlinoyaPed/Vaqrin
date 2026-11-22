@@ -1,0 +1,248 @@
+package time
+import (binary, coll, fs, text)
+
+pub enum LocalTimePolicy { Earlier, Later, RejectGap, ShiftForward }
+
+class Transition {
+    pub var at: i64;
+    pub var offset: i32;
+    pub func init(at: i64, offset: i32) : at(at), offset(offset) {}
+}
+
+class ZoneHeader {
+    pub var version: u8;
+    pub var utc: usize;
+    pub var standard: usize;
+    pub var leaps: usize;
+    pub var times: usize;
+    pub var types: usize;
+    pub var names: usize;
+    pub func init(version: u8, utc, standard, leaps, times, types, names: usize)
+        : version(version), utc(utc), standard(standard), leaps(leaps), times(times), types(types), names(names) {}
+    pub const func size(width: usize) usize {
+        times * (width + 1) + types * 6 + names + leaps * (width + 4) + standard + utc
+    }
+}
+
+func zoneHeader(reader: *binary.Reader) !ZoneHeader {
+    if reader.readU32()! != 0x545a6966 { return TimeError.InvalidZone; }
+    var version = reader.readU8()!;
+    if version != 0 && version != 50 && version != 51 && version != 52 { return TimeError.InvalidZone; }
+    var reserved = reader.readBytes(15)!;
+    var utc = usize(reader.readU32()!);
+    var standard = usize(reader.readU32()!);
+    var leaps = usize(reader.readU32()!);
+    var times = usize(reader.readU32()!);
+    var types = usize(reader.readU32()!);
+    var names = usize(reader.readU32()!);
+    if types == 0 || types > 256 || times > 262144 || names == 0 || names > 262144 ||
+       leaps != 0 || (utc != 0 && utc != types) || (standard != 0 && standard != types) {
+        return TimeError.InvalidZone;
+    }
+    ZoneHeader(version, utc, standard, leaps, times, types, names)
+}
+
+func zoneFile(name: str) !string {
+    var bytes = name.asBytes();
+    if bytes.len() == 0 || bytes.len() > 255 || name == "right" || name == "posix" {
+        return TimeError.InvalidZone;
+    }
+    var start = usize(0);
+    for i in usize(0)..=bytes.len() {
+        if i == bytes.len() || bytes[i] == 47 {
+            if i == start || (i == start + 1 && bytes[start] == 46) ||
+               (i == start + 2 && bytes[start] == 46 && bytes[start + 1] == 46) {
+                return TimeError.InvalidZone;
+            }
+            start = i + 1;
+        } else {
+            var byte = bytes[i];
+            if !asciiLetter(byte) && (byte < 48 || byte > 57) &&
+               byte != 45 && byte != 43 && byte != 95 && byte != 46 { return TimeError.InvalidZone; }
+        }
+    }
+    var path = text.StringBuilder();
+    path.append("/usr/share/zoneinfo/")!;
+    path.append(name)!;
+    path.build()
+}
+
+pub class TimeZone {
+    #copy: disabled
+    var identifier: string;
+    var initialOffset: i32;
+    var transitions: coll.Vec<Transition>;
+    var offsets: coll.Vec<i32>;
+    var recurring: ?RecurringZone;
+    func init(name: string, initial: i32, transitions: coll.Vec<Transition>,
+              offsets: coll.Vec<i32>, recurring: ?RecurringZone)
+        : identifier(move(name)), initialOffset(initial), transitions(move(transitions)),
+          offsets(move(offsets)), recurring(recurring) {}
+public:
+    static func utc() Self {
+        TimeZone("UTC", 0, coll.Vec<Transition>(), coll.Vec<i32>(), null)
+    }
+
+    static func fixedOffset(seconds: i32) !Self {
+        if seconds < -89999 || seconds > 93599 { return TimeError.InvalidZone; }
+        TimeZone("fixed", seconds, coll.Vec<Transition>(), coll.Vec<i32>(), null)
+    }
+
+    static func load(name: str) !Self {
+        var path = zoneFile(name)!;
+        var bytes = fs.readFile(path, 2097152)!;
+        return TimeZone.fromTzif(name, bytes.asConstSlice());
+    }
+
+    static func fromTzif(name: str, data: []const u8) !Self {
+        var reader = binary.Reader(data, binary.Endian.Big);
+        var header = zoneHeader(&reader)!;
+        var width = usize(4);
+        if header.version != 0 {
+            var version = header.version;
+            reader.seek(reader.position() + header.size(4))!;
+            header = zoneHeader(&reader)!;
+            if header.version != version { return TimeError.InvalidZone; }
+            width = 8;
+        }
+        var end = reader.position() + header.size(width);
+        if end > data.len() { return TimeError.InvalidZone; }
+        var timestamps = coll.Vec<i64>.withCapacity(header.times)!;
+        for i in usize(0)..header.times {
+            var value = if width == 8 { reader.readI64()! } else { i64(reader.readI32()!) };
+            if i != 0 && *timestamps.at(i - 1) >= value { return TimeError.InvalidZone; }
+            timestamps.push(value)!;
+        }
+        var indices = reader.readBytes(header.times)!;
+        var names = data[reader.position() + header.types * 6..reader.position() + header.types * 6 + header.names];
+        if names[names.len() - 1] != 0 { return TimeError.InvalidZone; }
+        var offsets = coll.Vec<i32>.withCapacity(header.types)!;
+        for i in usize(0)..header.types {
+            var offset = reader.readI32()!;
+            var daylight = reader.readU8()!;
+            var abbreviation = usize(reader.readU8()!);
+            if offset < -89999 || offset > 93599 || daylight > 1 || abbreviation >= header.names {
+                return TimeError.InvalidZone;
+            }
+            offsets.push(offset)!;
+        }
+        reader.seek(reader.position() + header.names)!;
+        for i in usize(0)..header.standard + header.utc {
+            if reader.readU8()! > 1 { return TimeError.InvalidZone; }
+        }
+        var transitions = coll.Vec<Transition>.withCapacity(header.times)!;
+        for i in usize(0)..header.times {
+            var index = usize(indices[i]);
+            if index >= header.types { return TimeError.InvalidZone; }
+            transitions.push(Transition(*timestamps.at(i), *offsets.at(index)))!;
+        }
+        var recurring: ?RecurringZone = null;
+        if width == 8 {
+            if data.len() - end < 2 || data[end] != 10 || data[data.len() - 1] != 10 {
+                return TimeError.InvalidZone;
+            }
+            if data.len() - end > 2 { recurring = some(parseRecurring(data[end + 1..data.len() - 1])!); }
+        } else if end != data.len() { return TimeError.InvalidZone; }
+        var initial = *offsets.at(0);
+        TimeZone(text.fromBytes(name.asBytes())!, initial, move(transitions), move(offsets), recurring)
+    }
+
+    const func name() str { identifier }
+    const func offsetAt(utc: UtcDateTime) Duration { Duration.fromSeconds(i64(offsetSeconds(utc.unixSeconds()))) }
+    const func clone() !Self {
+        TimeZone(text.fromBytes(identifier.asBytes())!, initialOffset, transitions.clone()!, offsets.clone()!, recurring)
+    }
+
+    const func offsetSeconds(utc: i64) i32 {
+        var low = usize(0);
+        var high = transitions.len();
+        if recurring != null && (high == 0 || utc > transitions.at(high - 1).at) {
+            return recurring.unwrap().offsetAt(utc);
+        }
+        for low < high {
+            var middle = low + (high - low) / 2;
+            if transitions.at(middle).at > utc { high = middle; } else { low = middle + 1; }
+        }
+        if low == 0 { return initialOffset; }
+        transitions.at(low - 1).offset
+    }
+
+    const func resolve(local: LocalDateTime, policy: LocalTimePolicy) !UtcDateTime {
+        var seconds = local.date().toOrdinal() * secondsPerDay + i64(local.time().secondsSinceMidnight());
+        var earliest: ?i64 = null;
+        var latest: ?i64 = null;
+        var forward: ?i64 = null;
+        var distance: i64 = 0;
+        var possible = offsets.asConstSlice();
+        var extra = usize(1);
+        if recurring != null { extra = 3; }
+        for index in usize(0)..possible.len() + extra {
+            var offset = initialOffset;
+            if index < possible.len() { offset = possible[index]; }
+            else if index > possible.len() {
+                var rule = recurring.unwrap();
+                offset = if index == possible.len() + 1 { rule.standard } else { rule.daylight };
+            }
+            var candidate = seconds - i64(offset);
+            var delta = i64(offsetSeconds(candidate)) - i64(offset);
+            if delta == 0 {
+                if earliest == null || candidate < earliest.unwrap() { earliest = some(candidate); }
+                if latest == null || candidate > latest.unwrap() { latest = some(candidate); }
+            } else if policy == LocalTimePolicy.ShiftForward && delta > 0 &&
+                      (forward == null || delta < distance) && offsetSeconds(candidate - delta) == offset {
+                forward = some(candidate);
+                distance = delta;
+            }
+        }
+        if earliest != null {
+            var chosen = if policy == LocalTimePolicy.Later { latest.unwrap() } else { earliest.unwrap() };
+            return UtcDateTime.fromUnixSeconds(chosen, local.time().nanosecond());
+        }
+        var chosen = forward ?? { return TimeError.NonexistentLocalTime; };
+        UtcDateTime.fromUnixSeconds(chosen, local.time().nanosecond())
+    }
+}
+
+pub class ZonedDateTime {
+    #copy: disabled
+    var instant: UtcDateTime;
+    var location: TimeZone;
+    func init(utc: UtcDateTime, zone: TimeZone) : instant(utc), location(move(zone)) {}
+public:
+    static func fromUtc(utc: UtcDateTime, zone: TimeZone) Self { ZonedDateTime(utc, move(zone)) }
+    static func fromLocal(local: LocalDateTime, zone: TimeZone, policy: LocalTimePolicy) !Self {
+        var utc = zone.resolve(local, policy)!;
+        ZonedDateTime(utc, move(zone))
+    }
+    const func utc() UtcDateTime { instant }
+    const func local() !LocalDateTime { toLocal(instant, &location) }
+    const func zoneName() str { location.name() }
+    const func offset() Duration { location.offsetAt(instant) }
+    const func withZone(zone: TimeZone) Self { ZonedDateTime(instant, move(zone)) }
+    const func add(value: Duration) !Self { ZonedDateTime(instant.add(value)!, location.clone()!) }
+}
+
+pub func toUtc(local: LocalDateTime, zone: *const TimeZone, policy: LocalTimePolicy) !UtcDateTime {
+    zone.resolve(local, policy)
+}
+
+pub func toLocal(utc: UtcDateTime, zone: *const TimeZone) !LocalDateTime {
+    var local = utc.add(zone.offsetAt(utc))!;
+    LocalDateTime.new(local.date(), local.time())
+}
+
+pub func loadTimeZone(name: str) !TimeZone { TimeZone.load(name) }
+
+pub func tzdbVersion() !string {
+    var file = fs.readText("/usr/share/zoneinfo/tzdata.zi", 2097152)!;
+    var bytes = file.asBytes();
+    var prefix = "# version ".asBytes();
+    if bytes.len() < prefix.len() { return TimeError.InvalidZone; }
+    for i in usize(0)..prefix.len() {
+        if bytes[i] != prefix[i] { return TimeError.InvalidZone; }
+    }
+    var end = prefix.len();
+    for end < bytes.len() && bytes[end] != 10 { end++; }
+    if end == prefix.len() { return TimeError.InvalidZone; }
+    text.fromBytes(bytes[prefix.len()..end])
+}

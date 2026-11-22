@@ -16,6 +16,7 @@ ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::v
       fail(n->span, "native clocks require a hosted GNU/Linux x86-64 or AArch64 target", "E290");
     return voidValue();
   }
+  if (key == "__vqr_posix_would_block") return {p.integer(32, true), ir.getInt32(p.hostedMac64() ? 35 : 11)};
   if (key == "__vqr_default_heap") return {p.boolTy, ir.getInt1(p.heapAvailable())};
   if (key == "__vqr_validate_channel") {
     if (!p.hostedLinux64())
@@ -319,6 +320,18 @@ ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::v
     if (!live()) return neverValue();
     ir.CreateMemMove(output, Align(1), input, Align(1), read(count, n->span));
     return voidValue();
+  }
+  if (key == "__vqr_serde_value_kind") {
+    arity(0);
+    if (types.size() != 1) fail(n->span, "serde classification requires one type");
+    auto *type = parseType(types[0]);
+    unsigned code = 0;
+    if (type == p.boolTy) code = 1;
+    else if (type == p.textTy) code = 2;
+    else if (type->kind == Kind::Int) code = type->sign ? 3 : 4;
+    else if (type->kind == Kind::Float) code = 5;
+    else if (type->kind == Kind::Char) code = 6;
+    return {p.integer(8, false), ir.getInt8(code)};
   }
   if (key == "__vqr_has_interface") {
     arity(0);

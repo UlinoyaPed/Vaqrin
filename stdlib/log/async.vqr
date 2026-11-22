@@ -1,0 +1,96 @@
+package log
+import (channel, task)
+
+// Only this constructor creates a queued record. Its recursive copy uses the
+// default allocator and retains no source views or custom allocator references.
+class QueuedRecord {
+    pub var contents: Record;
+    pub func init(source: *const Record) !void : contents(source.clone()!) {}
+}
+
+enum Delivery {
+    Write(QueuedRecord),
+    Flush(channel.Sender<?ErrorId>),
+}
+
+pub class AsyncHandler {
+    #copy: disabled
+    #implements: Handler
+    var sender: channel.Sender<Delivery>;
+    var worker: task.Task<void>;
+    var group: task.TaskGroup;
+    var closed: bool;
+    var droppedRecords: u64;
+    func init(sender: channel.Sender<Delivery>, worker: task.Task<void>, group: task.TaskGroup)
+        : sender(move(sender)), worker(move(worker)), group(move(group)), closed(false), droppedRecords(0) {}
+public:
+    // The handler is owned by the worker for the lifetime of this queue.
+    static func new<H: Handler & Movable & Sendable>(inner: H, capacity: usize) !Self {
+        tx, rx := channel.bounded<Delivery>(capacity)!;
+        var group = task.TaskGroup.withWorkers(1)!;
+        var run = [move(inner), move(rx)]() !void => {
+            var handler = move(inner);
+            var reader = move(rx);
+            var failure: ?ErrorId = null;
+            for {
+                var item = reader.recv()! ?? { break; };
+                switch move(item) {
+                    Delivery.Write(record) => {
+                        if handler.enabled(record.contents.level()) {
+                            handler.handle(&record.contents) catch (reason) {
+                                if failure == null { failure = some(reason); }
+                            };
+                        }
+                    },
+                    Delivery.Flush(reply) => {
+                        handler.flush() catch (reason) {
+                            if failure == null { failure = some(reason); }
+                        };
+                        reply.send(failure) catch {};
+                        failure = null;
+                    },
+                }
+            }
+            var final = handler.flush();
+            if failure != null { return failure.unwrap(); }
+            final
+        };
+        var worker = group.spawn<void>(move(run))!;
+        AsyncHandler(move(tx), move(worker), move(group))
+    }
+
+    const func enabled(level: Level) bool { !closed }
+    const func dropped() u64 { droppedRecords }
+
+    func handle(record: *const Record) !void {
+        if closed { return channel.ChannelError.Closed; }
+        var queued = Delivery.Write(QueuedRecord(record)!);
+        switch sender.trySend(move(queued)) {
+            channel.TrySendResult.Sent => {},
+            channel.TrySendResult.Full(item) => {
+                if droppedRecords != ~u64(0) { droppedRecords++; }
+            },
+            channel.TrySendResult.Closed(item) => return channel.ChannelError.Closed,
+            channel.TrySendResult.OutOfMemory(item) => return channel.ChannelError.OutOfMemory,
+        }
+    }
+
+    func flush() !void {
+        if closed { return channel.ChannelError.Closed; }
+        tx, rx := channel.bounded<?ErrorId>(1)!;
+        sender.send(Delivery.Flush(move(tx)))!;
+        var result = rx.recv()! ?? { return channel.ChannelError.Closed; };
+        if result != null { return result.unwrap(); }
+    }
+
+    func close() !void {
+        if closed { return; }
+        closed = true;
+        sender.close();
+        var joined = worker.join();
+        group.close()!;
+        joined
+    }
+
+    func deinit() void { close() catch {}; }
+}

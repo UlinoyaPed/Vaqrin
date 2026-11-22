@@ -10,6 +10,143 @@ class ContainerAcceptance(CompilerCase):
         self.process(VAQC, "build", entry, "-O2", "-o", "containers")
         return self.process("./containers").stdout.decode().splitlines()
 
+    def test_map_entry_lazy_insert_and_remove(self):
+        output = self.run_container(r"""
+            func main() !void {
+                var map = coll.HashMap<i32, i32>.withHasher(hash.hashI32, hash.eqI32);
+                {
+                    var entry = unsafe { map.entry(8) };
+                    io.println(entry.isVacant() && *entry.key() == 8)!;
+                    var build = () i32 => 42;
+                    io.println(*entry.orInsertWith(build)! == 42)!;
+                }
+                {
+                    var entry = unsafe { map.entry(8) };
+                    var adjust = (address: *i32) void => { *address += 3; };
+                    var changed = entry.andModify(adjust);
+                    io.println(changed.isOccupied() && *entry.get().unwrap() == 45)!;
+                    io.println(entry.remove().unwrap() == 45)!;
+                }
+                io.println(map.isEmpty())!;
+            }
+        """)
+        self.assertEqual(output, ["true"] * 5)
+
+    def test_consuming_vec_drops_each_slot_once(self):
+        output = self.run_container(r"""
+            class Owned {
+                #copy: disabled
+                pub var value: i32;
+                func deinit() void { io.println(value) catch {}; }
+            }
+            func main() !void {
+                var vector = coll.Vec<Owned>();
+                for i in 1..6 { vector.push(Owned{value: i})!; }
+                var iterator = coll.Vec<Owned>.intoIter(move(vector));
+                {
+                    var first = iterator.next().unwrap();
+                    var last = iterator.nextBack().unwrap();
+                    if first.value != 1 || last.value != 5 || iterator.remaining() != 3 {
+                        panic("invalid Vec iterator cursor");
+                    }
+                }
+            }
+        """)
+        self.assertEqual(sorted(output), ["1", "2", "3", "4", "5"])
+
+    def test_stable_sort_ranges_and_map_projections(self):
+        output = self.run_container(r"""
+            import (algo)
+            class Item {
+                #copy: disabled
+                pub var key: i32;
+                pub var ordinal: i32;
+            }
+            func less(a: *const Item, b: *const Item) bool { a.key < b.key }
+            func intLess(a: *const i32, b: *const i32) bool { *a < *b }
+            func main() !void {
+                var data = coll.Vec<Item>();
+                for i in 0..48 { data.push(Item{key: (47 - i) % 5, ordinal: i})!; }
+                algo.stableSortBy<Item>(data.asSlice(), less);
+                for i in usize(1)..data.len() {
+                    var a = data.getPtr(i - 1).unwrap();
+                    var b = data.getPtr(i).unwrap();
+                    if a.key > b.key || (a.key == b.key && a.ordinal >= b.ordinal) { panic("unstable sort"); }
+                }
+                var tree = coll.BTreeMap<i32, i32>.withComparator(intLess);
+                for i in 0..48 { var previous = tree.insert(i * 2, i)!; }
+                var start = 11;
+                var end = 27;
+                var range = tree.range(some(&start), some(&end));
+                var counter = 6;
+                for key, value in move(range) {
+                    if *key != counter * 2 || *value != counter { panic("range cursor mismatch"); }
+                    counter++;
+                }
+                io.println(counter)!;
+                var mixed = tree.iterMut()!;
+                var low = mixed.next().unwrap();
+                var high = mixed.nextBack().unwrap();
+                *low.1 = 100;
+                *high.1 = 200;
+                io.println(*tree.first().unwrap().1 == 100 && *tree.last().unwrap().1 == 200)!;
+                var table = coll.HashMap<i32, i32>.withHasher(hash.hashI32, hash.eqI32);
+                for i in 0..30 { var previous = table.insert(i, i * 2)!; }
+                var removed = table.remove(&start);
+                var keys = table.keys();
+                var values = table.values();
+                var total = 0;
+                for key in move(keys) { total += *key; }
+                var valueTotal = 0;
+                for value in move(values) { valueTotal += *value; }
+                io.println(total == 424 && valueTotal == 848)!;
+                var factory = () i32 => 700;
+                {
+                    var newEntry = table.getOrInsertWith(31, factory)!;
+                    io.println(newEntry == 700)!;
+                }
+                var existing = table.getOrInsertWith(31, factory)!;
+                io.println(existing == 700)!;
+                var pair = (5, 10);
+                var pointers = coll.Vec<(*const i32, *const i32)>();
+                pointers.push((&pair.0, &pair.1))!;
+                var old = coll.MapIterRef<i32, i32>(move(pointers), 1);
+                var valuesFromOld = old.nextBack().unwrap();
+                var treePointers = coll.Vec<*const (i32, i32)>();
+                treePointers.push(&pair)!;
+                var oldTree = coll.BTreeIterRef<i32, i32>(move(treePointers), 1);
+                io.println(*valuesFromOld.1 == 10 && *oldTree.next().unwrap().0 == 5)!;
+            }
+        """)
+        self.assertEqual(output, ["14", "true", "true", "true", "true", "true"])
+
+    def test_vec_splice_and_drain_owned_elements(self):
+        output = self.run_container(r"""
+            class Tag {
+                #copy: disabled
+                pub var id: i32;
+                func deinit() void { io.println(id) catch {}; }
+            }
+            func main() !void {
+                var source = coll.Vec<Tag>();
+                for i in 0..6 { source.push(Tag{id: i})!; }
+                var replacement = coll.Vec<Tag>();
+                for i in 6..10 { replacement.push(Tag{id: i})!; }
+                var removed = source.spliceOwned(1, 3, move(replacement))!;
+                var tail = removed.nextBack().unwrap();
+                if tail.id != 2 || source.len() != 8 ||
+                    source.getPtr(1).unwrap().id != 6 || source.getPtr(5).unwrap().id != 3 {
+                    panic("invalid splice");
+                }
+                var middle = source.drain(2, 6)!;
+                var first = middle.next().unwrap();
+                if first.id != 7 || source.len() != 4 || source.getPtr(2).unwrap().id != 4 {
+                    panic("invalid drain");
+                }
+            }
+        """)
+        self.assertEqual(sorted(output), list("0123456789"))
+
     def test_deques_wrap_and_preserve_noncopy_values(self):
         dropped = self.run_container('''
             class Probe {

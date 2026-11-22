@@ -3,6 +3,11 @@
 #endif
 
 #include <arpa/inet.h>
+#include <atomic>
+#include <cstdlib>
+#include <new>
+#include <pthread.h>
+#include <sys/eventfd.h>
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
@@ -113,6 +118,51 @@ int set_nonblocking(int fd, bool enabled) {
     int changed = enabled ? flags | O_NONBLOCK : flags & ~O_NONBLOCK;
     if (changed == flags) return 0;
     return retry_interrupted([&] { return fcntl(fd, F_SETFL, changed); }) == 0 ? 0 : errno;
+}
+
+addrinfo *resolve(const char *name, int32_t &status) {
+    addrinfo hints{};
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    addrinfo *addresses = nullptr;
+    const int error = getaddrinfo(name, nullptr, &hints, &addresses);
+    status = error == 0 ? 0 : error == EAI_SYSTEM ? errno : -1;
+    return addresses;
+}
+
+struct Resolution {
+    std::atomic<unsigned> references{2};
+    std::atomic<bool> done{false};
+    char *name = nullptr;
+    int event = -1;
+    int32_t status = 0;
+    addrinfo *addresses = nullptr;
+
+    ~Resolution() {
+        if (event >= 0) close(event);
+        if (addresses) freeaddrinfo(addresses);
+        free(name);
+    }
+};
+
+constexpr unsigned max_resolutions = 32;
+std::atomic<unsigned> active_resolutions{0};
+
+void release_resolution(Resolution *request) {
+    if (request->references.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+        request->~Resolution();
+        free(request);
+    }
+}
+
+void *run_resolution(void *argument) {
+    auto *request = static_cast<Resolution *>(argument);
+    request->addresses = resolve(request->name, request->status);
+    request->done.store(true, std::memory_order_release);
+    retry_interrupted([&] { return eventfd_write(request->event, 1); });
+    active_resolutions.fetch_sub(1, std::memory_order_relaxed);
+    release_resolution(request);
+    return nullptr;
 }
 
 } // namespace
@@ -282,13 +332,76 @@ intptr_t __vqr_net_receive_from(int32_t fd, uint8_t *data, size_t size, uint8_t 
 }
 
 uintptr_t __vqr_net_resolve(const char *name, int32_t *out_error) {
-    addrinfo hints{};
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-    addrinfo *addresses = nullptr;
-    const int error = getaddrinfo(name, nullptr, &hints, &addresses);
-    *out_error = error == 0 ? 0 : error == EAI_SYSTEM ? errno : -1;
-    return reinterpret_cast<uintptr_t>(addresses);
+    return reinterpret_cast<uintptr_t>(resolve(name, *out_error));
+}
+
+uintptr_t __vqr_net_resolve_start(const char *name, int32_t *out_error) {
+    auto *storage = malloc(sizeof(Resolution));
+    auto *request = storage ? new (storage) Resolution : nullptr;
+    if (!request) {
+        *out_error = ENOMEM;
+        return 0;
+    }
+    request->name = strdup(name);
+    if (!request->name) {
+        *out_error = ENOMEM;
+        request->~Resolution();
+        free(request);
+        return 0;
+    }
+    request->event = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+    if (request->event < 0) {
+        *out_error = errno;
+        request->~Resolution();
+        free(request);
+        return 0;
+    }
+    // A cancelled lookup can outlive its caller while the system resolver is
+    // blocked. Bound the number of such jobs with no scheduler worker involved.
+    if (active_resolutions.fetch_add(1, std::memory_order_relaxed) >= max_resolutions) {
+        active_resolutions.fetch_sub(1, std::memory_order_relaxed);
+        *out_error = EAGAIN;
+        request->~Resolution();
+        free(request);
+        return 0;
+    }
+    pthread_t thread;
+    pthread_attr_t attributes;
+    int status = pthread_attr_init(&attributes);
+    if (status == 0) {
+        status = pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED);
+        if (status == 0) status = pthread_create(&thread, &attributes, run_resolution, request);
+        pthread_attr_destroy(&attributes);
+    }
+    if (status != 0) {
+        active_resolutions.fetch_sub(1, std::memory_order_relaxed);
+        *out_error = status;
+        request->~Resolution();
+        free(request);
+        return 0;
+    }
+    *out_error = 0;
+    return reinterpret_cast<uintptr_t>(request);
+}
+
+int32_t __vqr_net_resolve_event(uintptr_t handle) {
+    return reinterpret_cast<const Resolution *>(handle)->event;
+}
+
+uintptr_t __vqr_net_resolve_finish(uintptr_t handle, int32_t *out_error) {
+    auto &request = *reinterpret_cast<Resolution *>(handle);
+    if (!request.done.load(std::memory_order_acquire)) {
+        *out_error = EAGAIN;
+        return 0;
+    }
+    *out_error = request.status;
+    auto *result = request.addresses;
+    request.addresses = nullptr;
+    return reinterpret_cast<uintptr_t>(result);
+}
+
+void __vqr_net_resolve_release(uintptr_t handle) {
+    release_resolution(reinterpret_cast<Resolution *>(handle));
 }
 
 int32_t __vqr_net_next_address(uintptr_t *cursor, uint8_t *wire) {

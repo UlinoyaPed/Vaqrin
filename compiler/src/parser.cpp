@@ -33,7 +33,7 @@ constexpr std::string_view assignments[] = {
 
 class Parser {
 public:
-  explicit Parser(const Source &source) : tokens(lex(source)) {}
+  explicit Parser(std::vector<Token> tokens) : tokens(std::move(tokens)) {}
   File file();
 
 private:
@@ -134,6 +134,7 @@ private:
   Ast postfix(Ast base, bool excludeFields);
   Ast loop();
   Ast match();
+  Ast selection();
   Ast pattern();
   bool bindingAhead(bool iteration = false) const;
   bool wrappedLoopHeader() const;
@@ -192,6 +193,13 @@ std::vector<Attribute> Parser::attributes(bool typeBody) {
       } while (eat(","));
       eat(";");
       out.push_back(std::move(attribute));
+      continue;
+    }
+    if (t.text == "serde_name") {
+      auto value = take();
+      if (value.kind != TokenKind::Text) fail(value.span, "expected a serialized field name", "E110");
+      eat(";");
+      out.push_back({t.text, t.span, std::move(value.text)});
       continue;
     }
     std::string value;
@@ -265,6 +273,7 @@ Decl Parser::declaration(bool member, bool iface) {
     d.readOnly = isConst;
     auto n = (isOperator || at("select") || (d.associated && at("new"))) ? take() : name();
     d.name = isOperator ? "operator" + n.text : n.text;
+    if (!isOperator) d.nameSpan = n.span;
     genericParameters(d);
     parameters(d);
     if (!(member && n.text == "init" && (at(":") || at("{"))))
@@ -295,7 +304,9 @@ Decl Parser::declaration(bool member, bool iface) {
       auto dot = d.type->text.rfind('.');
       d.name = d.type->text.substr(dot == std::string::npos ? 0 : dot + 1);
     } else {
-      d.name = name().text;
+      auto id = name();
+      d.name = id.text;
+      d.nameSpan = id.span;
       if (eat(":")) d.type = type();
     }
     if (eat("=")) d.body = expression();
@@ -306,7 +317,9 @@ Decl Parser::declaration(bool member, bool iface) {
   if (member) fail(current().span, "expected class or interface member", "E110");
   if (eat("type")) {
     d.kind = DeclKind::Alias;
-    d.name = name().text;
+    auto id = name();
+    d.name = id.text;
+    d.nameSpan = id.span;
     genericParameters(d);
     require("=");
     d.type = type();
@@ -323,7 +336,9 @@ Decl Parser::declaration(bool member, bool iface) {
     d.kind = DeclKind::Interface;
   else
     fail(current().span, "expected a declaration", "E110");
-  d.name = name().text;
+  auto id = name();
+  d.name = id.text;
+  d.nameSpan = id.span;
   genericParameters(d);
   require("{");
   auto inside = attributes(true);
@@ -458,15 +473,31 @@ Ast Parser::type(bool inferArray) {
     std::vector<Ast> types;
     list(")", [&] { types.push_back(parameterType()); });
     auto n = make(NodeKind::TypeFunction, start.span, c ? "C" : "", std::move(types));
+    if (current().kind == TokenKind::Name && current().text == "borrow" && current(1).text == "(") {
+      take();
+      require("(");
+      auto argument = take();
+      if (argument.kind != TokenKind::Number)
+        fail(argument.span, "borrow source must be a 1-based parameter index", "E110");
+      n->names.push_back(std::move(argument.text));
+      n->bindingSpans.push_back(argument.span);
+      require(")");
+    }
     n->type = type();
     return n;
   }
   auto id = name();
-  while (eat("."))
-    id.text += '.' + name().text;
+  auto leaf = id.span;
+  while (eat(".")) {
+    auto member = name();
+    leaf = member.span;
+    id.text += '.' + member.text;
+  }
   std::vector<Ast> types;
   if (at("<")) types = genericArguments();
-  return make(NodeKind::TypeName, id.span, id.text, std::move(types));
+  auto result = make(NodeKind::TypeName, id.span, id.text, std::move(types));
+  result->bindingSpans.push_back(leaf);
+  return result;
 }
 
 bool Parser::bindingAhead(bool iteration) const {
@@ -651,6 +682,53 @@ Ast Parser::match() {
   return n;
 }
 
+Ast Parser::selection() {
+  auto token = require("select");
+  auto result = make(NodeKind::Select, token.span);
+  require("{");
+  bool hasElse = false;
+  while (!eat("}")) {
+    auto arm = make(NodeKind::Arm, current().span);
+    if (eat("else")) {
+      if (hasElse) fail(arm->span, "select has more than one else arm", "E110");
+      hasElse = true;
+      arm->text = "else";
+    } else {
+      if (current().kind == TokenKind::Name && current(1).text == ":=") {
+        auto binding = take();
+        arm->names.push_back(binding.text);
+        arm->bindingSpans.push_back(binding.span);
+        require(":=");
+      }
+      auto call = expression(1, true);
+      if (call->kind != NodeKind::Call) fail(call->span, "select arm must call recv, send, or after", "E110");
+      auto target = call->children[0];
+      if (target->kind == NodeKind::Member && target->text == "recv" && call->children.size() == 1) {
+        arm->text = "recv";
+        arm->children.push_back(target->children[0]);
+      } else if (target->kind == NodeKind::Member && target->text == "send" && call->children.size() == 2 &&
+                 arm->names.empty()) {
+        arm->text = "send";
+        arm->children = {target->children[0], call->children[1]};
+      } else if (target->kind == NodeKind::Name && target->text == "after" && call->children.size() == 2 &&
+                 arm->names.empty()) {
+        arm->text = "after";
+        arm->children.push_back(call->children[1]);
+      } else {
+        fail(call->span, "invalid select arm", "E110");
+      }
+    }
+    require("=>");
+    auto previous = std::exchange(armExpression, true);
+    arm->tail = expression();
+    armExpression = previous;
+    result->children.push_back(arm);
+    if (!eat(",") && !at("}")) fail(current().span, "expected ',' after select arm", "E110");
+  }
+  if (result->children.empty()) fail(token.span, "select requires at least one arm", "E110");
+  return result;
+}
+
 Ast Parser::lambda(bool excludeFields) {
   auto start = current();
   if (start.kind == TokenKind::Name && current(1).text == "=>") {
@@ -807,7 +885,7 @@ Ast Parser::primary(bool excludeFields) {
     n->children = args(")");
     return n;
   }
-  if (at("select")) fail(t.span, "select requires the channel runtime, which is not yet supported", "E290");
+  if (at("select")) return selection();
   fail(t.span, "expected an expression", "E110");
 }
 
@@ -883,10 +961,13 @@ Ast Parser::expression(int minimum, bool excludeFields) {
     take();
     auto p = op->precedence;
     std::string binder;
+    Span binderSpan;
     if (p == 1 && at("(") && current(1).kind == TokenKind::Name && current(2).text == ")" &&
         current(3).text == "{") {
       take();
-      binder = name().text;
+      auto binding = name();
+      binder = binding.text;
+      binderSpan = binding.span;
       require(")");
     }
     auto right = expression(p <= 2 ? p : p + 1, excludeFields);
@@ -894,6 +975,7 @@ Ast Parser::expression(int minimum, bool excludeFields) {
       if (left->kind != NodeKind::Compare) left = make(NodeKind::Compare, t.span, "", {left});
       left->children.push_back(right);
       left->names.push_back(t.text);
+      left->bindingSpans.push_back(t.span);
     } else {
       if ((p == 8 || p == 10) && left->kind == NodeKind::Binary &&
           std::ranges::any_of(operators, [&](auto previous) {
@@ -901,7 +983,10 @@ Ast Parser::expression(int minimum, bool excludeFields) {
           }))
         fail(t.span, "operator cannot be chained", "E110");
       left = make(NodeKind::Binary, t.span, t.text, {left, right});
-      if (!binder.empty()) left->names.push_back(binder);
+      if (!binder.empty()) {
+        left->names.push_back(binder);
+        left->bindingSpans.push_back(binderSpan);
+      }
     }
   }
   return left;
@@ -924,7 +1009,13 @@ void show(const Ast &node, unsigned indent) {
 } // namespace
 
 File parse(const Source &source) {
-  return Parser(source).file();
+  return Parser(lex(source)).file();
+}
+
+File parse(const Source &source, std::vector<Token> tokens) {
+  if (tokens.empty()) return parse(source);
+  validateUtf8(source);
+  return Parser(std::move(tokens)).file();
 }
 
 void printAst(const File &file) {

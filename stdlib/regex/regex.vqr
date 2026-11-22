@@ -4,7 +4,7 @@ import (coll, core, convert, text, unicode)
 pub error RegexError {
     UnexpectedEnd, UnexpectedToken, UnclosedGroup, UnclosedClass, InvalidRange,
     InvalidEscape, InvalidRepeat, UnsupportedConstruct, TooManyStates,
-    InputTooLarge, InvalidUtf8, InvalidOffset, StepLimitExceeded, InvalidCapture, CaptureLimit
+    InputTooLarge, InvalidUtf8, InvalidOffset, StepLimitExceeded, InvalidCapture, CaptureLimit, DuplicateCaptureName
 }
 
 pub enum Op { Character, Any, Class, Split, Jump, Save, AssertStart, AssertEnd, Match }
@@ -68,6 +68,7 @@ pub class Regex {
     var maxInputBytes: usize;
     var maxSteps: usize;
     var captureGroups: usize;
+    var captureNames: coll.Vec<CaptureName>;
     var startState: i32;
 
 public:
@@ -76,13 +77,35 @@ public:
               maxInputBytes: usize, maxSteps: usize, captureCount: usize, startState: i32)
         : states(move(states)), classes(move(classes)), ranges(move(ranges)),
           patternText(move(pattern)), flags(flags), maxInputBytes(maxInputBytes),
-          maxSteps(maxSteps), captureGroups(captureCount), startState(startState) {}
+          maxSteps(maxSteps), captureGroups(captureCount),
+          captureNames(coll.Vec<CaptureName>()), startState(startState) {}
 
     static func compile(pattern: str) !Self {
         RegexBuilder(pattern).compile()
     }
 
     const func pattern() str { patternText }
+    func init(states: coll.Vec<State>, classes: coll.Vec<CharacterClass>,
+              ranges: coll.Vec<CharRange>, pattern: string, flags: u8,
+              maxInputBytes: usize, maxSteps: usize, captureCount: usize, startState: i32,
+              names: coll.Vec<CaptureName>)
+        : self(move(states), move(classes), move(ranges), move(pattern), flags,
+               maxInputBytes, maxSteps, captureCount, startState) {
+        captureNames = move(names);
+    }
+
+    const func captureIndex(name: str) ?usize {
+        for entry in captureNames.iterRef() {
+            if text.equal(entry.name, name) { return some(entry.index); }
+        }
+        null
+    }
+
+    const func captureNamed(groups: *const Captures, name: str) ?Match {
+        var index = captureIndex(name) ?? { return null; };
+        groups.get(index)
+    }
+
     const func captureCount() usize { captureGroups }
     const func stateCount() usize { states.len() }
     const func stateAt(index: usize) State { states[index] }

@@ -290,6 +290,64 @@ public:
         move(result)
     }
 
+    // Reserve before moving any elements. The removed interval owns its slots
+    // independently of this vector and can be consumed in either direction.
+    func spliceOwned(start: usize, end: usize, replacement: Self) !IntoVecIter<T> {
+        if start > end || end > length { return CapacityError.IndexOutOfBounds; }
+        var removed = end - start;
+        var incoming = replacement.len();
+        var kept = length - removed;
+        if incoming > ~usize(0) - kept { return CapacityError.Overflow; }
+        var result = switch allocator {
+            null => Vec<T>.withCapacity(removed)!,
+            some(owner) => Vec<T>.withCapacityAndAllocator(removed, owner)!,
+        };
+        if removed == 0 && incoming == 0 { return IntoVecIter<T>(move(result)); }
+        reserve(kept + incoming)!;
+        var storage = data.unwrap();
+        if removed != 0 {
+            var taken = result.data.unwrap();
+            for i in usize(0)..removed {
+                unsafe { __vqr_slot_write<T>(taken.offset(i), __vqr_slot_take<T>(storage.offset(start + i))); }
+            }
+            result.length = removed;
+        }
+        var destination = start + incoming;
+        if destination > end {
+            var i = length;
+            for i > end {
+                i--;
+                unsafe {
+                    __vqr_slot_write<T>(storage.offset(destination + (i - end)),
+                                       __vqr_slot_take<T>(storage.offset(i)));
+                }
+            }
+        } else if destination < end {
+            for i in end..length {
+                unsafe {
+                    __vqr_slot_write<T>(storage.offset(destination + (i - end)),
+                                       __vqr_slot_take<T>(storage.offset(i)));
+                }
+            }
+        }
+        if incoming != 0 {
+            var source = replacement.data.unwrap();
+            for i in usize(0)..incoming {
+                unsafe { __vqr_slot_write<T>(storage.offset(start + i), __vqr_slot_take<T>(source.offset(i))); }
+            }
+            replacement.length = 0;
+        }
+        length = kept + incoming;
+        IntoVecIter<T>(move(result))
+    }
+
+    func splice(start: usize, end: usize, replacement: []const T) !void {
+        if start > end || end > length { return CapacityError.IndexOutOfBounds; }
+        var removed = spliceOwned(start, end, Vec<T>.fromSlice(replacement)!)!;
+    }
+
+    func drain(start: usize, end: usize) !IntoVecIter<T> { spliceOwned(start, end, Vec<T>()) }
+
     // Requires T: Copyable. Copying is explicit at this API boundary.
     const func clone() !Self {
         var result = switch allocator {
@@ -360,6 +418,9 @@ public:
     func asSlice() []T { unsafe { __vqr_slice<T>(data, length) } }
     const func asSlice() []const T { unsafe { __vqr_const_slice<T>(data, length) } }
 
+    // The consuming iterator has already moved every remaining slot.
+    unsafe func forgetMovedPrefix() void { length = 0; }
+
     func deinit() void {
         clear();
         switch data {
@@ -373,9 +434,43 @@ public:
 
 pub class IntoVecIter<T: Movable> {
     var source: Vec<T>;
+    var front: usize;
 public:
-    func init(values: Vec<T>) : source(move(values)) {}
-    func next() ?T { source.remove(0) }
-    func nextBack() ?T { source.pop() }
-    const func remaining() usize { source.len() }
+    func init(values: Vec<T>) : source(move(values)), front(0) {}
+    func next() ?T {
+        if remaining() == 0 { return null; }
+        var slot = source.getMutPtr(front).unwrap();
+        front++;
+        some(unsafe { __vqr_slot_take<T>(slot) })
+    }
+    func nextBack() ?T {
+        if remaining() == 0 { return null; }
+        source.pop()
+    }
+    const func remaining() usize { source.len() - front }
+    func deinit() void {
+        // Vec handles the remaining initialized suffix and releases its allocation.
+        source.truncate(front);
+        unsafe { source.forgetMovedPrefix(); }
+    }
+}
+
+// Retains the direct constructors that accept an existing pointer list.
+class IteratorSnapshot<T: Copyable & Movable> {
+    var entries: Vec<T>;
+    var front: usize;
+    var back: usize;
+public:
+    func init(entries: Vec<T>, count: usize) : entries(move(entries)), front(0), back(count) {}
+    func take(reverse: bool) ?T {
+        if front == back { return null; }
+        if reverse {
+            back--;
+            return some(*entries.getPtr(back).unwrap());
+        }
+        var entry = *entries.getPtr(front).unwrap();
+        front++;
+        some(move(entry))
+    }
+    const func remaining() usize { back - front }
 }

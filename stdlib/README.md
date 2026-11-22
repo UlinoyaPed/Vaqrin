@@ -11,16 +11,16 @@
 | `result` | 错误结果的组合、恢复、观察、只读载荷访问与收集 |
 | `convert` | 检查转换、整数与浮点舍入、位转换及 Unicode 标量验证 |
 | `cmp` | 标量比较、部分序、浮点总序和上下界助手 |
-| `hash` | Hasher / HashKey 协议、带种子的 FNV-1a 32 位哈希及常用整数哈希/相等回调 |
+| `hash` | Hasher / HashKey 协议、FNV-1a 32 位、SipHash-2-4、进程随机种子及常用整数回调 |
 | `num` | 定宽整数边界与检查/回绕/饱和运算、BigUint、BigInt、有理数 |
 | `math` | IEEE 754 分类、f32/f64 数学函数、复数与基础区间运算 |
-| `random` | PCG64 XSL-RR 128/64、xoshiro256**、均匀分布、洗牌与抽样 |
+| `random` | PCG64、xoshiro256**、系统随机源、均匀分布、洗牌与抽样 |
 | `json` | JSON DOM、指针、严格数字词法、浮点转换、键排序、非 ASCII 转义和 Codec |
 | `csv` | 引号、换行、带表头的记录读写 |
-| `toml` | 基本类型、数组、嵌套表、浮点转换和 Codec |
+| `toml` | 多行字符串、数组、表数组、嵌套表、浮点转换和 Codec |
 | `serde` | 显式序列化协议和 Codec |
 | `unicode` | Unicode 17 属性、规范化和字素簇 |
-| `regex` | Thompson NFA、分组与有界执行 |
+| `regex` | Thompson NFA、编号与命名捕获、有界执行 |
 | `url` | URI 解析、解析相对引用、百分号编码及重复查询键 |
 | `log` | 级别、结构化属性和同步 Handler |
 | `errors` | 错误报告、上下文和多原因聚合 |
@@ -28,7 +28,7 @@
 | `mem` | 布局、字节操作、原始槽、手动析构、作用域守卫、强弱共享所有权和默认或固定缓冲分配器 |
 | `mmio` | 带边界和对齐检查的寄存器、宽度受限的 volatile 访问、编译器屏障及 ARM 指令屏障 |
 | `bits` | 定宽整数位操作、对齐及可指定顺序的位流读写 |
-| `algo` | 切片查找、二分、堆操作、排序、翻转、旋转和原地分区 |
+| `algo` | 切片查找、二分、堆操作、稳定排序、翻转、旋转和原地分区 |
 | `atomic` | 原生标量、可空指针、原子标志、比较交换、读改写和内存栅栏 |
 | `binary` | 定宽端序转换、带位置的读写游标、VarUint 和 ZigZag |
 | `bytes` | 切片查找、预处理字节模式、分割及可增长缓冲区 |
@@ -77,7 +77,7 @@ Vec 按值接收可移动元素。其 `reserve` 先分配，再搬迁已有元�
 
 `VecDeque` 使用循环缓冲槽数组，支持两端插入、移除和随机访问；`FixedDeque<T,N>` 使用内联固定槽，容量不足时以 `PushResult.Full(value)` 归还元素。两者均提供正反向借用迭代。Stack 以 Vec 尾部实现 LIFO，Queue 以 VecDeque 实现 FIFO。BinaryHeap 通过显式比较回调和 `HeapOrder.Min/Max` 构造最小堆或最大堆，也提供 `min()` / `max()` 使用 `<` 运算符；PriorityQueue 是同一实现的别名。
 
-LinkedList 使用双向节点和独立 Box 所有权表，节点地址在插入、删除其他节点和链表拼接时保持稳定；按索引访问仍为 O(n)。HashMap/HashSet 使用开放寻址和 tombstone 删除标记，构造时必须提供哈希与相等回调；`HashMap.iterRef()` 构建指针索引，返回 `!MapIterRef`，迭代器只借用键和值，容器结构修改后失效；`hash` 包提供 FNV-1a 32 位实现和 i8/u8/i16/u16/i32/u32/i64/u64/bool 的回调。种子由调用方提供，FNV 不适合抵御主动哈希洪泛。BTreeMap/BTreeSet 使用最小度数为 4 的 B 树，构造时必须提供严格弱序比较回调；迭代器创建时会构建指针索引，因此可能分配失败。关联容器的键只能通过只读借用访问，不能原地修改。
+LinkedList 使用双向节点和独立 Box 所有权表，节点地址在插入、删除其他节点和链表拼接时保持稳定；按索引访问仍为 O(n)。HashMap/HashSet 使用开放寻址和 tombstone 删除标记，构造时必须提供哈希与相等回调。`HashMap.iterRef()` 按桶扫描，`keys()` 和 `values()` 提供键值投影。处理不可信键时可通过 `HashMap.withSecureHasher` 使用以进程随机种子初始化的 SipHash-2-4。BTreeMap/BTreeSet 使用最小度数为 4 的 B 树，构造时传入严格弱序比较回调。树迭代器保存节点游标，`range(lower, upper)` 遍历左闭右开区间。所有借用迭代器在容器结构变更后失效。关联容器的键只能通过只读借用访问，不能原地修改。
 
 容器的安全查询 `get/getMut` 返回绑定到接收者的可空引用。活跃引用结束前，禁止冲突的写入和结构性修改。Vec 的 `getPtr/getMutPtr` 提供遵循失效合同的裸指针。
 
@@ -105,7 +105,7 @@ LinkedList 使用双向节点和独立 Box 所有权表，节点地址在插入�
 
 `Duration` 将亚秒部分归一化到与整数秒一致的方向，整数换算向零截断。可失败的算术操作报告溢出，`fromMinutes`、`fromHours` 和 `fromDays` 在超出表示范围时饱和。`Date.toOrdinal` 以 1970 年 1 月 1 日为第 0 天，公历规则向前后延伸到整个 `i32` 年份范围。`Instant`、`Deadline`、`Timer` 和 `Ticker` 以 Linux 单调时钟为准，睡眠阻塞调用线程，周期定时按前一次计划的到期点推进。
 
-`channel` 的接收端排空关闭的缓冲区后返回成功的外层 `null`。零容量通道只在发送与接收配对时交付。`sendPreserving` 在关闭或内存不足时交还值，`sendTimeout` 以 `Cancelled(value)` 交还超时值，`recvTimeout` 以 `ChannelError.Timeout` 报告超时。当前等待使用原生线程同步。`drain` 只迭代本次可立即取得的消息。
+`channel` 的接收端排空关闭的缓冲区后返回成功的外层 `null`。零容量通道只在发送与接收配对时交付。`sendPreserving` 在关闭或内存不足时交还值，`sendTimeout` 以 `Cancelled(value)` 交还超时值，`recvTimeout` 以 `ChannelError.Timeout` 报告超时。轻量任务通过调度器挂起，可由关闭、取消和单调时钟截止唤醒。原生线程通过 futex 等待。`drain` 只迭代本次可立即取得的消息。
 
 `new(allocator) T(...)` 借用一个实现 `mem.Allocator` 的可变位置。分配器及其缓冲区必须比所有借用它的 Box 活得更久。拆出自定义分配的 Box 时使用 `Box.intoRawParts`，恢复时传回原释放上下文。由于同一个 `^T` 类型可保存借用的分配器，当前线程能力检查保守地拒绝跨线程移交或共享 Box。
 
@@ -119,7 +119,7 @@ LinkedList 使用双向节点和独立 Box 所有权表，节点地址在插入�
 
 `math` 通过内部 `math_ffi` 包调用目标 C 数学 ABI。它为 f32/f64 分别使用对应的 C 数学入口。Linux 宿主的可执行文件或共享库引用这些数学入口时，`vaqc` 通过目标链接驱动添加 `-lm`。静态库的最终链接仍由调用方提供数学库。区间运算采用普通 IEEE 舍入，不提供向外舍入保证，因此 Interval 目前不构成严格的浮点包络证明。
 
-`random` 的 Pcg64 是 PCG XSL-RR 128/64，Xoshiro256 使用 xoshiro256**。两者都可复现且都不是密码学安全随机源。当前没有 OsRng 或 CryptoRng 实现；`newDefault()` 使用固定种子，不从系统时间伪造熵。随机字符串按 Unicode 标量抽样，不按字素簇抽样。
+`random` 的 Pcg64 是 PCG XSL-RR 128/64，Xoshiro256 使用 xoshiro256**。两者都可复现且都不是密码学安全随机源。GNU/Linux 上的 `OsRng`、`fillSystem` 和 `systemSeed` 从系统读取随机字节。`newSystem()` 用系统种子初始化 PCG64，`newDefault()` 保留可复现的固定种子。随机字符串按 Unicode 标量抽样，不按字素簇抽样。
 
 ### 浮点解析
 

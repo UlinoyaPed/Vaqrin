@@ -81,3 +81,6 @@ pub extern "C" func erff(x: f32) f32;
 pub extern "C" func erfcf(x: f32) f32;
 pub extern "C" func tgammaf(x: f32) f32;
 pub extern "C" func lgammaf(x: f32) f32;
+
+pub extern "C" func frexp(x: f64, exponent: *c_int) f64;
+pub extern "C" func scalbn(x: f64, exponent: c_int) f64;

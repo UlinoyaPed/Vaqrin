@@ -13,10 +13,12 @@
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/MC/TargetRegistry.h>
+#include <llvm/Object/ArchiveWriter.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/JSON.h>
 #include <llvm/Support/MemoryBuffer.h>
+#include <llvm/Support/Path.h>
 #include <llvm/Support/SHA256.h>
 #include <llvm/Support/Program.h>
 #include <llvm/Support/TargetSelect.h>
@@ -545,6 +547,30 @@ std::vector<std::string> targetFlags(const Request &r, const llvm::Triple &targe
   return args;
 }
 
+void writeStaticLibrary(const fs::path &output, const llvm::Triple &target,
+                        const std::vector<std::string> &objects, const std::string &archiver) {
+  if (!archiver.empty()) {
+    std::vector<std::string> args{"rcsD", output.string()};
+    args.insert(args.end(), objects.begin(), objects.end());
+    execute(archiver, args);
+    return;
+  }
+  std::vector<llvm::NewArchiveMember> members;
+  members.reserve(objects.size());
+  for (const auto &object : objects) {
+    auto member = llvm::NewArchiveMember::getFile(object, /*Deterministic=*/true);
+    if (!member) fail({}, llvm::toString(member.takeError()), "E302");
+    member->MemberName = llvm::sys::path::filename(member->MemberName);
+    members.push_back(std::move(*member));
+  }
+  using Archive = llvm::object::Archive;
+  const auto format = target.isOSBinFormatMachO() ? Archive::K_DARWIN :
+                      target.isOSBinFormatCOFF() ? Archive::K_COFF : Archive::K_GNU;
+  if (auto error = llvm::writeArchive(output.string(), members, llvm::SymtabWritingMode::NormalSymtab,
+                                      format, /*Deterministic=*/true, /*Thin=*/false))
+    fail({}, llvm::toString(std::move(error)), "E302");
+}
+
 void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, const Inputs &inputs) {
   auto &target = machine.getTargetTriple();
   auto output = fs::absolute(r.output.empty() ? defaultOutput(r, inputs.rootName, target) : r.output);
@@ -646,16 +672,16 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
     if (kind == "staticlib") {
       if (!r.linkInputs.empty())
         fail({}, "use --link-input with executable or shared-library emission", "E302");
-      std::vector<std::string> args{"rcsD", product.string(), object.string()};
-      if (usesTasks) args.push_back(runtime.string());
-      if (usesIoRuntime) args.push_back(ioRuntime.string());
-      if (usesProcessRuntime) args.push_back(processRuntime.string());
-      if (usesNetRuntime) args.push_back(netRuntime.string());
-      if (usesHttp2Runtime) args.push_back(http2Runtime.string());
-      if (usesGzipRuntime) args.push_back(gzipRuntime.string());
-      if (usesTlsRuntime) args.push_back(tlsRuntime.string());
-      if (usesDecimalRuntime) args.push_back(decimalRuntime.string());
-      execute(r.archiver.empty() ? "llvm-ar" : r.archiver, args);
+      std::vector<std::string> objects{object.string()};
+      if (usesTasks) objects.push_back(runtime.string());
+      if (usesIoRuntime) objects.push_back(ioRuntime.string());
+      if (usesProcessRuntime) objects.push_back(processRuntime.string());
+      if (usesNetRuntime) objects.push_back(netRuntime.string());
+      if (usesHttp2Runtime) objects.push_back(http2Runtime.string());
+      if (usesGzipRuntime) objects.push_back(gzipRuntime.string());
+      if (usesTlsRuntime) objects.push_back(tlsRuntime.string());
+      if (usesDecimalRuntime) objects.push_back(decimalRuntime.string());
+      writeStaticLibrary(product, target, objects, r.archiver);
     } else {
       auto args = targetFlags(r, target, driver);
       if (kind == "sharedlib") args.push_back(target.isOSDarwin() ? "-dynamiclib" : "-shared");

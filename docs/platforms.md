@@ -5,6 +5,8 @@ AArch64. The compiler links against a statically built LLVM 20.1.8 SDK.
 Each archive contains the compiler, standard packages and runtime sources.
 The workflow checks that the installed compiler can format, parse, check,
 emit a native object and run a linked smoke program.
+`vaqc build --emit=staticlib` writes a deterministic archive in the target's
+format. Use `--ar PROGRAM` to select an external archiver.
 
 GNU/Linux is the reference host for files, sockets, HTTP, processes, tasks
 and channels. The macOS build also supports POSIX files, environment

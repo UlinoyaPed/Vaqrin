@@ -3177,9 +3177,8 @@ class Acceptance(CompilerCase):
         ''')
         if sys.platform == "darwin":
             # The archive includes the native address-wait provider.
-            archiver = shutil.which("llvm-ar") or self.process("xcrun", "--find", "llvm-ar").stdout.decode().strip()
             library = "libsync.a"
-            self.process(VAQC, source, "--emit=staticlib", "--ar", archiver, "-O2", "-o", library)
+            self.process(VAQC, source, "--emit=staticlib", "-O2", "-o", library)
         else:
             library = "sync.o"
             self.process(VAQC, source, "--emit=obj", "-O2", "-o", library)

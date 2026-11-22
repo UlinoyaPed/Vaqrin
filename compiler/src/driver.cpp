@@ -439,11 +439,8 @@ void optimize(llvm::Module &module, llvm::TargetMachine &machine, const Options 
 fs::path moduleCacheEntry(const llvm::Module &module, const Options &options, const fs::path &executable) {
   const auto *directory = std::getenv("VAQRIN_MODULE_CACHE");
   if (!directory || !fs::path(directory).is_absolute() || options.optimization == 0) return {};
-  std::error_code error;
-  auto modified = fs::last_write_time(executable, error);
-  if (error) return {};
-  auto size = fs::file_size(executable, error);
-  if (error) return {};
+  auto identity = artifact::executableIdentity(executable);
+  if (!identity) return {};
 
   // Hash the validated input IR, which already includes the resolved sources
   // and their concrete generic instantiations.
@@ -455,9 +452,8 @@ fs::path moduleCacheEntry(const llvm::Module &module, const Options &options, co
     hash.update(std::to_string(value.size()) + ":");
     hash.update(value);
   };
-  for (const auto &value : std::array<std::string, 11>{
-           "vaqrin-module-v1", LLVM_VERSION_STRING, executable.string(), std::to_string(size),
-           std::to_string(modified.time_since_epoch().count()), options.triple, options.cpu,
+  for (const auto &value : std::array<std::string, 9>{
+           "vaqrin-module-v2", LLVM_VERSION_STRING, *identity, options.triple, options.cpu,
            options.features, options.profile, options.emit, std::to_string(options.optimization)})
     field(value);
   field(bitcode.str());

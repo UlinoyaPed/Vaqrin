@@ -156,6 +156,13 @@ namespace {
 constexpr std::size_t checksumLength = 64;
 }
 
+std::optional<std::string> executableIdentity(const std::filesystem::path &executable) {
+  llvm::sys::fs::file_status status;
+  if (llvm::sys::fs::status(executable.string(), status)) return {};
+  const auto modified = status.getLastModificationTime().time_since_epoch().count();
+  return executable.string() + '\n' + std::to_string(status.getSize()) + '\n' + std::to_string(modified);
+}
+
 llvm::StringRef payload(const llvm::MemoryBuffer &record) { return record.getBuffer().drop_front(checksumLength); }
 
 std::unique_ptr<llvm::MemoryBuffer> read(const std::filesystem::path &entry, std::size_t maxBytes) {
@@ -203,13 +210,12 @@ SyntaxCache::SyntaxCache(const std::filesystem::path &executable) {
   } else {
     return;
   }
-  std::error_code error;
-  auto modified = std::filesystem::last_write_time(executable, error);
-  if (error) { directory.clear(); return; }
-  auto size = std::filesystem::file_size(executable, error);
-  if (error) { directory.clear(); return; }
-  compilerKey = "v2\n" + executable.string() + '\n' + std::to_string(size) + '\n' +
-                std::to_string(modified.time_since_epoch().count());
+  auto identity = artifact::executableIdentity(executable);
+  if (!identity) {
+    directory.clear();
+    return;
+  }
+  compilerKey = "v3\n" + *identity;
 }
 
 std::filesystem::path SyntaxCache::entry(const Source &source) const {

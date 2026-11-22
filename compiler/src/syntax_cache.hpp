@@ -10,6 +10,7 @@
 namespace vqr {
 
 namespace artifact {
+std::optional<std::string> executableIdentity(const std::filesystem::path &executable);
 std::unique_ptr<llvm::MemoryBuffer> read(const std::filesystem::path &entry, std::size_t limit);
 llvm::StringRef payload(const llvm::MemoryBuffer &record);
 void write(const std::filesystem::path &entry, llvm::StringRef bytes, std::size_t limit);

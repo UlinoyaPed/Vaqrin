@@ -128,6 +128,20 @@ jobs:
             ProtocolAcceptance.test_tls_client_alpn \
             ProtocolAcceptance.test_tls_server_alpn
 
+      - name: Verify macOS file I/O and resumable streams from the installation
+        if: runner.os == 'macOS'
+        run: |
+          compiler="$PWD/build/release-root/vaqrin/bin/vaqc"
+          python compiler/tests/io_acceptance.py "$compiler" \
+            IoAcceptance.test_standard_streams_and_legacy_println \
+            IoAcceptance.test_files_seek_append_and_positional_io \
+            IoAcceptance.test_directories_metadata_and_errno
+          python compiler/tests/io_v2_acceptance.py "$compiler" \
+            IoV2Acceptance.test_copy_uses_open_file_identity_and_reports_failures \
+            IoV2Acceptance.test_body_and_scanner_preserve_partial_progress \
+            IoV2Acceptance.test_stdout_broken_pipe_is_catchable \
+            IoV2Acceptance.test_atomic_write_walk_and_temporary_resources
+
       - name: Verify Linux runtime and protocol packages from the installation
         if: runner.os == 'Linux'
         shell: bash

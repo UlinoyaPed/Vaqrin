@@ -43,7 +43,7 @@ They provide no measure of durable writes or long-running disk
 throughput. The single first-build sample and warm-build comparison
 provide no evidence of a compiler speedup.
 
-## Remaining scope
+## Scope of this measurement
 
 Task-aware TCP uses Linux epoll. TLS adapters can use the directional
 readiness API to wait after WANT_READ or WANT_WRITE. The synchronous
@@ -51,3 +51,9 @@ HTTPS client keeps its existing TLS transport. Asynchronous DNS, UDP,
 macOS and Windows runtime ports, and full Vaqrin-program sanitizer
 coverage are outside the validated scope. The scheduler still uses a
 global lock and a linear deadline scan.
+
+The current native release matrix also checks installed macOS compilers on
+x86-64 and AArch64. It exercises positioned I/O, file identity, atomic
+replacement, temporary resources, traversal, broken stdout pipes, and
+resumable HTTP Body and Scanner state. Linux runs the full I/O v2 suite,
+including epoll, task-aware sockets, and asynchronous process pipes.

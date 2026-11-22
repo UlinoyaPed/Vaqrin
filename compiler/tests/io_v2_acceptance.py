@@ -3,6 +3,7 @@ import errno
 import os
 import resource
 import subprocess
+import sys
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 
@@ -24,6 +25,12 @@ class IoV2Acceptance(CompilerCase):
         denied.mkdir()
         (denied / "file").write_bytes(b"hidden")
         denied.chmod(0)
+        full_device = ""
+        if sys.platform == "linux":
+            full_device = f'''
+                    var disk = fs.copy("source", "/dev/full");
+                    io.println(result.errorOf(&disk).unwrap() == io.systemError({errno.ENOSPC}))!;
+            '''
         try:
             self.hosted(f"""
                 import (fs, result)
@@ -45,10 +52,9 @@ class IoV2Acceptance(CompilerCase):
                     io.println(result.errorOf(&denied).unwrap() == io.systemError({errno.EACCES}))!;
                     var permission = fs.copy("source", "denied/rejected");
                     io.println(result.errorOf(&permission).unwrap() == io.systemError({errno.EACCES}))!;
-                    var disk = fs.copy("source", "/dev/full");
-                    io.println(result.errorOf(&disk).unwrap() == io.systemError({errno.ENOSPC}))!;
+                    {full_device}
                 }}
-            """, "true\n" * 15)
+            """, "true\n" * (15 if full_device else 14))
         finally:
             denied.chmod(0o700)
         self.assertEqual(original.read_bytes(), b"binary\x00payload")

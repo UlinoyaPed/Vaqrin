@@ -1152,8 +1152,6 @@ FunctionEntry &Program::function(Definition d, Types substitutions, Type *owner,
     if (d.file->standard && decl.external && !hostedLinux64()) {
       if (decl.name.starts_with("__vqr_net_resolve_"))
         fail(decl.span, "asynchronous name resolution requires hosted GNU/Linux x86-64 or AArch64", "E290");
-      if (!hostedMac64() && decl.name.starts_with("__vqr_net_"))
-        fail(decl.span, "host networking requires hosted GNU/Linux or macOS on x86-64 or AArch64", "E290");
       if (!hostedMac64() && decl.name.starts_with("__vqr_process_"))
         fail(decl.span, "process execution requires hosted GNU/Linux or macOS on x86-64 or AArch64", "E290");
     }
@@ -1252,6 +1250,8 @@ std::unique_ptr<Module> Program::build() {
     while (checked < files.size()) {
       indexFiles();
       const auto &file = files[checked++];
+      if (file.standard && file.package == "net" && !hostedLinux64() && !hostedMac64())
+        fail(file.span, "standard package 'net' requires hosted GNU/Linux or macOS on x86-64 or AArch64", "E290");
       if (file.standard && file.package != root) continue;
       for (const auto &d : file.declarations) {
         std::set<std::string> seen;

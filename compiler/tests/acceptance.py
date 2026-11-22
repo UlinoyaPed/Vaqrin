@@ -3175,9 +3175,37 @@ class Acceptance(CompilerCase):
                 return 0;
             }
         ''')
-        self.process(VAQC, source, "--emit=obj", "-O2", "-o", "sync.o")
-        self.process("cc", client, "sync.o", "-pthread", "-o", "sync-client")
+        if sys.platform == "darwin":
+            # The archive includes the native address-wait provider.
+            archiver = shutil.which("llvm-ar") or self.process("xcrun", "--find", "llvm-ar").stdout.decode().strip()
+            library = "libsync.a"
+            self.process(VAQC, source, "--emit=staticlib", f"--archiver={archiver}", "-O2", "-o", library)
+        else:
+            library = "sync.o"
+            self.process(VAQC, source, "--emit=obj", "-O2", "-o", library)
+        self.process("cc", client, library, "-pthread", "-o", "sync-client")
         self.process("./sync-client")
+
+    def test_condition_wait_uses_absolute_deadline(self):
+        self.hosted('''
+            import (cmp, sync, time)
+            func main() !void {
+                var mutex = sync.Mutex<i32>.new(23);
+                var condition = sync.CondVar.new();
+                var delay = time.Duration.fromMillis(5);
+                var start = time.Instant.now()!;
+                var instant = start.checkedAdd(delay)!;
+                var deadline = time.Deadline.at(instant);
+                var guard = mutex.lock()!;
+                for {
+                    acquired, elapsed := condition.waitUntilDeadline<i32>(move(guard), deadline)!;
+                    guard = move(acquired);
+                    if elapsed { break; }
+                }
+                io.println(start.elapsed()!.compare(delay) != cmp.Ordering.Less)!;
+                io.println(*guard.get())!;
+            }
+        ''', "true\n23\n")
 
     def test_shared_weak_ownership_and_native_transfer(self):
         self.hosted('''

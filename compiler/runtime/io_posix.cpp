@@ -114,42 +114,130 @@ void free_environment(char **entries, size_t count) {
     free(entries);
 }
 
+#if defined(__APPLE__)
+// Each waiter stays linked until it reacquires the queue lock. A waker signals
+// only waiters for the requested address, even when multiple addresses hash alike.
+struct AddressWaiter {
+    const uint32_t *address;
+    AddressWaiter *next;
+    pthread_cond_t condition = PTHREAD_COND_INITIALIZER;
+    bool notified = false;
+};
+
+struct AddressWaitQueue {
+    pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+    AddressWaiter *first = nullptr;
+};
+
+AddressWaitQueue address_wait_queues[64];
+
+AddressWaitQueue &wait_queue(const uint32_t *address) {
+    return address_wait_queues[(reinterpret_cast<uintptr_t>(address) >> 2) % 64];
+}
+
+// Return 1 with a positive delay, 0 when the deadline has elapsed, or -1 on failure.
+int monotonic_delay(timespec deadline, timespec &remaining) {
+    timespec now{};
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return -1;
+    if (deadline.tv_sec < now.tv_sec ||
+        (deadline.tv_sec == now.tv_sec && deadline.tv_nsec <= now.tv_nsec))
+        return 0;
+    remaining = {deadline.tv_sec - now.tv_sec, deadline.tv_nsec - now.tv_nsec};
+    if (remaining.tv_nsec < 0) {
+        --remaining.tv_sec;
+        remaining.tv_nsec += 1000000000;
+    }
+    return 1;
+}
+
+bool wait_on_address(const uint32_t *address, uint32_t expected, const timespec *deadline) {
+    auto &queue = wait_queue(address);
+    int previous_cancel_state;
+    pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &previous_cancel_state);
+    pthread_mutex_lock(&queue.mutex);
+    if (__atomic_load_n(address, __ATOMIC_RELAXED) != expected) {
+        pthread_mutex_unlock(&queue.mutex);
+        pthread_setcancelstate(previous_cancel_state, nullptr);
+        return false;
+    }
+    AddressWaiter waiter{address, queue.first};
+    queue.first = &waiter;
+    bool timed_out = false;
+    if (deadline) {
+        while (!waiter.notified) {
+            timespec remaining{};
+            int pending = monotonic_delay(*deadline, remaining);
+            if (pending <= 0) {
+                timed_out = pending == 0;
+                break;
+            }
+            int status = pthread_cond_timedwait_relative_np(&waiter.condition, &queue.mutex, &remaining);
+            if (status != ETIMEDOUT) break;
+        }
+    } else {
+        pthread_cond_wait(&waiter.condition, &queue.mutex);
+    }
+    auto **link = &queue.first;
+    while (*link != &waiter) link = &(*link)->next;
+    *link = waiter.next;
+    pthread_mutex_unlock(&queue.mutex);
+    pthread_cond_destroy(&waiter.condition);
+    pthread_setcancelstate(previous_cancel_state, nullptr);
+    return timed_out;
+}
+#endif
+
 } // namespace
 
 extern "C" {
 
-int32_t __vqr_io_clock_now(int32_t monotonic, int64_t *seconds, int32_t *nanoseconds) {
+#if defined(__APPLE__)
+size_t __vqr_io_cpu_count() {
+    const long count = sysconf(_SC_NPROCESSORS_ONLN);
+    return count > 0 ? static_cast<size_t>(count) : 1;
+}
+
+void __vqr_io_sync_wait(const uint32_t *address, uint32_t expected) {
+    wait_on_address(address, expected, nullptr);
+}
+
+int32_t __vqr_io_sync_wait_until(const uint32_t *address, uint32_t expected,
+                                int64_t seconds, int64_t nanos) {
+    const timespec deadline{seconds, nanos};
+    return wait_on_address(address, expected, &deadline);
+}
+
+void __vqr_io_sync_wake(const uint32_t *address, uint32_t count) {
+    auto &queue = wait_queue(address);
+    pthread_mutex_lock(&queue.mutex);
+    for (auto *node = queue.first; node && count != 0; node = node->next) {
+        if (node->address != address || node->notified) continue;
+        node->notified = true;
+        pthread_cond_signal(&node->condition);
+        --count;
+    }
+    pthread_mutex_unlock(&queue.mutex);
+}
+int32_t __vqr_io_clock_now(int32_t monotonic, int64_t *seconds, int64_t *nanoseconds) {
     timespec value{};
     if (clock_gettime(monotonic != 0 ? CLOCK_MONOTONIC : CLOCK_REALTIME, &value) != 0)
         return errno;
     *seconds = value.tv_sec;
-    *nanoseconds = static_cast<int32_t>(value.tv_nsec);
+    *nanoseconds = value.tv_nsec;
     return 0;
 }
 
 int32_t __vqr_io_clock_sleep_until(int64_t seconds, int32_t nanoseconds) {
-#if defined(__APPLE__)
+    const timespec deadline{seconds, nanoseconds};
     for (;;) {
-        timespec now{};
-        if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return errno;
-        if (seconds < now.tv_sec || (seconds == now.tv_sec && nanoseconds <= now.tv_nsec))
-            return 0;
-        timespec remaining{seconds - now.tv_sec, nanoseconds - now.tv_nsec};
-        if (remaining.tv_nsec < 0) {
-            --remaining.tv_sec;
-            remaining.tv_nsec += 1000000000;
-        }
+        timespec remaining{};
+        const int pending = monotonic_delay(deadline, remaining);
+        if (pending <= 0) return pending == 0 ? 0 : errno;
         // Recheck the absolute deadline after interruption and after a relative sleep.
         if (nanosleep(&remaining, nullptr) != 0 && errno != EINTR) return errno;
     }
-#else
-    const timespec target{seconds, nanoseconds};
-    int status;
-    do status = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &target, nullptr);
-    while (status == EINTR);
-    return status;
-#endif
 }
+#endif
 
 int32_t __vqr_io_random(uint8_t *dst, size_t length) {
     while (length > 0) {

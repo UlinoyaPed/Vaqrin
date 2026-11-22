@@ -3,8 +3,9 @@
 namespace vqr::detail {
 
 ValueAt Body::threadIntrinsic(std::string_view op, const Ast &n, const std::vector<Ast> &types) {
-  if (!p.hostedLinux64())
-    fail(n->span, "native threads require a hosted GNU/Linux x86-64 or AArch64 target", "E290");
+  const bool darwin = p.hostedMac64();
+  if (!p.hostedLinux64() && !darwin)
+    fail(n->span, "native threads require a hosted GNU/Linux or macOS x86-64 or AArch64 target", "E290");
 
   auto arity = [&](unsigned count, unsigned typeCount = 0) {
     if (n->children.size() != count + 1 || types.size() != typeCount)
@@ -14,14 +15,20 @@ ValueAt Body::threadIntrinsic(std::string_view op, const Ast &n, const std::vect
   auto *null = ConstantPointerNull::get(pointer);
   auto *status = p.integer(32, true);
   auto *word = p.sizeTy->ir;
+  llvm::Type *pthreadId = darwin ? static_cast<llvm::Type *>(pointer) : word;
 
   if (op == "id") {
     arity(0);
-    auto self = p.module->getOrInsertFunction("pthread_self", word);
-    return {p.sizeTy, ir.CreateCall(self)};
+    auto self = p.module->getOrInsertFunction("pthread_self", pthreadId);
+    auto *handle = ir.CreateCall(self);
+    return {p.sizeTy, darwin ? ir.CreatePtrToInt(handle, word) : handle};
   }
   if (op == "yield" || op == "cpu_count") {
     arity(0);
+    if (op == "cpu_count" && darwin) {
+      auto count = p.module->getOrInsertFunction("__vqr_io_cpu_count", word);
+      return {p.sizeTy, ir.CreateCall(count)};
+    }
     auto host = p.module->getOrInsertFunction(op == "yield" ? "sched_yield" : "get_nprocs", status->ir);
     auto *result = ir.CreateCall(host);
     if (op == "yield") return voidValue();
@@ -33,11 +40,12 @@ ValueAt Body::threadIntrinsic(std::string_view op, const Ast &n, const std::vect
     auto id = expression(n->children[1], p.sizeTy);
     if (!live()) return neverValue();
     auto *handle = read(id, n->span);
+    if (darwin) handle = ir.CreateIntToPtr(handle, pointer);
     if (op == "join") {
-      auto join = p.module->getOrInsertFunction("pthread_join", status->ir, word, pointer);
+      auto join = p.module->getOrInsertFunction("pthread_join", status->ir, pthreadId, pointer);
       return {status, ir.CreateCall(join, {handle, null})};
     }
-    auto detach = p.module->getOrInsertFunction("pthread_detach", status->ir, word);
+    auto detach = p.module->getOrInsertFunction("pthread_detach", status->ir, pthreadId);
     return {status, ir.CreateCall(detach, {handle})};
   }
   if (op == "start") {
@@ -100,8 +108,9 @@ ValueAt Body::threadIntrinsic(std::string_view op, const Ast &n, const std::vect
 }
 
 ValueAt Body::syncIntrinsic(std::string_view op, const Ast &n) {
-  if (!p.hostedLinux64())
-    fail(n->span, "blocking synchronization requires a hosted GNU/Linux x86-64 or AArch64 target", "E290");
+  const bool darwin = p.hostedMac64();
+  if (!p.hostedLinux64() && !darwin)
+    fail(n->span, "blocking synchronization requires a hosted GNU/Linux or macOS x86-64 or AArch64 target", "E290");
   bool timed = op == "wait_until";
   if ((!timed && op != "wait" && op != "wake") || n->children.size() != (timed ? 5U : 3U))
     fail(n->span, "invalid futex operation");
@@ -111,6 +120,25 @@ ValueAt Body::syncIntrinsic(std::string_view op, const Ast &n) {
   auto *location = read(address, n->span);
   auto argument = expression(n->children[2], u32);
   if (!live()) return neverValue();
+  auto *expected = read(argument, n->span);
+  if (darwin) {
+    if (!timed) {
+      auto wait = p.module->getOrInsertFunction(op == "wait" ? "__vqr_io_sync_wait" : "__vqr_io_sync_wake",
+                                                ir.getVoidTy(), ir.getPtrTy(), ir.getInt32Ty());
+      ir.CreateCall(wait, {location, expected});
+      return voidValue();
+    }
+    auto *signedWord = p.integer(64, true);
+    auto seconds = expression(n->children[3], signedWord);
+    if (!live()) return neverValue();
+    auto *whole = read(seconds, n->span);
+    auto nanos = expression(n->children[4], signedWord);
+    if (!live()) return neverValue();
+    auto wait = p.module->getOrInsertFunction("__vqr_io_sync_wait_until", ir.getInt32Ty(), ir.getPtrTy(),
+                                              ir.getInt32Ty(), signedWord->ir, signedWord->ir);
+    auto *result = ir.CreateCall(wait, {location, expected, whole, read(nanos, n->span)});
+    return {p.boolTy, ir.CreateIsNotNull(result)};
+  }
   auto *word = p.sizeTy->ir;
   auto *signature = FunctionType::get(word, {word}, true);
   auto syscall = p.module->getOrInsertFunction("syscall", signature);
@@ -118,7 +146,7 @@ ValueAt Body::syncIntrinsic(std::string_view op, const Ast &n) {
   constexpr unsigned privateFlag = 128;
   constexpr unsigned wait = 0, wake = 1, waitBitset = 9;
   auto *command = ConstantInt::get(word, privateFlag + (timed ? waitBitset : op == "wait" ? wait : wake));
-  auto *value = ir.CreateZExt(read(argument, n->span), word);
+  auto *value = ir.CreateZExt(expected, word);
   auto *null = ConstantPointerNull::get(ir.getPtrTy());
   if (!timed) {
     ir.CreateCall(syscall, {number, location, command, value, null, null, ConstantInt::get(word, 0)});

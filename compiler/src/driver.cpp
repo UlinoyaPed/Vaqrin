@@ -361,8 +361,10 @@ void lowerLargeArrayStores(llvm::Module &module, llvm::TargetMachine &machine, b
           auto *destination = store->getPointerOperand()->stripPointerCasts();
           auto *global = llvm::dyn_cast<llvm::GlobalVariable>(source);
           const bool immutable = global && global->isConstant() && global->hasInitializer();
+          auto *next = load->getNextNode();
+          while (llvm::isa_and_nonnull<llvm::DbgInfoIntrinsic>(next)) next = next->getNextNode();
           const bool localCopy = llvm::isa<llvm::AllocaInst>(source) && llvm::isa<llvm::AllocaInst>(destination) &&
-                                 source != destination && load->getNextNonDebugInstruction() == store;
+                                 source != destination && next == store;
           if (immutable || localCopy) stores.push_back({store, nullptr, load});
         }
       }

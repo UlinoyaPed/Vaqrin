@@ -28,7 +28,7 @@ build/host/vaqc build examples/hello.vqr -o build/hello
 当前功能范围、安装和交叉编译说明见[编译器使用说明](compiler/README.md)。
 
 
-### 本地项目依赖
+### 项目依赖
 
 在项目目录的 `package.toml` 中声明依赖。依赖目录须含声明了对应包名的 `.vqr` 源文件，也可在自己的 `package.toml` 中声明传递依赖。
 
@@ -40,7 +40,7 @@ entry = "main.vqr"
 models = { path = "../shared/models" }
 ```
 
-运行 `vaqc lock .` 后，将 `package.lock` 与清单一同提交。构建和语义检查会核对锁文件中的相对依赖路径和 SHA-256 源文件摘要。依赖路径或内容更新后，重新运行 `vaqc lock .`。这套流程使用本地目录，可离线执行。
+运行 `vaqc lock .` 后，将 `package.lock` 与清单一同提交。构建和语义检查会核对锁文件中的相对依赖路径和 SHA-256 源文件摘要。依赖路径或内容更新后，重新运行 `vaqc lock .`。构建可离线执行。Git 和注册表依赖同样使用锁文件和离线缓存，参见[项目依赖](compiler/README.md#项目依赖)。
 
 编译器按源码内容与编译器版本缓存大型标准库模块的语法树和定型整数字面量表。
 Unicode 数据表可跨项目复用编译后的常量字节。模块类型和依赖仍按当前项目检查。

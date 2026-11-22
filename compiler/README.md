@@ -36,6 +36,47 @@ build/host/vaqc build -O2 -g examples/hello.vqr -o build/hello
 
 在 Zed 中打开仓库根目录，`task: spawn` 可启动 `build vaqc`。已有绑定指向 `run code` 时，当前文件是 `.vqr` 就在构建编译器后编译并运行它，其他文件只触发编译器构建。任务首次配置时生成 `build/host/compile_commands.json`，供 clangd 使用。
 
+## 项目依赖
+
+项目根目录的 `package.toml` 可声明本地目录、固定提交的 Git 包和注册表版本。
+
+```toml
+[build]
+entry = "main.vqr"
+
+[registry]
+index = "index.json"
+
+[dependencies]
+models = { path = "../shared/models" }
+schema = { git = "https://example.org/team/schema.git", rev = "0123456789abcdef0123456789abcdef01234567", path = "vaqrin" }
+offset = { version = "1.2.3" }
+```
+
+依赖名是源码的逻辑导入名。本地路径相对于声明该依赖的清单。Git 的 `rev`
+使用完整提交哈希。可用 `path` 选择仓库中的包目录。
+
+注册表以 JSON 对象组织包名和版本。版本采用精确字符串匹配。`index` 可以是项目
+内的文件路径或 HTTPS URL。每个版本对应固定的 Git 提交，并可指定包目录。
+
+```json
+{
+  "offset": {
+    "1.2.3": {
+      "git": "https://example.org/team/offset.git",
+      "rev": "abcdef0123456789abcdef0123456789abcdef01",
+      "path": "src"
+    }
+  }
+}
+```
+
+在项目目录运行 `vaqc lock .` 解析注册表、获取 Git 源码并生成 `package.lock`。
+将清单和锁文件一同提交。后续 `vaqc build .` 和语义检查使用锁定的版本、提交和
+SHA-256 源文件摘要，可从本地缓存离线执行。依赖修改后重新锁定。CI 可通过绝对路径
+`VAQRIN_PACKAGE_CACHE` 保存或迁移离线缓存。首次锁定 Git 依赖需要 `git`，读取
+HTTPS 注册表还需要 `curl`。
+
 ## 当前覆盖
 
 | 领域 | 已实现 |
@@ -43,10 +84,14 @@ build/host/vaqc build -O2 -g examples/hello.vqr -o build/hello
 | 前端 | UTF-8 校验、Unicode 17.0 XID 和 NFC、字面量、可选包头、按文件选择入口、本地包和匿名文件导入、别名与可见性 |
 | 数值和控制流 | 1–128 位整数的前端类型、f32/f64、目标宽度整数、检查/回绕/饱和运算、转换、短路和比较链、分支、范围与数组循环、`iter()` / `next()` 协议、switch |
 | 值和资源 | 元组、固定数组、切片、普通指针、可空值与错误结果、类、构造器委托、嵌入方法提升、显式接口与动态接口视图、带载荷枚举、解引用绑定与模式借用、复制和显式移动、析构、支持自定义分配器的 Box 与默认分配器的 Vec |
-| 函数和编译期 | 函数指针、显式捕获 Lambda、受支持签名的重载、函数、类、枚举及类型别名的类型和编译期值泛型、类内 `comptime if`、部分泛型实参推导、可解释的常量和函数 |
-| 目标接口 | Linux 宿主 I/O、标量 C ABI、词法 unsafe、普通指针转换、volatile 访问、按目标宽度提供原子操作、DWARF 函数与基础局部信息、Cortex-M3 固件链接 |
+| 函数和编译期 | 函数指针、显式捕获 Lambda、受支持签名的重载、类型与编译期值泛型、泛型接口方法、类内 `comptime if`、可解释的常量和函数 |
+| 并发和标准库 | GNU/Linux 任务组、通道、`select`、异步 I/O 和协议栈，Unicode 17 规范化与字素分割 |
+| 目标接口 | Linux 和 macOS 的 POSIX 文件 I/O、Windows CNG 系统熵源、标量和普通 C 聚合 ABI、目标宽度原子操作、DWARF 和 CodeView 调试信息、Cortex-M3 固件链接 |
 
-目前缺少完整任务与通道运行时、`select`、泛型接口方法、Unicode 字素分割、通用迭代器组合、独立的目标运行时和 C 聚合 ABI 桥。Box、Vec 与拥有型动态文本的默认分配器在 Linux 宿主可用。Box 另支持 `new(allocator)` 和带释放上下文的原始部件转换。不可移动值的通用按值就地构造仍待实现。工程清单支持本地 `[build].entry`，依赖版本、锁文件和依赖获取仍待实现。泛型主要在实例化时检查。循环初始化检查使用保守的回边合并。规范 §19 的并发示例依赖尚未实现的运行时。
+Box、Vec 与拥有型动态文本的默认分配器支持 GNU/Linux 和 macOS。Box 支持显式
+分配器和带释放上下文的原始部件转换。不可移动值的通用按值就地构造仍待实现。
+泛型主要在实例化时检查。循环初始化检查使用保守的回边合并。规范 §19 的任务示例、
+泛型接口和 C 聚合集成都有编译运行验收。平台范围见 [宿主平台与发布](../docs/platforms.md)。
 
 实现流程是自写 AST 前端、静态类型与所有权检查、LLVM C++ API 生成和验证目标 IR。编译期解释器执行未优化的类型化 LLVM 控制流，使用目标布局和虚拟存储。当前没有设计文档中独立的 HIR、MIR 和通用初始化数据流求解器。Unicode 表随源码分发，生成脚本使用 Unicode 17.0 的 Node.js，构建编译器无需 Node.js 或 ICU。
 

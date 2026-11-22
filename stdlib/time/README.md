@@ -1,8 +1,10 @@
 # Calendar time and time zones
 
 `now`, `Instant.now` and the blocking deadline and sleep APIs support hosted
-GNU/Linux and macOS on x86-64 and AArch64. Deadlines use the platform's monotonic
-clock. Signal interruptions preserve the original sleep deadline.
+GNU/Linux, macOS and Windows MSVC on x86-64 and AArch64. Deadlines use the
+platform's monotonic clock. Signal interruptions preserve the original sleep
+deadline on POSIX. Windows waits use the system sleep granularity and recheck
+the monotonic deadline.
 
 `TimeZone.load` reads the host's IANA TZif files under `/usr/share/zoneinfo`.
 `tzdbVersion` reads the version from `tzdata.zi` when the host provides it.

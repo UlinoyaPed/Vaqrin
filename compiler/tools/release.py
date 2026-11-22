@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 BUILD = ROOT / "build"
 WINDOWS = os.name == "nt"
 MSVC_RUNTIME = "MultiThreadedDLL"
-WINDOWS_SMOKE_SOURCE = """import (coll, mem, random, text)
+WINDOWS_SMOKE_SOURCE = """import (coll, cmp, mem, random, text, time)
 
 func heapWorks() !bool {
     var allocator = mem.GlobalAllocator();
@@ -30,8 +30,20 @@ func heapWorks() !bool {
     return aligned && items[95] == 95 && *boxed.asPtr() == 23 && copy == "Windows heap";
 }
 
+func clocksWork() !bool {
+    var utc = time.now()!;
+    var start = time.Instant.now()!;
+    var delay = time.Duration.fromMillis(5);
+    var end = start.checkedAdd(delay)!;
+    var deadline = time.Deadline.at(end);
+    time.sleepUntil(end)!;
+    return utc.unixSeconds() > 1700000000 && deadline.expired()! &&
+           start.elapsed()!.compare(delay) != cmp.Ordering.Less;
+}
+
 export "C" func main() i32 {
     if !(heapWorks() catch { return 3; }) { return 4; }
+    if !(clocksWork() catch { return 5; }) { return 6; }
 	var bytes = mem.zeroedBytes<16>();
     random.fillSystem(bytes[:]) catch { return 1; };
     for byte in bytes[:] { if byte != 0 { return 0; } }

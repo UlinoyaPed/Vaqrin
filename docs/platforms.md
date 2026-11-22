@@ -14,7 +14,7 @@ the default allocator and system entropy.
 The release matrix exercises these APIs using the installed compiler.
 Task-aware sockets, asynchronous process pipes, epoll, tasks and channels
 require GNU/Linux. The Windows matrix exercises the compiler, tools,
-default allocator, owning text and `random.OsRng`. The Windows release
+default allocator, owning text, UTC and monotonic clocks and `random.OsRng`. The Windows release
 smoke test links a COFF object with the Visual Studio linker and reads system
 entropy through CNG. The LLVM SDK and vaqc use the dynamic MSVC CRT.
 Use a Visual Studio developer environment

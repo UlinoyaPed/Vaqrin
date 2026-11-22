@@ -7,19 +7,76 @@ class Timespec {
     pub var nanoseconds: i64;
 }
 
+class WindowsFileTime {
+    #repr: C
+    pub var low: u32;
+    pub var high: u32;
+}
+
 const monotonicClock: i32 = 1;
 const realtimeClock: i32 = 0;
 const absoluteSleep: c_int = 1;
 const interrupted: c_int = 4;
+const darwinClock: i32 = 1;
+const windowsClock: i32 = 2;
 
 extern "C" func clock_gettime(clock: c_int, value: *Timespec) c_int;
 extern "C" func clock_nanosleep(clock: c_int, flags: c_int, value: *const Timespec, remaining: *Timespec) c_int;
 extern "C" func __vqr_io_clock_now(clock: i32, seconds: *i64, nanoseconds: *i64) i32;
 extern "C" func __vqr_io_clock_sleep_until(seconds: i64, nanoseconds: i32) i32;
+extern "C" func GetSystemTimePreciseAsFileTime(output: *WindowsFileTime) void;
+extern "C" func QueryUnbiasedInterruptTimePrecise(output: *u64) void;
+extern "C" func Sleep(milliseconds: u32) void;
+
+class WindowsClock {
+public:
+    static func read(clock: i32) !Timespec {
+        const ticksPerSecond: u64 = 10000000;
+        const secondsFrom1601To1970: i64 = 11644473600;
+        var ticks: u64 = 0;
+        var epochOffset: i64 = 0;
+        if clock == monotonicClock {
+            unsafe { QueryUnbiasedInterruptTimePrecise(&ticks); }
+        } else {
+            var fileTime = WindowsFileTime{low: 0, high: 0};
+            unsafe { GetSystemTimePreciseAsFileTime(&fileTime); }
+            ticks = (u64(fileTime.high) << 32) | u64(fileTime.low);
+            epochOffset = secondsFrom1601To1970;
+        }
+        Timespec{seconds: i64(ticks / ticksPerSecond)! - epochOffset,
+                 nanoseconds: i64(ticks % ticksPerSecond)! * 100}
+    }
+
+    static func waitUntil(seconds: i64, nanoseconds: i32) !void {
+        const maxMillis: i64 = 4294967294;
+        for {
+            var now = WindowsClock.read(monotonicClock)!;
+            if seconds < now.seconds || (seconds == now.seconds && i64(nanoseconds) <= now.nanoseconds) {
+                return;
+            }
+            var whole = seconds - now.seconds;
+            var nanos = i64(nanoseconds) - now.nanoseconds;
+            if nanos < 0 {
+                whole -= 1;
+                nanos += 1000000000;
+            }
+            var millis = maxMillis;
+            if whole <= maxMillis / 1000 {
+                millis = whole * 1000 + (nanos + 999999) / 1000000;
+                if millis > maxMillis { millis = maxMillis; }
+            }
+            unsafe { Sleep(u32(millis)!); }
+        }
+    }
+}
 
 class NativeClock {
 public:
-    comptime if __vqr_clock_requires_runtime() {
+    comptime if __vqr_clock_platform() == windowsClock {
+        static func read(clock: i32) !Timespec { WindowsClock.read(clock) }
+        static func waitUntil(seconds: i64, nanos: i32) !void { WindowsClock.waitUntil(seconds, nanos) }
+    } else {
+      comptime if __vqr_clock_platform() == darwinClock {
         static func read(clock: i32) !Timespec {
             var seconds: i64 = 0;
             var nanoseconds: i64 = 0;
@@ -33,7 +90,7 @@ public:
                 return TimeError.ClockUnavailable;
             }
         }
-    } else {
+      } else {
         static func read(clock: i32) !Timespec {
             var value = Timespec{seconds: 0, nanoseconds: 0};
             if unsafe { clock_gettime(clock, &value) } != 0 { return TimeError.ClockUnavailable; }
@@ -48,6 +105,7 @@ public:
                 if status != interrupted { return TimeError.ClockUnavailable; }
             }
         }
+      }
     }
 }
 

@@ -21,5 +21,7 @@ infinity and NaN forms. The serde adapters read and write f64 values. Finite
 values use a round-trippable scientific decimal representation and can be
 stored inside a root table. Optional and date-time codecs remain pending.
 
-Tests cover representative decoded values, duplicate and conflicting table
-definitions, and round trips through the DOM adapters.
+CI checks acceptance and rejection against the TOML 1.0.0 fixture
+manifest from `toml-lang/toml-test`. The standard-library acceptance
+suite checks representative decoded values and round trips through the
+DOM adapters.

@@ -2,7 +2,7 @@ name: Compiler and standard library CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'release-check/**']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -80,6 +80,17 @@ jobs:
           curl --fail --silent --show-error --retry 3 "$base/NormalizationTest.txt" -o "$RUNNER_TEMP/ucd17/NormalizationTest.txt"
           curl --fail --silent --show-error --retry 3 "$base/auxiliary/GraphemeBreakTest.txt" -o "$RUNNER_TEMP/ucd17/GraphemeBreakTest.txt"
           python3 compiler/tests/unicode_conformance.py build/ci/vaqc "$RUNNER_TEMP/ucd17"
+
+      - name: Checkout TOML 1.0 syntax fixtures
+        uses: actions/checkout@v4
+        with:
+          repository: toml-lang/toml-test
+          ref: 96fd088448ec0f4d9f061c730ed7854399c46faf
+          path: build/toml-test
+          persist-credentials: false
+
+      - name: Verify TOML 1.0 syntax
+        run: python3 compiler/tests/toml_conformance.py build/ci/vaqc build/toml-test/tests
 
       - name: Verify installed compiler and standard library
         run: |

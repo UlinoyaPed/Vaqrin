@@ -112,6 +112,22 @@ jobs:
             Acceptance.test_mutex_condition_and_wait_group_across_threads \
             Acceptance.test_condition_wait_uses_absolute_deadline
 
+      - name: Verify macOS HTTP and TLS from the installation
+        if: runner.os == 'macOS'
+        run: |
+          openssl_prefix="$(brew --prefix openssl@3)"
+          if ! test -f "$openssl_prefix/include/openssl/ssl.h"; then brew install openssl@3; fi
+          export PATH="$openssl_prefix/bin:$PATH"
+          export CPATH="$openssl_prefix/include${CPATH:+:$CPATH}"
+          compiler="$PWD/build/release-root/vaqrin/bin/vaqc"
+          python compiler/tests/stdlib_acceptance.py "$compiler" \
+            StandardLibraryAcceptance.test_http_tcp_client \
+            StandardLibraryAcceptance.test_http_tcp_server \
+            StandardLibraryAcceptance.test_https_client
+          python compiler/tests/protocol_acceptance.py "$compiler" \
+            ProtocolAcceptance.test_tls_client_alpn \
+            ProtocolAcceptance.test_tls_server_alpn
+
       - name: Verify Linux runtime and protocol packages from the installation
         if: runner.os == 'Linux'
         shell: bash

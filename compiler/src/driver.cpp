@@ -600,8 +600,8 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
       fail({}, "HTTP/2 requires hosted GNU/Linux x86-64 or AArch64", "E290");
     if (usesGzipRuntime && !supportsHostRuntime)
       fail({}, "gRPC gzip requires hosted GNU/Linux x86-64 or AArch64", "E290");
-    if (usesTlsRuntime && !supportsHostRuntime)
-      fail({}, "TLS requires hosted GNU/Linux x86-64 or AArch64", "E290");
+    if (usesTlsRuntime && !supportsPosixIo)
+      fail({}, "TLS requires hosted GNU/Linux or macOS on x86-64 or AArch64", "E290");
     if (usesIoRuntime && !supportsPosixIo)
       fail({}, "host I/O requires hosted GNU/Linux or macOS on x86-64 or AArch64", "E290");
     if (usesDecimalRuntime && !supportsHostRuntime)
@@ -688,7 +688,7 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
         args.push_back("-lbcrypt");
       if (usesHttp2Runtime) args.push_back("-lnghttp2");
       if (usesGzipRuntime) args.push_back("-lz");
-      if (usesTlsRuntime) args.push_back("-ldl");
+      if (usesTlsRuntime && target.isOSLinux()) args.push_back("-ldl");
       if (r.options.profile == "hosted" && target.isOSLinux() &&
           (usesTasks || usesIoRuntime || usesNetRuntime || usesTlsRuntime || module.getFunction("pthread_create") ||
            module.getFunction("pthread_self")))

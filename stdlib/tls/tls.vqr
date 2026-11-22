@@ -49,14 +49,21 @@ func checkStatus(status: i32) !void {
 const wantRead: i32 = -10;
 const wantWrite: i32 = -11;
 
-func checkDeadline(deadline: ?time.Deadline) !void {
-    if task.isCancelled() { return io.IoError.Cancelled; }
-    if deadline != null && deadline.unwrap().expired()! { return io.IoError.DeadlineExceeded; }
-}
-
-func waitTls(fd: i32, status: i32, deadline: ?time.Deadline) !void {
-    var interest = if status == wantRead { reactor.Interest.read() } else { reactor.Interest.write() };
-    task.waitDescriptor(fd, interest, deadline)
+class TlsReadiness {
+public:
+    comptime if __vqr_host_supports_tasks() {
+        static func check(deadline: ?time.Deadline) !void {
+            if task.isCancelled() { return io.IoError.Cancelled; }
+            if deadline != null && deadline.unwrap().expired()! { return io.IoError.DeadlineExceeded; }
+        }
+        static func wait(fd: i32, status: i32, deadline: ?time.Deadline) !void {
+            var interest = if status == wantRead { reactor.Interest.read() } else { reactor.Interest.write() };
+            task.waitDescriptor(fd, interest, deadline)
+        }
+    } else {
+        static func check(deadline: ?time.Deadline) !void { io.IoError.Unsupported }
+        static func wait(fd: i32, status: i32, deadline: ?time.Deadline) !void { io.IoError.Unsupported }
+    }
 }
 
 class NativeSession {
@@ -118,7 +125,7 @@ private:
         var required = if requireProtocol { 1 } else { 0 };
         var fd = socket.systemDescriptor()!;
         var status: i32 = 0;
-        if suspendable { checkDeadline(deadline)!; }
+        if suspendable { TlsReadiness.check(deadline)!; }
         var session = if suspendable {
             unsafe { __vqr_tls_prepare(fd, host, roots, cert, key, offered, size, version, required, 1, &status) }
         } else {
@@ -167,15 +174,16 @@ public:
     func init(socket: net.TcpStream, native: NativeSession)
         : stream(move(socket)), session(native.value), suspendable(false), readDeadline(null), writeDeadline(null) {}
     func startAsync(deadline: ?time.Deadline) !void {
+        TlsReadiness.check(deadline)!;
         suspendable = true;
         readDeadline = deadline;
         writeDeadline = deadline;
         var fd = stream.systemDescriptor()!;
         for {
-            checkDeadline(deadline)!;
+            TlsReadiness.check(deadline)!;
             var status = unsafe { __vqr_tls_handshake(session) };
             if status != wantRead && status != wantWrite { return checkStatus(status); }
-            waitTls(fd, status, deadline)!;
+            TlsReadiness.wait(fd, status, deadline)!;
         }
     }
     func setReadDeadline(value: ?time.Deadline) void { readDeadline = value; }
@@ -210,7 +218,7 @@ public:
         if dst.len() == 0 { return 0; }
         for {
             if suspendable {
-                checkDeadline(readDeadline) catch (reason) {
+                TlsReadiness.check(readDeadline) catch (reason) {
                     close() catch {};
                     return reason;
                 };
@@ -221,7 +229,7 @@ public:
                 checkStatus(status)!;
                 return count;
             }
-            waitTls(stream.systemDescriptor()!, status, readDeadline) catch (reason) {
+            TlsReadiness.wait(stream.systemDescriptor()!, status, readDeadline) catch (reason) {
                 close() catch {};
                 return reason;
             };
@@ -232,7 +240,7 @@ public:
         if src.len() == 0 { return 0; }
         for {
             if suspendable {
-                checkDeadline(writeDeadline) catch (reason) {
+                TlsReadiness.check(writeDeadline) catch (reason) {
                     close() catch {};
                     return reason;
                 };
@@ -243,7 +251,7 @@ public:
                 checkStatus(status)!;
                 return count;
             }
-            waitTls(stream.systemDescriptor()!, status, writeDeadline) catch (reason) {
+            TlsReadiness.wait(stream.systemDescriptor()!, status, writeDeadline) catch (reason) {
                 close() catch {};
                 return reason;
             };

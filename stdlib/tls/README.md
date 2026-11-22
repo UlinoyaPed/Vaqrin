@@ -28,10 +28,13 @@ state are kept separate so a future credential mode can extend context setup
 for either role. HTTP/1.x retains its existing TLS error names and uses the
 same OpenSSL loader, verification and ownership logic.
 
-Networking targets hosted GNU/Linux x86-64 and AArch64. Building a TLS
-application with `vaqc` requires OpenSSL 3 headers for the target and running
-it requires `libssl.so.3`. Client verification also needs CA roots, for example
-the `ca-certificates` package on Debian/Ubuntu. The compiler and programs
-that never use TLS do not depend on OpenSSL.
+Blocking TLS supports hosted GNU/Linux and macOS on x86-64 and AArch64.
+Task-aware TLS requires GNU/Linux. Building with TLS requires OpenSSL 3
+headers for the target. On macOS with Homebrew, set
+`CPATH="$(brew --prefix openssl@3)/include"` when building with `vaqc`.
+The runtime loads `libssl.so.3` on GNU/Linux and `libssl.3.dylib` on macOS,
+including the standard Homebrew location. Client verification uses the CA
+roots configured in OpenSSL or a PEM bundle supplied by the caller. Plain
+HTTP works without OpenSSL.
 
 [OpenSSL ALPN API](https://docs.openssl.org/3.5/man3/SSL_CTX_set_alpn_select_cb/)

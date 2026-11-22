@@ -119,7 +119,12 @@ int socket_read(BIO *bio, char *data, int length) {
 int socket_write(BIO *bio, const char *data, int length) {
     api.BIO_clear_retry_flags(bio);
     const auto &socket = *static_cast<const SocketState *>(api.BIO_get_data(bio));
+#if defined(__APPLE__)
+    // Darwin TCP sockets have SO_NOSIGPIPE set when opened or accepted.
+    const auto count = send(socket.fd, data, length, 0);
+#else
     const auto count = send(socket.fd, data, length, MSG_NOSIGNAL);
+#endif
     if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
         const auto reason = errno;
         api.BIO_set_retry_write(bio);
@@ -161,7 +166,19 @@ bool attach_socket(SSL *ssl, SocketState &socket) {
 }
 
 void load_openssl() {
+#if defined(__APPLE__)
+    void *library = dlopen("libssl.3.dylib", RTLD_NOW | RTLD_LOCAL);
+    if (library == nullptr) {
+#if defined(__aarch64__)
+        const char *homebrew = "/opt/homebrew/opt/openssl@3/lib/libssl.3.dylib";
+#else
+        const char *homebrew = "/usr/local/opt/openssl@3/lib/libssl.3.dylib";
+#endif
+        library = dlopen(homebrew, RTLD_NOW | RTLD_LOCAL);
+    }
+#else
     void *library = dlopen("libssl.so.3", RTLD_NOW | RTLD_LOCAL);
+#endif
     if (library == nullptr) return;
     bool complete = true;
 #define LOAD(name) \

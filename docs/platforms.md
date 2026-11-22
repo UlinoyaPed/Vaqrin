@@ -9,7 +9,7 @@ emit a native object and run a linked smoke program.
 GNU/Linux is the reference host for files, sockets, HTTP, processes, tasks
 and channels. The macOS build also supports POSIX files, environment
 variables, synchronous process execution, monotonic and UTC clocks,
-synchronous TCP, UDP and DNS, native threads, blocking synchronization,
+synchronous TCP, UDP, DNS, HTTP/1 and TLS, native threads, blocking synchronization,
 the default allocator and system entropy.
 The release matrix exercises these APIs using the installed compiler.
 Task-aware sockets, asynchronous process pipes, epoll, tasks and channels

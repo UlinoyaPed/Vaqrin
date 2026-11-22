@@ -11,6 +11,7 @@ ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::v
   if (key.starts_with("__vqr_thread_")) return threadIntrinsic(key.substr(13), n, types);
   if (key.starts_with("__vqr_task_")) return taskIntrinsic(key.substr(11), n, types);
   if (key.starts_with("__vqr_sync_")) return syncIntrinsic(key.substr(11), n);
+  if (key == "__vqr_host_supports_tasks") return {p.boolTy, ir.getInt1(p.hostedLinux64())};
   if (key == "__vqr_clock_platform") {
     if (!p.hostedLinux64() && !p.hostedMac64() && !p.hostedWindows64())
       fail(n->span, "native clocks require hosted GNU/Linux, macOS or Windows MSVC on x86-64 or AArch64", "E290");

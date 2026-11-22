@@ -7,6 +7,7 @@
 #include <llvm/Bitcode/BitcodeReader.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
 #include <llvm/Config/llvm-config.h>
+#include <llvm/IR/InstIterator.h>
 #include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/LegacyPassManager.h>
@@ -25,6 +26,7 @@
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/TargetParser/Host.h>
 #include <llvm/Transforms/IPO/GlobalDCE.h>
+#include <llvm/Transforms/Utils/IntegerDivision.h>
 #include <llvm/Transforms/Utils/LowerMemIntrinsics.h>
 
 #include <algorithm>
@@ -412,6 +414,32 @@ void lowerLargeArrayStores(llvm::Module &module, llvm::TargetMachine &machine, b
   }
 }
 
+void lowerWindowsWideDivision(llvm::Module &module) {
+  llvm::SmallVector<llvm::BinaryOperator *, 16> divisions;
+  for (auto &function : module)
+    for (auto &instruction : llvm::instructions(function)) {
+      if (!instruction.getType()->isIntegerTy(128)) continue;
+      switch (instruction.getOpcode()) {
+      case llvm::Instruction::SDiv:
+      case llvm::Instruction::UDiv:
+      case llvm::Instruction::SRem:
+      case llvm::Instruction::URem:
+        divisions.push_back(llvm::cast<llvm::BinaryOperator>(&instruction));
+        break;
+      default:
+        break;
+      }
+    }
+  // The MSVC CRT has no compiler-rt helpers for 128-bit division and remainder.
+  for (auto *operation : divisions) {
+    auto opcode = operation->getOpcode();
+    if (opcode == llvm::Instruction::SDiv || opcode == llvm::Instruction::UDiv)
+      llvm::expandDivision(operation);
+    else
+      llvm::expandRemainder(operation);
+  }
+}
+
 void optimize(llvm::Module &module, llvm::TargetMachine &machine, const Options &options) {
   for (auto it = module.begin(); it != module.end();) {
     auto &function = *it++;
@@ -436,6 +464,7 @@ void optimize(llvm::Module &module, llvm::TargetMachine &machine, const Options 
   if (options.emit == "exe") passes.addPass(llvm::GlobalDCEPass());
   passes.run(module, mam);
   lowerLargeArrayStores(module, machine, options.profile == "freestanding");
+  if (machine.getTargetTriple().isWindowsMSVCEnvironment()) lowerWindowsWideDivision(module);
   if (llvm::verifyModule(module, &llvm::errs()))
     fail({}, "LLVM verification failed after optimization", "E900");
 }

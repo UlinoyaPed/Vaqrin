@@ -25,25 +25,36 @@ extern "C" func clock_nanosleep(clock: c_int, flags: c_int, value: *const Timesp
 extern "C" func __vqr_io_clock_now(clock: i32, seconds: *i64, nanoseconds: *i64) i32;
 extern "C" func __vqr_io_clock_sleep_until(seconds: i64, nanoseconds: i32) i32;
 extern "C" func GetSystemTimePreciseAsFileTime(output: *WindowsFileTime) void;
-extern "C" func QueryUnbiasedInterruptTimePrecise(output: *u64) void;
+extern "C" func QueryPerformanceCounter(output: *i64) i32;
+extern "C" func QueryPerformanceFrequency(output: *i64) i32;
 extern "C" func Sleep(milliseconds: u32) void;
 
 class WindowsClock {
 public:
     static func read(clock: i32) !Timespec {
+        if clock == monotonicClock {
+            var ticks: i64 = 0;
+            var frequency: i64 = 0;
+            if unsafe { QueryPerformanceCounter(&ticks) } == 0 ||
+               unsafe { QueryPerformanceFrequency(&frequency) } == 0 || ticks < 0 || frequency <= 0 {
+                return TimeError.ClockUnavailable;
+            }
+            var seconds = ticks / frequency;
+            var remainder = ticks % frequency;
+            const nanosPerSecond: i64 = 1000000000;
+            var nanos = if remainder <= largestSecond / nanosPerSecond {
+                remainder * nanosPerSecond / frequency
+            } else {
+                i64(i128(remainder) * i128(nanosPerSecond) / i128(frequency))!
+            };
+            return Timespec{seconds: seconds, nanoseconds: nanos};
+        }
         const ticksPerSecond: u64 = 10000000;
         const secondsFrom1601To1970: i64 = 11644473600;
-        var ticks: u64 = 0;
-        var epochOffset: i64 = 0;
-        if clock == monotonicClock {
-            unsafe { QueryUnbiasedInterruptTimePrecise(&ticks); }
-        } else {
-            var fileTime = WindowsFileTime{low: 0, high: 0};
-            unsafe { GetSystemTimePreciseAsFileTime(&fileTime); }
-            ticks = (u64(fileTime.high) << 32) | u64(fileTime.low);
-            epochOffset = secondsFrom1601To1970;
-        }
-        Timespec{seconds: i64(ticks / ticksPerSecond)! - epochOffset,
+        var fileTime = WindowsFileTime{low: 0, high: 0};
+        unsafe { GetSystemTimePreciseAsFileTime(&fileTime); }
+        var ticks = (u64(fileTime.high) << 32) | u64(fileTime.low);
+        Timespec{seconds: i64(ticks / ticksPerSecond)! - secondsFrom1601To1970,
                  nanoseconds: i64(ticks % ticksPerSecond)! * 100}
     }
 

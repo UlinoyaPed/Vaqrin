@@ -41,9 +41,17 @@ func clocksWork() !bool {
            start.elapsed()!.compare(delay) != cmp.Ordering.Less;
 }
 
+func wideDivisionWorks(value: i128, divisor: i128, unsignedValue: u128, unsignedDivisor: u128) bool {
+    return value / divisor == -18446744072904245248i128 && value % divisor == -2415919235i128 &&
+           unsignedValue / unsignedDivisor == 9223372036854775807u128 &&
+           unsignedValue % unsignedDivisor == 9223372036854775812u128;
+}
+
 export "C" func main() i32 {
     if !(heapWorks() catch { return 3; }) { return 4; }
     if !(clocksWork() catch { return 5; }) { return 6; }
+    if !wideDivisionWorks(-((1i128 << 100) + 131), (1i128 << 36) + 3,
+                          (1u128 << 127) + 3, (1u128 << 64) + 1) { return 7; }
 	var bytes = mem.zeroedBytes<16>();
     random.fillSystem(bytes[:]) catch { return 1; };
     for byte in bytes[:] { if byte != 0 { return 0; } }

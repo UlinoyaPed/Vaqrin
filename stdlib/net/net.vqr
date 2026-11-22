@@ -21,7 +21,7 @@ extern "C" func __vqr_net_set_timeout(fd: i32, writing: i32, seconds: i64, nanos
 extern "C" func __vqr_net_receive(fd: i32, data: *u8, length: usize, status: *i32) isize;
 extern "C" func __vqr_net_send(fd: i32, data: *const u8, length: usize, status: *i32) isize;
 extern "C" func __vqr_net_send_to(fd: i32, data: *const u8, length: usize, address: *const u8, status: *i32) isize;
-extern "C" func __vqr_net_receive_from(fd: i32, data: *u8, length: usize, address: *u8, status: *i32) isize;
+extern "C" func __vqr_net_receive_from(fd: i32, data: *u8, length: usize, address: *u8, truncated: *i32, status: *i32) isize;
 extern "C" func __vqr_net_resolve(name: *const u8, status: *i32) usize;
 extern "C" func __vqr_net_next_address(cursor: *usize, address: *u8) i32;
 extern "C" func __vqr_net_free_addresses(handle: usize) void;
@@ -353,11 +353,10 @@ public:
         var dummy: u8 = 0;
         var data = if dst.len() == 0 { &dummy } else { &dst[0] };
         var reason: i32 = 0;
-        var count = unsafe { __vqr_net_receive_from(socket.fd()!, data, dst.len(), &wire[0], &reason) };
+        var truncated: i32 = 0;
+        var count = unsafe { __vqr_net_receive_from(socket.fd()!, data, dst.len(), &wire[0], &truncated, &reason) };
         checkStatus(reason)!;
-        var length = usize(count)!;
-        var truncated = length > dst.len();
-        Datagram{len: if truncated { dst.len() } else { length }, source: fromWire(wire[:])!, truncated: truncated}
+        Datagram{len: usize(count)!, source: fromWire(wire[:])!, truncated: truncated != 0}
     }
     func recv(dst: []u8) !Datagram { recvFrom(dst) }
     func setBroadcast(value: bool) !void { socket.option(2, value) }

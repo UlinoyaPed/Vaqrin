@@ -594,8 +594,8 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
       fail({}, "the epoll reactor requires hosted GNU/Linux x86-64 or AArch64", "E290");
     if (usesProcessRuntime && !supportsPosixIo)
       fail({}, "process execution requires hosted GNU/Linux or macOS on x86-64 or AArch64", "E290");
-    if (usesNetRuntime && !supportsHostRuntime)
-      fail({}, "host networking requires hosted GNU/Linux x86-64 or AArch64", "E290");
+    if (usesNetRuntime && !supportsPosixIo)
+      fail({}, "host networking requires hosted GNU/Linux or macOS on x86-64 or AArch64", "E290");
     if (usesHttp2Runtime && !supportsHostRuntime)
       fail({}, "HTTP/2 requires hosted GNU/Linux x86-64 or AArch64", "E290");
     if (usesGzipRuntime && !supportsHostRuntime)

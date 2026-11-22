@@ -613,7 +613,7 @@ class StandardLibraryAcceptance(CompilerCase):
                 io.println(captured.status().signal() == null)!;
                 command.output(10) catch (reason) {
                     io.println(reason == process.ProcessError.OutputLimit)!;
-                    var empty = process.Command.new(path.fromString("/bin/true")!);
+                    var empty = process.Command.new(path.fromString("/bin/sh")!);
                     var zero = empty.output(0)!;
                     io.println(zero.status().success() && zero.stdout().len() == 0)!;
                     var script = [2]str{"-c", "head -c 70000 /dev/zero; head -c 80000 /dev/zero >&2"};
@@ -743,6 +743,8 @@ class StandardLibraryAcceptance(CompilerCase):
                 var clone = accepted.0.tryClone()!;
                 accepted.0.close()!;
                 io.println(io.readToString(&clone, 8)!)!;
+                var broken = client.write("again".asBytes());
+                io.println(io.systemErrorCode(result.errorOf(&broken).unwrap()).unwrap() == BROKEN_PIPE_ERRNO)!;
 
                 listener.setNonblocking(true)!;
                 var pending = listener.accept();
@@ -760,8 +762,15 @@ class StandardLibraryAcceptance(CompilerCase):
                 io.println(sender.send("".asBytes())!)!;
                 var empty = receiver.recv(buffer[0..0])!;
                 io.println(empty.len == 0 && !empty.truncated)!;
+                sender.send("one".asBytes())!;
+                var discarded = receiver.recv(buffer[0..0])!;
+                io.println(discarded.len == 0 && discarded.truncated)!;
+                sender.send("two".asBytes())!;
+                var exact = receiver.recv(buffer[:])!;
+                io.println(exact.len == 3 && !exact.truncated)!;
             }
-        """, "true\n[fe80::1%7]:80\ntrue\n127.0.0.1:81\ntrue\ntrue\ntrue\nping\ntrue\n8\ntrue\ntrue\n0\ntrue\n")
+        """.replace("BROKEN_PIPE_ERRNO", str(errno.EPIPE)),
+                    "true\n[fe80::1%7]:80\ntrue\n127.0.0.1:81\ntrue\ntrue\ntrue\nping\ntrue\ntrue\n8\ntrue\ntrue\n0\ntrue\ntrue\ntrue\n")
 
     def test_dense_linear_algebra(self):
         self.hosted(r"""

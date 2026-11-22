@@ -17,9 +17,8 @@ by default and return native errors through `io.systemErrorCode`.
 `Datagram.truncated` identifies a larger message. A zero-length datagram
 preserves its message boundary.
 
-These APIs target hosted GNU/Linux x86-64 and AArch64. Unix-domain sockets,
-multicast membership, reverse DNS and an asynchronous I/O integration remain
-pending.
+Synchronous TCP, UDP and DNS support hosted GNU/Linux and macOS on x86-64
+and AArch64. Task-aware networking requires hosted GNU/Linux.
 
 ## Task-aware TCP
 

@@ -23,16 +23,16 @@ default CA locations are supplied by OpenSSL. Set `SSL_CERT_FILE` to a PEM CA
 bundle or `SSL_CERT_DIR` to an OpenSSL-hashed CA directory for a private CA.
 `TlsError.Certificate` reports chain or identity verification failures.
 
-HTTP client and server networking currently targets hosted GNU/Linux x86-64
-and AArch64. HTTPS needs OpenSSL 3 development headers when building an
-application with `vaqc`, and `libssl.so.3` when issuing HTTPS requests. For Debian
-and Ubuntu, install `libssl-dev` to build and `ca-certificates` for the system
-trust store. Plain HTTP works without OpenSSL. HTTPS reports
+Blocking HTTP client and server networking supports hosted GNU/Linux and macOS
+on x86-64 and AArch64. HTTPS uses the [OpenSSL 3 backend](../tls/README.md).
+For Debian and Ubuntu, install `libssl-dev` to build and `ca-certificates` for
+the system trust store. Plain HTTP works without OpenSSL. HTTPS reports
 `TlsError.Unavailable` if the TLS backend could not be built or loaded.
 
 `Server.serveOne` accepts one plain HTTP connection and invokes an
 `http.Handler`. Both client and server use one connection per exchange and
 buffer the body within `HttpLimits`. Redirect responses are returned to the
-caller. Connection pooling, streaming bodies and protocol upgrades remain pending.
+caller. On GNU/Linux, `AsyncClient` and `AsyncServer` support task-aware
+requests and streaming bodies. `AsyncPool` reuses connections across requests.
 
 See [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112.html) for the wire framing.

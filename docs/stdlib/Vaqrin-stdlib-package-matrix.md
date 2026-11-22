@@ -35,17 +35,17 @@
 | `bufio` | 7 | 35 | 7 | 0 | 部分实现，已运行代表用例 | 复用缓冲、按块扫描行、短写恢复、ASCII 与自定义字节分隔、UTF-8 与二进制 Token | `coll`, `io`, `mem`, `parse`, `text` |
 | `path` | 5 | 26 | 18 | 0 | 部分实现，已运行代表用例 | 拥有型 POSIX UTF-8 词法路径，原生非 UTF-8、Windows 路径和更多相对路径运算待补 | `coll`, `text` |
 | `fs` | 16 | 53 | 31 | 0 | 部分实现，已运行代表用例 | POSIX 文件身份、原子替换、目录遍历与清理、符号链接和临时资源。MemFS 与其他系统端口待补 | `coll`, `io`, `path`, `text` |
-| `time` | 17 | 79 | 17 | 0 | 部分实现，已运行代表用例 | 时长、单调时钟、定时、公历格式化及 GNU/Linux 宿主 TZif 数据库 | `binary`, `cmp`, `coll`, `fmt`, `fs`, `text` |
+| `time` | 17 | 79 | 17 | 0 | 部分实现，已运行代表用例 | 时长、公历格式化、GNU/Linux 宿主 TZif 数据库，以及 GNU/Linux、macOS、Windows MSVC 的单调时钟、UTC 和定时 | `binary`, `cmp`, `coll`, `fmt`, `fs`, `text` |
 | `env` | 3 | 8 | 17 | 0 | 部分实现，已运行代表用例 | 进程环境读写、独立快照和路径查询。参数、主机信息、原生字节与变量展开待补 | `coll`, `io`, `path`, `text` |
-| `process` | 6 | 31 | 10 | 0 | 部分实现，已运行代表用例 | POSIX 命令执行和子进程句柄、环境覆盖、工作目录、标准流与文件重定向、退出状态、有上限的双流捕获及异步管道读写 | `coll`, `env`, `fs`, `io`, `path`, `text` |
-| `net` | 14 | 58 | 14 | 0 | 部分实现，已运行代表用例 | IPv4/IPv6、TCP 与 UDP、正向系统解析、网络字节序、连接及 I/O 超时。含可挂起的 TCP、UDP 和系统 DNS。多播与其他平台待补 | `binary`, `coll`, `fmt`, `io`, `mem`, `parse`, `reactor`, `task`, `text`, `time` |
+| `process` | 6 | 31 | 10 | 0 | 部分实现，已运行代表用例 | GNU/Linux 和 macOS 同步命令执行、环境覆盖、工作目录、标准流与文件重定向、退出状态和有上限的双流捕获。异步管道支持 GNU/Linux | `coll`, `env`, `fs`, `io`, `path`, `text` |
+| `net` | 14 | 58 | 14 | 0 | 部分实现，已运行代表用例 | GNU/Linux 和 macOS 同步 IPv4/IPv6、TCP、UDP、DNS 和超时。可挂起的 TCP、UDP 和 DNS 支持 GNU/Linux | `binary`, `coll`, `fmt`, `io`, `mem`, `parse`, `reactor`, `task`, `text`, `time` |
 | `reactor` | — | — | — | 0 | 部分实现，已运行代表用例 | Linux epoll 注册、修改、注销、就绪等待与 fd 复用防护 | `coll`, `io`, `time` |
-| `http` | 15 | 55 | 12 | 0 | 部分实现 | HTTP/1.x 报文读写、同步和异步 HTTP/HTTPS、串行连接复用、流式响应读取和分块请求上传及有界空闲连接池 | `bufio`, `coll`, `fmt`, `io`, `net`, `parse`, `text`, `time`, `tls`, `url` |
+| `http` | 15 | 55 | 12 | 0 | 部分实现，已运行代表用例 | HTTP/1.x 报文读写及 GNU/Linux、macOS 同步 HTTP/HTTPS。GNU/Linux 支持异步请求、流式 Body 和有界连接池 | `bufio`, `coll`, `fmt`, `io`, `net`, `parse`, `text`, `time`, `tls`, `url` |
 | `json` | 12 | 45 | 13 | 0 | 部分实现，已运行代表用例 | 嵌套 DOM、精确数字词法、代理对、指针及 Codec。编码支持递归键排序、非 ASCII 转义和 f64 转换；完整 RFC 向量待补 | `algo`, `bytes`, `cmp`, `coll`, `convert`, `core`, `fmt`, `io`, `iter`, `math`, `opt`, `parse`, `serde`, `text` |
 | `log` | 10 | 33 | 10 | 0 | 部分实现，已运行代表用例 | 级别、结构化属性、同步多 Handler、JSON Lines 及有界异步 Handler | `channel`, `coll`, `io`, `iter`, `json`, `task`, `text`, `time` |
 | `atomic` | 5 | 23 | 7 | 0 | 部分实现，已运行代表用例 | 目标受支持位宽上的原子操作，完整硬件目标矩阵待验 | — |
-| `sync` | 19 | 76 | 6 | 0 | 部分实现，已运行代表用例 | 互斥锁、条件变量、等待组、单次初始化，读写锁与信号量等待补 | `atomic`, `cell`, `core`, `opt`, `time` |
-| `thread` | 6 | 24 | 13 | 0 | 部分实现，已运行代表用例 | 原生线程、停止、join 与睡眠，TLS、亲和性和构建器待补 | `atomic`, `opt`, `time` |
+| `sync` | 19 | 76 | 6 | 0 | 部分实现，已运行代表用例 | GNU/Linux 和 macOS 的互斥锁、条件变量、等待组和单次初始化 | `atomic`, `cell`, `core`, `opt`, `time` |
+| `thread` | 6 | 24 | 13 | 0 | 部分实现，已运行代表用例 | GNU/Linux 和 macOS 的原生线程、停止、join 与睡眠 | `atomic`, `opt`, `time` |
 | `task` | 11 | 47 | 15 | 0 | 部分实现，已运行代表用例 | 任务组、结果领取、计时与取消，任务上下文、阻塞适配和完整调度 API 待补 | `opt`, `result`, `time` |
 | `channel` | 12 | 38 | 9 | 0 | 部分实现，已运行代表用例 | MPSC 缓冲、rendezvous、轻量任务挂起、取消、超时和 select。Broadcast 与 Watch 待补 | `atomic`, `coll`, `core`, `mem`, `opt`, `sync`, `time` |
 | `parallel` | 3 | 6 | 14 | 0 | 未实现 | 暂无标准包源码 | — |
@@ -59,7 +59,7 @@
 | `url` | 4 | 27 | 9 | 0 | 部分实现，已运行代表用例 | URI 组件、百分号、IPv6 和重复查询键；IDNA、IRI、zone identifier 待补 | `coll`, `encoding`, `text` |
 | `compress` | 4 | 8 | 6 | 0 | 未实现 | 暂无标准包源码 | — |
 | `crypto` | 5 | 19 | 8 | 0 | 未实现 | 暂无标准包源码 | — |
-| `tls` | 4 | 9 | 4 | 0 | 部分实现，已运行代表用例 | OpenSSL 客户端及服务端、ALPN、CA、SNI、超时与加密流，支持异步握手及读写。双向认证与会话复用待补 | `coll`, `io`, `mem`, `net`, `text`, `time` |
+| `tls` | 4 | 9 | 4 | 0 | 部分实现，已运行代表用例 | GNU/Linux 和 macOS OpenSSL 同步客户端及服务端、ALPN、CA、SNI、超时与加密流。GNU/Linux 支持异步握手及读写 | `coll`, `io`, `mem`, `net`, `text`, `time` |
 | `protobuf` | — | — | — | 0 | 部分实现，已运行代表用例 | Wire Format、标量、子消息、Packed 字段、保留未知字段及 Codec。proto3 schema 代码生成 | `binary`, `coll`, `core`, `mem`, `text` |
 | `http2` | — | — | — | 0 | 部分实现，已运行代表用例 | nghttp2 支持的连接、帧、HPACK、流、窗口和退出事件。TLS ALPN 与显式 h2c | `binary`, `bytes`, `coll`, `io`, `mem`, `text`, `tls` |
 | `grpc` | — | — | — | 0 | 部分实现，已运行代表用例 | 四种 RPC、元数据、状态、消息帧、Deadline 和取消。生成客户端与服务端适配器，支持 gzip 和客户端交错调用。一元和流式服务端 handler 可并发调度，流式发送支持 HTTP/2 背压。生成器提供同步和并发服务端适配器，并发连接支持 GOAWAY 和限时排空 | `binary`, `bytes`, `channel`, `cmp`, `coll`, `core`, `encoding`, `fmt`, `http2`, `io`, `net`, `parse`, `task`, `text`, `time`, `tls`, `url` |

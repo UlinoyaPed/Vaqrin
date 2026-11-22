@@ -2,14 +2,14 @@
 
 ## Scope and platform contract
 
-The first host port targets synchronous hosted GNU/Linux x86-64 and AArch64.
-The native implementation is isolated in compiler/runtime/io_posix.cpp and exposes
+The synchronous POSIX backend supports hosted GNU/Linux and macOS on x86-64 and
+AArch64. The native implementation in compiler/runtime/io_posix.cpp exposes
 only fixed-width scalars, size_t, byte pointers, and opaque directory handles through
 a C ABI. POSIX descriptors and structs do not appear in public Vaqrin signatures.
 
-Calls that require the native runtime are checked against the hosted GNU/Linux
-LP64 target contract during type checking. Portable stream adapters and memory
-streams can be used separately from the POSIX runtime.
+Type checking enforces the hosted target contract for native runtime calls.
+The epoll reactor requires GNU/Linux. Portable stream adapters and memory streams
+can be used separately from the POSIX runtime.
 
 ## Packages
 
@@ -30,7 +30,7 @@ Named language errors retain normal ErrorId values. A native errno is encoded wi
 error number in bits 0..29. This avoids collisions with the compiler's reserved
 high-valued error IDs for allocation, numeric conversion and legacy output errors. Use io.isSystemError and
 io.systemErrorCode to inspect it. This encoding is process-local and must not be
-serialized as a stable error number. Linux EINTR and EAGAIN are recognized by the
+serialized as a stable error number. Native EINTR and EAGAIN are recognized by the
 progress helpers. The POSIX open/read/write boundary retries EINTR. Abstract
 stream adapters report interruptions and would-block without an indefinite retry.
 Other errno values retain their original number.

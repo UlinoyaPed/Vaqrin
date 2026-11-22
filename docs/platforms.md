@@ -11,14 +11,15 @@ format. Use `--ar PROGRAM` to select an external archiver.
 GNU/Linux is the reference host for files, sockets, HTTP, processes, tasks
 and channels. The macOS build also supports POSIX files, environment
 variables, synchronous process execution, monotonic and UTC clocks,
-synchronous TCP, UDP, DNS, HTTP/1 and TLS, native threads, blocking synchronization,
-the default allocator and system entropy.
+synchronous TCP, UDP, DNS, HTTP/1 and TLS, native threads, blocking
+synchronization, the default allocator and system entropy.
 The release matrix exercises these APIs using the installed compiler.
 Task-aware sockets, asynchronous process pipes, epoll, tasks and channels
 require GNU/Linux. The Windows matrix exercises the compiler, tools,
-default allocator, owning text, UTC and monotonic clocks and `random.OsRng`. The Windows release
-smoke test links a COFF object with the Visual Studio linker and reads system
-entropy through CNG. The LLVM SDK and vaqc use the dynamic MSVC CRT.
+default allocator, owning text, UTC and monotonic clocks, 128-bit integer
+division and `random.OsRng`. The Windows release smoke test links a COFF object
+with the Visual Studio linker and reads system entropy through CNG. The LLVM SDK
+and vaqc use the dynamic MSVC CRT.
 Use a Visual Studio developer environment
 and Clang when using the driver's native executable link mode on Windows.
 

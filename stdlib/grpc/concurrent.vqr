@@ -57,9 +57,17 @@ class PendingCall {
 class CompletionWatch {
     #copy: disabled
     var watched: reactor.Reactor;
-    pub func init(socket: i32, completed: i32) !void : watched(reactor.Reactor.open()!) {
+    var shutdown: ?reactor.WatchId;
+    pub func init(socket: i32, completed: i32, stop: ?*const Shutdown) !void
+        : watched(reactor.Reactor.open()!), shutdown(null) {
         watched.register(socket, reactor.Interest.read())!;
         watched.register(completed, reactor.Interest.read())!;
+        if stop != null { shutdown = some(watched.register(stop.unwrap().descriptor(), reactor.Interest.read())!); }
+    }
+    pub func stopWatchingShutdown() !void {
+        if shutdown == null { return; }
+        watched.remove(shutdown.unwrap())!;
+        shutdown = null;
     }
     pub func wait(deadline: time.Deadline) !void {
         task.waitDescriptor(watched.systemDescriptor()!, reactor.Interest.read(), some(deadline))!;

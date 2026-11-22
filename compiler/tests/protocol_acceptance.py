@@ -935,11 +935,14 @@ class ProtocolAcceptance(CompilerCase):
         self.check_grpc_concurrent(check=self.check_streams)
         self.check_grpc_concurrent(self.make_certificate(), check=self.check_streams)
 
-    def check_grpc_concurrent(self, certificate=None, check=None):
+    def check_grpc_concurrent(self, certificate=None, check=None, short_drain=False):
         import grpc
 
         environment = os.environ.copy()
         environment.pop("VAQRIN_RPC_CERT", None)
+        environment.pop("VAQRIN_RPC_SHORT_DRAIN", None)
+        if short_drain:
+            environment["VAQRIN_RPC_SHORT_DRAIN"] = "1"
         if certificate:
             cert, key = certificate
             environment.update(VAQRIN_RPC_CERT=str(cert), VAQRIN_RPC_KEY=str(key))
@@ -959,7 +962,9 @@ class ProtocolAcceptance(CompilerCase):
                 with connection as channel:
                     (check or self.check_unary_calls)(channel, read_line)
                 out, err = server.communicate(timeout=6)
-                self.assertEqual(server.returncode, 0, (out, err))
+                self.assertEqual(server.returncode, int(short_drain), (out, err))
+                if short_drain:
+                    self.assertIn(b"DeadlineExceeded", err)
             finally:
                 if server.poll() is None:
                     server.kill()
@@ -1014,6 +1019,54 @@ class ProtocolAcceptance(CompilerCase):
         finally:
             requests.put(None)
             call.cancel()
+
+    def test_grpc_graceful_shutdown_drains_active_streams(self):
+        self.compile_fixture("grpc_concurrent.vqr", "concurrent")
+        self.check_grpc_concurrent(check=self.check_graceful_shutdown)
+        self.check_grpc_concurrent(self.make_certificate(), check=self.check_graceful_shutdown)
+
+    def check_graceful_shutdown(self, channel, read_line):
+        import grpc
+
+        echo = channel.stream_stream("/interop.Concurrent/Echo")
+        stop = channel.unary_unary("/interop.Concurrent/Stop")
+        requests = Queue()
+        requests.put(b"first")
+        stream = echo(iter(requests.get, None), timeout=6)
+        try:
+            self.assertEqual(next(stream), b"first")
+            self.assertEqual(stop(b"stop", timeout=2), b"stop")
+            requests.put(b"last")
+            requests.put(None)
+            self.assertEqual(list(stream), [b"last"])
+            self.assertEqual(stream.code(), grpc.StatusCode.OK)
+        finally:
+            requests.put(None)
+            stream.cancel()
+
+    def test_grpc_graceful_shutdown_is_bounded(self):
+        self.compile_fixture("grpc_concurrent.vqr", "concurrent")
+
+        def expired(channel, read_line):
+            import grpc
+
+            echo = channel.stream_stream("/interop.Concurrent/Echo")
+            stop = channel.unary_unary("/interop.Concurrent/Stop")
+            requests = Queue()
+            requests.put(b"first")
+            stream = echo(iter(requests.get, None), timeout=5)
+            try:
+                self.assertEqual(next(stream), b"first")
+                self.assertEqual(stop(b"stop", timeout=2), b"stop")
+                with self.assertRaises(grpc.RpcError) as drained:
+                    next(stream)
+                self.assertEqual(drained.exception.code(), grpc.StatusCode.UNAVAILABLE)
+                self.assertEqual(read_line(), b"stream cancelled\n")
+            finally:
+                requests.put(None)
+                stream.cancel()
+
+        self.check_grpc_concurrent(check=expired, short_drain=True)
 
     def test_grpc_concurrent_bidi_respects_stream_flow_control(self):
         from h2.connection import H2Connection

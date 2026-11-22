@@ -1,8 +1,6 @@
 package grpc
 import (channel, coll, core, http2, opt, task, time)
 
-extern "C" func __vqr_rt_signal_completion_fd(descriptor: i32) i32;
-
 pub interface ConcurrentStreamingHandler {
     const func handle(stream: *ConcurrentServerStream) !Status;
 }

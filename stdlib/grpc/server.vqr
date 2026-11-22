@@ -1,5 +1,5 @@
 package grpc
-import (coll, core, http2, io, mem, net, opt, reactor, task, text, time, tls)
+import (cmp, coll, core, http2, io, mem, net, opt, reactor, task, text, time, tls)
 
 pub class UnaryRequest {
     #copy: disabled
@@ -20,8 +20,10 @@ pub class ServeOptions {
     pub var maxConcurrentStreams: u32;
     pub var compressResponses: bool;
     pub var applicationWorkers: usize;
+    pub var shutdownTimeout: time.Duration;
     pub func init() : timeout(time.Duration.fromSeconds(15)), maxMessageBytes(4 * 1024 * 1024),
-        maxConcurrentStreams(16), compressResponses(false), applicationWorkers(2) {}
+        maxConcurrentStreams(16), compressResponses(false), applicationWorkers(2),
+        shutdownTimeout(time.Duration.fromSeconds(15)) {}
 }
 
 pub func reply(status: Status) UnaryResponse {
@@ -92,7 +94,7 @@ public:
         var session = http2.openTls(http2.Role.Server, &socket, settings)!;
         var stream = Transport(StreamSocket.Secure(move(socket)));
         stream.setTimeout(options.timeout)!;
-        serve(&stream, &session, options, false)
+        serve(&stream, &session, options, false, null)
     }
     func serveH2c(socket: net.TcpStream, options: ServeOptions) !void {
         var settings = http2.Settings();
@@ -100,24 +102,31 @@ public:
         var session = http2.Connection.open(http2.Role.Server, settings)!;
         var stream = Transport(StreamSocket.Clear(move(socket)));
         stream.setTimeout(options.timeout)!;
-        serve(&stream, &session, options, false)
+        serve(&stream, &session, options, false, null)
     }
     func serveConcurrentH2c(socket: net.AsyncTcpStream, options: ServeOptions) !void {
+        serveConcurrentH2c(move(socket), options, null)
+    }
+    func serveConcurrentH2c(socket: net.AsyncTcpStream, options: ServeOptions, stop: ?*const Shutdown) !void {
         var settings = http2.Settings();
         settings.maxStreams = options.maxConcurrentStreams;
         var session = http2.Connection.open(http2.Role.Server, settings)!;
         var stream = Transport(StreamSocket.AsyncClear(move(socket)));
-        serve(&stream, &session, options, true)
+        serve(&stream, &session, options, true, stop)
     }
     func acceptConcurrentTls(listener: *net.AsyncTcpListener, acceptor: *const tls.TlsAcceptor,
                              options: ServeOptions, deadline: ?time.Deadline) !void {
+        acceptConcurrentTls(listener, acceptor, options, deadline, null)
+    }
+    func acceptConcurrentTls(listener: *net.AsyncTcpListener, acceptor: *const tls.TlsAcceptor,
+                             options: ServeOptions, deadline: ?time.Deadline, stop: ?*const Shutdown) !void {
         socket, peer := listener.accept(deadline)!;
         var secure = acceptor.acceptAsync(move(socket), some(time.Deadline.after(options.timeout)!))!;
         var settings = http2.Settings();
         settings.maxStreams = options.maxConcurrentStreams;
         var session = http2.openTls(http2.Role.Server, &secure, settings)!;
         var stream = Transport(StreamSocket.AsyncSecure(move(secure)));
-        serve(&stream, &session, options, true)
+        serve(&stream, &session, options, true, stop)
     }
     func acceptTls(listener: *net.TcpListener, acceptor: *const tls.TlsAcceptor, options: ServeOptions) !void {
         raw, _ := listener.accept()!;
@@ -153,27 +162,41 @@ private:
         }
         some(move(head))
     }
-    func serve(wire: *Transport, session: *http2.Connection, options: ServeOptions, concurrent: bool) !void {
+    func serve(wire: *Transport, session: *http2.Connection, options: ServeOptions, concurrent: bool,
+               stop: ?*const Shutdown) !void {
         var calls = ConcurrentCalls(if concurrent { options.applicationWorkers } else { 1 })!;
         var watched: ?CompletionWatch = null;
-        if concurrent { watched = some(CompletionWatch(wire.descriptor()!, calls.completionDescriptor()!)!); }
+        if concurrent { watched = some(CompletionWatch(wire.descriptor()!, calls.completionDescriptor()!, stop)!); }
         var storage = mem.zeroedBytes<4096>();
         var pendingTlsWrite = false;
         var active = coll.Vec<Incoming>();
         var deferred = DeferredEvents();
         var goingAway = false;
+        var lastProcessed: i32 = 0;
+        var drainDeadline: ?time.Deadline = null;
         var receiveDeadline: ?time.Deadline = null;
         for {
             var queuedWrite = false;
+            if !pendingTlsWrite && drainDeadline == null && stop != null && stop.unwrap().requested()! {
+                opt.asMutPtr<CompletionWatch>(&watched).unwrap().stopWatchingShutdown()!;
+                session.goAway(lastProcessed, 0)!;
+                drainDeadline = some(time.Deadline.after(options.shutdownTimeout)!);
+            }
+            var timeout = options.timeout;
+            if drainDeadline != null {
+                var remaining = drainDeadline.unwrap().remaining()!;
+                if remaining.isZero() { return RpcError.DeadlineExceeded; }
+                if remaining.compare(timeout) == cmp.Ordering.Less { timeout = remaining; }
+            }
             if !pendingTlsWrite {
                 if concurrent {
                     calls.clearCompletionSignal()!;
                     calls.collect(session, options.maxMessageBytes)!;
-                    wire.setTimeout(options.timeout)!;
+                    wire.setTimeout(timeout)!;
                 }
                 session.flush(wire)!;
                 if concurrent { queuedWrite = calls.advanceWrites(session)!; }
-                if goingAway && active.len() == 0 && !calls.pending() { return; }
+                if (goingAway || drainDeadline != null) && active.len() == 0 && !calls.pending() { return; }
             }
             var next = if pendingTlsWrite { null } else { deferred.next(session)! };
             var event = move(next) ?? {
@@ -181,6 +204,10 @@ private:
                 if concurrent {
                     if receiveDeadline == null { receiveDeadline = some(time.Deadline.after(options.timeout)!); }
                     var idle = receiveDeadline.unwrap();
+                    if drainDeadline != null &&
+                       drainDeadline.unwrap().instant().compare(idle.instant()) == cmp.Ordering.Less {
+                        idle = drainDeadline.unwrap();
+                    }
                     received, interest := wire.tryRead(storage[:]) catch (reason) {
                         if reason == tls.TlsError.UnexpectedEof && active.len() == 0 { return; }
                         return reason;
@@ -193,7 +220,9 @@ private:
                     if interest != null {
                         var wake = opt.asMutPtr<CompletionWatch>(&watched).unwrap();
                         wake.wait(calls.nextDeadline(idle)) catch (reason) {
-                            if reason != io.IoError.DeadlineExceeded || idle.expired()! { return reason; }
+                            if reason != io.IoError.DeadlineExceeded { return reason; }
+                            if drainDeadline != null && drainDeadline.unwrap().expired()! { return RpcError.DeadlineExceeded; }
+                            if idle.expired()! { return reason; }
                         };
                         continue;
                     }
@@ -244,6 +273,13 @@ private:
                         session.reset(event.stream, 1)!;
                         active.swapRemove(position.unwrap());
                     } else {
+                        if drainDeadline != null {
+                            session.reset(event.stream, 7) catch (reason) { // REFUSED_STREAM
+                                if reason != http2.Http2Error.StreamClosed { return reason; }
+                            };
+                            continue;
+                        }
+                        if event.stream > lastProcessed { lastProcessed = event.stream; }
                         var head = incoming(&event, session)! ?? { continue; };
                         var handler = find(head.path) ?? {
                             sendError(session, event.stream, StatusCode.Unimplemented)!;

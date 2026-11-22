@@ -47,6 +47,7 @@ extern "C" func __vqr_http2_has_pending_data(session: usize, stream: i32) i32;
 extern "C" func __vqr_http2_trailers(session: usize, stream: i32, data: *const u8, size: usize) i32;
 extern "C" func __vqr_http2_reset(session: usize, stream: i32, code: u32) i32;
 extern "C" func __vqr_http2_goaway(session: usize, code: u32) i32;
+extern "C" func __vqr_http2_goaway_at(session: usize, last: i32, code: u32) i32;
 extern "C" func __vqr_http2_ping(session: usize, token: *const u8) i32;
 
 func checkStatus(code: i32) !void {
@@ -203,6 +204,11 @@ public:
     func goAway(code: u32) !void {
         checkOpen()!;
         checkStatus(unsafe { __vqr_http2_goaway(handle, code) })
+    }
+    func goAway(lastProcessed: i32, code: u32) !void {
+        checkOpen()!;
+        if lastProcessed < 0 { return Http2Error.InvalidArgument; }
+        checkStatus(unsafe { __vqr_http2_goaway_at(handle, lastProcessed, code) })
     }
     func ping(token: [8]u8) !void {
         checkOpen()!;

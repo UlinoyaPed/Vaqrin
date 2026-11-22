@@ -51,6 +51,15 @@ request or peer flow-control credit. A peer reset or local deadline
 cancels the corresponding task. A cancelled handler releases its slot
 when it finishes.
 
+Pass a `Shutdown.open()` token to the concurrent serving methods for
+graceful shutdown of an established connection. Calling `request()` sends
+GOAWAY and lets already accepted calls finish. The server closes the
+connection once they drain. If the drain exceeds
+`ServeOptions.shutdownTimeout`, the server cancels the remaining tasks
+and returns `RpcError.DeadlineExceeded`. Keep the shutdown token alive
+until all serving calls using it return. Listener acceptance and TLS
+handshake retain their own deadlines.
+
 For streaming, register a `StreamingHandler` with `registerStreaming`.
 A `ServerStream` reads and writes individual messages and exposes initial
 and trailing metadata. End of the sending half returns `null` from

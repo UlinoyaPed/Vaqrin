@@ -533,6 +533,11 @@ extern "C" int32_t __vqr_http2_goaway(uintptr_t handle, uint32_t code) {
     return convert(connection, nghttp2_submit_goaway(connection.session, 0, last, code, nullptr, 0));
 }
 
+extern "C" int32_t __vqr_http2_goaway_at(uintptr_t handle, int32_t last, uint32_t code) {
+    auto &connection = get(handle);
+    return convert(connection, nghttp2_submit_goaway(connection.session, 0, last, code, nullptr, 0));
+}
+
 extern "C" int32_t __vqr_http2_ping(uintptr_t handle, const uint8_t *token) {
     auto &connection = get(handle);
     return convert(connection, nghttp2_submit_ping(connection.session, 0, token));

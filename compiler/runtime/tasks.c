@@ -388,6 +388,29 @@ static void initialize_task_context(struct task *task, struct worker *worker) {
     makecontext(&task->context, run_task, 0);
 }
 
+int __vqr_rt_open_signal(int *error) {
+    int descriptor = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+    *error = descriptor < 0 ? errno : 0;
+    return descriptor;
+}
+
+void __vqr_rt_close_signal(int descriptor) {
+    close(descriptor);
+}
+
+int __vqr_rt_signal_ready(int descriptor, int *error) {
+    struct pollfd watched = {descriptor, POLLIN, 0};
+    int status;
+    do status = poll(&watched, 1, 0);
+    while (status < 0 && errno == EINTR);
+    if (status < 0 || (watched.revents & POLLNVAL)) {
+        *error = status < 0 ? errno : EBADF;
+        return -1;
+    }
+    *error = 0;
+    return (watched.revents & POLLIN) != 0;
+}
+
 int __vqr_rt_signal_completion_fd(int descriptor) {
     int rc;
     do rc = eventfd_write(descriptor, 1);

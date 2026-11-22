@@ -1,5 +1,5 @@
 package main
-import (bytes, coll, env, grpc, io, net, task, time, tls)
+import (bytes, coll, env, grpc, io, mem, net, task, time, tls)
 
 class Handler {
     #implements: grpc.ConcurrentUnaryHandler
@@ -41,17 +41,33 @@ class Echo {
     }
 }
 
+class StopHandler {
+    #implements: grpc.ConcurrentUnaryHandler
+    var signal: mem.Shared<grpc.Shutdown>;
+    pub func init(signal: mem.Shared<grpc.Shutdown>) : signal(move(signal)) {}
+    pub const func call(request: grpc.UnaryRequest) !grpc.UnaryResponse {
+        signal.asPtr().request()!;
+        grpc.response(coll.Vec<u8>.fromSlice(request.body.asConstSlice())!)
+    }
+}
+
 func main() !void {
     var server = grpc.Server();
     var handler = Handler{};
     var echo = Echo{};
+    var stop = mem.Shared<grpc.Shutdown>.new(grpc.Shutdown.open()!)!;
+    var stopHandler = StopHandler(stop.clone());
     var options = grpc.ServeOptions();
     options.applicationWorkers = 1;
     options.compressResponses = true;
+    if env.get("VAQRIN_RPC_SHORT_DRAIN")! != null {
+        options.shutdownTimeout = time.Duration.fromMillis(300);
+    }
     unsafe {
         server.registerConcurrent("/interop.Concurrent/Wait", &handler)!;
         server.registerConcurrent("/interop.Concurrent/Fast", &handler)!;
         server.registerConcurrentStreaming("/interop.Concurrent/Echo", &echo)!;
+        server.registerConcurrent("/interop.Concurrent/Stop", &stopHandler)!;
     }
     var listener = net.AsyncTcpListener.bind(net.parseSocketAddr("127.0.0.1:0")!)!;
     io.println(listener.localAddr()!.port())!;
@@ -63,8 +79,8 @@ func main() !void {
         config.addProtocol("h2".asBytes())!;
         config.requireProtocol = true;
         var acceptor = tls.TlsAcceptor.fromPem(cert, key, move(config))!;
-        return server.acceptConcurrentTls(&listener, &acceptor, options, null);
+        return server.acceptConcurrentTls(&listener, &acceptor, options, null, some(stop.asPtr()));
     }
     socket, peer := listener.accept(null)!;
-    server.serveConcurrentH2c(move(socket), options)
+    server.serveConcurrentH2c(move(socket), options, some(stop.asPtr()))
 }

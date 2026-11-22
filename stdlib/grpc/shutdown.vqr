@@ -1,0 +1,39 @@
+package grpc
+import (io)
+
+extern "C" func __vqr_rt_signal_completion_fd(descriptor: i32) i32;
+extern "C" func __vqr_rt_open_signal(status: *i32) i32;
+extern "C" func __vqr_rt_close_signal(descriptor: i32) void;
+extern "C" func __vqr_rt_signal_ready(descriptor: i32, status: *i32) i32;
+
+// Keep the token alive while any connection is using it.
+pub class Shutdown {
+    #copy: disabled
+    var fd: i32;
+    func init(fd: i32) : fd(fd) {}
+    func deinit() void { unsafe { __vqr_rt_close_signal(fd); } }
+
+public:
+    static func open() !Self {
+        __vqr_task_validate();
+        var status: i32 = 0;
+        var fd = unsafe { __vqr_rt_open_signal(&status) };
+        if fd < 0 { return io.systemError(status); }
+        Shutdown(fd)
+    }
+
+    const func request() !void {
+        var status = unsafe { __vqr_rt_signal_completion_fd(fd) };
+        if status != 0 { return io.systemError(status); }
+    }
+
+    const func requested() !bool {
+        var status: i32 = 0;
+        var ready = unsafe { __vqr_rt_signal_ready(fd, &status) };
+        if ready < 0 { return io.systemError(status); }
+        ready != 0
+    }
+
+    // This descriptor stays readable after request(). The token owns it.
+    const func descriptor() i32 { fd }
+}

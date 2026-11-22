@@ -1009,6 +1009,40 @@ std::uint32_t Program::errorCode(Definition def, std::string_view member) {
   return 0;
 }
 
+std::pair<Type *, Constant *> Program::globalInitializer(Definition def, Type *expected) {
+  const auto &node = def.decl->body;
+  const auto evaluateSource = [&] { return evaluate(node, *def.file, expected, {}); };
+  // Inferred-length arrays of explicitly typed integer literals depend only
+  // on the source text and compiler version. Leave general CTFE on the normal path.
+  if (!def.file->standard || !def.decl->readOnly || expected || options.editorHints ||
+      node->kind != NodeKind::Array || node->children.size() < 1024 || node->type->children[0])
+    return evaluateSource();
+  const auto &elementSyntax = node->type->children[1];
+  if (elementSyntax->kind != NodeKind::TypeName ||
+      (elementSyntax->text != "u32" && elementSyntax->text != "u64") ||
+      !std::ranges::all_of(node->children, [&](const Ast &child) {
+        return child->kind == NodeKind::Number && child->text.ends_with(elementSyntax->text);
+      }))
+    return evaluateSource();
+
+  const auto &cache = inputs.standardCache();
+  const auto path = cache.tableEntry(*node->span.source, def.decl->nameSpan.begin);
+  if (path.empty()) return evaluateSource();
+  auto *element = type(elementSyntax, *def.file);
+  const auto count = node->children.size();
+  const auto size = count * (element->bits / 8);
+  if (auto bytes = cache.loadTable(path, size)) {
+    auto *array = aggregate(Kind::Array, {element}, count);
+    return {array, ConstantDataArray::getRaw(*bytes, count, element->ir)};
+  }
+  auto result = evaluateSource();
+  if (auto *data = dyn_cast<ConstantDataArray>(result.second)) {
+    auto bytes = data->getRawDataValues();
+    if (bytes.size() == size) cache.storeTable(path, bytes);
+  }
+  return result;
+}
+
 GlobalEntry &Program::global(Definition d) {
   auto id = key(d);
   auto &g = globals[id];
@@ -1018,7 +1052,7 @@ GlobalEntry &Program::global(Definition d) {
   g.def = d;
   if (!d.decl->body) fail(d.decl->span, "package binding requires a compile-time initializer");
   auto *expected = d.decl->type ? type(d.decl->type, *d.file) : nullptr;
-  auto [t, c] = evaluate(d.decl->body, *d.file, expected, {});
+  auto [t, c] = globalInitializer(d, expected);
   if (hasReference(t)) fail(d.decl->span, "references cannot be stored at package scope", "E230");
   ensureSized(t, d.decl->span);
   if (t->kind == Kind::Text) {

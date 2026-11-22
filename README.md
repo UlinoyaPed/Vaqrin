@@ -42,7 +42,7 @@ models = { path = "../shared/models" }
 
 运行 `vaqc lock .` 后，将 `package.lock` 与清单一同提交。构建和语义检查会核对锁文件中的相对依赖路径和 SHA-256 源文件摘要。依赖路径或内容更新后，重新运行 `vaqc lock .`。这套流程使用本地目录，可离线执行。
 
-大型标准库模块的语法树会按源码内容与编译器版本存入本机缓存。可用绝对路径形式的
-`VAQRIN_AST_CACHE` 指定目录，默认使用 `$XDG_CACHE_HOME/vaqrin/syntax` 或
-`~/.cache/vaqrin/syntax`。将该变量设为 `0` 可禁用缓存。编译器仍会检查模块类型和
-跨模块依赖。
+编译器按源码内容与编译器版本缓存大型标准库模块的语法树和定型整数字面量表。
+Unicode 数据表可跨项目复用编译后的常量字节。模块类型和依赖仍按当前项目检查。
+可用绝对路径形式的 `VAQRIN_AST_CACHE` 指定缓存目录，默认使用
+`$XDG_CACHE_HOME/vaqrin/syntax` 或 `~/.cache/vaqrin/syntax`。将该变量设为 `0` 可禁用缓存。

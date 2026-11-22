@@ -14,6 +14,7 @@ class Inputs {
 public:
   using Overlays = std::map<Path, Path>;
   explicit Inputs(const Path &executable, Overlays overlays = {});
+  const SyntaxCache &standardCache() const { return cache; }
   std::set<Path> dependencyFiles() const;
   std::set<Path> dependencyDirectories() const;
   void loadStandard(std::string package, Span span);

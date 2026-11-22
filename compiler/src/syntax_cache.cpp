@@ -1,5 +1,6 @@
 #include "syntax_cache.hpp"
 
+#include <bit>
 #include <cstdlib>
 #include <limits>
 
@@ -148,6 +149,38 @@ std::string digest(llvm::StringRef data) {
   return llvm::toHex(hash.final(), true);
 }
 
+std::unique_ptr<llvm::MemoryBuffer> readRecord(const std::filesystem::path &entry) {
+  if (entry.empty()) return {};
+  std::error_code error;
+  const auto size = std::filesystem::file_size(entry, error);
+  if (error || size <= 64 || size > limit + 64) return {};
+  auto buffer = llvm::MemoryBuffer::getFile(entry.string());
+  if (!buffer) return {};
+  const auto record = (*buffer)->getBuffer();
+  if (record.size() != size || digest(record.drop_front(64)) != record.take_front(64)) return {};
+  return std::move(*buffer);
+}
+
+void writeRecord(const std::filesystem::path &entry, llvm::StringRef payload) {
+  if (entry.empty() || payload.empty() || payload.size() > limit) return;
+  auto directory = entry.parent_path();
+  std::error_code error;
+  std::filesystem::create_directories(directory, error);
+  if (error) return;
+  llvm::SmallString<256> temporary;
+  int fd;
+  if (llvm::sys::fs::createUniqueFile((directory / ".artifact-%%%%%%").string(), fd, temporary)) return;
+  {
+    llvm::raw_fd_ostream out(fd, true);
+    out << digest(payload) << payload;
+    out.close();
+    error = out.error();
+    out.clear_error();
+  }
+  if (!error) llvm::sys::fs::rename(temporary, entry.string());
+  llvm::sys::fs::remove(temporary);
+}
+
 } // namespace
 
 SyntaxCache::SyntaxCache(const std::filesystem::path &executable) {
@@ -180,16 +213,9 @@ std::filesystem::path SyntaxCache::entry(const Source &source) const {
 }
 
 std::optional<File> SyntaxCache::load(const std::filesystem::path &entry, const Source &source) const {
-  if (entry.empty()) return {};
-  std::error_code error;
-  const auto size = std::filesystem::file_size(entry, error);
-  if (error || size <= 64 || size > limit + 64) return {};
-  auto buffer = llvm::MemoryBuffer::getFile(entry.string());
-  if (!buffer) return {};
-  auto record = (*buffer)->getBuffer();
-  if (record.size() != size) return {};
-  auto data = record.drop_front(64);
-  if (digest(data) != record.take_front(64)) return {};
+  auto record = readRecord(entry);
+  if (!record) return {};
+  auto data = record->getBuffer().drop_front(64);
   try {
     File value;
     Archive<true> archive(source, data);
@@ -207,21 +233,28 @@ void SyntaxCache::store(const std::filesystem::path &entry, const Source &source
     archive.file(file);
     payload = archive.release();
   } catch (const InvalidCache &) { return; }
-  std::error_code error;
-  std::filesystem::create_directories(directory, error);
-  if (error) return;
-  llvm::SmallString<256> temporary;
-  int fd;
-  if (llvm::sys::fs::createUniqueFile((directory / ".syntax-%%%%%%").string(), fd, temporary)) return;
-  {
-    llvm::raw_fd_ostream out(fd, true);
-    out << digest(payload) << payload;
-    out.close();
-    error = out.error();
-    out.clear_error();
-  }
-  if (!error) llvm::sys::fs::rename(temporary, entry.string());
-  llvm::sys::fs::remove(temporary);
+  writeRecord(entry, payload);
+}
+
+std::filesystem::path SyntaxCache::tableEntry(const Source &source, std::size_t declarationOffset) const {
+  if (directory.empty() || source.bytes.size() > limit) return {};
+  llvm::SHA256 hash;
+  hash.update(compilerKey);
+  hash.update(std::endian::native == std::endian::little ? "\ntable-le\n" : "\ntable-be\n");
+  hash.update(std::to_string(declarationOffset));
+  hash.update("\n");
+  hash.update(source.bytes);
+  return directory / (llvm::toHex(hash.final(), true) + ".table");
+}
+
+std::optional<std::string> SyntaxCache::loadTable(const std::filesystem::path &entry, std::size_t size) const {
+  auto record = readRecord(entry);
+  if (!record || record->getBufferSize() - 64 != size) return {};
+  return record->getBuffer().drop_front(64).str();
+}
+
+void SyntaxCache::storeTable(const std::filesystem::path &entry, std::string_view bytes) const {
+  writeRecord(entry, llvm::StringRef(bytes));
 }
 
 } // namespace vqr

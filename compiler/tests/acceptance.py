@@ -75,6 +75,43 @@ class Acceptance(CompilerCase):
             self.assertEqual(self.process("./after-edit", good=False).returncode, 27)
             self.assertEqual(len(list(cache.glob("*.ast"))), 2)
 
+    def test_compiled_standard_library_integer_tables(self):
+        program = self.source("main.vqr", """
+            import (fixture)
+            func main() i32 {
+                if fixture.wide[511] != 4294967296u64 { return 1; }
+                if fixture.table[1000] == 19u32 { return 19; }
+                if fixture.table[1000] == 31u32 { return 31; }
+                2
+            }
+        """)
+        base = "package fixture\n"
+        base += "pub const table = [_]u32{" + ",".join(["19u32"] * 1024) + "};\n"
+        base += "pub const wide = [_]u64{" + ",".join(["4294967296u64"] * 1024) + "};\n"
+        module = self.source("stdlib/fixture/data.vqr", base)
+        cache = self.root / "cache"
+        with patch.dict(os.environ, VAQRIN_AST_CACHE=str(cache),
+                        VAQRIN_STDLIB_DIR=str(module.parents[1]),
+                        VAQRIN_RUNTIME_DIR=str(REPOSITORY / "compiler/runtime")):
+            def run(expected):
+                self.process(VAQC, program, "-o", "table-program")
+                self.assertEqual(self.process("./table-program", good=False).returncode, expected)
+
+            run(19)
+            entries = sorted(cache.glob("*.table"))
+            self.assertEqual(len(entries), 2)
+            signatures = [file.stat().st_mtime_ns for file in entries]
+            run(19)
+            self.assertEqual([file.stat().st_mtime_ns for file in entries], signatures)
+
+            entries[0].write_bytes(b"broken compiled constant")
+            run(19)
+            self.assertGreater(len(entries[0].read_bytes()), 64)
+
+            module.write_text(base.replace("19u32", "31u32"), encoding="utf-8")
+            run(31)
+            self.assertEqual(len(list(cache.glob("*.table"))), 4)
+
     def test_large_zeroed_byte_array_native_codegen(self):
         program = self.source("zeros.vqr", """
             import (mem)

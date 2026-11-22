@@ -389,6 +389,7 @@ public:
   std::vector<Definition> resolve(const File &f, std::string_view name, Span span);
   std::vector<Definition> methods(Type *t, std::string_view name, bool isStatic, bool keepHidden = false);
   std::string import(const File &f, std::string_view name);
+  std::pair<Type *, Constant *> globalInitializer(Definition def, Type *expected);
   GlobalEntry &global(Definition d);
   std::vector<Type *> parameters(Definition def, const Types &types, Type *owner,
                                  const Constants &values = {});

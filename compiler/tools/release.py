@@ -168,6 +168,8 @@ def smoke(compiler, prefix):
     else:
         run(compiler, "build", source, "-o", exe)
     run(exe)
+    if WINDOWS:
+        smoke_windows_executable(compiler)
     source.write_text("func main(\n", encoding="utf-8")
     failed = subprocess.run([str(compiler), "check", "--syntax-only", "--diagnostics=json", str(source)],
                             cwd=ROOT, capture_output=True, text=True)
@@ -179,6 +181,27 @@ def smoke(compiler, prefix):
         raise RuntimeError("installed standard library is missing linalg")
     if sys.platform in ("darwin", "linux"):
         smoke_posix_io(compiler)
+
+
+def smoke_windows_executable(compiler):
+    source = BUILD / "release-windows-entry.vqr"
+    source.write_text('''import (io, mem, random, sync)
+error SmokeError { ExpectedFailure }
+func main() !void {
+    var bytes = mem.zeroedBytes<16>();
+    random.fillSystem(bytes[:])!;
+    var lock = sync.Mutex<i32>.new(42);
+    var guard = lock.lock()!;
+    io.println(*guard.get())!;
+    return SmokeError.ExpectedFailure;
+}
+''', encoding="utf-8")
+    executable = BUILD / "release-windows-entry.exe"
+    run(compiler, "build", source, "-o", executable)
+    result = subprocess.run([str(executable)], capture_output=True, text=True, timeout=10)
+    if result.returncode != 1 or result.stdout != "42\n" or "SmokeError.ExpectedFailure" not in result.stderr:
+        raise RuntimeError(f"Windows hosted entry returned {result.returncode}: "
+                           f"{result.stdout!r} {result.stderr!r}")
 
 
 def smoke_posix_io(compiler):

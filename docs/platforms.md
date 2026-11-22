@@ -20,7 +20,9 @@ default allocator, owning text, UTC and monotonic clocks, 128-bit integer
 division, native threads, blocking synchronization and `random.OsRng`. The
 Windows release smoke test links a COFF object
 with the Visual Studio linker and reads system entropy through CNG. The LLVM SDK
-and vaqc use the dynamic MSVC CRT.
+and vaqc use the dynamic MSVC CRT. Vaqrin executables built through the driver
+use the same CRT. The release smoke also checks the hosted entry, integer
+output and fallible main diagnostics.
 Use a Visual Studio developer environment
 and Clang when using the driver's native executable link mode on Windows.
 

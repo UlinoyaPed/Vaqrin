@@ -737,14 +737,23 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
       for (const auto &input : r.linkInputs)
         args.push_back(fs::absolute(input).string());
       if (usesDecimalRuntime) args.push_back("-lstdc++");
-      if (target.isWindowsMSVCEnvironment() && std::ranges::any_of(module, [](const llvm::Function &function) {
-            return function.hasFnAttribute("vaqrin.bcrypt") && !function.use_empty();
-          }))
-        args.push_back("-lbcrypt");
-      if (target.isWindowsMSVCEnvironment() && std::ranges::any_of(module, [](const llvm::Function &function) {
-            return function.hasFnAttribute("vaqrin.synchronization") && !function.use_empty();
-          }))
-        args.push_back("-lsynchronization");
+      if (r.options.profile == "hosted" && target.isWindowsMSVCEnvironment()) {
+        // Clang otherwise selects the static CRT even when linking a prebuilt COFF object.
+        args.insert(args.end(), {"-nostartfiles", "-lmsvcrt", "-lvcruntime", "-lucrt", "-lkernel32"});
+        auto usesProvider = [&](llvm::StringRef name) {
+          return std::ranges::any_of(module, [name](const llvm::Function &function) {
+            return function.hasFnAttribute(name) && !function.use_empty();
+          });
+        };
+        auto usesSymbol = [&](llvm::StringRef name) {
+          const auto *function = module.getFunction(name);
+          return function && !function->use_empty();
+        };
+        if (usesSymbol("printf") || usesSymbol("fprintf"))
+          args.push_back("-llegacy_stdio_definitions");
+        if (usesProvider("vaqrin.bcrypt")) args.push_back("-lbcrypt");
+        if (usesProvider("vaqrin.synchronization")) args.push_back("-lsynchronization");
+      }
       if (usesHttp2Runtime) args.push_back("-lnghttp2");
       if (usesGzipRuntime) args.push_back("-lz");
       if (usesTlsRuntime && target.isOSLinux()) args.push_back("-ldl");

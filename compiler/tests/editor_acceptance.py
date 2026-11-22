@@ -27,6 +27,12 @@ class EditorAcceptance(CompilerCase):
         self.assertEqual(diagnostic["path"], str(source))
         self.assertEqual(diagnostic["range"]["start"]["character"],
                          len('func f() void { var text = "📚"; '.encode("utf-16-le")) // 2)
+        second = self.source("second.vqr", "func () void {}\n")
+        valid = self.source("valid.vqr", "import (unavailable)\nfunc f() void {}\n")
+        batch = self.process(VAQC, "check", "--syntax-only", "--diagnostics=json",
+                             source, valid, second, good=False)
+        self.assertEqual([json.loads(line)["path"] for line in batch.stderr.splitlines()],
+                         [str(source), str(second)])
 
     def test_formatter_preserves_expression_roles(self):
         source = self.source("style.vqr", """func main() i32 {
@@ -47,7 +53,7 @@ n
         "the second argument makes this call longer still",
         negative(-n)
     );
-    var selected = generic<i32>(1,2);
+    var selected = generic<i32>(1, 2);
     n
 }
 """
@@ -55,6 +61,11 @@ n
         source.write_text(expected, encoding="utf-8")
         self.process(VAQC, "fmt", "--check", source)
         self.process(VAQC, "check", "--syntax-only", source)
+        compact = "func f(a: i32 ,b: i32) i32 {\r\n a+b\r\n}\r\n"
+        result = self.process(VAQC, "fmt", "--tab-size=2", "--use-tabs", "-", input=compact.encode())
+        self.assertEqual(result.stdout, b"func f(a: i32, b: i32) i32 {\r\n\ta + b\r\n}\r\n")
+        failure = self.process(VAQC, "fmt", "--diagnostics=json", "-", input=b"@", good=False)
+        self.assertTrue(json.loads(failure.stderr)["code"].startswith("E1"))
 
     def test_multi_file_overlays_and_compiler_local_symbols(self):
         entry = self.source("app/main.vqr", "func main() void {}")
@@ -180,6 +191,9 @@ func sample(value: i32) !i32 {
                                                "end": {"line": 13, "character": 0}})
             self.assertEqual({hint["position"]["line"]: hint["label"] for hint in hints},
                              {9: ": i32", 10: ": GreeterImpl", 11: ": i32", 12: ": i32"})
+            formatting = request("formatting", options={"tabSize": 2, "insertSpaces": False})
+            self.assertIn("\tvar number = 3;", formatting[0]["newText"])
+            self.assertEqual(original.read_text(), "func f() void {}\n")
 
             cursor = position(9, "number")
             actions = request("codeAction", range={"start": cursor, "end": cursor},

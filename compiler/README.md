@@ -24,11 +24,19 @@ build/host/vaqc build examples/hello.vqr -o build/hello
 
 ```bash
 build/host/vaqc check examples/hello.vqr
+build/host/vaqc check --syntax-only --diagnostics=json examples/hello.vqr examples/vec.vqr
+build/host/vaqc fmt --check examples/hello.vqr
+build/host/vaqc fmt --tab-size=4 --write examples/hello.vqr
 build/host/vaqc build --emit=llvm-ir examples/hello.vqr -o build/hello.ll
 build/host/vaqc build -O2 -g examples/hello.vqr -o build/hello
 ```
 
 默认产物是宿主可执行文件，入口支持 `func main() void`、`func main() !void`、`func main() i32` 和 `func main() !i32`。成功的整数结果用作进程退出码，未处理错误输出到标准错误流并以 1 退出。也可生成 `llvm-ir`、`bc`、`asm`、`obj`、`staticlib` 和 `sharedlib`。生成库或对象时允许省略入口，供 C 消费者使用的符号通过 `export "C"` 声明。`--emit=ast` 将语法树写到标准输出。`check` 解析、类型检查并验证生成的 IR，无需链接。
+
+`check --syntax-only` 逐个检查源文件的语法，单个文件出错后继续检查其他文件。加上
+`--diagnostics=json` 后，每条诊断占标准错误流的一行，位置采用从零开始的 UTF-16 范围。
+`fmt` 支持打印、检查、原位写入和从标准输入读取，默认使用四个空格缩进，可用
+`--tab-size=N` 和 `--use-tabs` 调整。
 
 文件头可以省略 `package`。写出 `package demo` 或 `import (io)` 时，行尾省略分号。可执行文件从指定的源文件选取 `main`。目录模式优先采用 `--entry`，其次采用 `package.toml` 的 `[build].entry`，最后递归查找唯一的候选入口。多个显式输入各自保留文件级 `main`，可以用 `--entry` 选择其中之一。
 

@@ -812,11 +812,17 @@ class Server:
                     flag = "--editor-workspace-symbols" if workspace else "--editor-symbols"
                     result = run(flag, "--diagnostics=json")
                 else:
-                    result = run("--editor-hints", "--diagnostics=json")
-                    if "unknown option '--diagnostics=json'" in result.stderr:
-                        result = run("--editor-hints")
-                    if "unknown option '--editor-hints'" in result.stderr:
-                        result = run()
+                    # Check the edited buffer independently of dependency discovery.
+                    # A parse error here also makes a semantic check unnecessary.
+                    result = subprocess.run([compiler, "check", "--syntax-only", "--diagnostics=json",
+                                             "--overlay", overlay, source], cwd=self.root,
+                                            capture_output=True, encoding="utf-8", errors="replace", timeout=20)
+                    if result.returncode == 0 or "unknown option" in result.stderr:
+                        result = run("--editor-hints", "--diagnostics=json")
+                        if "unknown option '--diagnostics=json'" in result.stderr:
+                            result = run("--editor-hints")
+                        if "unknown option '--editor-hints'" in result.stderr:
+                            result = run()
         except (OSError, subprocess.TimeoutExpired) as error:
             return [diagnostic(str(error), severity=2)], None
         try:
@@ -880,18 +886,36 @@ class Server:
                 timer.cancel()
         self.thread.shutdown(wait=False, cancel_futures=True)
 
-    def format_document(self, params):
+    def format_document(self, params, *, report_failure=True):
         document = self.documents.get(params["textDocument"]["uri"])
         compiler = self.compiler()
         if document is None or not compiler:
             return []
         _, text = document
         try:
-            result = subprocess.run([compiler, "fmt", "-"], input=text.encode("utf-8"),
-                                    cwd=self.root, capture_output=True, timeout=10)
-        except (OSError, subprocess.TimeoutExpired):
+            options = params.get("options", {})
+            command = [compiler, "fmt", "--diagnostics=json", f"--tab-size={options.get('tabSize', 4)}"]
+            if not options.get("insertSpaces", True):
+                command.append("--use-tabs")
+            payload = text.encode("utf-8")
+            result = subprocess.run([*command, "-"], input=payload, cwd=self.root,
+                                    capture_output=True, timeout=10)
+            if result.returncode and b"unknown format option" in result.stderr:
+                result = subprocess.run([compiler, "fmt", "-"], input=payload, cwd=self.root,
+                                        capture_output=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            if report_failure:
+                raise ValueError(f"Vaqrin formatting failed: {error}") from error
             return []
         if result.returncode:
+            if report_failure:
+                message = result.stderr.decode("utf-8", errors="replace").strip()
+                try:
+                    diagnostic = json.loads(message)
+                    message = diagnostic["message"]
+                except (ValueError, KeyError, TypeError):
+                    pass
+                raise ValueError(f"Vaqrin formatting failed: {message}")
             return []
         formatted = result.stdout.decode("utf-8")
         if formatted == text:
@@ -917,7 +941,7 @@ class Server:
 
         actions = []
         if includes("source.vaqrin.format"):
-            edits = self.format_document(params)
+            edits = self.format_document(params, report_failure=False)
             if edits:
                 actions.append(action("Format Vaqrin document", "source.vaqrin.format", edits))
         if not includes("refactor.rewrite"):

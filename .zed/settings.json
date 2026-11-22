@@ -2,6 +2,7 @@
   "show_signature_help_after_edits": true,
   "languages": {
     "Vaqrin": {
+      "formatter": "language_server",
       "inlay_hints": {
         "enabled": true,
         "edit_debounce_ms": 100

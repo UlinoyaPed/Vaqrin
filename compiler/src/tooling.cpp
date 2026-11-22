@@ -8,6 +8,7 @@
 #include <llvm/Support/raw_ostream.h>
 
 #include <algorithm>
+#include <charconv>
 #include <iostream>
 #include <set>
 #include <utility>
@@ -105,6 +106,17 @@ struct Layout {
 
 bool horizontal(std::string_view gap) { return gap.find_first_not_of(" \t") == gap.npos; }
 
+std::string_view tokenGap(const Token &prior, const Token &next, std::string_view gap, const Layout &layout) {
+  if (!horizontal(gap)) return gap;
+  if (next.kind == TokenKind::Punctuation && next.text == ",") return "";
+  if (layout.operators.contains(prior.span.begin) || layout.operators.contains(next.span.begin)) return " ";
+  if (prior.kind == TokenKind::Punctuation && prior.text == "," &&
+      !(next.kind == TokenKind::Punctuation &&
+        (next.text == ")" || next.text == "]" || next.text == "}" || next.text.starts_with(">"))))
+    return " ";
+  return gap;
+}
+
 std::vector<std::size_t> wrapCall(const std::vector<Token> &tokens, std::size_t index,
                                   std::size_t lineEnd) {
   std::string delimiters(")");
@@ -134,7 +146,19 @@ std::vector<std::size_t> wrapCall(const std::vector<Token> &tokens, std::size_t 
   return {};
 }
 
-std::string format(const Source &source) {
+struct Indentation {
+  unsigned width = 4;
+  bool tabs = false;
+
+  void append(std::string &text, std::size_t depth) const {
+    if (tabs)
+      text.append(depth, '\t');
+    else
+      text.append(depth * width, ' ');
+  }
+};
+
+std::string format(const Source &source, Indentation indent) {
   const auto file = parse(source);
   Layout layout;
   for (const auto &decl : file.declarations) layout.visit(decl);
@@ -186,22 +210,15 @@ std::string format(const Source &source) {
     if (insideComment) {
       out.append(line);
     } else if (first != line.npos) {
-      out.append(indentation * 4, ' ');
+      indent.append(out, indentation);
       auto previous = start + first;
-      auto previousOperator = false;
       std::set<std::size_t> breaks;
-      auto length = last - first + 1 + indentation * 4;
-      for (auto index = firstToken; index < tokenIndex; ++index) {
+      auto length = last - first + 1 + indentation * indent.width;
+      for (auto index = firstToken + 1; index < tokenIndex; ++index) {
         const auto &token = tokens[index];
-        if (!layout.operators.contains(token.span.begin)) continue;
-        if (index > firstToken && !layout.operators.contains(tokens[index - 1].span.begin)) {
-          auto gap = code.substr(tokens[index - 1].span.end, token.span.begin - tokens[index - 1].span.end);
-          if (horizontal(gap)) length = length - gap.size() + 1;
-        }
-        if (index + 1 < tokenIndex) {
-          auto gap = code.substr(token.span.end, tokens[index + 1].span.begin - token.span.end);
-          if (horizontal(gap)) length = length - gap.size() + 1;
-        }
+        const auto &prior = tokens[index - 1];
+        auto gap = code.substr(prior.span.end, token.span.begin - prior.span.end);
+        length = length - gap.size() + tokenGap(prior, token, gap, layout).size();
       }
       std::size_t wrapEnd = 0;
       std::size_t wrapIndent = 0;
@@ -235,18 +252,16 @@ std::string format(const Source &source) {
       for (auto index = firstToken; index < tokenIndex; ++index) {
         const auto &token = tokens[index];
         auto gap = code.substr(previous, token.span.begin - previous);
-        const auto isOperator = layout.operators.contains(token.span.begin);
         if (breaks.contains(index)) {
           out.append(newline);
-          out.append((wrapIndent + (index == wrapEnd ? 0 : 1)) * 4, ' ');
-        } else if (index > firstToken && (previousOperator || isOperator) && horizontal(gap)) {
-          out.push_back(' ');
+          indent.append(out, wrapIndent + (index == wrapEnd ? 0 : 1));
+        } else if (index > firstToken) {
+          out.append(tokenGap(tokens[index - 1], token, gap, layout));
         } else {
           out.append(gap);
         }
         out.append(code.substr(token.span.begin, token.span.end - token.span.begin));
         previous = token.span.end;
-        previousOperator = isOperator;
       }
       out.append(code.substr(previous, start + last + 1 - previous));
     }
@@ -301,13 +316,30 @@ void printJsonDiagnostic(const Diagnostic &error) {
 
 int formatCommand(int argc, char **argv) {
   Source source;
+  const bool jsonDiagnostics = std::any_of(
+      argv + 2, argv + argc, [](const char *arg) { return std::string_view(arg) == "--diagnostics=json"; });
   try {
     enum class Mode { Print, Check, Write };
     Mode mode = Mode::Print;
+    Indentation indent;
     std::vector<fs::path> paths;
     for (int i = 2; i < argc; ++i) {
       std::string_view arg(argv[i]);
-      if (arg == "--check" || arg == "--write" || arg == "-w") {
+      if (arg == "--help" || arg == "-h") {
+        llvm::outs() << "usage: vaqc fmt [--tab-size=N] [--use-tabs] [--check | --write] FILE...\n"
+                        "       vaqc fmt [--tab-size=N] [--use-tabs] [--diagnostics=json] -\n";
+        return 0;
+      } else if (arg == "--diagnostics=json") {
+        continue;
+      } else if (arg == "--use-tabs") {
+        indent.tabs = true;
+      } else if (arg.starts_with("--tab-size=")) {
+        auto value = arg.substr(11);
+        auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), indent.width);
+        if (error != std::errc{} || end != value.data() + value.size() || indent.width < 1 ||
+            indent.width > 32)
+          fail({}, "format tab size must be an integer from 1 to 32", "E300");
+      } else if (arg == "--check" || arg == "--write" || arg == "-w") {
         if (mode != Mode::Print) fail({}, "format modes are mutually exclusive", "E300");
         mode = arg == "--check" ? Mode::Check : Mode::Write;
       } else if (!arg.starts_with('-') || arg == "-") {
@@ -329,7 +361,7 @@ int formatCommand(int argc, char **argv) {
         if (path.extension() != ".vqr") fail({}, "format requires .vqr source files", "E300");
         source = readSource(path, path);
       }
-      const auto formatted = format(source);
+      const auto formatted = format(source, indent);
       if (mode == Mode::Print) {
         llvm::outs() << formatted;
       } else if (formatted != source.bytes) {
@@ -340,7 +372,10 @@ int formatCommand(int argc, char **argv) {
     }
     return mode == Mode::Check && changed ? 1 : 0;
   } catch (const Diagnostic &error) {
-    printDiagnostic(error);
+    if (jsonDiagnostics)
+      printJsonDiagnostic(error);
+    else
+      printDiagnostic(error);
   } catch (const fs::filesystem_error &error) {
     std::cerr << "vaqc: error[E301]: " << error.what() << '\n';
   }

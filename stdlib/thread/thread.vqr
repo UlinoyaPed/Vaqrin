@@ -46,24 +46,26 @@ public:
 pub class Thread<T: Movable & Sendable> {
     #copy: disabled
     var handle: usize;
+    var identity: usize;
     var state: ?*State<T>;
-    func init(handle: usize, state: *State<T>) : handle(handle), state(some(state)) {}
+    func init(handle: usize, id: usize, state: *State<T>) : handle(handle), identity(id), state(some(state)) {}
 public:
     static func spawn<F: Movable & Sendable>(callback: F) !Self {
         var completion = (new State<T>())!;
         var work = (new Work<T, F>(completion.asPtr(), move(callback)))!;
         var rawState = Box.intoRaw(move(completion));
         var rawWork = Box.intoRaw(move(work));
+        var native: usize = 0;
         var id: usize = 0;
-        if unsafe { __vqr_thread_start<Work<T, F>>(&id, rawWork) } != 0 {
+        if unsafe { __vqr_thread_start<Work<T, F>>(&native, rawWork, &id) } != 0 {
             var rejectedWork = unsafe { Box<Work<T, F>>.fromRaw(rawWork) };
             var rejectedState = unsafe { Box<State<T>>.fromRaw(rawState) };
             return ThreadError.StartFailed;
         }
-        Thread<T>(id, rawState)
+        Thread<T>(native, id, rawState)
     }
 
-    const func id() ThreadId { ThreadId{value: handle} }
+    const func id() ThreadId { ThreadId{value: identity} }
 
     const func isFinished() bool {
         switch state {
@@ -81,7 +83,7 @@ public:
 
     func join() !T {
         var current = state ?? { return ThreadError.Closed; };
-        if handle == __vqr_thread_id() { return ThreadError.SelfJoin; }
+        if identity == __vqr_thread_id() && !isFinished() { return ThreadError.SelfJoin; }
         if __vqr_thread_join(handle) != 0 { return ThreadError.JoinFailed; }
         state = null;
         var result = opt.take<!T>(&current.result);
@@ -92,7 +94,7 @@ public:
     func detach() void {
         switch state {
             some(ptr) => {
-                if __vqr_thread_detach(handle) != 0 { panic("pthread_detach failed"); }
+                if __vqr_thread_detach(handle) != 0 { panic("native thread detach failed"); }
                 state = null;
                 release<T>(ptr);
             },

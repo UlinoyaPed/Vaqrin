@@ -52,7 +52,7 @@
 | `reactor` | [Linux epoll 就绪监听、注册和描述符生命周期](reactor/README.md) |
 | `bufio` | BufferedReader/Writer、Scanner、Token、peek/unread、按行和分隔符读取 |
 | `fmt` | Writer 格式化、整数/浮点/布尔/字符/字符串、宽度/精度/进制/填充 |
-| `thread` | GNU/Linux 和 macOS 原生线程、一次性领取结果、分离、协作停止、当前线程 ID 及 CPU 数 |
+| `thread` | GNU/Linux、macOS 和 Windows MSVC 原生线程、一次性领取结果、分离、协作停止、当前线程 ID 及 CPU 数 |
 | `sync` | 互斥锁、可投影的 RAII 守卫、条件变量、等待组及单次初始化 |
 | `time` | 纳秒时长、单调时钟和定时器、公历日期、日内时间及 UTC 墙钟 |
 | `channel` | 多发送端、单接收端的有界、无界及零容量通道，含关闭、定时等候和保留未交付值 |
@@ -99,9 +99,9 @@ LinkedList 使用双向节点和独立 Box 所有权表，节点地址在插入�
 
 `parseInt` 和 `parseUint` 支持 2 到 36 进制，按目标整数的取值范围检查溢出。`parseIntPrefix` 返回解析结果和消耗的字节数。`parseHex`、`parseBinary` 和 `parseOctal` 接受对应的可选进制前缀。`Cursor` 和 `splitFields` 返回借用输入的文本视图，游标位置总落在 UTF-8 标量边界。
 
-`thread.Thread<T>.spawn` 要求闭包及成功载荷可跨线程移交。回调返回 `T` 或 `!T`，`join` 一次性领取 `!T`。线程句柄析构时分离仍持有的线程，分离后由工作线程与句柄共同负责回收结果和运行状态。`requestStop` 设置协作标志，线程回调可由 `stopRequested` 查询。原生线程支持 GNU/Linux 和 macOS 的 x86-64 与 AArch64。
+`thread.Thread<T>.spawn` 要求闭包及成功载荷可跨线程移交。回调返回 `T` 或 `!T`，`join` 一次性领取 `!T`。线程句柄析构时分离仍持有的线程，分离后由工作线程与句柄共同负责回收结果和运行状态。`requestStop` 设置协作标志，线程回调可由 `stopRequested` 查询。原生线程支持 GNU/Linux、macOS 和 Windows MSVC 的 x86-64 与 AArch64。
 
-`Mutex`、`CondVar` 和 `WaitGroup` 阻塞调用线程。GNU/Linux 使用 futex，macOS 使用按地址唤醒的 POSIX 条件变量。`CondVar.wait` 允许虚假唤醒，`waitUntil` 会重新检查谓词。等待开始前须为 `WaitGroup` 登记本轮工作，计数上限为 `u32` 最大值。在所有守卫释放且等待结束前，应保持锁和条件变量的位置有效。守卫释放后，其 `get()` 返回的借用视图也到期。
+`Mutex`、`CondVar` 和 `WaitGroup` 阻塞调用线程。GNU/Linux 使用 futex，macOS 使用按地址唤醒的 POSIX 条件变量，Windows 使用 `WaitOnAddress`。`CondVar.wait` 允许虚假唤醒，`waitUntil` 会重新检查谓词。等待开始前须为 `WaitGroup` 登记本轮工作，计数上限为 `u32` 最大值。在所有守卫释放且等待结束前，应保持锁和条件变量的位置有效。守卫释放后，其 `get()` 返回的借用视图也到期。
 
 `Duration` 将亚秒部分归一化到与整数秒一致的方向，整数换算向零截断。可失败的算术操作报告溢出，`fromMinutes`、`fromHours` 和 `fromDays` 在超出表示范围时饱和。`Date.toOrdinal` 以 1970 年 1 月 1 日为第 0 天，公历规则向前后延伸到整个 `i32` 年份范围。`Instant`、`Deadline`、`Timer` 和 `Ticker` 以 Linux 单调时钟为准，睡眠阻塞调用线程，周期定时按前一次计划的到期点推进。
 

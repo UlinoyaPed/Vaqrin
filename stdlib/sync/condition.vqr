@@ -1,6 +1,29 @@
 package sync
 import (atomic, cell, core, time)
 
+class NativeCondition {
+public:
+    comptime if __vqr_host_is_windows() {
+        static func wait(address: *const u32, version: u32, deadline: time.Deadline) bool {
+            const maxMillis: i64 = 4294967294;
+            for {
+                var left = deadline.remaining() catch { return false; };
+                if left.isZero() { return true; }
+                var millis = left.toMillis() catch maxMillis;
+                if millis < maxMillis && left.nanosPart() % 1000000 != 0 { millis += 1; }
+                if millis > maxMillis { millis = maxMillis; }
+                var timeout = u32(millis) catch { return false; };
+                if !__vqr_sync_wait_for(address, version, timeout) { return false; }
+            }
+        }
+    } else {
+        static func wait(address: *const u32, version: u32, deadline: time.Deadline) bool {
+            seconds, nanos := unsafe { deadline.instant().monotonicParts() };
+            __vqr_sync_wait_until(address, version, seconds, i64(nanos))
+        }
+    }
+}
+
 pub class CondVar {
     #copy: disabled
     var sequence: u32;
@@ -23,10 +46,9 @@ public:
         if deadline.expired()! { return (move(guard), true); }
         var address = &sequence;
         var version = __vqr_atomic_load(address, atomic.Order.Relaxed);
-        seconds, nanos := unsafe { deadline.instant().monotonicParts() };
         var timedOut = false;
-        var awaitSignal = [address, version, seconds, nanos, &timedOut]() void => {
-            timedOut = __vqr_sync_wait_until(address, version, seconds, i64(nanos));
+        var awaitSignal = [address, version, deadline, &timedOut]() void => {
+            timedOut = NativeCondition.wait(address, version, deadline);
         };
         var reacquired = unsafe { MutexGuard<T>.unlockWhile(move(guard), awaitSignal) };
         (move(reacquired), timedOut)

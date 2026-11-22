@@ -4,8 +4,9 @@ namespace vqr::detail {
 
 ValueAt Body::threadIntrinsic(std::string_view op, const Ast &n, const std::vector<Ast> &types) {
   const bool darwin = p.hostedMac64();
-  if (!p.hostedLinux64() && !darwin)
-    fail(n->span, "native threads require a hosted GNU/Linux or macOS x86-64 or AArch64 target", "E290");
+  const bool windows = p.hostedWindows64();
+  if (!p.hostedLinux64() && !darwin && !windows)
+    fail(n->span, "native threads require a hosted GNU/Linux, macOS or Windows MSVC target on x86-64 or AArch64", "E290");
 
   auto arity = [&](unsigned count, unsigned typeCount = 0) {
     if (n->children.size() != count + 1 || types.size() != typeCount)
@@ -19,12 +20,26 @@ ValueAt Body::threadIntrinsic(std::string_view op, const Ast &n, const std::vect
 
   if (op == "id") {
     arity(0);
+    if (windows) {
+      auto self = p.module->getOrInsertFunction("GetCurrentThreadId", status->ir);
+      return {p.sizeTy, ir.CreateZExt(ir.CreateCall(self), word)};
+    }
     auto self = p.module->getOrInsertFunction("pthread_self", pthreadId);
     auto *handle = ir.CreateCall(self);
     return {p.sizeTy, darwin ? ir.CreatePtrToInt(handle, word) : handle};
   }
   if (op == "yield" || op == "cpu_count") {
     arity(0);
+    if (windows) {
+      if (op == "yield") {
+        auto yield = p.module->getOrInsertFunction("SwitchToThread", status->ir);
+        ir.CreateCall(yield);
+        return voidValue();
+      }
+      auto count = p.module->getOrInsertFunction("GetActiveProcessorCount", status->ir, ir.getInt16Ty());
+      auto *result = ir.CreateCall(count, {ir.getInt16(0xffff)});
+      return {p.sizeTy, ir.CreateZExt(ir.CreateSelect(ir.CreateIsNull(result), ir.getInt32(1), result), word)};
+    }
     if (op == "cpu_count" && darwin) {
       auto count = p.module->getOrInsertFunction("__vqr_io_cpu_count", word);
       return {p.sizeTy, ir.CreateCall(count)};
@@ -40,6 +55,24 @@ ValueAt Body::threadIntrinsic(std::string_view op, const Ast &n, const std::vect
     auto id = expression(n->children[1], p.sizeTy);
     if (!live()) return neverValue();
     auto *handle = read(id, n->span);
+    if (windows) {
+      handle = ir.CreateIntToPtr(handle, pointer);
+      auto close = p.module->getOrInsertFunction("CloseHandle", status->ir, pointer);
+      if (op == "detach")
+        return {status, ir.CreateZExt(ir.CreateIsNull(ir.CreateCall(close, {handle})), status->ir)};
+      auto wait = p.module->getOrInsertFunction("WaitForSingleObject", status->ir, pointer, status->ir);
+      auto *result = ir.CreateCall(wait, {handle, ir.getInt32(0xffffffffu)});
+      auto *awaited = ir.GetInsertBlock(), *release = block("thread.close"), *done = block("thread.joined");
+      ir.CreateCondBr(ir.CreateIsNull(result), release, done);
+      ir.SetInsertPoint(release);
+      auto *closed = ir.CreateZExt(ir.CreateIsNull(ir.CreateCall(close, {handle})), status->ir);
+      ir.CreateBr(done);
+      ir.SetInsertPoint(done);
+      auto *error = ir.CreatePHI(status->ir, 2);
+      error->addIncoming(ir.getInt32(1), awaited);
+      error->addIncoming(closed, release);
+      return {status, error};
+    }
     if (darwin) handle = ir.CreateIntToPtr(handle, pointer);
     if (op == "join") {
       auto join = p.module->getOrInsertFunction("pthread_join", status->ir, pthreadId, pointer);
@@ -49,7 +82,7 @@ ValueAt Body::threadIntrinsic(std::string_view op, const Ast &n, const std::vect
     return {status, ir.CreateCall(detach, {handle})};
   }
   if (op == "start") {
-    arity(2, 1);
+    arity(3, 1);
     if (!unsafeDepth) fail(n->span, "starting a raw thread requires unsafe", "E240");
     auto *work = parseType(types[0]);
     if (work->kind != Kind::Class || !work->def.file->standard || work->def.file->package != "thread")
@@ -63,20 +96,36 @@ ValueAt Body::threadIntrinsic(std::string_view op, const Ast &n, const std::vect
     auto context = expression(n->children[2], p.pointer(work, false));
     if (!live()) return neverValue();
     auto *state = read(context, n->span);
+    auto identity = expression(n->children[3], p.pointer(p.sizeTy, false));
+    if (!live()) return neverValue();
+    auto *threadId = read(identity, n->span);
     auto &entry = p.function(methods.front(), p.classTypes(work), work, work->comptimeArguments);
     if (entry.result != p.voidTy) fail(n->span, "native thread run method must return void");
-    std::string name = (entry.ir->getName() + ".pthread").str();
+    std::string name = (entry.ir->getName() + ".native_thread").str();
     auto *thunk = p.module->getFunction(name);
     if (!thunk) {
-      auto *signature = FunctionType::get(pointer, {pointer}, false);
+      llvm::Type *result = windows ? status->ir : static_cast<llvm::Type *>(pointer);
+      auto *signature = FunctionType::get(result, {pointer}, false);
       thunk = Function::Create(signature, GlobalValue::InternalLinkage, name, *p.module);
       IRBuilder<> builder(BasicBlock::Create(p.context, "entry", thunk));
       builder.CreateCall(entry.ir, {thunk->getArg(0)});
-      builder.CreateRet(null);
+      builder.CreateRet(Constant::getNullValue(result));
       p.lower(entry);
     }
+    if (windows) {
+      auto create = p.module->getOrInsertFunction("_beginthreadex", word, pointer, status->ir, pointer,
+                                                  pointer, status->ir, pointer);
+      auto *nativeId = slot(status, "thread.id");
+      ir.CreateStore(ir.getInt32(0), nativeId);
+      auto *handle = ir.CreateCall(create, {null, ir.getInt32(0), thunk, state, ir.getInt32(0), nativeId});
+      ir.CreateStore(handle, out);
+      ir.CreateStore(ir.CreateZExt(ir.CreateLoad(status->ir, nativeId), word), threadId);
+      return {status, ir.CreateZExt(ir.CreateIsNull(handle), status->ir)};
+    }
     auto create = p.module->getOrInsertFunction("pthread_create", status->ir, pointer, pointer, pointer, pointer);
-    return {status, ir.CreateCall(create, {out, null, thunk, state})};
+    auto *result = ir.CreateCall(create, {out, null, thunk, state});
+    ir.CreateStore(ir.CreateLoad(word, out), threadId);
+    return {status, result};
   }
   if (op == "stop" || op == "set_stop" || op == "clear_stop") {
     auto *slot = p.module->getGlobalVariable("__vqr_current_thread_stop", true);
@@ -109,11 +158,14 @@ ValueAt Body::threadIntrinsic(std::string_view op, const Ast &n, const std::vect
 
 ValueAt Body::syncIntrinsic(std::string_view op, const Ast &n) {
   const bool darwin = p.hostedMac64();
-  if (!p.hostedLinux64() && !darwin)
-    fail(n->span, "blocking synchronization requires a hosted GNU/Linux or macOS x86-64 or AArch64 target", "E290");
-  bool timed = op == "wait_until";
-  if ((!timed && op != "wait" && op != "wake") || n->children.size() != (timed ? 5U : 3U))
-    fail(n->span, "invalid futex operation");
+  const bool windows = p.hostedWindows64();
+  if (!p.hostedLinux64() && !darwin && !windows)
+    fail(n->span, "blocking synchronization requires hosted GNU/Linux, macOS or Windows MSVC on x86-64 or AArch64", "E290");
+  const bool timed = !windows && op == "wait_until";
+  const bool relative = windows && op == "wait_for";
+  if ((!timed && !relative && op != "wait" && op != "wake") ||
+      n->children.size() != (timed ? 5U : relative ? 4U : 3U))
+    fail(n->span, "invalid address wait operation");
   auto *u32 = p.integer(32, false);
   auto address = expression(n->children[1], p.pointer(u32, true));
   if (!live()) return neverValue();
@@ -121,6 +173,41 @@ ValueAt Body::syncIntrinsic(std::string_view op, const Ast &n) {
   auto argument = expression(n->children[2], u32);
   if (!live()) return neverValue();
   auto *expected = read(argument, n->span);
+  if (windows) {
+    auto *pointer = ir.getPtrTy();
+    auto *status = ir.getInt32Ty();
+    auto nativeSync = [&](llvm::StringRef name, FunctionType *type) {
+      auto provider = p.module->getOrInsertFunction(name, type);
+      if (auto *function = dyn_cast<Function>(provider.getCallee()))
+        function->addFnAttr("vaqrin.synchronization");
+      return provider;
+    };
+    if (op == "wake") {
+      auto *signature = FunctionType::get(ir.getVoidTy(), {pointer}, false);
+      auto one = nativeSync("WakeByAddressSingle", signature);
+      auto all = nativeSync("WakeByAddressAll", signature);
+      auto *notify = ir.CreateSelect(ir.CreateICmpEQ(expected, ir.getInt32(1)), one.getCallee(), all.getCallee());
+      ir.CreateCall(signature, notify, {location});
+      return voidValue();
+    }
+    Value *millis = ir.getInt32(0xffffffffu);
+    if (relative) {
+      auto timeout = expression(n->children[3], u32);
+      if (!live()) return neverValue();
+      millis = read(timeout, n->span);
+    }
+    auto *comparison = slot(u32, "wait.expected");
+    ir.CreateStore(expected, comparison);
+    auto *signature = FunctionType::get(status, {pointer, pointer, p.sizeTy->ir, status}, false);
+    auto wait = nativeSync("WaitOnAddress", signature);
+    auto *length = ConstantInt::get(p.sizeTy->ir, 4);
+    auto *result = ir.CreateCall(wait, {location, comparison, length, millis});
+    if (!relative) return voidValue();
+    auto lastError = p.module->getOrInsertFunction("GetLastError", status);
+    constexpr unsigned errorTimeout = 1460;
+    auto *timeout = ir.CreateICmpEQ(ir.CreateCall(lastError), ir.getInt32(errorTimeout));
+    return {p.boolTy, ir.CreateAnd(ir.CreateIsNull(result), timeout)};
+  }
   if (darwin) {
     if (!timed) {
       auto wait = p.module->getOrInsertFunction(op == "wait" ? "__vqr_io_sync_wait" : "__vqr_io_sync_wake",

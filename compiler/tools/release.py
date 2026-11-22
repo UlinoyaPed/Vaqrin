@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 BUILD = ROOT / "build"
 WINDOWS = os.name == "nt"
 MSVC_RUNTIME = "MultiThreadedDLL"
-WINDOWS_SMOKE_SOURCE = """import (coll, cmp, mem, random, text, time)
+WINDOWS_SMOKE_SOURCE = """import (coll, cmp, mem, random, sync, text, thread, time)
 
 func heapWorks() !bool {
     var allocator = mem.GlobalAllocator();
@@ -47,11 +47,67 @@ func wideDivisionWorks(value: i128, divisor: i128, unsignedValue: u128, unsigned
            unsignedValue % unsignedDivisor == 9223372036854775812u128;
 }
 
+func threadsWork() !bool {
+    var mainId = thread.currentId().value;
+    var work = [mainId]() u32 => {
+        if thread.currentId().value == mainId { return 0; }
+        for !thread.stopRequested() { thread.yieldNow(); }
+        42
+    };
+    var worker = thread.Thread<u32>.spawn(move(work))!;
+    var id = worker.id().value;
+    worker.requestStop();
+    return worker.join()! == 42 && id != mainId && worker.id().value == id && thread.cpuCount() > 0;
+}
+
+class SyncProbe {
+    pub var mutex: sync.Mutex<i32>;
+    pub var ready: sync.CondVar;
+    pub func init() : mutex(sync.Mutex<i32>.new(0)), ready(sync.CondVar.new()) {}
+}
+
+func synchronizationWorks() !bool {
+    var probe = mem.Shared<SyncProbe>.new(SyncProbe())!;
+    var local = probe.asPtr();
+    var guard = local.mutex.lock()!;
+    var shared = probe;
+    var update = [move(shared)]() !void => {
+        var remote = shared.asPtr();
+        var held = remote.mutex.lock()!;
+        *held.get() = 23;
+        remote.ready.notifyOne();
+    };
+    var updater = thread.Thread<void>.spawn(move(update))!;
+    var updated = (value: *i32) bool => *value == 23;
+    var acquired = sync.waitUntil(&local.ready, move(guard), updated)!;
+    updater.join()!;
+
+    var deadline = time.Deadline.after(time.Duration.fromMillis(5))!;
+    for {
+        next, elapsed := local.ready.waitUntilDeadline<i32>(move(acquired), deadline)!;
+        acquired = move(next);
+        if elapsed { break; }
+    }
+    if !deadline.expired()! || *acquired.get() != 23 { return false; }
+    acquired.unlock();
+
+    var group = mem.Shared<sync.WaitGroup>.new(sync.WaitGroup.new())!;
+    group.asPtr().add(1)!;
+    var participant = group;
+    var finish = [move(participant)]() void => { participant.asPtr().done(); };
+    var detached = thread.Thread<void>.spawn(move(finish))!;
+    detached.detach();
+    group.asPtr().wait()!;
+    return group.asPtr().count() == 0;
+}
+
 export "C" func main() i32 {
     if !(heapWorks() catch { return 3; }) { return 4; }
     if !(clocksWork() catch { return 5; }) { return 6; }
     if !wideDivisionWorks(-((1i128 << 100) + 131), (1i128 << 36) + 3,
                           (1u128 << 127) + 3, (1u128 << 64) + 1) { return 7; }
+    if !(threadsWork() catch { return 8; }) { return 9; }
+    if !(synchronizationWorks() catch { return 10; }) { return 11; }
 	var bytes = mem.zeroedBytes<16>();
     random.fillSystem(bytes[:]) catch { return 1; };
     for byte in bytes[:] { if byte != 0 { return 0; } }
@@ -107,7 +163,8 @@ def smoke(compiler, prefix):
     run(compiler, "build", "--emit=obj", source, "-o", obj)
     exe = BUILD / ("release-smoke.exe" if WINDOWS else "release-smoke")
     if WINDOWS:
-        run("link.exe", "/nologo", f"/out:{exe}", obj, "msvcrt.lib", "vcruntime.lib", "ucrt.lib", "kernel32.lib", "bcrypt.lib")
+        run("link.exe", "/nologo", f"/out:{exe}", obj, "msvcrt.lib", "vcruntime.lib", "ucrt.lib",
+            "kernel32.lib", "bcrypt.lib", "synchronization.lib")
     else:
         run(compiler, "build", source, "-o", exe)
     run(exe)

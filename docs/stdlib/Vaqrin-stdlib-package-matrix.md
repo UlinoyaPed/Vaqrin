@@ -44,8 +44,8 @@
 | `json` | 12 | 45 | 13 | 0 | 部分实现，已运行代表用例 | 嵌套 DOM、精确数字词法、代理对、指针及 Codec。编码支持递归键排序、非 ASCII 转义和 f64 转换；完整 RFC 向量待补 | `algo`, `bytes`, `cmp`, `coll`, `convert`, `core`, `fmt`, `io`, `iter`, `math`, `opt`, `parse`, `serde`, `text` |
 | `log` | 10 | 33 | 10 | 0 | 部分实现，已运行代表用例 | 级别、结构化属性、同步多 Handler、JSON Lines 及有界异步 Handler | `channel`, `coll`, `io`, `iter`, `json`, `task`, `text`, `time` |
 | `atomic` | 5 | 23 | 7 | 0 | 部分实现，已运行代表用例 | 目标受支持位宽上的原子操作，完整硬件目标矩阵待验 | — |
-| `sync` | 19 | 76 | 6 | 0 | 部分实现，已运行代表用例 | GNU/Linux 和 macOS 的互斥锁、条件变量、等待组和单次初始化 | `atomic`, `cell`, `core`, `opt`, `time` |
-| `thread` | 6 | 24 | 13 | 0 | 部分实现，已运行代表用例 | GNU/Linux 和 macOS 的原生线程、停止、join 与睡眠 | `atomic`, `opt`, `time` |
+| `sync` | 19 | 76 | 6 | 0 | 部分实现，已运行代表用例 | GNU/Linux、macOS 和 Windows MSVC 的互斥锁、条件变量、等待组和单次初始化 | `atomic`, `cell`, `core`, `opt`, `time` |
+| `thread` | 6 | 24 | 13 | 0 | 部分实现，已运行代表用例 | GNU/Linux、macOS 和 Windows MSVC 的原生线程、停止、join 与睡眠 | `atomic`, `opt`, `time` |
 | `task` | 11 | 47 | 15 | 0 | 部分实现，已运行代表用例 | 任务组、结果领取、计时与取消，任务上下文、阻塞适配和完整调度 API 待补 | `opt`, `result`, `time` |
 | `channel` | 12 | 38 | 9 | 0 | 部分实现，已运行代表用例 | MPSC 缓冲、rendezvous、轻量任务挂起、取消、超时和 select。Broadcast 与 Watch 待补 | `atomic`, `coll`, `core`, `mem`, `opt`, `sync`, `time` |
 | `parallel` | 3 | 6 | 14 | 0 | 未实现 | 暂无标准包源码 | — |

@@ -170,6 +170,24 @@ class Acceptance(CompilerCase):
         symbols = self.process("llvm-nm", "--undefined-only", "freestanding.o")
         self.assertNotIn(b"memset", symbols.stdout)
 
+    def test_large_local_array_copy_at_o0(self):
+        source = self.source("local.vqr", """
+            import (mem)
+            func main() i32 {
+                var original = mem.zeroedBytes<131072>();
+                original[131071] = 18;
+                var copy = original;
+                original[131071] = 29;
+                if copy[131071] != 18 { return 1; }
+                0
+            }
+        """)
+        self.process(VAQC, "build", "-O0", "-g", source, "-o", "copy")
+        self.process("./copy")
+        self.process(VAQC, "build", "-O0", "--profile=freestanding", "--emit=obj", source, "-o", "local.o")
+        symbols = self.process("llvm-nm", "--undefined-only", "local.o").stdout
+        self.assertNotIn(b"memcpy", symbols)
+
     def test_large_constant_arrays_copy_in_bulk(self):
         pattern = ",".join("17u32" if index % 2 == 0 else "254u32" for index in range(32768))
         literals = ",".join("7u8" for _ in range(4096))

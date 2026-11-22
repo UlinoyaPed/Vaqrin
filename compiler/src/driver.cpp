@@ -333,7 +333,7 @@ void compileRuntime(const std::string &driver, std::vector<std::string> args, co
 
 void lowerLargeArrayStores(llvm::Module &module, llvm::TargetMachine &machine, bool freestanding) {
   // SelectionDAG expands aggregate stores into one operation per element.
-  // Keep initialization from constant data in bulk form, including at -O0.
+  // Keep large copies in bulk form while preserving when the source is read.
   constexpr std::uint64_t minimumBytes = 4096;
   struct Initialization {
     llvm::StoreInst *store;
@@ -357,8 +357,13 @@ void lowerLargeArrayStores(llvm::Module &module, llvm::TargetMachine &machine, b
           stores.push_back({store, llvm::cast<llvm::Constant>(value), nullptr});
         } else if (auto *load = llvm::dyn_cast<llvm::LoadInst>(value);
                    load && load->isSimple() && load->hasOneUse()) {
-          auto *global = llvm::dyn_cast<llvm::GlobalVariable>(load->getPointerOperand()->stripPointerCasts());
-          if (global && global->isConstant() && global->hasInitializer()) stores.push_back({store, nullptr, load});
+          auto *source = load->getPointerOperand()->stripPointerCasts();
+          auto *destination = store->getPointerOperand()->stripPointerCasts();
+          auto *global = llvm::dyn_cast<llvm::GlobalVariable>(source);
+          const bool immutable = global && global->isConstant() && global->hasInitializer();
+          const bool localCopy = llvm::isa<llvm::AllocaInst>(source) && llvm::isa<llvm::AllocaInst>(destination) &&
+                                 source != destination && load->getNextNonDebugInstruction() == store;
+          if (immutable || localCopy) stores.push_back({store, nullptr, load});
         }
       }
     }

@@ -119,7 +119,7 @@ LinkedList 使用双向节点和独立 Box 所有权表，节点地址在插入�
 
 `math` 通过内部 `math_ffi` 包调用目标 C 数学 ABI。它为 f32/f64 分别使用对应的 C 数学入口。Linux 宿主的可执行文件或共享库引用这些数学入口时，`vaqc` 通过目标链接驱动添加 `-lm`。静态库的最终链接仍由调用方提供数学库。区间运算采用普通 IEEE 舍入，不提供向外舍入保证，因此 Interval 目前不构成严格的浮点包络证明。
 
-`random` 的 Pcg64 是 PCG XSL-RR 128/64，Xoshiro256 使用 xoshiro256**。两者都可复现且都不是密码学安全随机源。GNU/Linux 和 macOS 上的 `OsRng`、`fillSystem` 和 `systemSeed` 从系统读取随机字节。`newSystem()` 用系统种子初始化 PCG64，`newDefault()` 保留可复现的固定种子。随机字符串按 Unicode 标量抽样，不按字素簇抽样。
+`random` 的 Pcg64 是 PCG XSL-RR 128/64，Xoshiro256 使用 xoshiro256**。两者都可复现且都不是密码学安全随机源。GNU/Linux、macOS 和 Windows MSVC 上的 `OsRng`、`fillSystem` 和 `systemSeed` 从系统读取随机字节。`newSystem()` 用系统种子初始化 PCG64，`newDefault()` 保留可复现的固定种子。随机字符串按 Unicode 标量抽样，不按字素簇抽样。
 
 ### 浮点解析
 

@@ -11,8 +11,9 @@ and channels. The macOS build also supports the POSIX file and environment
 backend, the default allocator and system entropy. Its release smoke test
 builds and runs a program that uses these APIs. Sockets, processes, epoll,
 tasks and channels still require GNU/Linux. The Windows matrix exercises
-the compiler and tools. On Windows the release smoke test links the emitted COFF object
-with the Visual Studio linker. The LLVM SDK and vaqc use the dynamic MSVC CRT.
+the compiler, tools and `random.OsRng`. The Windows release smoke test
+links a COFF object that reads system entropy through CNG with the Visual
+Studio linker. The LLVM SDK and vaqc use the dynamic MSVC CRT.
 Use a Visual Studio developer environment
 and Clang when using the driver's native executable link mode on Windows.
 
@@ -21,7 +22,10 @@ publish a release. You can add a prerelease suffix, such as `-rc.1`.
 Publishing waits for every build and attaches the six archives and
 `SHA256SUMS`. A manual workflow run builds archives without publishing.
 Pull requests that update the release script, CMake build, or release workflow
-also run the native build matrix.
+also run the native build matrix. Push a release-related change to a
+`release-check/*` branch to run the matrix before opening a pull request.
+The workflow saves a newly built LLVM SDK before running the installed smoke tests,
+so a smoke-test failure can be retried with the same SDK.
 
 Use `vaqc fmt FILE.vqr` to emit a formatted copy, `vaqc fmt --write FILE.vqr`
 to edit in place and `vaqc fmt --check FILE.vqr` to check formatting. The

@@ -14,6 +14,14 @@ ROOT = Path(__file__).resolve().parents[2]
 BUILD = ROOT / "build"
 WINDOWS = os.name == "nt"
 MSVC_RUNTIME = "MultiThreadedDLL"
+WINDOWS_SMOKE_SOURCE = """import (mem, random)
+export "C" func main() i32 {
+	var bytes = mem.zeroedBytes<16>();
+    random.fillSystem(bytes[:]) catch { return 1; };
+    for byte in bytes[:] { if byte != 0 { return 0; } }
+    2
+}
+"""
 
 
 def run(*args, **options):
@@ -53,8 +61,8 @@ def build_llvm():
 
 def smoke(compiler, prefix):
     source = BUILD / "release-smoke.vqr"
-    entry = 'export "C" func' if WINDOWS else "func"
-    source.write_text(f"{entry} main() i32 {{\n\treturn 0;  \n}}\n", encoding="utf-8")
+    program = WINDOWS_SMOKE_SOURCE if WINDOWS else "func main() i32 {\n\treturn 0;  \n}\n"
+    source.write_text(program, encoding="utf-8")
     run(compiler, "fmt", "--write", source)
     run(compiler, "fmt", "--check", source)
     run(compiler, "check", "--syntax-only", "--diagnostics=json", source)
@@ -63,7 +71,7 @@ def smoke(compiler, prefix):
     run(compiler, "build", "--emit=obj", source, "-o", obj)
     exe = BUILD / ("release-smoke.exe" if WINDOWS else "release-smoke")
     if WINDOWS:
-        run("link.exe", "/nologo", f"/out:{exe}", obj, "msvcrt.lib", "vcruntime.lib", "ucrt.lib", "kernel32.lib")
+        run("link.exe", "/nologo", f"/out:{exe}", obj, "msvcrt.lib", "vcruntime.lib", "ucrt.lib", "kernel32.lib", "bcrypt.lib")
     else:
         run(compiler, "build", source, "-o", exe)
     run(exe)

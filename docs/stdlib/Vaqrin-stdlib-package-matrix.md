@@ -27,7 +27,7 @@
 | `fmt` | 9 | 14 | 15 | 0 | 部分实现，已运行代表用例 | Writer、字串、整数、浮点、宽度精度及位置参数。通用 Display/Debug 与编译期格式计划待补 | `coll`, `convert`, `io`, `mem`, `text` |
 | `regex` | 7 | 32 | 6 | 0 | 部分实现，已运行代表用例 | Thompson NFA、编号与命名捕获、分支、重复及资源上限。环视待补 | `coll`, `convert`, `core`, `text`, `unicode` |
 | `math` | 4 | 22 | 75 | 0 | 部分实现，已运行代表用例 | IEEE 754 分类、舍入及 C 数学入口；区间向外舍入与其余数学合同待补 | `cmp`, `convert`, `math_ffi`, `meta` |
-| `random` | 12 | 30 | 16 | 0 | 部分实现，已运行代表用例 | 可复现 PCG64、xoshiro256**、基础分布及 GNU/Linux 系统熵源。各分布统计验收待补 | `coll`, `convert`, `io`, `math`, `mem`, `meta`, `text` |
+| `random` | 12 | 30 | 16 | 0 | 部分实现，已运行代表用例 | 可复现 PCG64、xoshiro256**、基础分布及 GNU/Linux、macOS 和 Windows MSVC 系统熵源。各分布统计验收待补 | `coll`, `convert`, `io`, `math`, `mem`, `meta`, `text` |
 | `simd` | 2 | 25 | 14 | 0 | 部分实现，已运行代表用例 | 定宽标量回退，硬件向量加速和多目标验收待补 | `mem` |
 | `linalg` | 8 | 64 | 18 | 0 | 部分实现 | 稠密向量、矩阵、范数、LU、Householder QR、线性求解和最小二乘。张量、步幅视图、SVD 与特征值待补 | `coll`, `math`, `num` |
 | `units` | 5 | 10 | 7 | 0 | 未实现 | 暂无标准包源码 | — |

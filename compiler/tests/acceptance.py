@@ -3,6 +3,7 @@ import pathlib
 import json
 import os
 import re
+import runpy
 import shutil
 import subprocess
 import sys
@@ -132,6 +133,19 @@ class Acceptance(CompilerCase):
                      "--emit=obj", program, "-o", "freestanding.o")
         symbols = self.process("llvm-nm", "--undefined-only", "freestanding.o")
         self.assertNotIn(b"memset", symbols.stdout)
+
+    def test_windows_release_entry_uses_native_system_entropy(self):
+        release = runpy.run_path(str(REPOSITORY / "compiler/tools/release.py"))
+        source = self.source("release.vqr", release["WINDOWS_SMOKE_SOURCE"])
+        for arch in ("x86_64", "aarch64"):
+            with self.subTest(arch=arch):
+                filename = f"{arch}.obj"
+                target = f"{arch}-pc-windows-msvc"
+                self.process(VAQC, "build", "--target", target, "--emit=obj", source, "-o", filename)
+                symbols = self.process("llvm-nm", "--extern-only", filename).stdout
+                self.assertIn(b"T main", symbols)
+                self.assertIn(b"U BCryptGenRandom", symbols)
+                self.assertNotIn(b"__vqr_io_random", symbols)
 
     def test_large_constant_compilation(self):
         def timings(path):

@@ -26,6 +26,34 @@ ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::v
   auto arity = [&](unsigned count) {
     if (n->children.size() != count + 1) fail(n->span, "wrong intrinsic argument count");
   };
+  if (key == "__vqr_windows_system_entropy" || key == "__vqr_windows_fill_entropy") {
+    const auto target = p.targetTriple();
+    const bool available = p.options.profile == "hosted" && target.isWindowsMSVCEnvironment() &&
+                           (target.getArch() == Triple::x86_64 || target.getArch() == Triple::aarch64);
+    if (key == "__vqr_windows_system_entropy") {
+      arity(0);
+      return {p.boolTy, ir.getInt1(available)};
+    }
+    arity(2);
+    if (!available)
+      fail(n->span, "Windows system entropy requires hosted MSVC x86-64 or AArch64", "E290");
+    auto *bytePointer = p.pointer(p.integer(8, false), false);
+    auto destination = expression(n->children[1], bytePointer);
+    if (!live()) return neverValue();
+    auto *buffer = read(destination, n->span);
+    auto length = expression(n->children[2], p.integer(32, false));
+    if (!live()) return neverValue();
+    auto *i32 = ir.getInt32Ty();
+    auto *ptr = ir.getPtrTy();
+    auto *signature = FunctionType::get(i32, {ptr, ptr, i32, i32}, false);
+    auto provider = p.module->getOrInsertFunction("BCryptGenRandom", signature);
+    cast<Function>(provider.getCallee())->addFnAttr("vaqrin.bcrypt");
+    // The system-preferred provider requires a null algorithm handle.
+    constexpr unsigned useSystemPreferredRng = 2;
+    auto *status = ir.CreateCall(provider, {ConstantPointerNull::get(ptr), buffer, read(length, n->span),
+                                          ir.getInt32(useSystemPreferredRng)});
+    return {p.integer(32, true), status};
+  }
   if (key == "__vqr_decimal_width") {
     arity(0);
     if (types.size() != 1) fail(n->span, "floating-point parsing requires one target type");

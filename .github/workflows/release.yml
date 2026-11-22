@@ -2,7 +2,7 @@ name: Multi-platform build and release
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'release-check/**']
     tags: ['v*']
     paths:
       - 'compiler/**'
@@ -69,7 +69,7 @@ jobs:
 
       - name: Restore LLVM SDK
         id: sdk
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: build/llvm-sdk
           key: llvm-sdk-v3-${{ matrix.runner }}-${{ env.LLVM_TAG }}-x86-aarch64-arm
@@ -85,6 +85,13 @@ jobs:
       - name: Build LLVM SDK
         if: steps.sdk.outputs.cache-hit != 'true'
         run: python compiler/tools/release.py llvm
+
+      - name: Save the built LLVM SDK
+        if: steps.sdk.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/llvm-sdk
+          key: ${{ steps.sdk.outputs.cache-primary-key }}
 
       - name: Build and smoke-test the installed compiler
         env:

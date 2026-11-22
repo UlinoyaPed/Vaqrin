@@ -581,6 +581,10 @@ void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, con
       for (const auto &input : r.linkInputs)
         args.push_back(fs::absolute(input).string());
       if (usesDecimalRuntime) args.push_back("-lstdc++");
+      if (target.isWindowsMSVCEnvironment() && std::ranges::any_of(module, [](const llvm::Function &function) {
+            return function.hasFnAttribute("vaqrin.bcrypt") && !function.use_empty();
+          }))
+        args.push_back("-lbcrypt");
       if (usesHttp2Runtime) args.push_back("-lnghttp2");
       if (usesGzipRuntime) args.push_back("-lz");
       if (usesTlsRuntime) args.push_back("-ldl");

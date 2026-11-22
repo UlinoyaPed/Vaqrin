@@ -10,6 +10,7 @@ pub error RandomError {
     InvalidSeed,
     SampleTooLarge,
     UnsupportedWidth,
+    SystemEntropyUnavailable,
 }
 
 pub interface Rng {
@@ -23,6 +24,29 @@ pub interface CryptoRng {
 
 extern "C" func __vqr_io_random(destination: *u8, length: usize) i32;
 
+// The CNG provider is selected by the OS when BCRYPT_USE_SYSTEM_PREFERRED_RNG is set.
+class NativeEntropy {
+public:
+    comptime if __vqr_windows_system_entropy() {
+        static func fill(dst: []u8) !void {
+            var position: usize = 0;
+            for position < dst.len() {
+                var available = dst.len() - position;
+                var count = if available > 0x40000000 { usize(0x40000000) } else { available };
+                var status = __vqr_windows_fill_entropy(&dst[position], u32(count)!);
+                if status < 0 { return RandomError.SystemEntropyUnavailable; }
+                position += count;
+            }
+        }
+    } else {
+        static func fill(dst: []u8) !void {
+            if dst.len() == 0 { return; }
+            var status = unsafe { __vqr_io_random(&dst[0], dst.len()) };
+            if status != 0 { return io.systemError(status); }
+        }
+    }
+}
+
 pub class OsRng {
     #implements: CryptoRng
 public:
@@ -30,11 +54,7 @@ public:
     func fillSecure(dst: []u8) !void { fillSystem(dst) }
 }
 
-pub func fillSystem(dst: []u8) !void {
-    if dst.len() == 0 { return; }
-    var status = unsafe { __vqr_io_random(&dst[0], dst.len()) };
-    if status != 0 { return io.systemError(status); }
-}
+pub func fillSystem(dst: []u8) !void { NativeEntropy.fill(dst) }
 
 pub func systemSeed() !Seed {
     var raw = mem.zeroedBytes<16>();

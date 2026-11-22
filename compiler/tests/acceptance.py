@@ -2185,6 +2185,26 @@ class Acceptance(CompilerCase):
         self.assertRegex(assembly, r"\bdmb\b")
         self.assertRegex(assembly, r"\bisb\b")
 
+    def test_nested_explicit_generic_results_drive_outer_inference(self):
+        self.source("types.vqr", """
+            pub func identity<T>(value: T) T { value }
+            pub class Passthrough {
+                pub const func call<T>(value: T) T { value }
+            }
+        """)
+        self.hosted(r"""
+            import ("types.vqr" as source)
+            func wrap<T>(value: T) T { value }
+            func check<T>(value: T) T {
+                var instance = source.Passthrough{};
+                wrap(instance.call<T>(value) - source.identity<T>(T(1)))
+            }
+            func main() !void {
+                io.println(check<f32>(8.0) == 7.0f32)!;
+                io.println(check<f64>(8.0) == 7.0f64)!;
+            }
+        """, "true\ntrue\n")
+
     def test_generic_interface_methods(self):
         self.hosted(r"""
             interface Transformer<C> {

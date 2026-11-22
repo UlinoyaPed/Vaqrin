@@ -111,6 +111,28 @@ Type *Body::hint(const Ast &n) {
   }
   case NodeKind::Call: {
     auto callee = n->children[0];
+    ArrayRef<Ast> typeArguments;
+    if (callee->kind == NodeKind::Generic) {
+      typeArguments = ArrayRef<Ast>(callee->children).drop_front();
+      callee = callee->children.front();
+      if (std::ranges::any_of(typeArguments, [](const Ast &argument) {
+            return argument->kind != NodeKind::TypeName && argument->kind != NodeKind::TypePrefix &&
+                   argument->kind != NodeKind::TypeArray && argument->kind != NodeKind::TypeTuple &&
+                   argument->kind != NodeKind::TypeFunction && argument->kind != NodeKind::Name;
+          }))
+        return nullptr;
+    }
+    auto canHint = [&](const Decl &definition) {
+      return definition.generics.size() == typeArguments.size() && !hasComptimeParameters(definition) &&
+             std::ranges::none_of(definition.generics, &Parameter::comptime);
+    };
+    auto returnType = [&](Definition definition, Type *declaring = nullptr) {
+      auto types = declaring ? p.classTypes(declaring) : Types{};
+      for (unsigned i = 0; i < typeArguments.size(); ++i)
+        types[definition.decl->generics[i].name] = parseType(typeArguments[i]);
+      return p.type(definition.decl->type, *definition.file, types,
+                    declaring ? declaring->comptimeArguments : Constants{});
+    };
     if (callee->kind == NodeKind::Member && callee->names.empty()) {
       auto source = callee->children[0];
       auto *receiver = hint(source);
@@ -121,8 +143,7 @@ Type *Body::hint(const Ast &n) {
         Definition method{};
         for (auto def : p.methods(receiver, callee->text, false)) {
           auto *candidate = def.decl;
-          if (candidate->params.size() + 1 != n->children.size() || !candidate->generics.empty() ||
-              hasComptimeParameters(*candidate) || (!candidate->readOnly && !writable) ||
+          if (candidate->params.size() + 1 != n->children.size() || !canHint(*candidate) || (!candidate->readOnly && !writable) ||
               ((!candidate->visible || !def.publicPath) && owner != receiver))
             continue;
           if (!method.decl || (!candidate->readOnly && method.decl->readOnly))
@@ -132,7 +153,7 @@ Type *Body::hint(const Ast &n) {
         }
         if (method.decl) {
           auto *actual = method.declaringType ? method.declaringType : receiver;
-          return p.type(method.decl->type, *method.file, p.classTypes(actual), actual->comptimeArguments);
+          return returnType(method, actual);
         }
       }
     }
@@ -145,11 +166,10 @@ Type *Body::hint(const Ast &n) {
           Type *result = nullptr;
           for (auto def : methods) {
             auto &method = *def.decl;
-            if (method.params.size() + 1 != n->children.size() || !method.generics.empty() ||
-                hasComptimeParameters(method))
+            if (method.params.size() + 1 != n->children.size() || !canHint(method))
               continue;
             auto *actual = def.declaringType ? def.declaringType : owner;
-            auto *type = p.type(method.type, *def.file, p.classTypes(actual), actual->comptimeArguments);
+            auto *type = returnType(def, actual);
             if (result && result != type) return nullptr;
             result = type;
           }
@@ -162,17 +182,18 @@ Type *Body::hint(const Ast &n) {
         const auto &candidate = *def.decl;
         if (candidate.kind != DeclKind::Function || candidate.params.size() + 1 != n->children.size())
           continue;
-        if (!candidate.generics.empty() || hasComptimeParameters(candidate)) return nullptr;
-        auto *type = p.type(candidate.type, *def.file);
+        if (!canHint(candidate)) return nullptr;
+        auto *type = returnType(def);
         if (result && result != type) return nullptr;
         result = type;
       }
       if (result) return result;
-      if (ds.size() == 1 && ds[0].decl->kind == DeclKind::Class && ds[0].decl->generics.empty())
+      if (typeArguments.empty() && ds.size() == 1 && ds[0].decl->kind == DeclKind::Class &&
+          ds[0].decl->generics.empty())
         return p.nominal(ds[0], {});
-      if (generics.contains(key) || key == "bool" || key == "char" || key == "usize" || key == "isize" || key == "f32" ||
+      if (typeArguments.empty() && (generics.contains(key) || key == "bool" || key == "char" || key == "usize" || key == "isize" || key == "f32" ||
           key == "f64" ||
-          (key.size() > 1 && (key[0] == 'i' || key[0] == 'u') && key[1] >= '0' && key[1] <= '9')) {
+          (key.size() > 1 && (key[0] == 'i' || key[0] == 'u') && key[1] >= '0' && key[1] <= '9'))) {
         auto *target = p.named(key, file, n->span, generics);
         if (n->children.size() == 2 && mathInteger(n->children[1])) return target;
       }

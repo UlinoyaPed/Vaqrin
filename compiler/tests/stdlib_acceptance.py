@@ -368,7 +368,7 @@ class StandardLibraryAcceptance(CompilerCase):
                 var log = math.Complex<T>.new(largest, largest).log();
                 var expected = math.log<T>(largest) + math.log<T>(T(2)) / T(2);
                 io.println(math.isFinite(log.real()) && math.abs<T>(log.real() - expected) < T(0.001))!;
-                io.println(math.abs<T>(log.imag() - math.pi<T>() / T(4)) < T(0.001))!;
+                io.println(math.abs(log.imag() - math.pi<T>() / T(4)) < T(0.001))!;
                 var small = math.Complex<T>.new(tiny, tiny).log();
                 io.println(math.isFinite(small.real()) && small.real() > math.log<T>(tiny))!;
                 var onAxis = math.Complex<T>.new(exponent, -T(0)).exp();

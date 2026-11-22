@@ -144,8 +144,23 @@ void Body::recordBorrow(int id, ValueAt v, Span span) {
     v.origin.raw = false;
     bool mutableLoan = locals[id].reference ? !locals[id].reference->readOnly : !p.copyable(v.type);
     checkAccess(v, mutableLoan, span);
+    locals[id].noBorrowPayload = !v.hasBorrowPayload();
   }
   if (p.hasReference(v.type) || locals[id].reference || carriesBorrow(v.type)) locals[id].origin = v.origin;
+}
+
+void Body::holdBorrow(Borrow &combined, ValueAt value, Value *stored, Span span) {
+  if (value.origin.root < 0)
+    fail(span, "borrowed value requires a tracked owner", "E230");
+  auto loan = bind(" <value borrow " + std::to_string(locals.size()) + ">", value.type, false, stored, span);
+  recordBorrow(loan, value, span);
+  combined = combined.root < 0 ? value.origin : joinBorrow(combined, value.origin, value.type, span);
+}
+
+void Body::mergeValueBorrow(Borrow &combined, bool &payload, ValueAt value, Span span) {
+  if (!p.hasReference(value.type) || !value.hasBorrowPayload()) return;
+  combined = payload ? joinBorrow(combined, value.origin, value.type, span) : value.origin;
+  payload = true;
 }
 
 ValueAt Body::referenceName(int id, Span span) {
@@ -759,8 +774,7 @@ void Body::emitReturn(ValueAt value, Span span) {
   if (result == p.neverTy) fail(span, "never function cannot return normally");
   value = coerce(value, result, span);
   rejectTemporaryBorrow(value, span);
-  if (p.hasReference(result) && !value.noPayload &&
-      !(isa_and_nonnull<Constant>(value.value) && cast<Constant>(value.value)->isNullValue()) &&
+  if (p.hasReference(result) && value.hasBorrowPayload() &&
       (returnRoot < 0 || value.origin.root != returnRoot || value.origin.alternatives))
     fail(span, "returned reference must borrow from its declared source", "E230");
   auto *returned = read(value, span);
@@ -1032,6 +1046,7 @@ ValueAt Body::conditional(const Ast &n, Type *expected) {
   std::vector<std::pair<Value *, BasicBlock *>> edges;
   bool temporaryBorrow = false;
   Borrow origin{};
+  bool borrowPayload = false;
   auto arm = [&](BasicBlock *target, const Ast &body) {
     ir.SetInsertPoint(target);
     merge({initial}, initial.size());
@@ -1049,8 +1064,7 @@ ValueAt Body::conditional(const Ast &n, Type *expected) {
     if (!t) t = v.type;
     v = coerce(v, t, body ? body->span : n->span);
     temporaryBorrow |= v.temporaryBorrow;
-    if (p.hasReference(t))
-      origin = edges.empty() ? v.origin : joinBorrow(origin, v.origin, t, n->span);
+    mergeValueBorrow(origin, borrowPayload, v, n->span);
     auto *value = read(v, body ? body->span : n->span);
     leave();
     states.push_back(initialized);
@@ -1069,7 +1083,7 @@ ValueAt Body::conditional(const Ast &n, Type *expected) {
   auto *phi = ir.CreatePHI(p.storage(t), edges.size());
   for (auto [value, from] : edges)
     phi->addIncoming(value, from);
-  return {t, phi, nullptr, false, -1, false, temporaryBorrow, origin};
+  return {t, phi, nullptr, false, -1, false, temporaryBorrow, origin, p.hasReference(t) && !borrowPayload};
 }
 
 void Body::statement(const Ast &n) {
@@ -1241,7 +1255,7 @@ ValueAt Body::sequence(const Ast &n, Type *expected, bool scoped) {
   if (live()) {
     v = n->tail ? expression(n->tail, expected) : coerce(voidValue(), expected, n->span);
     if (live() && scoped && v.address)
-      v = {v.type, read(v, n->span), nullptr, false, -1, false, v.temporaryBorrow, v.origin};
+      v = {v.type, read(v, n->span), nullptr, false, -1, false, v.temporaryBorrow, v.origin, v.noPayload};
   }
   if (scoped) leave();
   return v;
@@ -1557,7 +1571,7 @@ ValueAt Body::expression(const Ast &n, Type *expected) {
     if (patternBorrows.contains(i) || !l.writable || locals[i].refCapture || !p.movable(l.type))
       fail(n->span, "source cannot be moved", "E230");
     if (locals[i].captureFlag) closure->consuming = true;
-    v = {l.type, read(l, n->span, false), nullptr, false, -1, false, l.temporaryBorrow, l.origin};
+    v = {l.type, read(l, n->span, false), nullptr, false, -1, false, l.temporaryBorrow, l.origin, l.noPayload};
     if (p.drops(l.type)) invalidateOwnedAddresses(l);
     setAlive(i, false);
     break;
@@ -1601,10 +1615,8 @@ ValueAt Body::expression(const Ast &n, Type *expected) {
           fail(syntax->span, "tuple reference elements must be read-only and copyable", "E230");
         referenceElements = true;
         if (item.origin.root >= 0) {
-          auto loan = bind(" <tuple loan " + std::to_string(i) + ">", item.type, false, value, syntax->span);
-          recordBorrow(loan, item, syntax->span);
-          origin = origin.root < 0 ? item.origin : joinBorrow(origin, item.origin, item.type, syntax->span);
-        } else if (!item.noPayload && !(isa<Constant>(value) && cast<Constant>(value)->isNullValue())) {
+          holdBorrow(origin, item, value, syntax->span);
+        } else if (item.hasBorrowPayload()) {
           fail(syntax->span, "tuple reference element requires a tracked owner", "E230");
         }
       }

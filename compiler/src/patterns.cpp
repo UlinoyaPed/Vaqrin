@@ -241,6 +241,7 @@ ValueAt Body::match(const Ast &n, Type *expected) {
   std::vector<std::pair<Value *, BasicBlock *>> edges;
   bool temporaryBorrow = false;
   Borrow origin{};
+  bool borrowPayload = false;
   for (std::size_t i = 1; i < n->children.size(); ++i) {
     auto arm = n->children[i];
     auto *entry = block("switch.arm");
@@ -312,8 +313,7 @@ ValueAt Body::match(const Ast &n, Type *expected) {
       }
       v = coerce(v, resultType, arm->span);
       temporaryBorrow |= v.temporaryBorrow;
-      if (p.hasReference(resultType))
-        origin = edges.empty() ? v.origin : joinBorrow(origin, v.origin, resultType, arm->span);
+      mergeValueBorrow(origin, borrowPayload, v, arm->span);
       auto *value = read(v, arm->span);
       leave();
       states.push_back(initialized);
@@ -347,7 +347,8 @@ ValueAt Body::match(const Ast &n, Type *expected) {
   auto *phi = ir.CreatePHI(resultType->ir, edges.size());
   for (auto [v, b] : edges)
     phi->addIncoming(v, b);
-  return {resultType, phi, nullptr, false, -1, false, temporaryBorrow, origin};
+  return {resultType, phi, nullptr, false, -1, false, temporaryBorrow, origin,
+          p.hasReference(resultType) && !borrowPayload};
 }
 
 } // namespace vqr::detail

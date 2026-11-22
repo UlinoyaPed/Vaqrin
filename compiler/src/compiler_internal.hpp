@@ -134,6 +134,11 @@ struct ValueAt {
   bool temporaryBorrow = false;
   Borrow origin{};
   bool noPayload = false;
+
+  bool hasBorrowPayload() const {
+    auto *constant = dyn_cast_or_null<Constant>(value);
+    return !noPayload && (!constant || !constant->isNullValue());
+  }
 };
 
 struct FunctionEntry {
@@ -169,6 +174,7 @@ struct Local {
   Type *reference = nullptr;
   Borrow origin{};
   Span declaration{};
+  bool noBorrowPayload = false;
 };
 struct Loop {
   BasicBlock *leave, *next;
@@ -247,6 +253,8 @@ private:
   ValueAt referenceName(int local, Span span);
   Type *referenceHint(const Ast &n);
   void recordBorrow(int local, ValueAt v, Span span);
+  void holdBorrow(Borrow &combined, ValueAt value, Value *stored, Span span);
+  void mergeValueBorrow(Borrow &combined, bool &payload, ValueAt value, Span span);
   void setAlive(int local, bool alive);
   void registerDrop(int local, bool alive);
   void merge(const std::vector<std::vector<bool>> &edges, std::size_t size);

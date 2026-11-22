@@ -478,7 +478,8 @@ Type *Program::nominal(Definition d, const std::vector<Type *> &args, bool compl
     auto *layout = kind == Kind::Interface ? voidTy->ir : StructType::create(context, id);
     t = add(kind, layout, id, args);
     t->def = d;
-    t->scopedBorrow = kind == Kind::Class && attribute(*d.decl, "borrowed") == "scoped";
+    t->scopedBorrow = (kind == Kind::Class || kind == Kind::Enum) &&
+                      attribute(*d.decl, "borrowed") == "scoped";
     t->comptimeArguments = values;
   }
   if (complete) ensureSized(t, d.decl->span);
@@ -533,9 +534,16 @@ void Program::fill(Type *t, const Types &substitutions) {
     }
   };
   collect(collect, d.members);
+  bool referenceField = false;
+  auto validateBorrowField = [&](Type *field, Span span) {
+    if (field->kind == Kind::Reference && field->readOnly && !field->compatible)
+      referenceField = true;
+    else if (field->kind != Kind::Int && field->kind != Kind::Bool &&
+             field->kind != Kind::Char && field->kind != Kind::Float)
+      fail(span, "scoped borrow fields require a read-only reference or scalar", "E230");
+  };
   if (t->kind == Kind::Class) {
     t->cAbi = attribute(d, "repr") == "C";
-    bool referenceField = false;
     if (t->scopedBorrow && std::ranges::any_of(d.attributes, [](const auto &a) { return a.name != "borrowed"; }))
       fail(d.span, "a scoped borrow record cannot declare other class attributes", "E230");
     for (const auto *member : t->members) {
@@ -548,11 +556,9 @@ void Program::fill(Type *t, const Types &substitutions) {
                            : evaluate(m.body, *t->def.file, nullptr, substitutions, t->comptimeArguments).first;
       ensureSized(field, m.span);
       if (t->scopedBorrow) {
-        if (field->kind == Kind::Reference && field->readOnly && !field->compatible && !m.body)
-          referenceField = true;
-        else if (field->kind != Kind::Int && field->kind != Kind::Bool &&
-                 field->kind != Kind::Char && field->kind != Kind::Float)
-          fail(m.span, "scoped borrow fields require a read-only reference or scalar", "E230");
+        if (hasReference(field) && m.body)
+          fail(m.span, "scoped reference fields require an explicit initializer", "E230");
+        validateBorrowField(field, m.span);
       } else if (hasReference(field)) {
         fail(m.span, "reference fields require #borrowed: scoped", "E230");
       }
@@ -561,8 +567,6 @@ void Program::fill(Type *t, const Types &substitutions) {
       t->fields.push_back({&m, field, static_cast<unsigned>(layout.size())});
       layout.push_back(storage(field));
     }
-    if (t->scopedBorrow && !referenceField)
-      fail(d.span, "a scoped borrow record requires a read-only reference field", "E230");
     auto copy = attribute(d, "copy");
     if (copy == "enable" && !methods(t, "deinit", false).empty() && methods(t, "copy", false).empty())
       fail(d.span, "copy-enabled class with deinit requires a copy method");
@@ -590,7 +594,8 @@ void Program::fill(Type *t, const Types &substitutions) {
       for (const auto &a : m.params) {
         auto *field = type(a.type, *t->def.file, substitutions, t->comptimeArguments);
         ensureSized(field, a.span);
-        if (hasReference(field)) fail(m.span, "reference storage in enum fields is not supported", "E230");
+        if (t->scopedBorrow) validateBorrowField(field, a.span);
+        else if (hasReference(field)) fail(a.span, "reference fields require #borrowed: scoped", "E230");
         v.fields.push_back(field);
         layout.push_back(storage(field));
       }
@@ -598,6 +603,8 @@ void Program::fill(Type *t, const Types &substitutions) {
       next = next.sext(std::max(tag->bits + 2, next.getBitWidth())) + 1;
     }
   }
+  if (t->scopedBorrow && !referenceField)
+    fail(d.span, "a scoped borrow type requires a read-only reference field", "E230");
   cast<StructType>(t->ir)->setBody(layout);
 }
 
@@ -1243,13 +1250,14 @@ std::unique_ptr<Module> Program::build() {
         std::set<std::string> seen;
         for (const auto &a : d.attributes) {
           if (!seen.insert(a.name).second) fail(a.span, "duplicate attribute '" + a.name + "'");
-          if ((a.name == "repr" &&
+          if ((a.name == "borrowed" && a.value == "scoped" &&
+               (d.kind == DeclKind::Class || d.kind == DeclKind::Enum)) ||
+              (a.name == "repr" &&
                (d.kind == DeclKind::Enum || (d.kind == DeclKind::Class && a.value == "C"))) ||
               (d.kind == DeclKind::Function && a.name == "return_borrow") ||
               (d.kind == DeclKind::Class &&
                ((a.name == "copy" && (a.value == "enable" || a.value == "disabled")) ||
-                (a.name == "move" && a.value == "disabled") || a.name == "implements" || a.name == "derive" ||
-                (a.name == "borrowed" && a.value == "scoped"))))
+                (a.name == "move" && a.value == "disabled") || a.name == "implements" || a.name == "derive")))
             continue;
           fail(a.span, "invalid attribute '" + a.name + "' for declaration");
         }

@@ -200,7 +200,7 @@ ValueAt Body::name(const Ast &n) {
     indexSymbol(n->span, l.declaration);
     auto origin = l.origin;
     if (l.reference || p.hasReference(l.type)) origin.via = i;
-    return {l.type, nullptr, l.slot, l.writable, i, true, false, origin};
+    return {l.type, nullptr, l.slot, l.writable, i, true, false, origin, l.noBorrowPayload};
   }
   if (owner)
     for (const auto &f : owner->fields) {
@@ -340,7 +340,8 @@ ValueAt Body::member(const Ast &n) {
       auto v = std::ranges::find(t->variants, n->text, &Variant::name);
       if (v == t->variants.end() || !v->fields.empty())
         fail(n->span, "expected an enum member without a payload");
-      return {t, ir.CreateInsertValue(Constant::getNullValue(t->ir), ConstantInt::get(p.context, v->tag), 0)};
+      return {t, ir.CreateInsertValue(Constant::getNullValue(t->ir), ConstantInt::get(p.context, v->tag), 0),
+              nullptr, false, -1, false, false, {}, t->scopedBorrow};
     }
     if (target == base && !p.import(file, basePath).empty()) {
       auto full = p.resolve(file, basePath + "." + n->text, n->span);
@@ -783,8 +784,12 @@ ValueAt Body::fallback(const Ast &n, Type *expected) {
   if (other) phi->addIncoming(other, bad);
   merge(other ? std::vector{initial, initialized} : std::vector<std::vector<bool>>{initial}, initial.size());
   Borrow origin = v.origin;
-  if (other && !(v.origin == alt.origin))
-    origin = p.hasReference(inner) ? joinBorrow(v.origin, alt.origin, inner, n->span) : Borrow{};
+  const bool reference = p.hasReference(inner);
+  bool borrowPayload = reference && v.hasBorrowPayload();
+  if (other) {
+    if (reference) mergeValueBorrow(origin, borrowPayload, alt, n->span);
+    else if (!(v.origin == alt.origin)) origin = {};
+  }
   return {inner,
           phi,
           nullptr,
@@ -792,7 +797,8 @@ ValueAt Body::fallback(const Ast &n, Type *expected) {
           -1,
           false,
           v.temporaryBorrow || alt.temporaryBorrow,
-          origin};
+          origin,
+          reference && !borrowPayload};
 }
 
 ValueAt Body::castNumber(Type *to, const Ast &arg, Span span) {
@@ -1434,10 +1440,7 @@ ValueAt Body::construct(const Ast &n, Type *t, const std::vector<Definition> &de
     }
     auto *data = read(v, n->span);
     if (f.type->kind == Kind::Reference) {
-      if (v.origin.root < 0) fail(initializer->span, "reference field requires a tracked owner", "E230");
-      auto loan = bind(" <field loan " + f.decl->name + ">", f.type, false, data, initializer->span);
-      recordBorrow(loan, v, initializer->span);
-      origin = origin.root < 0 ? v.origin : joinBorrow(origin, v.origin, t, initializer->span);
+      holdBorrow(origin, v, data, initializer->span);
     }
     if (p.drops(f.type))
       transfers.push_back(bind(" <field " + f.decl->name + ">", f.type, true, data, n->span));
@@ -1592,10 +1595,7 @@ ValueAt Body::lambda(const Ast &n, Type *expected) {
     }
     auto *stored = read(v, n->span);
     if (capture.scoped) {
-      if (v.origin.root < 0) fail(n->span, "scoped capture requires a tracked owner", "E230");
-      auto loan = bind(" <capture loan " + std::to_string(i) + ">", v.type, false, stored, n->span);
-      recordBorrow(loan, v, n->span);
-      origin = origin.root < 0 ? v.origin : joinBorrow(origin, v.origin, t, n->span);
+      holdBorrow(origin, v, stored, n->children[i]->span);
     }
     if (p.drops(v.type))
       transfers.push_back(bind(" <capture " + std::to_string(i) + ">", v.type, true, stored, n->span));
@@ -1878,13 +1878,19 @@ ValueAt Body::call(const Ast &n, Type *expected) {
       Value *value =
           ir.CreateInsertValue(Constant::getNullValue(t->ir), ConstantInt::get(p.context, variant->tag), 0);
       std::vector<int> transfers;
+      Borrow origin{};
       for (unsigned i = 0; i < variant->fields.size(); ++i) {
-        auto v = expression(n->children[i + 1], variant->fields[i]);
+        const auto &syntax = n->children[i + 1];
+        auto *field = variant->fields[i];
+        auto v = field->kind == Kind::Reference
+                     ? borrow(expression(syntax), field, syntax->span, false)
+                     : expression(syntax, field);
         if (!live()) {
           leave();
           return neverValue();
         }
         auto *raw = read(v, n->span);
+        if (field->kind == Kind::Reference) holdBorrow(origin, v, raw, syntax->span);
         if (p.drops(v.type))
           transfers.push_back(bind(" <payload " + std::to_string(i) + ">", v.type, true, raw, n->span));
         value = ir.CreateInsertValue(value, raw, variant->offset + i);
@@ -1892,7 +1898,7 @@ ValueAt Body::call(const Ast &n, Type *expected) {
       for (auto i : transfers)
         setAlive(i, false);
       leave();
-      return {t, value};
+      return {t, value, nullptr, false, -1, false, false, origin, t->scopedBorrow && origin.root < 0};
     }
     auto v = expression(base);
     if (!live()) return neverValue();

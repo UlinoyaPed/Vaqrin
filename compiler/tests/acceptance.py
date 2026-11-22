@@ -1429,6 +1429,62 @@ class Acceptance(CompilerCase):
                 result = self.process(VAQC, "check", path, good=False)
                 self.assertIn(b"E230", result.stderr, result.stderr.decode())
 
+    def test_scoped_enums_and_empty_borrow_branches(self):
+        self.hosted(r"""
+            enum Hit {
+                #borrowed: scoped
+                Empty = 7,
+                Match(&const i32, i32),
+            }
+            func find(value: &const i32, found: bool) Hit {
+                var empty = Hit.Empty;
+                if found { Hit.Match(value, 3) } else { empty }
+            }
+            func fallback(hit: ?Hit) Hit {
+                var empty = Hit.Empty;
+                hit ?? empty
+            }
+            func increment(hit: Hit) Hit {
+                switch hit {
+                    Hit.Empty => Hit.Empty,
+                    Hit.Match(&number, count) => Hit.Match(number, count + 1),
+                }
+            }
+            func print(hit: Hit) !void {
+                switch hit {
+                    Hit.Empty => { io.println("empty")!; },
+                    Hit.Match(&number, count) => { io.println(number + count)!; },
+                }
+            }
+            func main() !void {
+                var number = 40;
+                var view: &const i32 = &number;
+                print(increment(find(view, true)))!;
+                print(increment(find(view, false)))!;
+                print(fallback(some(Hit.Match(view, 3))))!;
+            }
+        """, "44\nempty\n43\n")
+        cases = [
+            """enum Hit { #borrowed: scoped; Empty, Match(&const i32), }
+               func bad() i32 {
+                   var number = 42;
+                   var selected = Hit.Match(&number);
+                   number++;
+                   switch selected { Hit.Empty => 0, Hit.Match(&result) => result, }
+               }""",
+            """enum Hit { #borrowed: scoped; Empty, Match(&const i32), }
+               func bad(source: &const i32) Hit {
+                   var number = 42;
+                   Hit.Match(&number)
+               }""",
+            """enum Hit { #borrowed: scoped; Match(&i32), }""",
+        ]
+        for index, text in enumerate(cases):
+            with self.subTest(index=index):
+                source = self.source(f"enum-{index}/main.vqr", text)
+                result = self.process(VAQC, "check", source, good=False)
+                self.assertIn(b"E230", result.stderr, result.stderr.decode())
+
     def test_indirect_reference_return_contract(self):
         self.hosted(r"""
             type Pick = func(&const i32, &const i32) borrow(2) &const i32;

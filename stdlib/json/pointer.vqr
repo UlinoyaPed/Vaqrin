@@ -57,12 +57,12 @@ pub func pointerSet(value: *Value, pointer: str, newValue: Value) !void {
         var token = decodePointerToken(bytes[start..index])!;
         if index == bytes.len() {
             switch *current {
-                Value.Object(ref object) => {
+                Value.Object(ref mut object) => {
                     var owned = text.fromBytes(token.asBytes())!;
                     var previous = object.insert(move(owned), move(newValue))!;
                     return;
                 },
-                Value.Array(ref array) => {
+                Value.Array(ref mut array) => {
                     var item = parsePointerIndex(token)!;
                     if item >= array.len() { return JsonError.IndexOutOfRange; }
                     array.replace(item, move(newValue)) ?? { return JsonError.IndexOutOfRange; };
@@ -72,8 +72,8 @@ pub func pointerSet(value: *Value, pointer: str, newValue: Value) !void {
             }
         }
         current = switch *current {
-            Value.Object(ref object) => object.getMut(token) ?? { return JsonError.InvalidPointer; },
-            Value.Array(ref array) => {
+            Value.Object(ref mut object) => object.getMut(token) ?? { return JsonError.InvalidPointer; },
+            Value.Array(ref mut array) => {
                 var item = parsePointerIndex(token)!;
                 array.getMut(item) ?? { return JsonError.IndexOutOfRange; }
             },

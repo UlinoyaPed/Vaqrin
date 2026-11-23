@@ -264,7 +264,7 @@ class Generator:
             return
         pattern = "some" if variant is None else variant
         p.start(f"switch {source}")
-        p.start(f"{pattern}(ref nested) =>")
+        p.start(f"{pattern}(ref mut nested) =>")
         p.line(f"protobuf.mergeMessage<{target}>(field, nested.asPtr(), &codec)!;")
         p.line("continue;")
         p.end(",")

@@ -108,12 +108,14 @@ Type *Program::pointer(Type *t, bool readOnly) {
   return p;
 }
 
-Type *Program::reference(Type *t, bool readOnly, bool compatible) {
-  auto key = std::string(compatible ? "in &const " : readOnly ? "&const " : "&") + t->name;
+Type *Program::reference(Type *t, bool readOnly, bool compatible, ParameterMode mode) {
+  auto key = std::string(mode == ParameterMode::In ? "in " : mode == ParameterMode::Mut ? "mut "
+                         : compatible ? "in &const " : readOnly ? "&const " : "&") + t->name;
   if (auto i = canonical.find(key); i != canonical.end()) return i->second;
   auto *ref = add(Kind::Reference, pointer(t, readOnly)->ir, key, {t});
   ref->readOnly = readOnly;
   ref->compatible = compatible;
+  ref->parameterMode = mode;
   return ref;
 }
 
@@ -129,21 +131,27 @@ int Program::borrowParameter(Definition def, const std::vector<Type *> &params, 
   if (std::ranges::count(def.decl->attributes, "return_borrow", &Attribute::name) > 1)
     fail(def.decl->span, "duplicate attribute 'return_borrow'");
   auto source = attribute(*def.decl, "return_borrow");
+  if (!def.decl->borrowSource.empty()) {
+    if (!source.empty()) fail(def.decl->span, "borrow source is specified twice", "E230");
+    source = def.decl->borrowSource;
+  }
   if (!hasReference(result)) {
-    if (!source.empty()) fail(def.decl->span, "#return_borrow requires a reference result", "E230");
+    if (!source.empty()) fail(def.decl->span, "borrow source requires a reference result", "E230");
     return -1;
   }
   if (receiver && source == "self") return 0;
   int found = -1;
   for (unsigned i = 0; i < def.decl->params.size(); ++i) {
-    if (!hasReference(params[i + receiver])) continue;
+    auto *param = params[i + receiver];
+    if (!hasReference(param) || (!def.decl->borrowSource.empty() && param->parameterMode == ParameterMode::Value))
+      continue;
     if (!source.empty() && def.decl->params[i].name != source) continue;
     if (found >= 0)
-      fail(def.decl->span, "reference result requires #return_borrow naming its source", "E230");
+      fail(def.decl->span, "reference result requires an explicit borrow source", "E230");
     found = i + receiver;
   }
   if (found < 0)
-    fail(def.decl->span, "reference result requires a reference parameter or #return_borrow: self", "E230");
+    fail(def.decl->span, "reference result requires a valid borrow source", "E230");
   return found;
 }
 
@@ -229,7 +237,8 @@ Type *Program::rawStorage(Type *element, Span span) {
   return add(Kind::RawStorage, StructType::get(context, layout), key, {element});
 }
 
-Type *Program::aggregate(Kind kind, std::vector<Type *> parts, std::uint64_t count, bool cAbi) {
+Type *Program::aggregate(Kind kind, std::vector<Type *> parts, std::uint64_t count, bool cAbi,
+                         std::vector<unsigned> moveParameters) {
   std::string key;
   switch (kind) {
   case Kind::Array:
@@ -244,6 +253,7 @@ Type *Program::aggregate(Kind kind, std::vector<Type *> parts, std::uint64_t cou
   case Kind::Function:
     key = typeKey(cAbi ? "extern C func" : "func", parts);
     if (count != 0) key += " borrow(" + std::to_string(count) + ')';
+    for (auto index : moveParameters) key += " move(" + std::to_string(index) + ')';
     break;
   default:
     key = typeKey("tuple", parts);
@@ -268,6 +278,7 @@ Type *Program::aggregate(Kind kind, std::vector<Type *> parts, std::uint64_t cou
   auto *out = add(kind, ir, key, std::move(parts));
   out->count = count;
   out->cAbi = cAbi;
+  out->moveParameters = std::move(moveParameters);
   return out;
 }
 
@@ -406,12 +417,15 @@ Type *Program::type(const Ast &n, const File &file, const Types &generics, const
   }
   if (n->kind == NodeKind::TypeTuple || n->kind == NodeKind::TypeFunction) {
     std::vector<Type *> parts;
-    for (const auto &a : n->children)
+    std::vector<unsigned> moveParameters;
+    for (const auto &a : n->children) {
+      if (parameterMode(a) == ParameterMode::Move) moveParameters.push_back(parts.size());
       parts.push_back(type(a, file, generics, values));
+    }
     if (n->type) {
       parts.push_back(type(n->type, file, generics, values));
       const bool c = n->text == "C";
-      if (c && (!n->names.empty() || std::ranges::any_of(parts, [&](auto *part) {
+      if (c && (!moveParameters.empty() || !n->names.empty() || std::ranges::any_of(parts, [&](auto *part) {
             return hasReference(part) || (part->kind == Kind::Pointer && !part->ir->isPointerTy());
           })))
         fail(n->span, "references and interface views cannot use the C ABI");
@@ -424,7 +438,7 @@ Type *Program::type(const Ast &n, const File &file, const Types &generics, const
           fail(n->bindingSpans.front(), "borrow source must be a 1-based parameter index", "E230");
       }
       source = functionBorrow(ArrayRef<Type *>(parts).drop_back(), parts.back(), source, n->span);
-      return aggregate(Kind::Function, parts, source, c);
+      return aggregate(Kind::Function, parts, source, c, std::move(moveParameters));
     }
     for (auto *t : parts)
       ensureSized(t, n->span);
@@ -432,12 +446,21 @@ Type *Program::type(const Ast &n, const File &file, const Types &generics, const
   }
   if (n->kind == NodeKind::TypePrefix) {
     auto *inner = type(n->children[0], file, generics, values);
+    auto mode = parameterMode(n);
+    if (mode == ParameterMode::Move) {
+      ensureSized(inner, n->span);
+      if (!movable(inner) || copyable(inner) || hasReference(inner))
+        fail(n->span, "move parameter requires an owning, movable, non-Copyable type", "E230");
+      return inner;
+    }
     if (n->text != "?" && n->text != "!" && hasReference(inner))
       fail(n->span, "indirect storage of a reference-bearing type is not supported", "E230");
     if (n->text == "*" || n->text == "*const") return pointer(inner, n->text == "*const");
-    if (n->text == "&" || n->text == "&const" || n->text == "in &const") {
+    if (n->text == "&" || n->text == "&const" || n->text == "in &const" || n->text == "ref" ||
+        n->text == "ref mut" || mode == ParameterMode::In || mode == ParameterMode::Mut) {
       if (inner == voidTy || inner == neverTy) fail(n->span, "reference requires an object type");
-      return reference(inner, n->text != "&", n->text == "in &const");
+      return reference(inner, n->text != "&" && n->text != "ref mut" && mode != ParameterMode::Mut,
+                       n->text == "in &const", mode);
     }
     if (n->text == "^") return box(inner);
     if (n->text == "[]" || n->text == "[]const") return slice(inner, n->text == "[]const");
@@ -698,6 +721,10 @@ void Program::validateInterfaces(Type *type) {
           if (!method.visible || !found.publicPath || method.unsafe != requirement.unsafe ||
               method.readOnly != requirement.readOnly || method.params.size() != requirement.params.size() ||
               method.comptime != requirement.comptime)
+            continue;
+          if (!std::ranges::equal(method.params, requirement.params, {},
+                                 [](const auto &param) { return parameterMode(param.type); },
+                                 [](const auto &param) { return parameterMode(param.type); }))
             continue;
           auto *owner = found.declaringType ? found.declaringType : type;
           auto methodTypes = classTypes(owner);
@@ -1103,6 +1130,8 @@ std::vector<Type *> Program::parameters(Definition d, const Types &types, Type *
   std::vector<Type *> params;
   if (owner && !d.decl->associated) params.push_back(pointer(owner, d.decl->readOnly));
   for (const auto &param : d.decl->params) {
+    if ((param.comptime || d.decl->external || d.decl->exported) && parameterMode(param.type) != ParameterMode::Value)
+      fail(param.span, "parameter modes require a native runtime parameter", "E230");
     auto *t = type(param.type, *d.file, types, values);
     ensureSized(t, param.span);
     params.push_back(t);
@@ -1120,8 +1149,12 @@ FunctionEntry &Program::function(Definition d, Types substitutions, Type *owner,
   for (const auto &g : decl.generics)
     if (!g.comptime) genericTypes.push_back(substitutions.at(g.name));
   auto overloadParams = params;
-  for (auto *&param : overloadParams)
-    if (param->compatible) param = reference(param->parts[0], true);
+  for (auto *&param : overloadParams) {
+    if (param->parameterMode != ParameterMode::Value)
+      param = param->parts[0];
+    else if (param->compatible)
+      param = reference(param->parts[0], true);
+  }
   auto instance = typeKey(typeKey(id, genericTypes), overloadParams);
   for (const auto &[name, value] : values) {
     std::string operand;
@@ -1131,6 +1164,7 @@ FunctionEntry &Program::function(Definition d, Types substitutions, Type *owner,
   }
   auto *ret = type(decl.type, *d.file, substitutions, values);
   ensureSized(ret, decl.span);
+  borrowParameter(d, params, ret, owner && !decl.associated);
   if (!movable(ret) || std::ranges::any_of(params, [&](auto *t) { return !movable(t); }))
     fail(decl.span, "direct by-value parameters and returns of immovable types are not yet supported",
          "E290");
@@ -1202,7 +1236,11 @@ Type *Program::signature(FunctionEntry &entry) {
   auto types = entry.parameters;
   types.push_back(entry.result);
   auto source = borrowParameter(entry.def, entry.parameters, entry.result, false);
-  return aggregate(Kind::Function, types, source + 1, entry.def.decl->external || entry.def.decl->exported);
+  std::vector<unsigned> moveParameters;
+  for (unsigned i = 0; i < entry.def.decl->params.size(); ++i)
+    if (parameterMode(entry.def.decl->params[i].type) == ParameterMode::Move) moveParameters.push_back(i);
+  return aggregate(Kind::Function, types, source + 1, entry.def.decl->external || entry.def.decl->exported,
+                   std::move(moveParameters));
 }
 
 void Program::lower(FunctionEntry &entry) {

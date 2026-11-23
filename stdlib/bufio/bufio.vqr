@@ -28,7 +28,7 @@ pub class BufferedReader {
     comptime if __vqr_host_supports_io() {
         func readSource(dst: []u8) !usize {
             switch ownedSource {
-                some(ref reader) => { return io.read(&reader, dst); },
+                some(ref mut reader) => { return io.read(&reader, dst); },
                 null => {},
             }
             io.read(source.unwrap(), dst)

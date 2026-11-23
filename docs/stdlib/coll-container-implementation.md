@@ -65,7 +65,7 @@ API 草案中的 `SmallVec`、`RingBuffer`、`ForwardList`、`StableVec`、`Orde
 - `clone() -> !Self`（要求 T 可复制）
 
 借用、遍历和维护：
-- `get(index: usize) -> ?&const T`、`getMut(index: usize) -> ?&T`
+- v0.2.0 开发分支的 `get(index: usize) ?ref T from self` 和 `getMut(index: usize) ?ref mut T from self` 返回借用。两者都以 Vec 为来源
 - `at(index: usize) -> *const T`、`atMut(index: usize) -> *T`
 - `first() -> ?*const T`、`firstMut() -> ?*T`
 - `last() -> ?*const T`、`lastMut() -> ?*T`

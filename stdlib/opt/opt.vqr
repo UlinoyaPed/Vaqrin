@@ -37,7 +37,7 @@ pub func asRef<T>(value: in &const ?T) ?&const T {
 pub func asMutRef<T>(value: &?T) ?&T {
     switch value {
         null => { return null; },
-        some(ref item) => { return item; },
+        some(ref mut item) => { return item; },
     }
 }
 

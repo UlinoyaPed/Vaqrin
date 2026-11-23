@@ -78,6 +78,22 @@ class EditorAcceptance(CompilerCase):
         self.assertEqual([entry["type"] for entry in json.loads(hints.stdout)],
                          ["^Counter", "func(i32) i32"])
 
+    def test_v020_formatter_and_reference_hints(self):
+        source = self.source("ref.vqr", """package sample;
+func first(a: in i32,b: in i32) ref i32 from a {
+ a
+}
+func example() void {
+ var x=1;
+ var y=first(x,2);
+}
+""")
+        self.process(VAQC, "fmt", "--write", source)
+        self.process(VAQC, "fmt", "--check", source)
+        self.assertIn("func first(a: in i32, b: in i32) ref i32 from a", source.read_text())
+        result = self.process(VAQC, "check", "--editor-hints", source)
+        self.assertEqual([entry["type"] for entry in json.loads(result.stdout)], ["i32", "ref i32"])
+
     def test_formatter_preserves_expression_roles(self):
         source = self.source("style.vqr", """func main() i32 {
 var n=1+2*3;
@@ -360,8 +376,8 @@ func sample(value: i32) !i32 {
             expected = {}
             short = {1, 3, 5}
             for row, name, hint in ((1, "a", "i16"), (1, "b", "i64"), (2, "total", "i16"),
-                                    (3, "alias", "&i16"), (4, "i", "i64"), (5, "j", "i16"),
-                                    (7, "ptr", "*i16"), (8, "borrowed", "&*i16")):
+                                    (3, "alias", "ref mut i16"), (4, "i", "i64"), (5, "j", "i16"),
+                                    (7, "ptr", "*i16"), (8, "borrowed", "ref *i16")):
                 line = source.splitlines()[row]
                 end = line.index(name, 8 if row == 4 else 0) + len(name)
                 label = hint if row in short else (": " if row == 2 else ":") + hint

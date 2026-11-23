@@ -18,6 +18,7 @@ ctest --test-dir build/host --output-on-failure
 build/host/vaqc --version
 build/host/vaqc build examples/hello.vqr -o build/hello
 ./build/hello
+build/host/vaqc run examples/hello.vqr
 ```
 
 示例输出 `Hello, Vaqrin!`。更多程序和预期输出见[示例学习路线](../examples/README.md)。宿主链接默认调用 `clang`，归档默认调用 `llvm-ar`。可用 `cmake --install build/host --prefix <安装目录>` 安装 `bin/vaqc` 和标准包源码。
@@ -32,6 +33,8 @@ build/host/vaqc build -O2 -g examples/hello.vqr -o build/hello
 ```
 
 默认产物是宿主可执行文件，入口支持 `func main() void`、`func main() !void`、`func main() i32` 和 `func main() !i32`。成功的整数结果用作进程退出码，未处理错误输出到标准错误流并以 1 退出。也可生成 `llvm-ir`、`bc`、`asm`、`obj`、`staticlib` 和 `sharedlib`。生成库或对象时允许省略入口，供 C 消费者使用的符号通过 `export "C"` 声明。`--emit=ast` 将语法树写到标准输出。`check` 解析、类型检查并验证生成的 IR，无需链接。
+
+`vaqc run file.vqr` 在临时目录构建宿主可执行文件。程序继承终端输入和输出，退出时返回程序的退出码并清理临时产物。用 `--` 分隔传给程序的参数。
 
 `check --syntax-only` 逐个检查源文件的语法，单个文件出错后继续检查其他文件。加上
 `--diagnostics=json` 后，每条诊断占标准错误流的一行，位置采用从零开始的 UTF-16 范围。

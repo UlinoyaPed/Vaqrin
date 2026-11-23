@@ -111,6 +111,8 @@ struct Type {
   bool consuming = false;
   std::vector<Ast> patterns;
   bool compatible = false;
+  ParameterMode parameterMode = ParameterMode::Value;
+  std::vector<unsigned> moveParameters;
 };
 
 struct Borrow {
@@ -119,8 +121,10 @@ struct Borrow {
   bool raw = false;
   // A read-only merge conservatively pins every possible source.
   std::shared_ptr<const std::vector<int>> alternatives{};
+  std::vector<unsigned> fields{};
 
   bool protects(int owner) const;
+  bool overlaps(int owner, const Borrow &access) const;
   bool operator==(const Borrow &other) const;
 };
 
@@ -180,6 +184,7 @@ struct Loop {
   BasicBlock *leave, *next;
   std::size_t depth;
   std::vector<std::vector<bool>> continues, breaks;
+  std::string label;
 };
 
 class Program;
@@ -213,6 +218,7 @@ private:
   Type *owner;
   Type *closure = nullptr;
   unsigned unsafeDepth = 0;
+  unsigned explicitBorrowDepth = 0;
   std::vector<Local> locals;
   std::multiset<int> patternBorrows;
   std::vector<std::vector<int>> scopes;
@@ -249,7 +255,7 @@ private:
   ValueAt dereference(ValueAt v, Span span);
   void checkUnwrap(Value *present, Span span);
   ValueAt borrow(ValueAt v, Type *t, Span span, bool materialize);
-  ValueAt argument(const Ast &n, Type *t);
+  ValueAt argument(const Ast &n, Type *t, bool transfersOwnership = false);
   ValueAt referenceName(int local, Span span);
   Type *referenceHint(const Ast &n);
   void recordBorrow(int local, ValueAt v, Span span);
@@ -359,9 +365,10 @@ public:
   Type *integer(unsigned bits, bool sign);
   std::size_t functionBorrow(llvm::ArrayRef<Type *> parameters, Type *result, std::size_t explicitSource,
                              Span span);
-  Type *aggregate(Kind kind, std::vector<Type *> parts, std::uint64_t count = 0, bool cAbi = false);
+  Type *aggregate(Kind kind, std::vector<Type *> parts, std::uint64_t count = 0, bool cAbi = false,
+                  std::vector<unsigned> moveParameters = {});
   Type *pointer(Type *t, bool readOnly);
-  Type *reference(Type *t, bool readOnly, bool compatible = false);
+  Type *reference(Type *t, bool readOnly, bool compatible = false, ParameterMode mode = ParameterMode::Value);
   bool hasReference(Type *t);
   int borrowParameter(Definition def, const std::vector<Type *> &parameters, Type *result, bool receiver);
   Type *slice(Type *t, bool readOnly);

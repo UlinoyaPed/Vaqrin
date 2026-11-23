@@ -11,52 +11,52 @@ public:
     func init(socket: StreamSocket) : stream(move(socket)) {}
     func read(dst: []u8) !usize {
         switch stream {
-            StreamSocket.Clear(ref raw) => raw.read(dst),
-            StreamSocket.Secure(ref secure) => secure.read(dst),
-            StreamSocket.AsyncClear(ref raw) => raw.read(dst),
-            StreamSocket.AsyncSecure(ref secure) => secure.read(dst),
+            StreamSocket.Clear(ref mut raw) => raw.read(dst),
+            StreamSocket.Secure(ref mut secure) => secure.read(dst),
+            StreamSocket.AsyncClear(ref mut raw) => raw.read(dst),
+            StreamSocket.AsyncSecure(ref mut secure) => secure.read(dst),
         }
     }
     func write(src: []const u8) !usize {
         switch stream {
-            StreamSocket.Clear(ref raw) => raw.write(src),
-            StreamSocket.Secure(ref secure) => secure.write(src),
-            StreamSocket.AsyncClear(ref raw) => raw.write(src),
-            StreamSocket.AsyncSecure(ref secure) => secure.write(src),
+            StreamSocket.Clear(ref mut raw) => raw.write(src),
+            StreamSocket.Secure(ref mut secure) => secure.write(src),
+            StreamSocket.AsyncClear(ref mut raw) => raw.write(src),
+            StreamSocket.AsyncSecure(ref mut secure) => secure.write(src),
         }
     }
     func flush() !void {
         switch stream {
-            StreamSocket.Clear(ref raw) => raw.flush(),
-            StreamSocket.Secure(ref secure) => secure.flush(),
-            StreamSocket.AsyncClear(ref raw) => raw.flush(),
-            StreamSocket.AsyncSecure(ref secure) => secure.flush(),
+            StreamSocket.Clear(ref mut raw) => raw.flush(),
+            StreamSocket.Secure(ref mut secure) => secure.flush(),
+            StreamSocket.AsyncClear(ref mut raw) => raw.flush(),
+            StreamSocket.AsyncSecure(ref mut secure) => secure.flush(),
         }
     }
     func close() !void {
         switch stream {
-            StreamSocket.Clear(ref raw) => raw.close(),
-            StreamSocket.Secure(ref secure) => secure.close(),
-            StreamSocket.AsyncClear(ref raw) => raw.close(),
-            StreamSocket.AsyncSecure(ref secure) => secure.close(),
+            StreamSocket.Clear(ref mut raw) => raw.close(),
+            StreamSocket.Secure(ref mut secure) => secure.close(),
+            StreamSocket.AsyncClear(ref mut raw) => raw.close(),
+            StreamSocket.AsyncSecure(ref mut secure) => secure.close(),
         }
     }
     func setTimeout(timeout: time.Duration) !void {
         switch stream {
-            StreamSocket.Clear(ref raw) => {
+            StreamSocket.Clear(ref mut raw) => {
                 raw.setReadTimeout(some(timeout))!;
                 raw.setWriteTimeout(some(timeout))!;
             },
-            StreamSocket.Secure(ref secure) => {
+            StreamSocket.Secure(ref mut secure) => {
                 secure.setReadTimeout(some(timeout))!;
                 secure.setWriteTimeout(some(timeout))!;
             },
-            StreamSocket.AsyncClear(ref raw) => {
+            StreamSocket.AsyncClear(ref mut raw) => {
                 var deadline = some(time.Deadline.after(timeout)!);
                 raw.setReadDeadline(deadline);
                 raw.setWriteDeadline(deadline);
             },
-            StreamSocket.AsyncSecure(ref secure) => {
+            StreamSocket.AsyncSecure(ref mut secure) => {
                 var deadline = some(time.Deadline.after(timeout)!);
                 secure.setReadDeadline(deadline);
                 secure.setWriteDeadline(deadline);
@@ -72,14 +72,14 @@ public:
     }
     func tryRead(dst: []u8) !(usize, ?reactor.Interest) {
         switch stream {
-            StreamSocket.AsyncClear(ref raw) => {
+            StreamSocket.AsyncClear(ref mut raw) => {
                 var count = raw.tryRead(dst) catch (reason) {
                     if io.isWouldBlock(reason) { return (usize(0), some(reactor.Interest.read())); }
                     return reason;
                 };
                 return (count, null);
             },
-            StreamSocket.AsyncSecure(ref secure) => { return secure.tryRead(dst); },
+            StreamSocket.AsyncSecure(ref mut secure) => { return secure.tryRead(dst); },
             _ => { return io.IoError.Unsupported; },
         }
     }

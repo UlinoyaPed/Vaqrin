@@ -62,6 +62,15 @@ private:
     auto t = current();
     return (t.kind == TokenKind::Punctuation || t.kind == TokenKind::Keyword) && t.text == text;
   }
+  bool atWord(std::string_view text) const {
+    auto t = current();
+    return t.kind == TokenKind::Name && t.text == text;
+  }
+  bool eatWord(std::string_view text) {
+    if (!atWord(text)) return false;
+    take();
+    return true;
+  }
   Token take() {
     auto t = current();
     if (t.kind == TokenKind::End) fail(t.span, "unexpected end of file", "E110");
@@ -143,8 +152,10 @@ private:
 File Parser::file() {
   File f;
   f.span = current().span;
-  if (eat("package")) f.package = name().text;
-  if (at(";")) fail(current().span, "package headers have no trailing semicolon", "E110");
+  if (eat("package")) {
+    f.package = name().text;
+    eat(";");
+  }
   while (eat("import")) {
     require("(");
     if (at(")")) fail(current().span, "import requires at least one item", "E110");
@@ -172,7 +183,7 @@ File Parser::file() {
       }
       f.imports.push_back(std::move(item));
     });
-    if (at(";")) fail(current().span, "import headers have no trailing semicolon", "E110");
+    eat(";");
   }
   while (current().kind != TokenKind::End)
     f.declarations.push_back(declaration());
@@ -239,7 +250,7 @@ void Parser::genericParameters(Decl &d) {
       constraint = type();
       if (!c) {
         auto current = constraint;
-        while (eat("&")) {
+        while (eat("+") || eat("&")) {
           current->tail = type();
           current = current->tail;
         }
@@ -280,6 +291,7 @@ Decl Parser::declaration(bool member, bool iface) {
       d.type = type();
     else
       d.type = make(NodeKind::TypeName, n.span, "void");
+    if (eatWord("from")) d.borrowSource = at("self") ? take().text : name().text;
     if (eat(":")) {
       do {
         auto field = at("self") ? take() : name();
@@ -423,17 +435,24 @@ std::vector<Ast> Parser::genericArguments() {
 
 Ast Parser::parameterType() {
   auto start = current();
-  if (!eat("in")) return type();
-  auto reference = type();
-  if (reference->kind != NodeKind::TypePrefix || reference->text != "&const")
-    fail(start.span, "'in' requires a read-only reference parameter", "E110");
-  return make(NodeKind::TypePrefix, start.span, "in &const", reference->children);
+  if (!eat("in") && !eatWord("mut") && !eat("move")) return type();
+  auto data = type();
+  if (start.text == "in" && data->kind == NodeKind::TypePrefix) {
+    if (data->text == "&const") return make(NodeKind::TypePrefix, start.span, "in &const", data->children);
+    if (data->text == "&") fail(start.span, "'in &' requires a read-only reference parameter", "E110");
+  }
+  return make(NodeKind::TypePrefix, start.span, start.text, {data});
 }
 
 Ast Parser::type(bool inferArray) {
   Nest nesting(*this);
   auto start = current();
-  if (at("in")) fail(start.span, "'in' is only permitted in parameter types", "E110");
+  if (at("in") || atWord("mut") || at("move"))
+    fail(start.span, "parameter mode is only permitted in parameter lists", "E110");
+  if (eatWord("ref")) {
+    bool writable = eatWord("mut");
+    return make(NodeKind::TypePrefix, start.span, writable ? "ref mut" : "ref", {type()});
+  }
   if (typePunctuation('?') || eat("!") || eat("^") || eat("*") || typePunctuation('&') || eat("const")) {
     auto key = start.text == "??" ? "?" : start.text == "&&" ? "&" : start.text;
     if (key == "*" && eat("const")) key = "*const";
@@ -471,7 +490,18 @@ Ast Parser::type(bool inferArray) {
     require("func");
     require("(");
     std::vector<Ast> types;
-    list(")", [&] { types.push_back(parameterType()); });
+    std::vector<std::string> parameters;
+    list(")", [&] {
+      std::string parameter;
+      if (current().kind == TokenKind::Name && current(1).text == ":") {
+        parameter = take().text;
+        require(":");
+        if (std::ranges::find(parameters, parameter) != parameters.end())
+          fail(current().span, "duplicate function type parameter", "E110");
+      }
+      parameters.push_back(std::move(parameter));
+      types.push_back(parameterType());
+    });
     auto n = make(NodeKind::TypeFunction, start.span, c ? "C" : "", std::move(types));
     if (current().kind == TokenKind::Name && current().text == "borrow" && current(1).text == "(") {
       take();
@@ -484,6 +514,18 @@ Ast Parser::type(bool inferArray) {
       require(")");
     }
     n->type = type();
+    if (eatWord("from")) {
+      auto source = name();
+      auto parameter = std::ranges::find(parameters, source.text);
+      if (!n->names.empty() || parameter == parameters.end())
+        fail(source.span, "from must identify one named function type parameter", "E110");
+      auto index = static_cast<std::size_t>(parameter - parameters.begin());
+      auto mode = parameterMode(n->children[index]);
+      if (mode != ParameterMode::In && mode != ParameterMode::Mut)
+        fail(source.span, "from must identify an in or mut parameter", "E230");
+      n->names.push_back(std::to_string(index + 1));
+      n->bindingSpans.push_back(source.span);
+    }
     return n;
   }
   auto id = name();
@@ -513,6 +555,18 @@ bool Parser::bindingAhead(bool iteration) const {
 }
 
 Ast Parser::statement(bool header) {
+  if (atWord("ref") && (current(2).text == "=" ||
+                    (current(1).text == "mut" && current(3).text == "="))) {
+    auto start = take();
+    bool writable = eatWord("mut");
+    auto binding = name();
+    require("=");
+    auto n = make(NodeKind::Binding, start.span, "var",
+                  {make(NodeKind::Unary, start.span, writable ? "ref mut" : "ref", {expression(1, header)})});
+    n->names.push_back(binding.text);
+    n->bindingSpans.push_back(binding.span);
+    return n;
+  }
   if (at("var") || at("const") || at("comptime")) {
     auto t = take();
     if (t.text == "comptime") require("const");
@@ -597,6 +651,11 @@ bool Parser::wrappedLoopHeader() const {
 }
 
 Ast Parser::loop() {
+  if (atWord("while")) {
+    auto start = take();
+    auto condition = expression(1, true);
+    return make(NodeKind::For, start.span, "", {nullptr, condition, nullptr, block()});
+  }
   auto t = require("for");
   bool parens = wrappedLoopHeader();
   if (parens) require("(");
@@ -638,8 +697,9 @@ Ast Parser::pattern() {
   }
   if (t.kind == TokenKind::Name && t.text == "ref" && current(1).kind == TokenKind::Name) {
     take();
+    const bool writable = eatWord("mut");
     auto binding = name();
-    return make(NodeKind::PatternRef, binding.span, binding.text);
+    return make(writable ? NodeKind::PatternMutRef : NodeKind::PatternRef, binding.span, binding.text);
   }
   if (eat("null")) return make(NodeKind::PatternCase, t.span, "null");
   if (eat("(")) {
@@ -795,6 +855,21 @@ Ast Parser::primary(bool excludeFields) {
     return make(k, t.span, t.text);
   }
   if (auto closure = lambda(excludeFields)) return closure;
+  if (t.kind == TokenKind::Name && current(1).text == ":" &&
+      (current(2).text == "for" || current(2).text == "while")) {
+    auto label = take();
+    require(":");
+    auto result = loop();
+    result->text = label.text;
+    return result;
+  }
+  if (atWord("while")) return loop();
+  if ((atWord("ref") || atWord("raw")) &&
+      (current(1).kind == TokenKind::Name || current(1).text == "self" || current(1).text == "*")) {
+    take();
+    auto operation = t.text == "ref" && eatWord("mut") ? "ref mut" : t.text;
+    return make(NodeKind::Unary, t.span, operation, {expression(14, excludeFields)});
+  }
   if (t.kind == TokenKind::Name || at("self")) {
     take();
     return make(NodeKind::Name, t.span, t.text);
@@ -819,6 +894,17 @@ Ast Parser::primary(bool excludeFields) {
     return n;
   }
   if (eat("if")) {
+    if (eatWord("let")) {
+      auto binding = pattern();
+      require("=");
+      auto subject = expression(1, true);
+      auto yes = make(NodeKind::Arm, binding->span, "", {binding});
+      yes->tail = block();
+      auto no = make(NodeKind::Arm, t.span, "", {make(NodeKind::PatternAny, t.span)});
+      if (eat("else")) no->tail = at("if") ? expression(1, excludeFields) : block();
+      else no->tail = make(NodeKind::Block, t.span);
+      return make(NodeKind::Switch, t.span, "", {subject, yes, no});
+    }
     Ast cond;
     bool blockForm = !at("(");
     if (blockForm)
@@ -868,8 +954,9 @@ Ast Parser::primary(bool excludeFields) {
     }
     return n;
   }
-  if (eat("break")) return make(NodeKind::Break, t.span);
-  if (eat("continue")) return make(NodeKind::Continue, t.span);
+  if (eat("break") || eat("continue"))
+    return make(t.text == "break" ? NodeKind::Break : NodeKind::Continue, t.span,
+                current().kind == TokenKind::Name && !current().newline ? take().text : "");
   if (at("!") || at("-") || at("~") || at("*") || at("&")) {
     take();
     return make(NodeKind::Unary, t.span, t.text, {expression(14, excludeFields)});

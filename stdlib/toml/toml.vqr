@@ -442,7 +442,7 @@ func setDotted(document: *Document, path: []const string, value: Value, rejectDu
             child = current.getMut(key);
         }
         switch *child.unwrap() {
-            Value.Table(ref table) => {
+            Value.Table(ref mut table) => {
                 if rejectDuplicate {
                     var kind = table.tableKind();
                     if kind != TableKind.Implicit && kind != TableKind.Dotted { return TomlError.DuplicateTable; }
@@ -464,7 +464,7 @@ func setDotted(document: *Document, path: []const string, value: Value, rejectDu
 func arrayTable(array: *coll.Vec<Value>) !*Document {
     var tail = array.lastMut() ?? { return TomlError.TypeConflict; };
     switch *tail {
-        Value.Table(ref table) => {
+        Value.Table(ref mut table) => {
             if table.tableKind() != TableKind.ArrayElement { return TomlError.TypeConflict; }
             var address: *Document = &table;
             return address;
@@ -483,11 +483,11 @@ func declareTable(document: *Document, path: []const string, array: bool) !*Docu
             child = current.getMut(key);
         }
         switch *child.unwrap() {
-            Value.Table(ref table) => {
+            Value.Table(ref mut table) => {
                 if table.tableKind() == TableKind.Inline { return TomlError.DuplicateTable; }
                 current = &table;
             },
-            Value.Array(ref tables) => { current = arrayTable(&tables)!; },
+            Value.Array(ref mut tables) => { current = arrayTable(&tables)!; },
             _ => return TomlError.TypeConflict,
         }
     }
@@ -500,7 +500,7 @@ func declareTable(document: *Document, path: []const string, array: bool) !*Docu
             current.set(text.fromBytes(key.asBytes())!, Value.Array(move(tables)))!;
             child = current.getMut(key);
             switch *child.unwrap() {
-                Value.Array(ref list) => return arrayTable(&list),
+                Value.Array(ref mut list) => return arrayTable(&list),
                 _ => panic("TOML array table invariant"),
             }
         }
@@ -508,14 +508,14 @@ func declareTable(document: *Document, path: []const string, array: bool) !*Docu
         child = current.getMut(key);
     }
     switch *child.unwrap() {
-        Value.Table(ref table) => {
+        Value.Table(ref mut table) => {
             if array { return TomlError.TypeConflict; }
             if table.tableKind() != TableKind.Implicit { return TomlError.DuplicateTable; }
             table.setTableKind(TableKind.Explicit);
             var address: *Document = &table;
             return address;
         },
-        Value.Array(ref tables) => {
+        Value.Array(ref mut tables) => {
             if !array { return TomlError.TypeConflict; }
             var previous = arrayTable(&tables)!;
             tables.push(Value.Table(Document(TableKind.ArrayElement)))!;

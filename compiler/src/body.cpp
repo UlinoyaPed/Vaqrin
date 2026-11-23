@@ -67,8 +67,15 @@ bool Borrow::protects(int owner) const {
   return root == owner || (alternatives && std::ranges::binary_search(*alternatives, owner));
 }
 
+bool Borrow::overlaps(int owner, const Borrow &access) const {
+  if (!protects(owner)) return false;
+  if (alternatives || access.alternatives || raw || access.raw) return true;
+  const auto [loanField, accessField] = std::ranges::mismatch(fields, access.fields);
+  return loanField == fields.end() || accessField == access.fields.end();
+}
+
 bool Borrow::operator==(const Borrow &other) const {
-  if (root != other.root || via != other.via || raw != other.raw) return false;
+  if (root != other.root || via != other.via || raw != other.raw || fields != other.fields) return false;
   return alternatives == other.alternatives ||
          (alternatives && other.alternatives && *alternatives == *other.alternatives);
 }
@@ -106,15 +113,16 @@ void Body::checkAccess(ValueAt v, bool write, Span span) {
 
 void Body::checkRootAccess(int root, Borrow origin, bool write, Span span) {
   const auto scope = locals[root].scope;
-  if (!initialized[root] || scope >= scopes.size() ||
-      std::ranges::find(scopes[scope], root) == scopes[scope].end()) {
+  const bool inScope = scope < scopes.size() && std::ranges::find(scopes[scope], root) != scopes[scope].end();
+  if (!initialized[root] || !inScope) {
     if (origin.raw) return;
+    if (!inScope) fail(span, "reference would outlive its owner", "E230");
     fail(span, "borrowed owner is no longer initialized", "E230");
   }
   for (const auto &scope : scopes)
     for (int id : scope) {
       const auto &loan = locals[id];
-      if (id == root || !initialized[id] || !loan.origin.protects(root) || loan.origin.raw ||
+      if (id == root || !initialized[id] || !loan.origin.overlaps(root, origin) || loan.origin.raw ||
           (!loan.reference && !p.hasReference(loan.type)))
         continue;
       int via = origin.via;
@@ -202,6 +210,8 @@ ValueAt Body::dereference(ValueAt v, Span span) {
   }
   if (t->kind != Kind::Pointer && t->kind != Kind::Reference)
     fail(span, "dereference requires a pointer, reference or Box");
+  if (t->kind == Kind::Pointer && explicitBorrowDepth && !unsafeDepth)
+    fail(span, "borrowing through a raw pointer requires unsafe", "E240");
   auto origin = t->kind == Kind::Reference || v.origin.raw ? v.origin : Borrow{};
   return {t->parts[0], nullptr, read(v, span, false), !t->readOnly, -1, true, v.temporaryBorrow, origin};
 }
@@ -235,7 +245,11 @@ ValueAt Body::borrow(ValueAt v, Type *t, Span span, bool materialize) {
     fail(span, "safe reference cannot be derived from an untracked closure capture", "E230");
   v.origin.raw = false;
   checkAccess(v, !t->readOnly, span);
-  if (v.origin.root < 0 && materialize && raw)
+  if (v.origin.root < 0 && explicitBorrowDepth) {
+    if (!unsafeDepth || t->parameterMode == ParameterMode::Value)
+      fail(span, "cannot prove the lifetime of the reference source", "E230");
+    v.temporaryBorrow = true;
+  } else if (v.origin.root < 0 && materialize && raw)
     v.temporaryBorrow = true;
   else if (v.origin.root < 0 && !unsafeDepth)
     fail(span, "reference source is unproven; borrowing a raw address requires unsafe", "E230");
@@ -248,7 +262,13 @@ ValueAt Body::borrow(ValueAt v, Type *t, Span span, bool materialize) {
   return {t, address, nullptr, false, -1, false, v.temporaryBorrow, v.origin};
 }
 
-ValueAt Body::argument(const Ast &n, Type *t) {
+ValueAt Body::argument(const Ast &n, Type *t, bool transfersOwnership) {
+  if (transfersOwnership) {
+    auto v = expression(n, t);
+    if (v.type != p.neverTy && v.borrowed)
+      fail(n->span, "move parameter requires move(object) or an owning temporary", "E230");
+    return v;
+  }
   if (t->kind != Kind::Reference) {
     auto v = expression(n, t);
     if (t->kind == Kind::Pointer && v.origin.raw) {
@@ -258,6 +278,25 @@ ValueAt Body::argument(const Ast &n, Type *t) {
       if (!t->readOnly) invalidateOwnedAddresses(pointee);
     }
     return v;
+  }
+  if (t->parameterMode != ParameterMode::Value) {
+    auto *target = t->parts[0];
+    if (n->kind == NodeKind::Move)
+      fail(n->span, "a borrow parameter does not consume its argument", "E230");
+    struct Guard {
+      unsigned &depth;
+      ~Guard() { --depth; }
+    } guard{explicitBorrowDepth};
+    ++explicitBorrowDepth;
+    auto *hinted = referenceHint(n);
+    auto *context = hinted && hinted->kind == Kind::Reference ? hinted
+                    : !hinted && (target->kind == Kind::Int || target->kind == Kind::Float) ? target : nullptr;
+    auto value = expression(n, context);
+    if (value.type != p.neverTy && value.type != target &&
+        (value.type->kind != Kind::Reference || value.type->parts[0] != target))
+      fail(n->span, "borrow argument requires '" + target->name + "'; dereference pointers and Box explicitly",
+           "E201");
+    return borrow(value, t, n->span, t->parameterMode == ParameterMode::In);
   }
   if (!t->compatible) return expression(n, t);
   int id = n->kind == NodeKind::Name ? findLocal(n->text) : -1;
@@ -288,15 +327,23 @@ static std::string bindingType(Type *type, const Source *source) {
     return "^" + bindingType(type->parts[0], source);
   case Kind::Function: {
     auto parameters = llvm::ArrayRef(type->parts).drop_back();
-    return std::string(type->cAbi ? "extern \"C\" func(" : "func(") + arguments(parameters) + ") " +
+    std::string list;
+    for (unsigned i = 0; i < parameters.size(); ++i) {
+      if (i) list += ", ";
+      if (std::ranges::find(type->moveParameters, i) != type->moveParameters.end()) list += "move ";
+      list += bindingType(parameters[i], source);
+    }
+    return std::string(type->cAbi ? "extern \"C\" func(" : "func(") + list + ") " +
            bindingType(type->parts.back(), source);
   }
   case Kind::Pointer:
     return std::string(type->readOnly ? "*const " : "*") + bindingType(type->parts[0], source);
   case Kind::Reference:
-    return std::string(type->compatible ? "in &const "
-                       : type->readOnly ? "&const "
-                                        : "&") +
+    return std::string(type->parameterMode == ParameterMode::In ? "in "
+                       : type->parameterMode == ParameterMode::Mut ? "mut "
+                       : type->compatible ? "in &const "
+                       : type->readOnly ? "ref "
+                                        : "ref mut ") +
            bindingType(type->parts[0], source);
   case Kind::Slice:
     return std::string(type->readOnly ? "[]const " : "[]") + bindingType(type->parts[0], source);
@@ -767,7 +814,11 @@ ValueAt Body::payload(ValueAt source, unsigned i, Type *t) {
     else
       address = ir.CreateStructGEP(source.type->ir, source.address, i);
     auto origin = source.origin;
-    if (source.type->kind == Kind::Class && t->kind == Kind::Pointer) origin = {};
+    if (source.type->kind == Kind::Class && t->kind == Kind::Pointer)
+      origin = {};
+    else if ((source.type->kind == Kind::Class || source.type->kind == Kind::Tuple) &&
+             !p.hasReference(source.type) && !origin.alternatives && !origin.raw)
+      origin.fields.push_back(i);
     return {t,     nullptr, address, source.writable, source.local, source.borrowed, source.temporaryBorrow,
             origin};
   }
@@ -1497,7 +1548,9 @@ ValueAt Body::loop(const Ast &n) {
   } else
     ir.CreateBr(iteration);
   ir.SetInsertPoint(iteration);
-  loops.push_back({end, next, scopes.size(), {}, {}});
+  if (!n->text.empty() && std::ranges::any_of(loops, [&](const Loop &loop) { return loop.label == n->text; }))
+    fail(n->span, "duplicate active loop label '" + n->text + "'", "E110");
+  loops.push_back({end, next, scopes.size(), {}, {}, n->text});
   enter();
   auto bindIteration = [&](std::size_t index, ValueAt value) {
     if (n->names[index].starts_with('&') && value.type->kind == Kind::Box) {
@@ -1804,7 +1857,10 @@ ValueAt Body::expression(const Ast &n, Type *expected) {
   case NodeKind::Break:
   case NodeKind::Continue: {
     if (loops.empty()) fail(n->span, "loop control used outside a loop");
-    auto &loop = loops.back();
+    auto target = std::ranges::find_if(loops.rbegin(), loops.rend(),
+                                      [&](const Loop &loop) { return n->text.empty() || loop.label == n->text; });
+    if (target == loops.rend()) fail(n->span, "unknown loop label '" + n->text + "'", "E110");
+    auto &loop = *target;
     clean(loop.depth);
     if (n->kind == NodeKind::Break) {
       loop.breaks.push_back(initialized);

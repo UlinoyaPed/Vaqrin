@@ -24,6 +24,7 @@ if "read_packet" not in globals():
 KEYWORDS = """package import as pub var const comptime func class interface enum error type public
 private static operator embed self extern export unsafe return break continue if else switch
 select for in move new catch true false null ref""".split()
+CONTEXTUAL_KEYWORDS = ("from", "let", "mut", "raw", "while")
 TYPES = """bool char str string void never ErrorId Self isize usize c_int c_char
 i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f16 f32 f64""".split()
 IDENT = r"[^\W\d]\w*"
@@ -149,6 +150,10 @@ def parameter_bindings(code):
             modifier = "comptime " if pending[0][2] else ""
             yield from ((position, name, modifier, type_name) for position, name, _ in pending)
             pending.clear()
+
+
+def unqualified_type(type_name):
+    return re.sub(r"^(?:(?:[!?*&^]\s*|(?:ref|const|in|mut|move)\s+))+", "", type_name).strip()
 
 
 def call_tokens(code, start=0):
@@ -305,7 +310,8 @@ class SourceIndex:
             if kind == "func" and self.code[bracket:bracket + 1] == "(":
                 head = " ".join(self.text[line + modifiers.start(1):bracket].split())
                 signature = f"{head}({', '.join(labels)})" + (f" {result}" if result else "")
-            symbol = Symbol(self.file, name, kind, start, match.end(), signature, owner=owner, type=result,
+            result_type = re.sub(rf"\s+from\s+{IDENT}$", "", result)
+            symbol = Symbol(self.file, name, kind, start, match.end(), signature, owner=owner, type=result_type,
                             public=public, type_parameters=type_parameters,
                             declaration_only=kind == "func" and finish not in self.scopes,
                             parameters=labels)
@@ -325,12 +331,13 @@ class SourceIndex:
                                                (finish, self.scopes[finish]), type=type_name))
 
     def parse_bindings(self):
-        pattern = re.compile(rf"(?m)(?:\b(var|const)\s+&?({IDENT})(?:\s*:\s*([^=;\n{{]+))?\s*(=|;)|(?<!\w)&?({IDENT})\s*:=)")
+        pattern = re.compile(
+            rf"(?m)(?:\b(var|const)\s+&?({IDENT})(?:\s*:\s*([^=;\n{{]+))?\s*(=|;)"
+            rf"|(?<!\w)&?({IDENT})\s*:=|(?:^|(?<=[;{{}}]))[ \t]*ref[ \t]+(?:mut[ \t]+)?({IDENT})\s*=(?!=))"
+        )
         for match in pattern.finditer(self.code):
-            if match[5]:
-                name, index = match[5], match.start(5)
-            else:
-                name, index = match[2], match.start(2)
+            binding = 6 if match[6] else 5 if match[5] else 2
+            name, index = match[binding], match.start(binding)
             scope = self.scope(index)
             declared = (match[3] or "").strip()
             initializer = self.initializer(match.end()) if match[4] != ";" else ""
@@ -643,7 +650,7 @@ class Server:
         if not candidates:
             return []
         source = candidates[0]
-        receiver = self.type_of(model, source, seen).lstrip("!?*& ").removeprefix("const ").strip()
+        receiver = unqualified_type(self.type_of(model, source, seen))
         if generic and source.kind in DECLARED_TYPES:
             receiver = head.rstrip() + "<" + arguments
         name = receiver.split("<", 1)[0]
@@ -744,7 +751,7 @@ class Server:
                         "range": {"start": offset_position(model.text, token.start()),
                                   "end": offset_position(model.text, token.end())}}
             if mode == "typeDefinition":
-                inferred = self.type_of(model, targets[0]).lstrip("!?*& ").removeprefix("const ").split("<", 1)[0]
+                inferred = unqualified_type(self.type_of(model, targets[0])).split("<", 1)[0]
                 if not inferred or inferred in TYPES:
                     return None
                 package, _, name = inferred.rpartition(".")
@@ -962,7 +969,7 @@ class Server:
         if qualifier:
             candidates = self.members(model, offset, qualifier[1])
         else:
-            entries.update({name: 14 for name in KEYWORDS})
+            entries.update({name: 14 for name in (*KEYWORDS, *CONTEXTUAL_KEYWORDS)})
             entries.update({name: 7 for name in TYPES})
             entries.update({alias: 9 for _, _, alias in import_items(model)})
             candidates = self.local_symbols(model, offset)

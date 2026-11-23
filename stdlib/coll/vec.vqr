@@ -377,14 +377,12 @@ public:
     func getMutPtr(index: usize) ?*T {
         if index < length { some(&asSlice()[index]) } else { null }
     }
-    #return_borrow: self
-    const func get(index: usize) ?&const T {
+    const func get(index: usize) ?ref T from self {
         if index >= length { return null; }
         unsafe { __vqr_borrow_from_self(getPtr(index).unwrap()) }
     }
 
-    #return_borrow: self
-    func getMut(index: usize) ?&T {
+    func getMut(index: usize) ?ref mut T from self {
         if index >= length { return null; }
         unsafe { __vqr_borrow_from_self(getMutPtr(index).unwrap()) }
     }

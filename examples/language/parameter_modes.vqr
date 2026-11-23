@@ -1,0 +1,39 @@
+import (io)
+
+func doubled(n: i32) i32 {
+    n * 2
+}
+
+func read(n: in i32) i32 {
+    n
+}
+
+func increment(n: mut i32) void {
+    n++;
+}
+
+func take(box: move ^i32) i32 {
+    box.intoInner()
+}
+
+func first(a: in i32, b: in i32) ref i32 from a {
+    a
+}
+
+func main() !void {
+    var score = 10;
+    io.println(doubled(score))!;
+
+    {
+        ref mut view = score;
+        increment(view);
+        io.println(read(view))!;
+    }
+
+    var box = new i32(20)!;
+    increment(*box);
+    io.println(take(move(box)))!;
+
+    var choice = first(score, 0);
+    io.println(read(choice))!;
+}

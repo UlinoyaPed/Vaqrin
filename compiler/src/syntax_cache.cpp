@@ -119,7 +119,8 @@ template <bool Reading> class Archive {
     kind(value.kind, DeclKind::Conditional);
     fields(value.span, value.nameSpan, value.name, value.type, value.body, value.params, value.generics,
            value.attributes, value.members, value.otherwise, value.initializers, value.visible, value.external,
-           value.exported, value.readOnly, value.comptime, value.unsafe, value.associated, value.embed);
+           value.exported, value.readOnly, value.comptime, value.unsafe, value.associated, value.embed,
+           value.borrowSource);
     --depth;
   }
 
@@ -252,7 +253,7 @@ SyntaxCache::SyntaxCache(const std::filesystem::path &executable) {
     directory.clear();
     return;
   }
-  compilerKey = "v3\n" + *identity;
+  compilerKey = "v5\n" + *identity;
 }
 
 std::filesystem::path SyntaxCache::entry(const Source &source) const {

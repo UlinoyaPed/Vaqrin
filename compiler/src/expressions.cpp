@@ -51,11 +51,12 @@ Type *Body::hint(const Ast &n) {
                                                                                             : nullptr;
     if (n->text == "post!") return t->kind == Kind::Result ? t->parts[0] : nullptr;
     if (n->text == "post?") return t->kind == Kind::Optional ? t->parts[0] : nullptr;
-    if (n->text == "&" && n->children[0]->kind == NodeKind::Name) {
+    if (n->text == "ref" || n->text == "ref mut") return p.reference(t, n->text == "ref");
+    if ((n->text == "&" || n->text == "raw") && n->children[0]->kind == NodeKind::Name) {
       int i = findLocal(n->children[0]->text);
       if (i >= 0) return p.pointer(t, !locals[i].writable);
     }
-    return n->text == "&" ? nullptr : t;
+    return n->text == "&" || n->text == "raw" ? nullptr : t;
   }
   case NodeKind::Compare:
     return p.boolTy;
@@ -510,9 +511,23 @@ ValueAt Body::index(const Ast &n) {
 
 ValueAt Body::unary(const Ast &n, Type *expected) {
   const auto &op = n->text;
+  if (op == "ref" || op == "ref mut") {
+    struct Guard {
+      unsigned &depth;
+      ~Guard() { --depth; }
+    } guard{explicitBorrowDepth};
+    ++explicitBorrowDepth;
+    auto place = expression(n->children[0]);
+    if (!live()) return place;
+    if (!place.address) fail(n->span, "ref requires an existing storage location", "E230");
+    return borrow(place, p.reference(place.type, op == "ref"), n->span, false);
+  }
   auto v = expression(n->children[0], op == "!" ? p.boolTy : nullptr);
   if (v.type == p.neverTy) return v;
-  if (op == "&") {
+  if (op == "&" || op == "raw") {
+    auto *reference = op == "raw" ? referenceHint(n->children[0]) : nullptr;
+    if (reference && reference->kind == Kind::Reference)
+      fail(n->span, "use toRaw() to convert a safe reference", "E230");
     if (!v.address) fail(n->span, "address-of requires an existing storage location");
     return asPointer(v, n->span);
   }
@@ -1100,15 +1115,19 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
         for (std::size_t i = 0; i < pattern->children.size(); ++i)
           recurse(recurse, pattern->children[i], actual->parts[i]);
         recurse(recurse, pattern->type, actual->parts.back());
-      } else if (pattern->kind == NodeKind::TypePrefix && !actual->parts.empty()) {
+      } else if (pattern->kind == NodeKind::TypePrefix) {
         const auto &op = pattern->text;
-        if (op == "in &const")
+        if (parameterMode(pattern) == ParameterMode::Move)
+          recurse(recurse, pattern->children[0], actual);
+        else if (op == "in &const" || parameterMode(pattern) == ParameterMode::In ||
+                 parameterMode(pattern) == ParameterMode::Mut)
           recurse(recurse, pattern->children[0], actual->kind == Kind::Reference ? actual->parts[0] : actual);
-        else if (((op == "*" || op == "*const") && actual->kind == Kind::Pointer) ||
-                 ((op == "&" || op == "&const") && actual->kind == Kind::Reference) ||
+        else if (!actual->parts.empty() && (((op == "*" || op == "*const") && actual->kind == Kind::Pointer) ||
+                 ((op == "&" || op == "&const" || op == "ref" || op == "ref mut") &&
+                  actual->kind == Kind::Reference) ||
                  ((op == "[]" || op == "[]const") && actual->kind == Kind::Slice) ||
                  (op == "?" && actual->kind == Kind::Optional) ||
-                 (op == "!" && actual->kind == Kind::Result) || (op == "^" && actual->kind == Kind::Box))
+                 (op == "!" && actual->kind == Kind::Result) || (op == "^" && actual->kind == Kind::Box)))
           recurse(recurse, pattern->children[0], actual->parts[0]);
       }
     };
@@ -1130,7 +1149,7 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
       }
       for (const auto &[parameter, t] : untyped)
         if ((parameter->kind == NodeKind::TypeName && !subst.contains(parameter->text)) ||
-            parameter->text == "in &const")
+            parameter->text == "in &const" || parameterMode(parameter) != ParameterMode::Value)
           infer(infer, parameter, t);
     }
     if (!consistent) continue;
@@ -1181,7 +1200,16 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
       auto *t = c.parameters[offset + i];
       auto a = n->children[i + 1];
       auto *from = t->kind == Kind::Reference ? referenceHint(a) : hint(a);
-      if (!from && a->kind == NodeKind::Unary && a->text == "&") {
+      if (t->parameterMode != ParameterMode::Value) {
+        if (!from || from == t->parts[0] ||
+            (from->kind == Kind::Reference && from->parts == t->parts && (t->readOnly || !from->readOnly))) {
+          c.ranks.push_back(from == t->parts[0] ? 1 : 2);
+          continue;
+        }
+        valid = false;
+        break;
+      }
+      if (!from && a->kind == NodeKind::Unary && (a->text == "&" || a->text == "raw")) {
         // Address-of always produces a pointer, even when the pointee type
         // cannot be inferred before selecting the overload.
         auto *target = t;
@@ -1359,7 +1387,7 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
   for (unsigned i = 1; i < n->children.size(); ++i) {
     if (d.params[i - 1].comptime) continue;
     auto *t = best->parameters[i - 1 + offset];
-    auto value = argument(n->children[i], t);
+    auto value = argument(n->children[i], t, parameterMode(d.params[i - 1].type) == ParameterMode::Move);
     temporaryBorrow |= value.temporaryBorrow;
     if (!live()) {
       leave();
@@ -1522,6 +1550,7 @@ ValueAt Body::lambda(const Ast &n, Type *expected) {
     fail(n->span, "lambda signature does not match its context");
   bool hasCaptures = !n->children.empty();
   std::vector<Type *> signature;
+  std::vector<unsigned> moveParameters;
   auto *result = n->type ? parseType(n->type) : expected ? expected->parts.back() : nullptr;
   std::vector<llvm::Type *> irArgs;
   if (hasCaptures) irArgs.push_back(PointerType::getUnqual(p.context));
@@ -1531,8 +1560,14 @@ ValueAt Body::lambda(const Ast &n, Type *expected) {
     if (!t) fail(param.span, "lambda parameter requires a type or a function type context");
     p.ensureSized(t, param.span);
     signature.push_back(t);
+    if (parameterMode(param.type) == ParameterMode::Move ||
+        (!param.type && expected && std::ranges::find(expected->moveParameters, i) != expected->moveParameters.end()))
+      moveParameters.push_back(i);
+    if (expected && t != expected->parts[i]) fail(param.span, "lambda parameter does not match its context", "E201");
     irArgs.push_back(p.storage(t));
   }
+  if (expected && expected->moveParameters != moveParameters)
+    fail(n->span, "lambda ownership parameter mode does not match its context", "E201");
   auto name = "vqr.lambda." + std::to_string(p.lambdaCount++);
   Type *t = nullptr;
   std::vector<Capture> captures;
@@ -1621,9 +1656,10 @@ ValueAt Body::lambda(const Ast &n, Type *expected) {
   }
   if (body.live()) body.emitReturn(returned, n->span);
   signature.push_back(result);
-  if (!hasCaptures) return {p.aggregate(Kind::Function, signature, source), function};
+  if (!hasCaptures) return {p.aggregate(Kind::Function, signature, source, false, std::move(moveParameters)), function};
   t->count = source;
   t->callable = signature;
+  t->moveParameters = std::move(moveParameters);
   t->callEntry = function;
   Value *environment = Constant::getNullValue(t->ir);
   enter();
@@ -1942,6 +1978,14 @@ ValueAt Body::call(const Ast &n, Type *expected) {
       leave();
       return {t, value, nullptr, false, -1, false, false, origin, t->scopedBorrow && origin.root < 0};
     }
+    if (callee->text == "toRaw" && callee->names.empty() && n->children.size() == 1) {
+      auto *reference = referenceHint(base);
+      if (reference && reference->kind == Kind::Reference) {
+        auto borrowed = expression(base, reference);
+        if (!live()) return neverValue();
+        return asPointer(dereference(borrowed, n->span), n->span);
+      }
+    }
     auto v = expression(base);
     if (!live()) return neverValue();
     auto member = callee->text;
@@ -1960,6 +2004,23 @@ ValueAt Body::call(const Ast &n, Type *expected) {
       v = payload(v, 1, v.type->parts[0]);
     }
     auto invokeMember = [&]() -> ValueAt {
+      if (v.type->kind == Kind::Box && member == "intoInner" && n->children.size() == 1) {
+        auto *inner = v.type->parts[0];
+        if (!p.movable(inner)) fail(n->span, "Box.intoInner requires a movable payload", "E230");
+        if (v.borrowed && (v.local < 0 || locals[v.local].refCapture || !v.writable ||
+                           locals[v.local].slot != v.address || locals[v.local].type != v.type))
+          fail(n->span, "Box.intoInner requires a complete owning Box", "E230");
+        checkAccess(v, true, n->span);
+        auto *box = read(v, n->span, false);
+        auto *address = ir.CreateExtractValue(box, 0);
+        auto *value = inner == p.voidTy ? nullptr : ir.CreateLoad(p.storage(inner), address);
+        if (v.borrowed) {
+          invalidateOwnedAddresses(v);
+          setAlive(v.local, false);
+        }
+        releaseBox(address, ir.CreateExtractValue(box, 1));
+        return value ? ValueAt{inner, value} : voidValue();
+      }
       if (v.type->kind == Kind::Box && member == "asPtr" && n->children.size() == 1) {
         if (!v.borrowed) fail(n->span, "bind the Box before taking a pointer to its contents", "E290");
         return asPointer(dereference(v, n->span), n->span);
@@ -2063,7 +2124,8 @@ ValueAt Body::call(const Ast &n, Type *expected) {
   bool returnTemporary = false;
   bool temporaryBorrow = target.temporaryBorrow;
   for (std::size_t i = 0; i + 1 < parts.size(); ++i) {
-    auto v = argument(n->children[i + 1], parts[i]);
+    bool moves = std::ranges::find(target.type->moveParameters, i) != target.type->moveParameters.end();
+    auto v = argument(n->children[i + 1], parts[i], moves);
     if (!live()) {
       leave();
       return neverValue();

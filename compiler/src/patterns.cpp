@@ -9,7 +9,8 @@ struct Constructor {
 
 bool wildcard(const Ast &p) {
   return !p || p->kind == NodeKind::PatternAny || p->kind == NodeKind::PatternName ||
-         p->kind == NodeKind::PatternRef || p->kind == NodeKind::PatternIndirect;
+         p->kind == NodeKind::PatternRef || p->kind == NodeKind::PatternMutRef ||
+         p->kind == NodeKind::PatternIndirect;
 }
 
 std::string patternKey(const Ast &p) {
@@ -132,8 +133,8 @@ void Body::assertCondition(Value *test, BasicBlock *failure) {
 void Body::checkPattern(const Ast &pat, ValueAt subject, BasicBlock *failure,
                         std::vector<std::pair<Ast, ValueAt>> &bindings) {
   if (pat->kind == NodeKind::PatternAny) return;
-  if (pat->kind == NodeKind::PatternName || pat->kind == NodeKind::PatternRef ||
-      pat->kind == NodeKind::PatternIndirect) {
+  const bool borrowsSlot = pat->kind == NodeKind::PatternRef || pat->kind == NodeKind::PatternMutRef;
+  if (pat->kind == NodeKind::PatternName || borrowsSlot || pat->kind == NodeKind::PatternIndirect) {
     if (std::ranges::any_of(bindings, [&](auto &b) { return b.first->text == pat->text; }))
       fail(pat->span, "duplicate pattern binding");
     if (pat->kind != NodeKind::PatternName) {
@@ -142,11 +143,13 @@ void Body::checkPattern(const Ast &pat, ValueAt subject, BasicBlock *failure,
       } else if (p.hasReference(subject.type)) {
         fail(pat->span, "use '&' to borrow through a reference payload", "E230");
       }
-      auto *reference = p.reference(subject.type, !subject.writable);
+      if (pat->kind == NodeKind::PatternMutRef && !subject.writable)
+        fail(pat->span, "ref mut pattern requires writable storage", "E230");
+      auto *reference = p.reference(subject.type, !subject.writable || pat->kind == NodeKind::PatternRef);
       auto origin = subject.origin;
-      if (pat->kind == NodeKind::PatternRef && subject.local >= 0 &&
+      if (borrowsSlot && subject.local >= 0 &&
           (origin.root < 0 || (origin.raw && !locals[subject.local].reference))) {
-        if (subject.writable && origin.raw) locals[subject.local].origin = {};
+        if (!reference->readOnly && origin.raw) locals[subject.local].origin = {};
         origin = {subject.local, -1};
       }
       origin.raw = false;
@@ -285,15 +288,23 @@ ValueAt Body::match(const Ast &n, Type *expected) {
     ir.SetInsertPoint(entry);
     merge({initial}, initial.size());
     enter();
+    int armOwner = -1;
     if (ownerType) {
       auto *owner = ir.CreateInsertValue(Constant::getNullValue(ownerType->ir), subject.address, 0);
       owner = ir.CreateInsertValue(owner, ir.CreateLoad(ir.getInt32Ty(), selection), 1);
-      bind(" <match remainder>", ownerType, true, owner, arm->span);
+      armOwner = bind(" <match remainder>", ownerType, true, owner, arm->span);
     }
     for (unsigned j = 0; j < signature.size(); ++j) {
       auto &[key, t, mode, borrowed] = signature[j];
       auto id = bind(key, t, true, ir.CreateLoad(p.storage(t), slots[j]), arm->span);
       locals[id].declaration = declarations[j];
+      if (!subject.borrowed && (mode == NodeKind::PatternRef || mode == NodeKind::PatternMutRef)) {
+        if (armOwner < 0)
+          armOwner = bind(" <match storage>", p.voidTy, false, voidValue().value, arm->span);
+        borrowed.root = armOwner;
+        borrowed.via = -1;
+        borrowed.alternatives.reset();
+      }
       if (t->kind == Kind::Reference || p.hasReference(t))
         recordBorrow(id, {t, nullptr, nullptr, false, -1, false, false, borrowed}, arm->span);
     }

@@ -37,6 +37,7 @@ class StandardLibraryAcceptance(CompilerCase):
             ("language/interfaces.vqr", None, "21\n16\n10\n"),
             ("language/ownership.vqr", None, "42\nCounter released\n"),
             ("language/optional.vqr", None, "42\n0\n-1\n"),
+            ("language/parameter_modes.vqr", None, "20\n11\n21\n11\n"),
             ("stdlib/stdin.vqr", b"1 -2 43\n", "42\n"),
             ("stdlib/files.vqr", None, "first line\nsecond line\n"),
             ("stdlib/data_formats.vqr", None, "Ada\n8080\n2\n"),

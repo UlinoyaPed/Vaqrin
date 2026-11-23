@@ -29,3 +29,13 @@
 
 ((source_file [(bracket "(") (delimiter ",")] . (identifier) @keyword . (identifier) . [(bracket ")") (delimiter ",")])
  (#eq? @keyword "ref"))
+
+((source_file (keyword "if") . (identifier) @keyword)
+ (#eq? @keyword "let"))
+((source_file (delimiter ":") . (identifier) @keyword . (identifier))
+ (#match? @keyword "^(ref|mut)$"))
+((source_file (identifier) @keyword . (identifier))
+ (#match? @keyword "^(ref|raw|from|while)$"))
+((source_file (identifier) @_ref . (identifier) @keyword)
+ (#eq? @_ref "ref")
+ (#eq? @keyword "mut"))

@@ -88,6 +88,8 @@ struct Request {
   bool editorSymbols = false;
   bool workspaceSymbols = false;
   bool syntaxOnly = false;
+  bool run = false;
+  std::vector<std::string> programArguments;
   std::string cDriver, archiver;
 };
 
@@ -95,6 +97,7 @@ void help() {
   std::cout << "Vaqrin native compiler\n"
                "Usage: vaqc [build|check] [options] source.vqr [source.vqr ...]\n"
                "       vaqc build [options] package-directory\n"
+               "       vaqc run [options] file.vqr [-- PROGRAM-ARGUMENTS...]\n"
                "       vaqc lock package-directory\n"
                "       vaqc fmt [--check | --write] FILE... | vaqc fmt -\n"
                "  --emit=exe|obj|llvm-ir|bc|asm|staticlib|sharedlib|ast\n"
@@ -128,9 +131,14 @@ Request arguments(int argc, char **argv) {
   Request r;
   for (int i = 1; i < argc; ++i) {
     std::string_view a = argv[i];
-    if (i == 1 && (a == "build" || a == "check")) {
+    if (i == 1 && (a == "build" || a == "check" || a == "run")) {
       r.options.check = a == "check";
+      r.run = a == "run";
       continue;
+    }
+    if (r.run && a == "--") {
+      r.programArguments.assign(argv + i + 1, argv + argc);
+      break;
     }
     if (a == "--timings") { r.timings = true; continue; }
     if (a == "--syntax-only") { r.syntaxOnly = true; continue; }
@@ -197,6 +205,10 @@ Request arguments(int argc, char **argv) {
       fail({}, "unknown option '" + std::string(a) + "'", "E300");
   }
   if (r.inputs.empty()) fail({}, "no input files; see vaqc --help", "E300");
+  if (r.run && (r.inputs.size() != 1 || !fs::is_regular_file(r.inputs.front()) ||
+                r.inputs.front().extension() != ".vqr" || r.options.check || r.options.profile != "hosted" ||
+                r.options.emit != "exe" || !r.options.triple.empty() || !r.output.empty() || !r.entry.empty()))
+    fail({}, "run requires one .vqr source and builds a temporary host executable", "E300");
   const auto stdinInputs = std::ranges::count(r.inputs, fs::path("-"));
   if (stdinInputs && (!r.syntaxOnly || stdinInputs != 1 || !r.overlay.empty()))
     fail({}, "'-' requires --syntax-only and may be specified once without --overlay", "E300");
@@ -574,6 +586,16 @@ struct Stage {
     fs::remove_all(path, error);
   }
 };
+
+int runProgram(const fs::path &program, const std::vector<std::string> &arguments) {
+  const auto executable = program.string();
+  std::vector<llvm::StringRef> args{executable};
+  args.insert(args.end(), arguments.begin(), arguments.end());
+  std::string error;
+  const auto status = llvm::sys::ExecuteAndWait(executable, args, std::nullopt, {}, 0, 0, &error);
+  if (status < 0) fail({}, "program terminated: " + error, "E302");
+  return status;
+}
 
 std::vector<std::string> targetFlags(const Request &r, const llvm::Triple &target, const std::string &driver) {
   std::vector<std::string> args;
@@ -956,6 +978,14 @@ int main(int argc, char **argv) {
                   << std::chrono::duration<double, std::milli>(compileTimings.durations[i]).count() << " ms\n";
     }
     const auto dependencies = dependencyDestination(request, *inputs, machine->getTargetTriple());
+    Stage execution;
+    if (request.run) {
+      llvm::SmallString<256> directory;
+      if (auto error = llvm::sys::fs::createUniqueDirectory((fs::temp_directory_path() / "vaqc-run").string(), directory))
+        fail({}, "cannot create program directory: " + error.message(), "E302");
+      execution.path = directory.str().str();
+      request.output = execution.path / (machine->getTargetTriple().isOSWindows() ? "program.exe" : "program");
+    }
     if (!request.options.check) {
       optimizeBuild(module, *machine, request, executable, cachedContext);
       stage("optimize");
@@ -963,6 +993,7 @@ int main(int argc, char **argv) {
       stage("emit and link");
     }
     if (!dependencies.empty()) writeDependencies(dependencies, *inputs);
+    if (request.run) return runProgram(request.output, request.programArguments);
     if (request.editorHints) printEditorHints(hints);
     if (request.editorSymbols || request.workspaceSymbols) printEditorSymbols(hints);
     return 0;

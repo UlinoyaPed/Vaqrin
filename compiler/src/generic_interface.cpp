@@ -71,7 +71,7 @@ struct GenericSignature {
 
   int borrowRoot() const {
     const auto &decl = *definition.decl;
-    auto name = program.attribute(decl, "return_borrow");
+    auto name = decl.borrowSource.empty() ? program.attribute(decl, "return_borrow") : decl.borrowSource;
     if (name.empty()) return -2;
     if (name == "self") return -1;
     for (unsigned i = 0; i < decl.params.size(); ++i)

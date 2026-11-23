@@ -44,6 +44,7 @@ enum class NodeKind {
   ForIn,
   PatternName,
   PatternRef,
+  PatternMutRef,
   PatternIndirect,
   PatternCase,
   PatternTuple,
@@ -58,6 +59,8 @@ enum class NodeKind {
 
 struct Node;
 using Ast = std::shared_ptr<Node>;
+enum class ParameterMode { Value, In, Mut, Move };
+inline ParameterMode parameterMode(const Ast &syntax);
 struct Parameter {
   std::string name;
   Span span;
@@ -75,6 +78,14 @@ struct Node {
   Ast tail;
   std::vector<Span> bindingSpans;
 };
+
+inline ParameterMode parameterMode(const Ast &syntax) {
+  if (!syntax || syntax->kind != NodeKind::TypePrefix) return ParameterMode::Value;
+  if (syntax->text == "in") return ParameterMode::In;
+  if (syntax->text == "mut") return ParameterMode::Mut;
+  if (syntax->text == "move") return ParameterMode::Move;
+  return ParameterMode::Value;
+}
 
 struct Attribute {
   std::string name;
@@ -102,6 +113,7 @@ struct Decl {
   bool unsafe = false;
   bool associated = false;
   bool embed = false;
+  std::string borrowSource;
 };
 
 struct Import {

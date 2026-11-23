@@ -275,7 +275,7 @@ private:
   ValueAt unary(const Ast &n, Type *expected);
   ValueAt binary(const Ast &n, Type *expected);
   ValueAt compareText(const Ast &node, ValueAt left);
-  ValueAt operate(std::string_view op, ValueAt left, ValueAt right, Span span, bool retainWidth = false);
+  ValueAt operate(std::string_view op, ValueAt left, ValueAt right, Span span);
   ValueAt chain(const Ast &n);
   ValueAt conditional(const Ast &n, Type *expected);
   ValueAt fallback(const Ast &n, Type *expected);

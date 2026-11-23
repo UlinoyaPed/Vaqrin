@@ -168,7 +168,7 @@ pub class VecDeque<T: Movable> {
     func ensureRoomForOne() !void {
         if length < capacity() { return; }
         if length == ~usize(0) { return CapacityError.Overflow; }
-        reserve(if (capacity() < 4) usize(4) else capacity() +| capacity())
+        reserve(nextSequenceCapacity(capacity()))
     }
 
     pub func pushBack(value: T) !void {

@@ -506,6 +506,27 @@ class StandardLibraryAcceptance(CompilerCase):
         ''')
         self.assertEqual(self.run_program(program), "true\ntrue\n")
 
+    def test_rng_and_siphash_preserve_fixed_width_bit_patterns(self):
+        seed = ", ".join(map(str, range(32)))
+        data = "x" * 300
+        self.hosted('''
+            import (hash, random)
+            func main() !void {
+                var pcg = random.Pcg64.seed(42u64);
+                var xoshiro = random.Xoshiro256.fromSeed([32]u8{SEED})!;
+                for i in 0..3 {
+                    io.println(pcg.nextU64())!;
+                    io.println(xoshiro.nextU64())!;
+                }
+                var hasher = hash.SipHasher(hash.HashSeed{low: 1, high: 2});
+                hasher.write("DATA".asBytes());
+                io.println(hasher.finish64())!;
+            }
+        '''.replace("SEED", seed).replace("DATA", data),
+                    "6261763436413913661\n13557399450712487245\n5707447046872229490\n"
+                    "2706373525000986293\n7522330712029359324\n88962455226424365\n"
+                    "12910671513412005119\n")
+
     def test_float_parsing_and_scanning(self):
         self.hosted(r"""
             import (bufio, convert, parse)

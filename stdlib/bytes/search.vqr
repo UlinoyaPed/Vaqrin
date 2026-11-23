@@ -15,7 +15,7 @@ pub func compare(a: []const u8, b: []const u8) cmp.Ordering { mem.compareBytes(a
 
 pub func compareConstantTime(a: []const u8, b: []const u8) bool {
     if a.len() != b.len() { return false; }
-    var mask: i32 = 0;
+    var mask: u8 = 0;
     unsafe {
         for i in usize(0)..a.len() {
             mask |= volatileLoad(&a[i]) ^ volatileLoad(&b[i]);

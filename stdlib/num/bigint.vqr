@@ -498,7 +498,7 @@ pub class BigInt {
     pub const func divMod(other: *const Self) !(Self, Self) {
         if other.sign == 0 { return NumError.DivisionByZero; }
         quotient, remainder := magnitude.divMod(&other.magnitude)!;
-        var quotientSign = if quotient.isZero() { i8(0) } else { i8(sign * other.sign)! };
+        var quotientSign = if quotient.isZero() { i8(0) } else { sign * other.sign };
         var remainderSign = if remainder.isZero() { i8(0) } else { sign };
         (BigInt(quotientSign, move(quotient)), BigInt(remainderSign, move(remainder)))
     }
@@ -558,10 +558,10 @@ pub class BigInt {
 
     pub func negate() !Self { negated() }
 
-    pub func negateInPlace() void { sign = i8(-sign) catch { panic("invalid BigInt sign"); }; }
+    pub func negateInPlace() void { sign = -sign; }
 
     pub const func negated() !Self {
-        BigInt(i8(-sign)!, magnitude.clone()!)
+        BigInt(-sign, magnitude.clone()!)
     }
 
     pub func toText(radix: u8) !string {

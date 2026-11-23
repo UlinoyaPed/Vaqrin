@@ -873,8 +873,8 @@ func appendQuoted(builder: *text.StringBuilder, value: str) !void {
             _ => {
                 var digits = "0123456789abcdef".asBytes();
                 appendRaw(builder, "\\u00")!;
-                appendByte(builder, digits[usize(byte >> 4)!])!;
-                appendByte(builder, digits[usize(byte & 15)!])!;
+                appendByte(builder, digits[usize(byte >> 4)])!;
+                appendByte(builder, digits[usize(byte & 15)])!;
             },
         }
         start = index + 1;

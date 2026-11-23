@@ -39,7 +39,7 @@ pub func hexDecode(value: str) !coll.Vec<u8> {
     for i := usize(0); i < src.len(); i += 2 {
         var high = hexDigit(src[i])!;
         var low = hexDigit(src[i + 1])!;
-        out.push(u8((high << 4) | low)!)!;
+        out.push((high << 4) | low)!;
     }
     move(out)
 }
@@ -72,7 +72,7 @@ pub func percentDecode(value: str) !coll.Vec<u8> {
             if data.len() - i < 3 { return EncodingError.InvalidLength; }
             var high = hexDigit(data[i + 1])!;
             var low = hexDigit(data[i + 2])!;
-            result.push(u8((high << 4) | low)!)!;
+            result.push((high << 4) | low)!;
             i += 2;
         }
     }

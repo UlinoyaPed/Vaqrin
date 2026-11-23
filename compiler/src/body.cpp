@@ -1352,7 +1352,7 @@ void Body::statementContents(const Ast &n, std::size_t bindingScope) {
         rhs = {l.type, ConstantInt::get(l.type->ir, 1)};
       } else
         rhs = expression(n->children[1], shift ? nullptr : l.type);
-      value = operate(bin, {l.type, old}, rhs, n->span, true);
+      value = operate(bin, {l.type, old}, rhs, n->span);
     }
     if (value.type == p.neverTy) return;
     rejectTemporaryBorrow(value, n->span);

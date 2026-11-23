@@ -69,17 +69,12 @@ Type *Body::hint(const Ast &n) {
       return left && left->kind == (operation == "catch" ? Kind::Result : Kind::Optional)
                  ? left->parts[0] : nullptr;
     if (operation == ".." || operation == "..=") return nullptr;
+    if (operation.starts_with("<<") || operation == ">>")
+      return left && left->kind == Kind::Int ? left : nullptr;
     auto *right = hint(n->children[1]);
-    bool fixedWidth = operation == "+%" || operation == "-%" || operation == "*%" ||
-                      operation == "<<%" || operation == "+|" || operation == "-|" ||
-                      operation == "*|" || operation == "<<|";
     auto arithmetic = [&](Type *type, const Ast &other) -> Type * {
       if (!type) return nullptr;
-      if (type->kind == Kind::Int && mathInteger(other)) {
-        if (type->bits < 32 && !fixedWidth)
-          return p.integer(32, true);
-        return type;
-      }
+      if (type->kind == Kind::Int && mathInteger(other)) return type;
       if (type->kind == Kind::Float && other->kind == NodeKind::Number &&
           parseNumber(other->text).floating)
         return type;
@@ -87,13 +82,7 @@ Type *Body::hint(const Ast &n) {
     };
     if (!left || !right) return left ? arithmetic(left, n->children[1]) : arithmetic(right, n->children[0]);
     if (left == right && left->kind == Kind::Float) return left;
-    if (left->kind == Kind::Int && right->kind == Kind::Int) {
-      if (!fixedWidth) {
-        if (left->bits < 32) left = p.integer(32, true);
-        if (right->bits < 32) right = p.integer(32, true);
-      }
-      if (left == right || operation.starts_with("<<") || operation == ">>") return left;
-    }
+    if (left == right && left->kind == Kind::Int) return left;
     return nullptr;
   }
   case NodeKind::Index:
@@ -577,14 +566,13 @@ ValueAt Body::unary(const Ast &n, Type *expected) {
   if (op == "!") return {p.boolTy, ir.CreateNot(raw)};
   if (v.type->kind == Kind::Float && op == "-") return {v.type, ir.CreateFNeg(raw)};
   if (v.type->kind != Kind::Int) fail(n->span, "integer operand required for '" + op + "'");
-  auto *t = v.type->bits < 32 ? p.integer(32, true) : v.type;
-  if (v.type != t) raw = ir.CreateIntCast(raw, t->ir, v.type->sign);
+  auto *t = v.type;
   if (op == "~") return {t, ir.CreateNot(raw)};
   (void)expected;
   return {t, binaryNumber(ir, "-", ConstantInt::get(t->ir, 0), raw, t->sign, t->sign)};
 }
 
-ValueAt Body::operate(std::string_view op, ValueAt a, ValueAt b, Span span, bool retainWidth) {
+ValueAt Body::operate(std::string_view op, ValueAt a, ValueAt b, Span span) {
   if (a.type == p.neverTy) return a;
   if (b.type == p.neverTy) return b;
   if (a.type == p.boolTy || a.type == p.charTy || a.type == p.errorTy || a.type->kind == Kind::Pointer) {
@@ -606,20 +594,8 @@ ValueAt Body::operate(std::string_view op, ValueAt a, ValueAt b, Span span, bool
                          read(payload(b, 0, p.integer(b.type->bits, b.type->sign)), span), false, false)};
   }
   bool shift = op.starts_with("<<") || op == ">>";
-  bool special = op == "+%" || op == "-%" || op == "*%" || op == "+|" || op == "-|" || op == "*|" ||
-                 op == "<<%" || op == "<<|";
   auto *at = a.type, *bt = b.type;
   auto *av = read(a, span), *bv = read(b, span);
-  if (at->kind == Kind::Int && bt->kind == Kind::Int && !retainWidth && !special) {
-    if (at->bits < 32) {
-      av = ir.CreateIntCast(av, ir.getInt32Ty(), at->sign);
-      at = p.integer(32, true);
-    }
-    if (!shift && bt->bits < 32) {
-      bv = ir.CreateIntCast(bv, ir.getInt32Ty(), bt->sign);
-      bt = p.integer(32, true);
-    }
-  }
   if ((shift && (at->kind != Kind::Int || bt->kind != Kind::Int)) || (!shift && at != bt) ||
       (at->kind != Kind::Int && at->kind != Kind::Float))
     fail(span,
@@ -723,12 +699,6 @@ ValueAt Body::binary(const Ast &n, Type *expected) {
   }
   auto *leftHint = hint(n->children[0]);
   auto *rightHint = hint(n->children[1]);
-  if (leftHint && leftHint->kind == Kind::Int && leftHint->bits < 32 && !op.ends_with('|') && op != "+%" &&
-      op != "-%" && op != "*%" && op != "<<%")
-    leftHint = p.integer(32, true);
-  if (rightHint && rightHint->kind == Kind::Int && rightHint->bits < 32 && !op.ends_with('|') && op != "+%" &&
-      op != "-%" && op != "*%" && op != "<<%")
-    rightHint = p.integer(32, true);
   auto wants = [&](const Ast &a, Type *t) -> Type * {
     if (t && mathInteger(a) && t->kind == Kind::Int) return t;
     if (t && a->kind == NodeKind::Number && parseNumber(a->text).floating &&
@@ -755,10 +725,16 @@ ValueAt Body::binary(const Ast &n, Type *expected) {
 
 ValueAt Body::chain(const Ast &n) {
   auto first = n->children[0];
-  auto *context = hint(n->children[1]);
-  if (context && context->kind == Kind::Int && context->bits < 32) context = p.integer(32, true);
-  auto left =
-      expression(first, mathInteger(first) && context && context->kind == Kind::Int ? context : nullptr);
+  Type *context = nullptr;
+  if (mathInteger(first)) {
+    for (const auto &operand : llvm::ArrayRef(n->children).drop_front()) {
+      if (mathInteger(operand)) continue;
+      auto *type = hint(operand);
+      if (type && type->kind == Kind::Int) context = type;
+      break;
+    }
+  }
+  auto left = expression(first, context);
   if (left.type == p.neverTy) return left;
   left = {left.type, read(left, n->span, false)};
   auto *end = block("compare.end");
@@ -768,7 +744,6 @@ ValueAt Body::chain(const Ast &n) {
   for (std::size_t i = 0; i < n->names.size(); ++i) {
     auto next = n->children[i + 1];
     auto *t = left.type;
-    if (t->kind == Kind::Int && t->bits < 32) t = p.integer(32, true);
     auto right = expression(next, mathInteger(next) && t->kind == Kind::Int ? t : nullptr);
     if (right.type == p.neverTy) break;
     right = {right.type, read(right, n->span, false)};

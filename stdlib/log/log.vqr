@@ -216,9 +216,9 @@ pub class Logger {
 func writeHexByte(writer: *io.Writer, value: u8) !void {
     var digits = "0123456789ABCDEF".asBytes();
     io.writeString(writer, "\\x")!;
-    var high = usize(value >> 4)!;
+    var high = usize(value >> 4);
     io.writeAll(writer, digits[high..high + 1])!;
-    var low = usize(value & 15)!;
+    var low = usize(value & 15);
     io.writeAll(writer, digits[low..low + 1])!;
 }
 

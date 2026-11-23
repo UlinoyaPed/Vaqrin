@@ -6,6 +6,7 @@ pub error NumericError { OutOfRange, InvalidScalar, InvalidBoolean }
 
 pub func narrow<T, U>(value: U) !T { T(value) }
 pub func widen<T, U>(value: U) T { T(value) }
+pub func truncBits<T, U>(value: U) T { __vqr_convert_trunc_bits<T>(value) }
 
 pub func truncToInt<T, F>(value: F) !T { __vqr_convert_trunc<T>(value) }
 pub func floorToInt<T, F>(value: F) !T { __vqr_convert_floor<T>(value) }

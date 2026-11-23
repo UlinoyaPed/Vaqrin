@@ -1,5 +1,5 @@
 package channel
-import (coll, core, opt)
+import (coll, core, num, opt)
 
 class Queue<T: Movable> {
     var slots: coll.Vec<?T>;
@@ -24,7 +24,7 @@ class Queue<T: Movable> {
 
     pub func prepare() !void {
         if used < slots.len() { return; }
-        var size = if used == 0 { usize(4) } else { used *| 2 };
+        var size = if used == 0 { usize(4) } else { num.saturatingMul<usize>(used, usize(2)) };
         var expanded = coll.Vec<?T>.withCapacity(size)!;
         for position in usize(0)..used {
             var item = opt.take<T>(&slots[index(position)]);

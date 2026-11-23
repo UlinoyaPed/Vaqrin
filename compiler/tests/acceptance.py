@@ -603,8 +603,52 @@ class Acceptance(CompilerCase):
                 result = self.process(VAQC, "check", bad, good=False)
                 self.assertIn(diagnostic, result.stderr.decode())
 
+    def test_v020_integer_width_and_overflow(self):
+        for level in ("-O0", "-O2"):
+            with self.subTest(level=level):
+                self.hosted('''
+                    import (convert)
+                    func add(a: u8, b: u8) u8 { a + b }
+                    func run(a: i8, b: u8) !void {
+                        var total: u8 = add(b, 4);
+                        var inverted: u8 = ~b;
+                        var signed: i8 = -a;
+                        var wrap: u8 = b +% 250;
+                        var shifted: u8 = b << 1;
+                        var count: u8 = 8;
+                        var inferred: i32 = (1 << count) + 1;
+                        io.println(0 < 2 < total)!;
+                        io.println(total)!;
+                        io.println(inverted)!;
+                        io.println(signed)!;
+                        io.println(wrap)!;
+                        io.println(shifted)!;
+                        io.println(inferred)!;
+                        io.println(convert.truncBits<i8, u16>(u16(511)))!;
+                        io.println(convert.narrow<u8, u16>(u16(256)) catch u8(7))!;
+                    }
+                    func main() !void { run(-2, 8)!; }
+                ''', "true\n12\n247\n2\n2\n16\n257\n-1\n7\n", level)
+                for body in ("n += 1; n", "n + 1", "n << 1", "u8(0) - n"):
+                    with self.subTest(body=body):
+                        source = self.source("overflow.vqr", f"""
+                            func operation(n: u8) u8 {{ {body} }}
+                            func main() i32 {{ i32(operation(255)) }}
+                        """)
+                        self.process(VAQC, level, source, "-o", "overflow")
+                        result = self.process("./overflow", good=False)
+                        self.assertLess(result.returncode, 0)
+        mixed = self.source("mixed.vqr", "func add(a: u8, b: i16) i16 { a + b }")
+        self.assertIn(b"incompatible operands", self.process(VAQC, "check", mixed, good=False).stderr)
+        for operator in ("+|", "-|", "*|", "<<|", "+|=", "-|=", "*|=", "<<|="):
+            with self.subTest(operator=operator):
+                removed = self.source("removed.vqr", f"func f(n: u8) void {{ n {operator} 1; }}")
+                self.assertIn(b"saturating operators were removed",
+                              self.process(VAQC, "check", "--syntax-only", removed, good=False).stderr)
+
     def test_numerics_ctfe(self):
         self.hosted('''
+            import (num)
             comptime func add(n: usize) usize {
                 var s: usize = 0;
                 for i in usize(1)..=n { s += i; }
@@ -625,10 +669,10 @@ class Acceptance(CompilerCase):
                 io.println(length<u8, (1 + 2)>(&a))!;
                 io.println(scale(2 + 3, 8))!;
                 io.println(add(5))!;
-                io.println(u8(250) + u8(10))!;
-                u := u8(250); u += 10;
+                io.println(u8(250) + u8(5))!;
+                u := u8(250); u +%= 10;
                 io.println(u)!;
-                io.println(u8(250) +| 10)!;
+                io.println(num.saturatingAdd(u8(250), u8(10)))!;
                 io.println(narrow(127)!)!;
                 io.println(narrow(128) catch i8(7))!;
                 io.println(typedRem(-2147483648, -1))!;
@@ -638,7 +682,7 @@ class Acceptance(CompilerCase):
                 for n in u8(254)..=u8(255) { count++; }
                 io.println(count)!;
             }
-        ''', "10\n3\n3\n40\n15\n260\n4\n255\n127\n7\n0\n-1\ntrue\n2\n", "-O2")
+        ''', "10\n3\n3\n40\n15\n255\n4\n255\n127\n7\n0\n-1\ntrue\n2\n", "-O2")
         for expression in ["i32(2147483647) + 1", "i32(1) << -1", "typed(0)", "1 / 0"]:
             with self.subTest(expression=expression):
                 bad = self.source("bad.vqr", f'''

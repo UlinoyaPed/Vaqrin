@@ -222,6 +222,7 @@
 ```text
   narrow<T,U>(value: U)->!T
   widen<T,U>(value: U)->T
+  truncBits<T,U>(value: U)->T
   truncToInt<T,F>(value: F)->!T
   floorToInt<T,F>(value: F)->!T
   ceilToInt<T,F>(value: F)->!T

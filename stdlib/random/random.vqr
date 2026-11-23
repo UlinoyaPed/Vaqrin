@@ -97,7 +97,7 @@ pub class Pcg64 {
     var state: u128;
     var increment: u128;
 
-    func init(seedValue: u128, streamValue: u128) : state(0), increment((streamValue << 1) | 1) {
+    func init(seedValue: u128, streamValue: u128) : state(0), increment((streamValue <<% 1) | 1) {
         nextU64();
         state +%= seedValue;
         nextU64();
@@ -119,7 +119,7 @@ pub class Pcg64 {
         state = old *% MULTIPLIER +% increment;
         var value = __vqr_parse_bits<u64>((old >> 64) ^ old);
         var rotation = __vqr_parse_bits<u32>(old >> 122);
-        (value >> rotation) | (value << ((u64(0) -% u64(rotation)) & 63))
+        (value >> rotation) | (value <<% ((u64(0) -% u64(rotation)) & 63))
     }
 
     pub func nextU32() u32 { __vqr_parse_bits<u32>(u128(nextU64() >> 32)) }
@@ -191,14 +191,14 @@ pub class Xoshiro256 {
 
     pub func nextU64() u64 {
         var product = s1 *% 5;
-        var result = ((product << 7) | (product >> 57)) *% 9;
-        var temporary = s1 << 17;
+        var result = ((product <<% 7) | (product >> 57)) *% 9;
+        var temporary = s1 <<% 17;
         s2 ^= s0;
         s3 ^= s1;
         s1 ^= s2;
         s0 ^= s3;
         s2 ^= temporary;
-        s3 = (s3 << 45) | (s3 >> 19);
+        s3 = (s3 <<% 45) | (s3 >> 19);
         result
     }
 

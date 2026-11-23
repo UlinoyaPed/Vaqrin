@@ -3,6 +3,13 @@ import (core, iter as iterator, mem)
 
 pub error CapacityError { Overflow, IndexOutOfBounds }
 
+func nextSequenceCapacity(capacity: usize) usize {
+    if capacity < 4 { return 4; }
+    var maximum = ~usize(0);
+    if capacity > maximum / 2 { return maximum; }
+    capacity * 2
+}
+
 pub enum ReplaceResult<T: Movable> {
     Replaced(T),
     InvalidIndex(T),
@@ -139,7 +146,7 @@ pub class Vec<T: Movable> {
     func ensureRoomForOne() !void {
         if length < reserved { return; }
         if length == ~usize(0) { return CapacityError.Overflow; }
-        reserve(if (reserved < 4) usize(4) else reserved +| reserved)
+        reserve(nextSequenceCapacity(reserved))
     }
 
     pub func push(value: T) !void {

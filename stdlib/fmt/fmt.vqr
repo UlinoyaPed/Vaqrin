@@ -1,5 +1,5 @@
 package fmt
-import (io, text, coll, convert, mem)
+import (io, text, coll, convert, mem, num)
 
 pub error FormatError { InvalidRadix, InvalidPrecision, WidthTooLarge, UnsupportedType, InvalidFormat }
 pub enum Alignment { Left, Right, Center }
@@ -163,8 +163,8 @@ func writeNumber(writer: *io.Writer, value: str, options: FormatOptions) !void {
     var negative = bytes.len() != 0 && bytes[0] == 45;
     if !negative && !options.showSign { return writeString(writer, value, options); }
     var sign: str = if negative { "-" } else { "+" };
-    var width = options.width -| value.byteLen();
-    if !negative { width = width -| 1; }
+    var width = num.saturatingSub<usize>(options.width, value.byteLen());
+    if !negative { width = num.saturatingSub<usize>(width, usize(1)); }
     var left: usize = if options.alignment == Alignment.Left { 0 }
                       else if options.alignment == Alignment.Center { width / 2 }
                       else { width };

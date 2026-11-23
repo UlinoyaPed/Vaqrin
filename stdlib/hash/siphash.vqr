@@ -44,7 +44,7 @@ pub class SipHasher {
 
     pub const func finish64() u64 {
         var finalized = *self;
-        finalized.compress(tail | (length << 56));
+        finalized.compress(tail | ((length & 255) << 56));
         finalized.v2 ^= 0xffu64;
         for i in 0..4 { finalized.round(); }
         finalized.v0 ^ finalized.v1 ^ finalized.v2 ^ finalized.v3

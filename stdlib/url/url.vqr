@@ -176,7 +176,7 @@ func lowerAscii(value: str) !string {
     var data = value.asBytes();
     var out = coll.Vec<u8>.withCapacity(data.len())!;
     for byte in data {
-        if 65 <= byte && byte <= 90 { out.push(u8(byte + 32)!)!; }
+        if 65 <= byte && byte <= 90 { out.push(byte + 32)!; }
         else { out.push(byte)!; }
     }
     text.fromBytes(out.asConstSlice())
@@ -188,7 +188,7 @@ func normalizePercent(value: str) !string {
         if data[i] != 37 {
             appendAscii(&out, data[i])!;
         } else {
-            var decoded = u8((hexValue(data[i + 1]) << 4) | hexValue(data[i + 2]))!;
+            var decoded = (hexValue(data[i + 1]) << 4) | hexValue(data[i + 2]);
             if isUnreserved(decoded) {
                 appendAscii(&out, decoded)!;
             } else {

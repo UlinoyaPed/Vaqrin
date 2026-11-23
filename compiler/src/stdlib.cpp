@@ -153,6 +153,16 @@ ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::v
       return castNumber(to, n->children[1], n->span);
     }
     if (op == "trunc") return builtin("truncToInt", n, types, nullptr);
+    if (op == "trunc_bits") {
+      arity(1);
+      if (types.size() != 1) fail(n->span, "truncBits requires one target type");
+      auto *target = parseType(types[0]);
+      auto value = expression(n->children[1]);
+      if (!live()) return neverValue();
+      if (target->kind != Kind::Int || value.type->kind != Kind::Int || target->bits >= value.type->bits)
+        fail(n->span, "truncBits requires an integer destination narrower than its integer source", "E201");
+      return {target, ir.CreateTrunc(read(value, n->span), target->ir)};
+    }
     if (op == "floor") return builtin("floorToInt", n, types, nullptr);
     if (op == "ceil") return builtin("ceilToInt", n, types, nullptr);
     if (op == "round") return builtin("roundToInt", n, types, nullptr);

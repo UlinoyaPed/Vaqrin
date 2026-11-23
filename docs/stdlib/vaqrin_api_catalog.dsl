@@ -18,7 +18,7 @@
 @convert|无隐式窄化；数值转换显式标识失败及舍入
 #enum Rounding|TowardZero, Floor, Ceil, NearestEven, AwayFromZero
 #enum OverflowMode|Checked, Wrap, Saturate
-= narrow<T,U>(value: U)->!T; widen<T,U>(value: U)->T; truncToInt<T,F>(value: F)->!T; floorToInt<T,F>(value: F)->!T; ceilToInt<T,F>(value: F)->!T; roundToInt<T,F>(value: F)->!T; toFloat<T,U>(value: U)->T; bitCast<T,U>(value: U)->T; checkedCast<T,U>(value: U)->!?T; toChar(value: u32)->!char; fromChar(value: char)->u32; toBool(value: u8)->!bool
+= narrow<T,U>(value: U)->!T; widen<T,U>(value: U)->T; truncBits<T,U>(value: U)->T; truncToInt<T,F>(value: F)->!T; floorToInt<T,F>(value: F)->!T; ceilToInt<T,F>(value: F)->!T; roundToInt<T,F>(value: F)->!T; toFloat<T,U>(value: U)->T; bitCast<T,U>(value: U)->T; checkedCast<T,U>(value: U)->!?T; toChar(value: u32)->!char; fromChar(value: char)->u32; toBool(value: u8)->!bool
 @meta|类型性质与目标布局只在编译期求值，禁止假定宿主布局
 #record TypeInfo|类型名称、类别、性质
 #record TargetInfo|目标三元组、字宽、端序、ABI

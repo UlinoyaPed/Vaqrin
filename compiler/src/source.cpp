@@ -390,6 +390,9 @@ void Lexer::run(std::vector<Token> &tokens, bool indexOnly) {
       matched = input.substr(pos, 1);
     if (matched.empty()) fail(span(begin), c == '@' ? "'@' is reserved" : "unexpected character", "E104");
     pos += matched.size();
+    if (!indexOnly && (matched.starts_with("+|") || matched.starts_with("-|") ||
+                       matched.starts_with("*|") || matched.starts_with("<<|")))
+      fail(span(begin), "saturating operators were removed; use an explicit saturating function", "E104");
     tokens.push_back({TokenKind::Punctuation, std::string(matched), span(begin), newline});
   }
 }

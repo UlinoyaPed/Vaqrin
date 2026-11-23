@@ -128,7 +128,7 @@ Value *binaryNumber(IRBuilder<> &b, std::string_view op, Value *a, Value *c, boo
     guard(b, b.CreateICmpULT(count, ConstantInt::get(count->getType(), width)));
     c = b.CreateIntCast(count, integer, false);
     if (op == ">>") return sign ? b.CreateAShr(a, c) : b.CreateLShr(a, c);
-    if (op == "<<%" || (!sign && op == "<<")) return b.CreateShl(a, c);
+    if (op == "<<%") return b.CreateShl(a, c);
   }
   if (op == "/" || op == "%") {
     auto *valid = b.CreateICmpNE(c, zero);
@@ -148,8 +148,7 @@ Value *binaryNumber(IRBuilder<> &b, std::string_view op, Value *a, Value *c, boo
   if (op == "|") return b.CreateOr(a, c);
   if (op == "^") return b.CreateXor(a, c);
   if (!shift && !op.starts_with('+') && !op.starts_with('-') && !op.starts_with('*')) return nullptr;
-  bool saturate = op.ends_with('|');
-  if (op.ends_with('%') || (!sign && !saturate)) {
+  if (op.ends_with('%')) {
     if (op.starts_with('+')) return b.CreateAdd(a, c);
     if (op.starts_with('-')) return b.CreateSub(a, c);
     return b.CreateMul(a, c);
@@ -171,7 +170,6 @@ Value *binaryNumber(IRBuilder<> &b, std::string_view op, Value *a, Value *c, boo
   auto *below = b.CreateICmpSLT(result, b.CreateIntCast(minimum, wide, sign));
   auto *above = b.CreateICmpSGT(result, b.CreateIntCast(maximum, wide, sign));
   auto *truncated = b.CreateTrunc(result, integer);
-  if (saturate) return b.CreateSelect(below, minimum, b.CreateSelect(above, maximum, truncated));
   guard(b, b.CreateNot(b.CreateOr(below, above)));
   return truncated;
 }

@@ -3,13 +3,13 @@
 Run the static check with the repository's current compiler:
 
 ```sh
-vaqc check examples/numerics/main.vqr
+vaqc check examples/stdlib/numerics/main.vqr
 ```
 
 On hosted Linux, `vaqc` links the target math library when the program uses it.
 
 ```sh
-vaqc build examples/numerics/main.vqr -o numerics-example
+vaqc build examples/stdlib/numerics/main.vqr -o numerics-example
 ./numerics-example
 ```
 

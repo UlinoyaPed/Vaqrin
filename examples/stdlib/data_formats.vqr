@@ -1,0 +1,22 @@
+import (csv, io, json, toml)
+
+error DataError { MissingName, InvalidPort }
+
+func main() !void {
+    var data = json.parse("{\"user\":{\"name\":\"Ada\"}}")!;
+    var nameValue = json.pointerGet(&data, "/user/name") ?? { return DataError.MissingName; };
+    var name = json.asString(nameValue) ?? { return DataError.MissingName; };
+    io.println(name)!;
+
+    var config = toml.parse("[server]\nport = 8080\n")!;
+    var port = toml.get(&config, "server.port") ?? { return DataError.InvalidPort; };
+    switch *port {
+        toml.Value.Integer(number) => { io.println(number)!; },
+        _ => { return DataError.InvalidPort; },
+    }
+
+    var options = csv.CsvOptions();
+    options.hasHeader = true;
+    var rows = csv.parse("name,score\nAda,42\nLin,38\n", options)!;
+    io.println(rows.len())!;
+}

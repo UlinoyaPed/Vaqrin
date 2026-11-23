@@ -1,0 +1,35 @@
+import (io)
+
+interface Area {
+    const func measure() i32;
+}
+
+class Rectangle {
+    #implements: Area
+    pub var width: i32;
+    pub var height: i32;
+    pub const func measure() i32 { width * height }
+}
+
+enum Shape {
+    Square(i32),
+    Rectangle(i32, i32),
+}
+
+func areaOf(shape: Shape) i32 {
+    switch shape {
+        Shape.Square(side) => side * side,
+        Shape.Rectangle(width, height) => width * height,
+    }
+}
+
+func printArea(shape: *const Area) !void {
+    io.println(shape.measure())!
+}
+
+func main() !void {
+    var rectangle = Rectangle{width: 3, height: 7};
+    printArea(&rectangle)!;
+    io.println(areaOf(Shape.Square(4)))!;
+    io.println(areaOf(Shape.Rectangle(2, 5)))!;
+}

@@ -96,7 +96,7 @@
 
 1. 在网络可用的 Node.js 18+ 环境运行 `node stdlib/unicode/tools/generate.mjs`，检查生成数据与仓库内文件一致。
 2. 使用本地 `vaqc check` 检查 `stdlib/unicode/unicode.vqr` 与 `stdlib/regex/regex.vqr` 入口及其包内依赖。
-3. 编译运行 `examples/unicode-regex.vqr`。
+3. 编译运行 `examples/stdlib/regex.vqr`。
 4. 使用 Unicode 17.0.0 `NormalizationTest.txt` 验证 NFC/NFD/NFKC/NFKD；重点覆盖 Hangul、兼容字符、阻断组合和乱序 combining marks。
 5. 使用 Unicode 17.0.0 `auxiliary/GraphemeBreakTest.txt` 验证完整 GB3–GB13、GB9c、GB11 规则。
 6. 验证 UTF-8 截断、孤立 continuation、过长编码、代理项和超范围码点。

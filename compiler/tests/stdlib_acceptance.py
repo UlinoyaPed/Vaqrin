@@ -17,7 +17,7 @@ class StandardLibraryAcceptance(CompilerCase):
     def example(self, source, *flags):
         return self.run_program(REPOSITORY / source, *flags)
 
-    def run_program(self, source, *flags):
+    def run_program(self, source, *flags, input=None):
         compiled = subprocess.run(
             [VAQC, "build", source, *flags, "-o", "example"],
             cwd=self.root,
@@ -25,7 +25,29 @@ class StandardLibraryAcceptance(CompilerCase):
             timeout=120,
         )
         self.assertEqual(compiled.returncode, 0, compiled.stderr.decode(errors="replace"))
-        return self.process("./example").stdout.decode()
+        return self.process("./example", input=input).stdout.decode()
+
+    def test_learning_examples(self):
+        examples = REPOSITORY / "examples"
+        for path, data, expected in (
+            ("hello.vqr", None, "Hello, Vaqrin!\n"),
+            ("basics/control_flow.vqr", None, "excellent\nretry\npass\n2\n"),
+            ("basics/collections.vqr", None, "2\n1\n0\n"),
+            ("language/generics.vqr", None, "42\ntrue\n"),
+            ("language/interfaces.vqr", None, "21\n16\n10\n"),
+            ("language/ownership.vqr", None, "42\nCounter released\n"),
+            ("language/optional.vqr", None, "42\n0\n-1\n"),
+            ("stdlib/stdin.vqr", b"1 -2 43\n", "42\n"),
+            ("stdlib/files.vqr", None, "first line\nsecond line\n"),
+            ("stdlib/data_formats.vqr", None, "Ada\n8080\n2\n"),
+            ("stdlib/protobuf.vqr", None, "Vaqrin\n42\n"),
+            ("stdlib/tasks.vqr", None, "42\n"),
+            ("projects/local_import", None, "42\n"),
+            ("contests/b3612.vqr", b"5\n1 -2 3 4 -5\n3\n1 3\n2 5\n4 4\n", "2\n0\n4\n"),
+            ("contests/p1918.vqr", b"4\n5 7 9 12\n3\n9 3 5\n", "3\n0\n1\n"),
+        ):
+            with self.subTest(example=path):
+                self.assertEqual(self.run_program(examples / path, input=data), expected)
 
     def test_native_clocks_and_absolute_deadline(self):
         self.hosted(r"""
@@ -404,8 +426,8 @@ class StandardLibraryAcceptance(CompilerCase):
 
     def test_numerics(self):
         self.assertEqual(
-            self.example("examples/numerics/main.vqr"),
-            (REPOSITORY / "examples/numerics/expected.txt").read_text(encoding="utf-8"),
+            self.example("examples/stdlib/numerics/main.vqr"),
+            (REPOSITORY / "examples/stdlib/numerics/expected.txt").read_text(encoding="utf-8"),
         )
 
     def test_integer_arithmetic_edges(self):
@@ -1157,10 +1179,10 @@ class StandardLibraryAcceptance(CompilerCase):
         """, "false\ntrue\nfalse\ntrue\n")
 
     def test_unicode(self):
-        self.assertEqual(self.example("examples/unicode-basic.vqr"), "é\n17.0.0\n")
+        self.assertEqual(self.example("examples/stdlib/unicode.vqr"), "é\n17.0.0\n")
 
     def test_regex(self):
-        self.assertEqual(self.example("examples/unicode-regex.vqr"), "é\ntrue\n1\nabab\nab\n3\n")
+        self.assertEqual(self.example("examples/stdlib/regex.vqr"), "é\ntrue\n1\nabab\nab\n3\n")
 
     def test_unicode_and_regex_edges(self):
         program = self.source("unicode_edges.vqr", r'''
@@ -1187,7 +1209,7 @@ class StandardLibraryAcceptance(CompilerCase):
         self.assertEqual(self.run_program(program), "e\u0301\nAfi\nAe\u0301\n3\ntrue\n")
 
     def test_utilities(self):
-        output = self.example("examples/utilities.vqr")
+        output = self.example("examples/stdlib/utilities.vqr")
         lines = output.splitlines()
         self.assertEqual(lines[:12], [
             "https://example.com:443/b?tag=one&tag=two#top", "http://a/b/g", "2001:db8::1",

@@ -1,0 +1,14 @@
+import (bufio, fs, io)
+
+func main() !void {
+    // The temporary file is removed when it goes out of scope.
+    var file = fs.TempFile.inDir(".")!;
+    io.writeString(&file, "first line\nsecond line\n")!;
+    file.seek(0, io.SeekOrigin.Start)!;
+
+    var reader = bufio.BufferedReader(&file, 64)!;
+    for {
+        var line = reader.readLine(80)! ?? { break; };
+        io.println(line)!;
+    }
+}

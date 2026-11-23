@@ -21,7 +21,7 @@ build/host/vaqc build examples/hello.vqr -o build/hello
 | --- | --- |
 | [compiler/](compiler/) | C++20 编译器、CMake 构建、测试和 Unicode 表生成工具 |
 | [stdlib/](stdlib/) | 用 Vaqrin 编写的标准包 |
-| [examples/](examples/) | 可直接运行的 Vaqrin 示例 |
+| [examples/](examples/README.md) | 从语法入门到标准库和多文件项目的示例路线 |
 | [boards/](boards/) | Cortex-M3 板级启动和链接文件 |
 | [docs/](docs/) | 语言规范、实现设计和使用文档索引 |
 

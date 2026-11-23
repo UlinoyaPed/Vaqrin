@@ -1,12 +1,5 @@
-package main
-
 import (io)
 
-func square(n: i32) i32 { n * n }
-
 func main() !void {
-  io.println("Hello, Vaqrin!")!;
-  for n in 1..=300 {
-    io.println(square(n))!;
-  }
+    io.println("Hello, Vaqrin!")!;
 }

@@ -1,0 +1,20 @@
+import (bufio, coll, io)
+
+func main() !void {
+    var scan = bufio.newScanner(io.stdin())!;
+    var length = scan.readInt<i32>()!;
+    var positions = coll.i32Map<i32>();
+    for i in 0..length {
+        var number = scan.readInt<i32>()!;
+        positions.insert(number, i + 1)!;
+    }
+
+    var queries = scan.readInt<i32>()!;
+    for _ in 0..queries {
+        var number = scan.readInt<i32>()!;
+        switch positions.get(number) {
+            some(position) => { io.println(position)!; },
+            null => { io.println(0)!; },
+        }
+    }
+}

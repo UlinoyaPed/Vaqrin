@@ -1,0 +1,22 @@
+import (io)
+
+class Counter {
+    #copy: disabled
+    pub var value: i32;
+    pub func init(initial: i32) : value(initial) {}
+    func deinit() void { io.println("Counter released") catch {}; }
+}
+
+func increment(value: &i32) void { value++; }
+func inspect(value: in &const i32) i32 { value }
+
+func main() !void {
+    var owner = new Counter(41)!;
+    {
+        // End the mutable borrow before transferring the Box.
+        var value: &i32 = &owner.value;
+        increment(value);
+    }
+    var nextOwner = move(owner);
+    io.println(inspect(nextOwner.value))!;
+}

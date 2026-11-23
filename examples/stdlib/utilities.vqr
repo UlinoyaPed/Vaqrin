@@ -3,7 +3,7 @@ import (url, log, errors, io, core, text)
 
 error NetworkError { Refused, Timeout }
 
-func main() !void {
+func showUrls() !void {
     // URI parsing, normalization, and RFC 3986 relative resolution.
     var address = url.parse("https://Example.COM:443/a/../b?tag=one&tag=two#top")!;
     var normalized = address.normalize()!;
@@ -41,7 +41,9 @@ func main() !void {
     io.println(core.isErr(&badEscape))!;
     var badUtf8 = url.queryUnescape("%FF");
     io.println(core.isErr(&badUtf8))!;
+}
 
+func showDiagnostics() !void {
     // Synchronous structured logging with two independent handlers.
     var memory = io.MemoryWriter();
     var textHandler = log.TextHandler.new(&memory);
@@ -90,4 +92,9 @@ func main() !void {
     var drained = pending.drain();
     var first = drained.next();
     io.println(core.isSome(&first))!;
+}
+
+func main() !void {
+    showUrls()!;
+    showDiagnostics()!;
 }

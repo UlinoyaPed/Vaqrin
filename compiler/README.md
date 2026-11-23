@@ -4,7 +4,7 @@
 
 `value?` 传播空值，`result!` 传播错误，`lookup()!?` 可依次检查两个通道。
 宿主程序使用 `-g` 构建时，断言式 `.unwrap()` 会在 trap 前输出文件、行号和函数。
-可在 [Optional 示例](../examples/optional.vqr) 中试用传播、后备值和显式错误转换。
+可在 [Optional 示例](../examples/language/optional.vqr) 中试用传播、后备值和显式错误转换。
 
 ## 构建和运行
 
@@ -20,11 +20,11 @@ build/host/vaqc build examples/hello.vqr -o build/hello
 ./build/hello
 ```
 
-示例先输出 `Hello, Vaqrin!`，再依次输出 1 到 3000 的平方。宿主链接默认调用 `clang`，归档默认调用 `llvm-ar`。可用 `cmake --install build/host --prefix <安装目录>` 安装 `bin/vaqc` 和标准包源码。
+示例输出 `Hello, Vaqrin!`。更多程序和预期输出见[示例学习路线](../examples/README.md)。宿主链接默认调用 `clang`，归档默认调用 `llvm-ar`。可用 `cmake --install build/host --prefix <安装目录>` 安装 `bin/vaqc` 和标准包源码。
 
 ```bash
 build/host/vaqc check examples/hello.vqr
-build/host/vaqc check --syntax-only --diagnostics=json examples/hello.vqr examples/vec.vqr
+build/host/vaqc check --syntax-only --diagnostics=json examples/hello.vqr examples/basics/collections.vqr
 build/host/vaqc fmt --check examples/hello.vqr
 build/host/vaqc fmt --tab-size=4 --write examples/hello.vqr
 build/host/vaqc build --emit=llvm-ir examples/hello.vqr -o build/hello.ll
@@ -38,11 +38,35 @@ build/host/vaqc build -O2 -g examples/hello.vqr -o build/hello
 `fmt` 支持打印、检查、原位写入和从标准输入读取，默认使用四个空格缩进，可用
 `--tab-size=N` 和 `--use-tabs` 调整。
 
+对未保存的缓冲区，可以用 `vaqc check --syntax-only --diagnostics=json -` 从标准输入检查语法。
+诊断中的路径显示为 `<stdin>`。
+
 文件头可以省略 `package`。写出 `package demo` 或 `import (io)` 时，行尾省略分号。可执行文件从指定的源文件选取 `main`。目录模式优先采用 `--entry`，其次采用 `package.toml` 的 `[build].entry`，最后递归查找唯一的候选入口。多个显式输入各自保留文件级 `main`，可以用 `--entry` 选择其中之一。
 
 同目录匿名文件可以直接引用唯一的辅助声明，也可用 `helpers.name` 限定。跨目录使用 `import ("lib/helpers.vqr" as h)` 导入目标的公开声明。有名包通过逻辑包名导入，额外搜索根由 `--package-path DIR` 指定。标准包也支持 `std/` 前缀。参见[标准包说明](../stdlib/README.md)。
 
-在 Zed 中打开仓库根目录，`task: spawn` 可启动 `build vaqc`。已有绑定指向 `run code` 时，当前文件是 `.vqr` 就在构建编译器后编译并运行它，其他文件只触发编译器构建。任务首次配置时生成 `build/host/compile_commands.json`，供 clangd 使用。
+在 Zed 中打开仓库根目录，`task: spawn` 可启动 `build vaqc`。`run code` 使用已有的编译器运行当前 `.vqr`
+文件，`build vaqc and run` 会先更新编译器。任务首次配置时生成 `build/host/compile_commands.json`，供 clangd 使用。
+
+## 调试
+
+`vaqdbg` 先用同一构建或安装中的 `vaqc` 以 `-O0 -g` 生成程序，再启动系统的 LLDB。
+传 `-o` 可保留可执行文件，省略时使用调试会话的临时目录。也可传 `--build-only -o PATH`
+只构建调试目标。若需指定工具路径，可用 `VAQC` 和 `VAQRIN_LLDB`。
+
+```sh
+cmake --build build/host --target vaqdbg
+build/host/vaqdbg examples/language/ownership.vqr
+```
+
+| 内容 | 位置 |
+| --- | --- |
+| 编译器实现和调试信息生成 | [compiler/src/](src/) |
+| 调试命令源码 | [compiler/tools/vaqdbg.cpp](tools/vaqdbg.cpp) |
+| 命令行与 DAP 验收 | [compiler/tests/debug_acceptance.py](tests/debug_acceptance.py) |
+| CMake 构建产物 | `build/host/vaqc`、`build/host/vaqdbg`。安装后位于安装前缀的 `bin/` |
+| Zed 适配器与开发扩展 | [editors/zed/](../editors/zed/)、`build/zed-extension/` |
+| 仓库的 Zed 调试配置与待调试程序 | [.zed/debug.json](../.zed/debug.json)、`build/debug/` |
 
 ## 项目依赖
 

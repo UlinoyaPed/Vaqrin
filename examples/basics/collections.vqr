@@ -1,0 +1,24 @@
+import (coll, io)
+
+func main() !void {
+    var values = coll.Vec<i32>();
+    values.push(4)!;
+    values.push(7)!;
+    values.push(4)!;
+
+    var counts = coll.i32Map<i32>();
+    // Read each Vec element through a borrowed iterator.
+    for &key in values.iterRef() {
+        // The returned map reference is live only during this iteration.
+        var count = counts.getOrInsert(key, 0)!;
+        count++;
+    }
+
+    // Query in a fixed order so the output is independent of hash order.
+    for key in [_]i32{4, 7, 9} {
+        switch counts.get(key) {
+            some(count) => { io.println(count)!; },
+            null => { io.println(0)!; },
+        }
+    }
+}

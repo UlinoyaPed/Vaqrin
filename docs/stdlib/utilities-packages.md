@@ -66,4 +66,4 @@ ErrorSink.drain 把内部 Vec 的所有权转移给 ReportDrain，按插入顺�
 
 ## 本地集成
 
-`examples/utilities.vqr` 是由 CTest 运行的综合验收入口，覆盖 URI 解析、相对引用解析、Builder、IPv6、空端口、非法百分号、重复查询参数、加号语义、日志级别过滤、结构化 group、Writer/Buffer Handler、错误链、SourceLocation 和 ErrorSink。
+`examples/stdlib/utilities.vqr` 是由 CTest 运行的综合验收入口，覆盖 URI 解析、相对引用解析、Builder、IPv6、空端口、非法百分号、重复查询参数、加号语义、日志级别过滤、结构化 group、Writer/Buffer Handler、错误链、SourceLocation 和 ErrorSink。

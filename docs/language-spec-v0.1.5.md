@@ -879,5 +879,5 @@ entry = "hello.vqr"
 
 ## 附录 E．引用验收
 
-见 [引用示例](../examples/references.vqr)、编译器验收中的 test_reference_contracts 及容器验收。
+见 [引用示例](../examples/language/references.vqr)、编译器验收中的 test_reference_contracts 及容器验收。
 用例验证严格参数、兼容参数、泛型、调用约定、Box、模式和临时对象，并检查权限放宽、逃逸及冲突修改的诊断。

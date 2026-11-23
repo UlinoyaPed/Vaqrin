@@ -21,7 +21,7 @@ func main() !void {
     io.println(nextId(41, true)! ?? 0)!;
     io.println(nextId(-1, true)! ?? 0)!;
     io.println(requireId(-1) catch (reason) {
-        if reason != LookupError.NotFound { return reason; }
-        i32(-1)
+            if reason != LookupError.NotFound { return reason; }
+            i32(-1)
     })!;
 }

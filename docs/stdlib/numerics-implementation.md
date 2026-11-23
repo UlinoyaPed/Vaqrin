@@ -58,8 +58,8 @@ Before local integration, pay particular attention to compiler diagnostics aroun
 
 ## Local acceptance
 
-1. Run `vaqc check examples/numerics/main.vqr` using the current compiler.
-2. Build the example with `vaqc build examples/numerics/main.vqr -o numerics-example` on hosted Linux.
+1. Run `vaqc check examples/stdlib/numerics/main.vqr` using the current compiler.
+2. Build the example with `vaqc build examples/stdlib/numerics/main.vqr -o numerics-example` on hosted Linux.
 3. Compare BigUint add/sub/mul/divMod/shifts/parse/bytes against Python integers, including zero, carries, borrow chains, and division by one-limb and multi-limb divisors.
 4. Test BigInt conversion at i8/i64/i128 minima and maxima, negative zero parsing, truncating division, arithmetic right shift, and signed byte round-trips.
 5. Test Rational negative denominators, zero numerator, denominator minimum, exact reduction, cross-product overflow avoidance, and final-result overflow.

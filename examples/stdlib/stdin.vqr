@@ -1,0 +1,11 @@
+import (bufio, io)
+
+func main() !void {
+    var scanner = bufio.newScanner(io.stdin())!;
+    var sum: i64 = 0;
+    for {
+        var value = scanner.nextInt<i64>()! ?? { break; };
+        sum += value;
+    }
+    io.println(sum)!;
+}

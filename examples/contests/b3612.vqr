@@ -1,0 +1,21 @@
+import (bufio, coll, io)
+
+func main() !void {
+    var scan = bufio.newScanner(io.stdin())!;
+    var length = scan.readInt<i32>()!;
+
+    // prefix[i] is the sum of the first i values.
+    var prefix = coll.Vec<i64>();
+    prefix.push(0)!;
+    for i in 0..length {
+        var value = scan.readInt<i64>()!;
+        prefix.push(prefix[i] + value)!;
+    }
+
+    var queries = scan.readInt<i32>()!;
+    for _ in 0..queries {
+        var start = scan.readInt<i32>()!;
+        var end = scan.readInt<i32>()!;
+        io.println(prefix[end] - prefix[start - 1])!;
+    }
+}

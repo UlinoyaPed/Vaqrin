@@ -6,7 +6,7 @@ import sys
 
 compiler = pathlib.Path(sys.argv[1]).resolve()
 root = pathlib.Path(__file__).resolve().parents[2]
-example = root / "examples" / "io_stack.vqr"
+example = root / "examples/stdlib/file_operations.vqr"
 
 if not compiler.is_file():
     raise SystemExit(f"vaqc not found: {compiler}")

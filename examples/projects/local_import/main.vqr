@@ -1,0 +1,5 @@
+import (io, "report.vqr" as report)
+
+func main() !void {
+    io.println(report.total(20, 22))!;
+}

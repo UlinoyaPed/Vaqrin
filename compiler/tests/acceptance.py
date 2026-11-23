@@ -239,7 +239,7 @@ class Acceptance(CompilerCase):
             path = self.source(f"const{size}.vqr", f"const values: [{size}]u32 = [{size}]u32{{{values}}};")
             samples.append(timings(path))
         self.assertLess(samples[1], samples[0] * 3 + 200)
-        self.assertLess(timings(REPOSITORY / "examples/unicode-regex.vqr"), 6000)
+        self.assertLess(timings(REPOSITORY / "examples/stdlib/regex.vqr"), 6000)
 
     def test_git_and_registry_dependencies_build_offline(self):
         if not shutil.which("git"):
@@ -1611,7 +1611,7 @@ class Acceptance(CompilerCase):
         self.assertIn(b"E230", error.stderr)
 
     def test_reference_contracts(self):
-        source = REPOSITORY / "examples/references.vqr"
+        source = REPOSITORY / "examples/language/references.vqr"
         self.process(VAQC, "build", "-g", "-O2", source, "-o", "references")
         self.assertEqual(self.process("./references").stdout.decode(), "11\n24\n*i32\ni32\n42\n10\n21\n11\n12\n31\n")
         self.hosted("""

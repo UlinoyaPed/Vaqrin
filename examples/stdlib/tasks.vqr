@@ -1,0 +1,9 @@
+import (io, task)
+
+func main() !void {
+    var group = task.TaskGroup.withWorkers(2)!;
+    var input = 6;
+    var work = [input]() !i32 => input * 7;
+    var job = group.spawn<i32>(move(work))!;
+    io.println(job.join()!)!;
+}

@@ -1,0 +1,41 @@
+import (bufio, fmt, fs, io, path)
+
+func main() !void {
+    // Work in an isolated directory that is removed when this function returns.
+    var workspace = fs.TempDir.inDir(".")!;
+    var folder = workspace.location()!;
+    var target = path.join(folder, path.Path("io-stack.txt"))!;
+
+    var options = fs.OpenOptions();
+    options.read(true);
+    options.write(true);
+    options.createNew(true);
+    var file = fs.open(target, options)!;
+
+    io.writeString(&file, "vaqrin I/O\n")!;
+    file.writeAt(0, "V".asBytes())!;
+    var first = [1]u8{0};
+    if file.readAt(0, first[:])! != 1 { return io.IoError.UnexpectedEof; }
+
+    // Positional I/O keeps the cursor in place. Rewind for sequential reading.
+    file.seek(0, io.SeekOrigin.Start)!;
+    {
+        var reader = bufio.BufferedReader(&file, 64)!;
+        var line = reader.readLine(64)! ?? { return io.IoError.UnexpectedEof; };
+        var output = io.stdout();
+        fmt.writeTo(&output, "read: ")!;
+        fmt.writeTo(&output, line)!;
+        fmt.writeTo(&output, "\n")!;
+        output.flush()!;
+    }
+    io.println(file.metadata()!.len())!;
+    var arguments = [1]fmt.FormatArg{fmt.arg(u64(255))};
+    io.println(fmt.format("hex={:x}", arguments[:])!)!;
+    file.close()!;
+
+    // The directory contains only the file this example created.
+    var directory = fs.readDir(folder)!;
+    var entry = directory.next()! ?? { return io.IoError.UnexpectedEof; };
+    io.println(entry.name())!;
+    directory.close()
+}

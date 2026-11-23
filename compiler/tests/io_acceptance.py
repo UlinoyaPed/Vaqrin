@@ -56,7 +56,7 @@ class IoAcceptance(CompilerCase):
         self.assertIn(b"borrow from a temporary", self.process(VAQC, "check", source, good=False).stderr)
 
     def test_p1102_counts_and_input_errors(self):
-        self.process(VAQC, "build", REPOSITORY / "examples/uses/p1102.vqr", "-o", "p1102")
+        self.process(VAQC, "build", REPOSITORY / "examples/contests/p1102.vqr", "-o", "p1102")
         for data, expected in (
             (b"4 1\n1 1 2 3\n", b"3\n"), (b"4 1\n1 1 2 2\n", b"4\n"),
             (b"3 9\n2 2 2\n", b"0\n"),
@@ -255,10 +255,11 @@ class IoAcceptance(CompilerCase):
         self.assertEqual(result.stdout.decode(), "/a/b/.hidden.ext\next\n.hidden\n/a/b\n/other\nowned 00FF -9223372036854775808 1.2\n")
 
     def test_example_links_and_executes(self):
-        (self.root / "build").mkdir()
-        self.process(VAQC, "build", REPOSITORY / "examples" / "io_stack.vqr", "-O2", "-o", "io-example")
+        self.process(VAQC, "build", REPOSITORY / "examples/stdlib/file_operations.vqr", "-O2", "-o", "io-example")
+        before = set(self.root.iterdir())
         result = self.process("./io-example")
         self.assertEqual(result.stdout, b"read: Vaqrin I/O\n11\nhex=ff\nio-stack.txt\n")
+        self.assertEqual(set(self.root.iterdir()), before)
 
     def test_float_specials_radix_and_signed_padding(self):
         result = self.run_source(r'''

@@ -1,5 +1,5 @@
 package unicode_demo
-import (io, unicode, text)
+import (io, unicode)
 
 func main() !void {
     var composed = unicode.normalize("e\u{301}", unicode.NormalForm.NFC)!;

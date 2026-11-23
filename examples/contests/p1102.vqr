@@ -5,7 +5,7 @@ func main() !void {
     var n = scan.readInt<i64>()!;
     var c = scan.readInt<i64>()!;
     var freq = coll.i64Map<i64>();
-    for i in 0i64..n {
+    for _ in 0i64..n {
         var key = scan.readInt<i64>()!;
         count := freq.getOrInsert(key, 0)!;
         count++;

@@ -1,0 +1,13 @@
+import (io)
+
+func applyTwice<T: Copyable>(value: T, transform: func(T) T) T {
+    transform(transform(value))
+}
+
+func main() !void {
+    var addOne = (value: i32) i32 => value + 1;
+    io.println(applyTwice<i32>(40, addOne))!;
+
+    var flip = (value: bool) bool => !value;
+    io.println(applyTwice<bool>(true, flip))!;
+}

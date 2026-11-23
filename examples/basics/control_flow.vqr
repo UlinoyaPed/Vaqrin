@@ -1,0 +1,19 @@
+import (io)
+
+const passMark: i32 = 60;
+
+func classify(score: i32) str {
+    if score >= 90 { return "excellent"; }
+    if score >= passMark { return "pass"; }
+    "retry"
+}
+
+func main() !void {
+    var scores = [_]i32{92, 58, 76};
+    var passed = 0;
+    for score in scores {
+        io.println(classify(score))!;
+        if score >= passMark { passed++; }
+    }
+    io.println(passed)!;
+}

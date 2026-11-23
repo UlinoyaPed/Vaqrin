@@ -1,6 +1,7 @@
 # Vaqrin 文档
 
 - [语言规范 v0.1.5](language-spec-v0.1.5.md) 定义现行语言。
+- [v0.2.0 开发设计](v0.2.0/design.md)、[迁移对照](v0.2.0/breaking-changes.md)与[实施记录](v0.2.0/implementation-plan.md)。
 - [语言规范 v0.1.4](language-spec-v0.1.4.md) 为历史版本。
 - [v0.1.4 引用实现](reference-implementation-v0.1.4.md) 说明编译器降低及实现边界。
 - [语言规范 v0.1.3](language-spec-v0.1.3.md) 为历史版本。

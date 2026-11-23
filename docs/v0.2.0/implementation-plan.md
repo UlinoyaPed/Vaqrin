@@ -33,7 +33,7 @@
 | Box 与控制流 | 支持消费式 `intoInner()`、`while`、`if let` 和循环标签。常规对象清理沿用现有返回和跳转路径 |
 | 标准库和工具 | Vec 查询签名使用 `from self`。bufio、opt、JSON、TOML 和 gRPC 显式区分可写模式借用。`vaqc run` 使用临时宿主产物。格式化接受新签名，Zed 内联提示显示 `ref`，签名保留 `from` |
 
-当前 ABI 和标准库仍有 v0.1.5 入口，版本号保留 0.1.5。分支尚未达到发布验收标准。继续实施时优先处理下列依赖。
+当前 ABI 和标准库仍有 v0.1.5 入口，版本号保留 0.1.5。标准库的 146 个源文件中，还有 103 个包含旧可见性区段、`in &const` 或旧返回借用属性中的至少一项。分支尚未达到发布验收标准。继续实施时优先处理下列依赖。
 
 - 完成普通 Value 参数的全局 Copyable 验证与非 Copy 参数迁移。动态调用、接口和方法的权限约束也需要进一步统一验收。
 - 建立引用聚合、闭包捕获、迭代器和守卫的跨过程区域关系。当前仍拒绝多种间接引用存储，结构性失效和控制流分析需要继续扩展。
@@ -42,3 +42,37 @@
 - 补齐其余标准库签名、API 清单、正式规范和完整 EBNF。保持设计文档中的目标与已验证行为可区分。
 
 设计中使用 `!` 的示例函数必须有错误返回通道。`processFile(file)?` 需要 Optional 成功通道，返回 `!void` 的示例应使用 `!` 传播错误。共享借用与独占借用示例应使用不同词法作用域，两个冲突借用不可同时存活。
+
+## 验证记录
+
+在 x86-64 Linux 使用 Clang 和 LLVM 22.1.8 构建 Release 与 Debug。Release 的 CTest 共 10 套，全部通过。Debug 在同一编译器产物上完成九套 CTest，随后用 Python 3.14 单独重跑协议套件，26 项均通过。首次 Debug 协议测试因 CMake 选中的 Python 3.11 与本机 gRPC 扩展的 Python 3.14 ABI 不符而失败。Release 的 Python 测试共 210 项，另有两个静态检查脚本。测试覆盖动态接口、泛型、Lambda、调用期间借用冲突、移动后的重新初始化、临时模式借用逃逸、Box 自定义分配器的释放和析构、包与协议互通。参数模式示例在仓库和临时安装目录中均依次输出 20、11、21、11。
+
+```sh
+cmake -S compiler -B build/host -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++ \
+  -DLLVM_DIR="$(llvm-config --cmakedir)" -DPython3_EXECUTABLE=/usr/bin/python3.14
+cmake --build build/host --parallel 3
+ctest --test-dir build/host --output-on-failure -j 3
+cmake -S compiler -B build/v020-debug -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+  -DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++ \
+  -DLLVM_DIR="$(llvm-config --cmakedir)" -DPython3_EXECUTABLE=/usr/bin/python3.14
+cmake --build build/v020-debug --parallel 2
+ctest --test-dir build/v020-debug --output-on-failure -j 3
+build/host/vaqc run examples/language/parameter_modes.vqr
+build/host/vaqc fmt --check examples/language/parameter_modes.vqr
+```
+
+本机测试使用 Python 3.14，gRPC 原生扩展须与之匹配。协议套件还需要 nghttp2 开发包、OpenSSL 和 zlib。Zed 高亮查询和 LSP 通过命令行测试。
+
+## 性能对照
+
+使用同一 LLVM、Clang 和 Release 配置分别构建 `main` 基线和开发分支。两侧使用独立的暖缓存，交替运行，每个组合去掉首次结果后取七次中位数。用户程序使用 `-O0`。计时为当前机器的进程墙钟时间，含工具启动和构建所需的子进程。
+
+| 输入和命令 | 基线中位数 | 分支中位数 |
+| --- | ---: | ---: |
+| Hello，`check` | 158.5 ms | 153.6 ms |
+| Hello，`build` | 271.9 ms | 268.0 ms |
+| P1102，`check` | 177.1 ms | 186.9 ms |
+| P1102，`build` | 707.1 ms | 705.1 ms |
+
+基线和分支的各组数据范围相交。当前结果可以记录这两个入口的运行量级，无法据此判定整套标准库的性能变化。

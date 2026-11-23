@@ -56,7 +56,7 @@ class IoAcceptance(CompilerCase):
         self.assertIn(b"borrow from a temporary", self.process(VAQC, "check", source, good=False).stderr)
 
     def test_p1102_counts_and_input_errors(self):
-        self.process(VAQC, "build", REPOSITORY / "examples/p1102.vqr", "-o", "p1102")
+        self.process(VAQC, "build", REPOSITORY / "examples/uses/p1102.vqr", "-o", "p1102")
         for data, expected in (
             (b"4 1\n1 1 2 3\n", b"3\n"), (b"4 1\n1 1 2 2\n", b"4\n"),
             (b"3 9\n2 2 2\n", b"0\n"),
@@ -67,6 +67,44 @@ class IoAcceptance(CompilerCase):
             result = self.process("./p1102", input=data, good=False)
             self.assertEqual(result.stdout, b"")
             self.assertIn(error, result.stderr)
+
+    def test_scanner_owns_temporary_and_moved_host_files(self):
+        result = self.run_source(r'''
+            import (bufio, fs, io)
+            extern "C" func fcntl(fd: c_int, command: c_int) c_int;
+
+            func main() !void {
+                {
+                    var direct: bufio.Scanner = bufio.newScanner(io.stdin())!;
+                    io.println(direct.readInt<i32>()!)!;
+                    var moved = move(direct);
+                    io.println(moved.readInt<i32>()!)!;
+                    io.println(moved.nextInt<i32>()! == null)!;
+                }
+                if unsafe { fcntl(0, 1) } < 0 { panic("scanner closed stdin"); }
+                fs.writeFile("scanner.txt", "19 23".asBytes())!;
+                var closed: i32;
+                {
+                    var owned = io.HostFile.open("scanner.txt".asBytes(), 1, 0)!;
+                    closed = owned.systemDescriptor()!;
+                    var scanner = bufio.newScanner(move(owned))!;
+                    io.println(scanner.readInt<i32>()!)!;
+                }
+                if unsafe { fcntl(closed, 1) } >= 0 { panic("scanner left owned file open"); }
+                var file = io.HostFile.open("scanner.txt".asBytes(), 1, 0)!;
+                var descriptor = file.systemDescriptor()!;
+                var scanner = bufio.newScanner(move(file))!;
+                io.println(scanner.readInt<i32>()! + scanner.readInt<i32>()!)!;
+                var memory = io.MemoryReader("7".asBytes());
+                scanner.reset(&memory);
+                io.println(scanner.readInt<i32>()!)!;
+                if unsafe { fcntl(descriptor, 1) } >= 0 { panic("reset left owned file open"); }
+                var pair = (io.MemoryReader("8".asBytes()), 0);
+                var borrowed = bufio.newScanner(&pair.0)!;
+                io.println(borrowed.readInt<i32>()!)!;
+            }
+        ''', input=b"11 22")
+        self.assertEqual(result.stdout, b"11\n22\ntrue\n19\n42\n7\n8\n")
 
     def test_standard_streams_and_legacy_println(self):
         result = self.run_source(r'''
@@ -286,6 +324,18 @@ class IoAcceptance(CompilerCase):
         result = self.process(VAQC, "check", source, "--target", "thumbv7m-none-eabi",
                               "--profile", "freestanding", good=False)
         self.assertIn(b"host I/O requires hosted GNU/Linux", result.stderr)
+
+    def test_borrowed_scanner_keeps_freestanding_io_independent(self):
+        source = self.source("borrowed.vqr", '''
+            import (bufio, io)
+            func first(reader: *io.Reader) !?bufio.ByteToken {
+                var scanner = bufio.newScanner(reader)!;
+                scanner.nextBytes()
+            }
+        ''')
+        self.process(VAQC, "build", "--emit=llvm-ir", "--target", "thumbv7m-none-eabi",
+                     "--profile", "freestanding", source, "-o", "bare.ll")
+        self.assertNotIn("__vqr_io_", (self.root / "bare.ll").read_text())
 
 
 if __name__ == "__main__":

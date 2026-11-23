@@ -1181,6 +1181,17 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
       auto *t = c.parameters[offset + i];
       auto a = n->children[i + 1];
       auto *from = t->kind == Kind::Reference ? referenceHint(a) : hint(a);
+      if (!from && a->kind == NodeKind::Unary && a->text == "&") {
+        // Address-of always produces a pointer, even when the pointee type
+        // cannot be inferred before selecting the overload.
+        auto *target = t;
+        while (target->kind == Kind::Optional || target->kind == Kind::Result)
+          target = target->parts[0];
+        if (target->kind != Kind::Pointer && !(target->kind == Kind::Reference && target->compatible)) {
+          valid = false;
+          break;
+        }
+      }
       auto math = mathInteger(a);
       unsigned rank = 0;
       for (;;) {

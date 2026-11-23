@@ -179,6 +179,11 @@ in one executable. x86-64 is the executed host target in this integration.
 两者原样传播输入错误和溢出。包级 `bufio.readLine` 每次只消费一行；
 连续高吞吐读取可复用同一 `BufferedReader`。
 
+宿主程序可以直接使用 `var scan = bufio.newScanner(io.stdin())!;`。
+这个重载按值接收 `io.HostFile`。传入已有文件时写 `bufio.newScanner(move(file))!`。
+扫描器销毁或改用 `reset(&reader)` 时释放所持文件，标准输入的系统描述符仍由进程持有。
+传入 `&reader` 的重载继续借用输入流，调用方负责保证它在扫描期间有效。
+
 ## Recoverable transfers and file identity
 
 `readExactProgress` and `writeAllProgress` report the confirmed byte count

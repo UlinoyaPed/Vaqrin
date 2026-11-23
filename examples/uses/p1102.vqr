@@ -1,12 +1,11 @@
 import (io, bufio, coll)
 
 func main() !void {
-    var input = io.stdin();
-    var scan = bufio.newScanner(&input)!;
+    var scan = bufio.newScanner(io.stdin())!;
     var n = scan.readInt<i64>()!;
     var c = scan.readInt<i64>()!;
     var freq = coll.i64Map<i64>();
-    for i in i64(0)..n {
+    for i in 0i64..n {
         var key = scan.readInt<i64>()!;
         count := freq.getOrInsert(key, 0)!;
         count++;

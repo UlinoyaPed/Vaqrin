@@ -6,7 +6,10 @@ pub error BufferError { InvalidCapacity, BufferFull, UnreadUnavailable, TokenToo
 pub class BufferedReader {
     #copy: disabled
     #implements: io.Reader
-    var source: *io.Reader;
+    var source: ?*io.Reader;
+    comptime if __vqr_host_supports_io() {
+        var ownedSource: ?io.HostFile = null;
+    }
     var data: coll.Vec<u8>;
     var position: usize;
     var filled: usize;
@@ -15,13 +18,32 @@ pub class BufferedReader {
     var lastByte: ?u8;
     var pending: coll.Vec<u8>;
     var pendingDelimiter: u8;
-public:
-    func init(reader: *io.Reader, size: usize) !void
-        : source(reader), data(coll.Vec<u8>()), position(0), filled(0), capacity(size), eof(false), lastByte(null),
+    func init(size: usize) !void
+        : source(null), data(coll.Vec<u8>()), position(0), filled(0), capacity(size), eof(false), lastByte(null),
           pending(coll.Vec<u8>()), pendingDelimiter(0) {
         if size == 0 { return BufferError.InvalidCapacity; }
         data.reserve(size)!;
         for index in usize(0)..size { data.push(0)!; }
+    }
+    comptime if __vqr_host_supports_io() {
+        func readSource(dst: []u8) !usize {
+            switch ownedSource {
+                some(ref reader) => { return io.read(&reader, dst); },
+                null => {},
+            }
+            io.read(source.unwrap(), dst)
+        }
+        func releaseOwnedSource() void { ownedSource = null; }
+    } else {
+        func readSource(dst: []u8) !usize { io.read(source.unwrap(), dst) }
+        func releaseOwnedSource() void {}
+    }
+public:
+    func init(reader: *io.Reader, size: usize) !void : self(size) { source = some(reader); }
+    comptime if __vqr_host_supports_io() {
+        func init(reader: io.HostFile, size: usize) !void : self(size) {
+            ownedSource = some(move(reader));
+        }
     }
     func fill() !void {
         if eof { return; }
@@ -33,7 +55,7 @@ public:
             position = 0;
         }
         if filled == capacity { return; }
-        var count = io.read(source, buffer[filled..capacity])!;
+        var count = readSource(buffer[filled..capacity])!;
         if count == 0 { eof = true; return; }
         filled += count;
     }
@@ -143,7 +165,8 @@ public:
     }
     const func bufferLen() usize { filled - position }
     func reset(reader: *io.Reader) void {
-        source = reader;
+        releaseOwnedSource();
+        source = some(reader);
         position = 0;
         filled = 0;
         eof = false;
@@ -260,10 +283,14 @@ pub class Scanner {
     var mode: SplitMode;
     var pending: coll.Vec<u8>;
     var tokenStart: u64;
-public:
-    func init(source: *io.Reader) !void
-        : reader(BufferedReader(source, 4096)!), maximum(1048576), consumed(0), mode(SplitMode.AsciiWhitespace),
+    func init(buffered: BufferedReader, maxToken: usize)
+        : reader(move(buffered)), maximum(maxToken), consumed(0), mode(SplitMode.AsciiWhitespace),
           pending(coll.Vec<u8>()), tokenStart(0) {}
+public:
+    func init(source: *io.Reader) !void : self(BufferedReader(source, 4096)!, 1048576) {}
+    comptime if __vqr_host_supports_io() {
+        func init(source: io.HostFile) !void : self(BufferedReader(move(source), 4096)!, 1048576) {}
+    }
     func setMaxToken(value: usize) void { maximum = value; }
     func setSplitMode(value: SplitMode) void { mode = value; }
     const func position() u64 { consumed }
@@ -352,6 +379,7 @@ pub func newWriter(writer: *io.Writer, capacity: usize) !BufferedWriter {
     BufferedWriter(writer, capacity)
 }
 pub func newScanner(reader: *io.Reader) !Scanner { Scanner(reader) }
+pub func newScanner(reader: io.HostFile) !Scanner { Scanner(move(reader)) }
 pub func readLine(reader: *BufferedReader, maxBytes: usize) !?string {
     reader.readLine(maxBytes)
 }

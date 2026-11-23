@@ -12,6 +12,7 @@ ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::v
   if (key.starts_with("__vqr_task_")) return taskIntrinsic(key.substr(11), n, types);
   if (key.starts_with("__vqr_sync_")) return syncIntrinsic(key.substr(11), n);
   if (key == "__vqr_host_supports_tasks") return {p.boolTy, ir.getInt1(p.hostedLinux64())};
+  if (key == "__vqr_host_supports_io") return {p.boolTy, ir.getInt1(p.hostedLinux64() || p.hostedMac64())};
   if (key == "__vqr_host_is_windows") return {p.boolTy, ir.getInt1(p.hostedWindows64())};
   if (key == "__vqr_clock_platform") {
     if (!p.hostedLinux64() && !p.hostedMac64() && !p.hostedWindows64())

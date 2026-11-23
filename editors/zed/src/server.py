@@ -21,8 +21,8 @@ if "debug_hover_frames" not in globals():
 if "read_packet" not in globals():
     from protocol import read_packet
 
-KEYWORDS = """package import as pub var const comptime func class interface enum error type public
-private static operator embed self extern export unsafe return break continue if else switch
+KEYWORDS = """package import as pub var const comptime func class interface enum error type
+static operator embed self extern export unsafe return break continue if else switch
 select for in move new catch true false null ref""".split()
 CONTEXTUAL_KEYWORDS = ("from", "let", "mut", "raw", "while")
 TYPES = """bool char str string void never ErrorId Self isize usize c_int c_char
@@ -302,9 +302,7 @@ class SourceIndex:
             public = "pub" in modifiers[1].split()
             if owner:
                 outer = next((item for item in self.classes if item.name == owner), None)
-                access = self.code[outer.scope[0]:start] if outer else ""
-                labels = re.findall(r"(?m)^\s*(public|private):", access)
-                public |= bool(outer and outer.kind == "interface" or labels and labels[-1] == "public")
+                public |= bool(outer and outer.kind == "interface")
             signature = self.text[line + modifiers.start(1):finish].strip()
             labels = tuple(f"{modifier}{name}: {type_name}" for _, name, modifier, type_name in params)
             if kind == "func" and self.code[bracket:bracket + 1] == "(":

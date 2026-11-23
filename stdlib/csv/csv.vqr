@@ -16,8 +16,7 @@ pub class CsvOptions {
     pub var maxRecordBytes: usize;
     pub var maxInputBytes: usize;
     pub var maxRecords: usize;
-public:
-    func init()
+    pub func init()
         : delimiter(44), quote(34), lineEnding(LineEnding.CRLF), hasHeader(false),
           maxFieldBytes(1024 * 1024), maxRecordBytes(8 * 1024 * 1024),
           maxInputBytes(64 * 1024 * 1024), maxRecords(1_000_000) {}
@@ -40,14 +39,13 @@ pub class CsvReader {
     var recordNumber: usize;
     var byteOffset: usize;
     var headerValues: ?coll.Vec<string>;
-public:
-    func init(reader: *io.Reader, options: CsvOptions) !void
+    pub func init(reader: *io.Reader, options: CsvOptions) !void
         : reader(reader), options(options), pendingByte(null), eof(false),
           recordNumber(0), byteOffset(0), headerValues(null) {
         validateOptions(&options)!;
     }
 
-    func readRecord() !?coll.Vec<string> {
+    pub func readRecord() !?coll.Vec<string> {
         for {
             var row = readRawRecord()!;
             switch move(row) {
@@ -63,7 +61,7 @@ public:
         }
     }
 
-    func readFields(dst: *coll.Vec<string>) !bool {
+    pub func readFields(dst: *coll.Vec<string>) !bool {
         dst.clear();
         var row = readRecord()!;
         switch move(row) {
@@ -75,13 +73,12 @@ public:
         }
     }
 
-    const func headers() ?*const coll.Vec<string> {
+    pub const func headers() ?*const coll.Vec<string> {
         switch headerValues { null => null, some(ref value) => some(&value) }
     }
-    const func position() (usize, usize) { (recordNumber, byteOffset) }
-    func close() void {}
+    pub const func position() (usize, usize) { (recordNumber, byteOffset) }
+    pub func close() void {}
 
-private:
     func nextByte() !?u8 {
         switch pendingByte {
             some(value) => { pendingByte = null; return some(value); },
@@ -209,11 +206,10 @@ pub class CsvWriter {
     var writer: *io.Writer;
     var options: CsvOptions;
     var recordNumber: usize;
-public:
-    func init(writer: *io.Writer, options: CsvOptions) !void
+    pub func init(writer: *io.Writer, options: CsvOptions) !void
         : writer(writer), options(options), recordNumber(0) { validateOptions(&options)!; }
 
-    func writeRecord(fields: []const str) !void {
+    pub func writeRecord(fields: []const str) !void {
         var encoded = coll.Vec<u8>();
         for index in usize(0)..fields.len() {
             if index != 0 { encoded.push(options.delimiter)!; }
@@ -228,10 +224,10 @@ public:
         io.writeAll(writer, encoded.asConstSlice())!;
         recordNumber++;
     }
-    func writeAll(rows: []const []const str) !void {
+    pub func writeAll(rows: []const []const str) !void {
         for row in rows { writeRecord(row)!; }
     }
-    func flush() !void { writer.flush() }
+    pub func flush() !void { writer.flush() }
 }
 
 pub func parseRecord(value: str, options: CsvOptions) !coll.Vec<string> {

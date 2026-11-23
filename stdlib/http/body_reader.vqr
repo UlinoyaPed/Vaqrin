@@ -18,8 +18,7 @@ pub class BodyReader {
     var line: coll.Vec<u8>;
     var seenCr: bool;
     var failure: ?ErrorId;
-public:
-    func init(reader: *io.Reader, framing: Framing, limits: HttpLimits, budget: ReadBudget,
+    pub func init(reader: *io.Reader, framing: Framing, limits: HttpLimits, budget: ReadBudget,
               noBody: bool, untilClose: bool) !void
         : source(reader), phase(BodyPhase.End), remaining(framing.length ?? 0),
           allowance(limits.maxBodyBytes), metadataAllowance(budget.remaining),
@@ -34,9 +33,9 @@ public:
         }
     }
 
-    const func isComplete() bool { phase == BodyPhase.End && failure == null }
+    pub const func isComplete() bool { phase == BodyPhase.End && failure == null }
 
-    func read(dst: []u8) !usize {
+    pub func read(dst: []u8) !usize {
         if dst.len() == 0 { return 0; }
         if failure != null { return failure.unwrap(); }
         advance(dst) catch (reason) {
@@ -45,7 +44,6 @@ public:
         }
     }
 
-private:
     func advance(dst: []u8) !usize {
         for {
             switch phase {

@@ -208,7 +208,7 @@ HashMap 操作：
 - `len`、`capacity`、`isEmpty`、`reserve`、`reserveAdditional`
 - `insert(key,value) -> !?V`
 - `insertPreserving(key,value) -> InsertResult<K,V>`
-- `get(key: in &const K) -> ?&const V`、`getMut(key: in &const K) -> ?&V`
+- `get(key: in K) -> ?&const V`、`getMut(key: in K) -> ?&V`
 - `getKeyValue(key) -> ?(*const K,*const V)`、`containsKey(key) -> bool`
 - `remove(key) -> ?V`、`removeEntry(key) -> ?(K,V)`
 - `retain(predicate)`、`extend(entries) -> !void`
@@ -224,7 +224,7 @@ BTreeMap 构造必须提供严格弱序回调 `less: func(*const K,*const K) boo
 - `init(less)`、`withComparator(less)`
 - `len`、`isEmpty`
 - `insert(key,value) -> !?V`
-- `get(key: in &const K) -> ?&const V`、`getMut(key: in &const K) -> ?&V`、`containsKey(key) -> bool`
+- `get(key: in K) -> ?&const V`、`getMut(key: in K) -> ?&V`、`containsKey(key) -> bool`
 - `remove(key) -> ?V`、`removeEntry(key) -> ?(K,V)`
 - `first/last -> ?(*const K,*const V)`
 - `popFirst/popLast -> ?(K,V)`
@@ -238,7 +238,7 @@ BTreeSet 提供 `init(less)`、`withComparator(less)`、`len/isEmpty/contains/in
 
 ## 6. 内存、所有权和迭代器合同
 
-v0.1.4 的 `Vec.get/getMut`、`HashMap.get/getMut`、`BTreeMap.get/getMut` 返回可空引用，来源是容器接收者。容器持有的引用结束前，禁止冲突的结构性写入及移动。映射的查询、检查和删除参数使用 `in &const K`；集合对应操作使用 `in &const T`。
+的 `Vec.get/getMut`、`HashMap.get/getMut`、`BTreeMap.get/getMut` 返回可空引用，来源是容器接收者。容器持有的引用结束前，禁止冲突的结构性写入及移动。映射的查询、检查和删除参数使用 `in K`；集合对应操作使用 `in T`。
 
 Vec 的 `getPtr/getMutPtr` 保留底层裸地址访问，指针迭代器、BTree 游标和元组指针查询保留原有裸地址合同。
 

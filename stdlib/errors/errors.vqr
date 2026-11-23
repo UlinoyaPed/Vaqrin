@@ -19,13 +19,12 @@ pub class SourceLocation {
             return ReportError.InvalidLocation;
         }
     }
-public:
-    const func file() str { fileValue }
-    const func startLine() u32 { startLineValue }
-    const func startColumn() u32 { startColumnValue }
-    const func endLine() u32 { endLineValue }
-    const func endColumn() u32 { endColumnValue }
-    const func function() str { functionValue }
+    pub const func file() str { fileValue }
+    pub const func startLine() u32 { startLineValue }
+    pub const func startColumn() u32 { startColumnValue }
+    pub const func endLine() u32 { endLineValue }
+    pub const func endColumn() u32 { endColumnValue }
+    pub const func function() str { functionValue }
 }
 
 pub class Frame {
@@ -37,11 +36,10 @@ pub class Frame {
           attrsValue(coll.Vec<log.Attr>()) {
         for &attr in iterator.SliceIterRef<log.Attr>(attrs) { attrsValue.push(attr.clone()!)!; }
     }
-public:
-    const func message() str { messageValue }
-    const func location() ?SourceLocation { locationValue }
-    const func attrs() []const log.Attr { attrsValue.asConstSlice() }
-    const func clone() !Self { Frame(messageValue, locationValue, attrsValue.asConstSlice())! }
+    pub const func message() str { messageValue }
+    pub const func location() ?SourceLocation { locationValue }
+    pub const func attrs() []const log.Attr { attrsValue.asConstSlice() }
+    pub const func clone() !Self { Frame(messageValue, locationValue, attrsValue.asConstSlice())! }
 }
 
 pub class Report {
@@ -55,15 +53,14 @@ pub class Report {
         : errorValue(cause), messageValue(text.fromBytes(message.asBytes())!),
           severityValue(ErrorSeverity.Error), frames(coll.Vec<Frame>()),
           children(coll.Vec<Report>()) {}
-public:
-    static func fromError(cause: ErrorId) !Self {
+    pub static func fromError(cause: ErrorId) !Self {
         Report("error", some(cause))!
     }
-    static func new(message: str) !Self { Report(message, null)! }
-    const func message() str { messageValue }
-    const func severity() ErrorSeverity { severityValue }
-    func setSeverity(value: ErrorSeverity) void { severityValue = value; }
-    const func rootError() ?ErrorId {
+    pub static func new(message: str) !Self { Report(message, null)! }
+    pub const func message() str { messageValue }
+    pub const func severity() ErrorSeverity { severityValue }
+    pub func setSeverity(value: ErrorSeverity) void { severityValue = value; }
+    pub const func rootError() ?ErrorId {
         for &child in iterator.SliceIterRef<Report>(children.asConstSlice()) {
             switch child.rootError() {
                 some(cause) => { return some(cause); },
@@ -72,40 +69,40 @@ public:
         }
         errorValue
     }
-    const func contextFrames() []const Frame { frames.asConstSlice() }
-    const func causeSlice() []const Report { children.asConstSlice() }
-    const func frameCount() usize { frames.len() }
-    func reserveFrames(count: usize) !void { frames.reserve(count)!; }
-    func reserveCauses(count: usize) !void { children.reserve(count)!; }
-    const func causeCount() usize { children.len() }
+    pub const func contextFrames() []const Frame { frames.asConstSlice() }
+    pub const func causeSlice() []const Report { children.asConstSlice() }
+    pub const func frameCount() usize { frames.len() }
+    pub func reserveFrames(count: usize) !void { frames.reserve(count)!; }
+    pub func reserveCauses(count: usize) !void { children.reserve(count)!; }
+    pub const func causeCount() usize { children.len() }
 
-    func addContext(message: str) !void {
+    pub func addContext(message: str) !void {
         var empty = [0]log.Attr{};
         frames.push(Frame(message, null, empty[:])!)!
     }
-    func addContextAt(message: str, location: SourceLocation, attrs: []const log.Attr) !void {
+    pub func addContextAt(message: str, location: SourceLocation, attrs: []const log.Attr) !void {
         frames.push(Frame(message, some(move(location)), attrs)!)!
     }
-    func withContext(message: str) !Self {
+    pub func withContext(message: str) !Self {
         var result = clone()!;
         result.addContext(message)!;
         move(result)
     }
-    func addCause(report: Report) !void { children.push(move(report))!; }
-    func join(other: Report) !Self {
+    pub func addCause(report: Report) !void { children.push(move(report))!; }
+    pub func join(other: Report) !Self {
         var result = Report.new("multiple errors")!;
         result.reserveCauses(2)!;
         result.addCause(clone()!)!;
         result.addCause(move(other))!;
         move(result)
     }
-    const func matches(cause: ErrorId) bool {
+    pub const func matches(cause: ErrorId) bool {
         switch errorValue { some(value) => { if value == cause { return true; } }, null => {} }
         for &child in iterator.SliceIterRef<Report>(children.asConstSlice()) { if child.matches(cause) { return true; } }
         false
     }
-    const func causes() ReportCauseIter { ReportCauseIter(children.asConstSlice()) }
-    const func clone() !Self {
+    pub const func causes() ReportCauseIter { ReportCauseIter(children.asConstSlice()) }
+    pub const func clone() !Self {
         var result = Report(messageValue, errorValue)!;
         result.severityValue = severityValue;
         result.reserveFrames(frames.len())!;
@@ -114,11 +111,11 @@ public:
         for &child in iterator.SliceIterRef<Report>(children.asConstSlice()) { result.children.push(child.clone()!)!; }
         move(result)
     }
-    const func format(writer: *io.Writer) !void {
+    pub const func format(writer: *io.Writer) !void {
         formatNode(messageValue, errorValue, frames.asConstSlice(),
             children.asConstSlice(), writer, 0)
     }
-    const func formatString() !string {
+    pub const func formatString() !string {
         var writer = io.MemoryWriter();
         formatNode(messageValue, errorValue, frames.asConstSlice(),
             children.asConstSlice(), &writer, 0)!;
@@ -126,7 +123,6 @@ public:
         text.fromBytes(bytes.asConstSlice())
     }
 
-private:
 }
 
 pub error ReportError { Empty, InvalidLocation, FormatFailed, TooManyCauses }
@@ -134,9 +130,8 @@ pub error ReportError { Empty, InvalidLocation, FormatFailed, TooManyCauses }
 pub class ReportCauseIter {
     var values: []const Report;
     var index: usize;
-public:
     pub func init(values: []const Report) : values(values), index(0) {}
-    func next() ?*const Report {
+    pub func next() ?*const Report {
         if index >= values.len() { return null; }
         var item = &values[index];
         index++;
@@ -210,18 +205,17 @@ func formatU32(value: u32) !string {
 
 pub class ErrorSink {
     var reports: coll.Vec<Report>;
-public:
     pub func init() : reports(coll.Vec<Report>()) {}
-    func push(report: Report) !void { reports.push(move(report))!; }
-    const func len() usize { reports.len() }
-    const func isEmpty() bool { reports.isEmpty() }
-    func clear() void { reports.clear(); }
-    func drain() ReportDrain {
+    pub func push(report: Report) !void { reports.push(move(report))!; }
+    pub const func len() usize { reports.len() }
+    pub const func isEmpty() bool { reports.isEmpty() }
+    pub func clear() void { reports.clear(); }
+    pub func drain() ReportDrain {
         var owned = mem.replace<coll.Vec<Report>>(&reports, coll.Vec<Report>());
         owned.reverse();
         ReportDrain(move(owned))
     }
-    func toReport() !Report {
+    pub func toReport() !Report {
         if reports.isEmpty() { return ReportError.Empty; }
         if reports.len() == 1 { return reports.pop().unwrap(); }
         var result = Report.new("multiple errors")!;
@@ -236,9 +230,8 @@ public:
 
 pub class ReportDrain {
     var items: coll.Vec<Report>;
-public:
     pub func init(items: coll.Vec<Report>) : items(move(items)) {}
-    func next() ?Report { items.pop() }
+    pub func next() ?Report { items.pop() }
 }
 
 pub func fromError(cause: ErrorId) !Report { Report.fromError(cause) }

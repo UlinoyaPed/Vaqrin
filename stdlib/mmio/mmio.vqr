@@ -25,11 +25,10 @@ pub func instructionBarrier() void { __vqr_mmio_instruction_barrier(); }
 pub class Volatile<T> {
     var location: *T;
     func init(location: *T) : location(location) {}
-public:
-    static func new(ptr: *T) Self { Volatile<T>(ptr) }
-    unsafe const func load() T { unsafe { volatileLoad<T>(location) } }
-    unsafe func store(value: T) void { unsafe { volatileStore<T>(location, move(value)); } }
-    unsafe func update<F: Movable>(transform: F) void {
+    pub static func new(ptr: *T) Self { Volatile<T>(ptr) }
+    pub unsafe const func load() T { unsafe { volatileLoad<T>(location) } }
+    pub unsafe func store(value: T) void { unsafe { volatileStore<T>(location, move(value)); } }
+    pub unsafe func update<F: Movable>(transform: F) void {
         unsafe { volatileUpdate<T, F>(location, move(transform)); }
     }
 }
@@ -37,15 +36,14 @@ public:
 pub class Register<T: Movable> {
     var location: *T;
     func init(ptr: *T) : location(ptr) {}
-public:
-    static func new(ptr: *T) Self { Register<T>(ptr) }
-    unsafe const func read() T { unsafe { volatileLoad<T>(location) } }
-    unsafe func write(value: T) void { unsafe { volatileStore<T>(location, move(value)); } }
-    unsafe func modify<F: Movable>(transform: F) void {
+    pub static func new(ptr: *T) Self { Register<T>(ptr) }
+    pub unsafe const func read() T { unsafe { volatileLoad<T>(location) } }
+    pub unsafe func write(value: T) void { unsafe { volatileStore<T>(location, move(value)); } }
+    pub unsafe func modify<F: Movable>(transform: F) void {
         unsafe { volatileUpdate<T, F>(location, move(transform)); }
     }
 
-    unsafe func setBits(mask: T) void {
+    pub unsafe func setBits(mask: T) void {
         unsafe {
             var value = read();
             var updated: !T = T(value | mask);
@@ -53,7 +51,7 @@ public:
         }
     }
 
-    unsafe func clearBits(mask: T) void {
+    pub unsafe func clearBits(mask: T) void {
         unsafe {
             var value = read();
             var updated: !T = T(value & ~mask);
@@ -66,12 +64,11 @@ pub class MmioRegion {
     var start: usize;
     var size: usize;
     func init(base: usize, length: usize) : start(base), size(length) {}
-public:
-    static func new(base: usize, length: usize) Self { MmioRegion(base, length) }
+    pub static func new(base: usize, length: usize) Self { MmioRegion(base, length) }
 
-    const func contains(address: usize) bool { address >= start && address - start < size }
+    pub const func contains(address: usize) bool { address >= start && address - start < size }
 
-    unsafe const func registerAt<T: Movable>(offset: usize) !Register<T> {
+    pub unsafe const func registerAt<T: Movable>(offset: usize) !Register<T> {
         if offset >= size || meta.sizeOf<T>() > size - offset { return MmioError.OutsideRegion; }
         if offset > ~usize(0) - start { return MmioError.AddressOverflow; }
         var address = start + offset;

@@ -69,26 +69,25 @@ class Incoming {
 pub class Server {
     #copy: disabled
     var routes: coll.Vec<Route>;
-public:
-    func init() : routes(coll.Vec<Route>()) {}
-    func register(path: str, handler: *UnaryHandler) !void {
+    pub func init() : routes(coll.Vec<Route>()) {}
+    pub func register(path: str, handler: *UnaryHandler) !void {
         registerRoute(path, RouteHandler.Unary(UnaryRoute.Synchronous(handler)))
     }
     // The shared handler must remain alive at a stable address while registered.
-    unsafe func registerConcurrent<H: ConcurrentUnaryHandler & Shareable>(path: str, handler: *const H) !void {
+    pub unsafe func registerConcurrent<H: ConcurrentUnaryHandler + Shareable>(path: str, handler: *const H) !void {
         var route: *const ConcurrentUnaryHandler = handler;
         registerRoute(path, RouteHandler.Unary(UnaryRoute.Concurrent(route)))
     }
-    func registerStreaming(path: str, handler: *StreamingHandler) !void {
+    pub func registerStreaming(path: str, handler: *StreamingHandler) !void {
         registerRoute(path, RouteHandler.Streaming(handler))
     }
     // The shared handler must remain alive at a stable address while registered.
-    unsafe func registerConcurrentStreaming<H: ConcurrentStreamingHandler & Shareable>(
+    pub unsafe func registerConcurrentStreaming<H: ConcurrentStreamingHandler + Shareable>(
         path: str, handler: *const H) !void {
         var route: *const ConcurrentStreamingHandler = handler;
         registerRoute(path, RouteHandler.ConcurrentStreaming(route))
     }
-    func serveTls(socket: tls.TlsStream, options: ServeOptions) !void {
+    pub func serveTls(socket: tls.TlsStream, options: ServeOptions) !void {
         var settings = http2.Settings();
         settings.maxStreams = options.maxConcurrentStreams;
         var session = http2.openTls(http2.Role.Server, &socket, settings)!;
@@ -96,7 +95,7 @@ public:
         stream.setTimeout(options.timeout)!;
         serve(&stream, &session, options, false, null)
     }
-    func serveH2c(socket: net.TcpStream, options: ServeOptions) !void {
+    pub func serveH2c(socket: net.TcpStream, options: ServeOptions) !void {
         var settings = http2.Settings();
         settings.maxStreams = options.maxConcurrentStreams;
         var session = http2.Connection.open(http2.Role.Server, settings)!;
@@ -104,21 +103,21 @@ public:
         stream.setTimeout(options.timeout)!;
         serve(&stream, &session, options, false, null)
     }
-    func serveConcurrentH2c(socket: net.AsyncTcpStream, options: ServeOptions) !void {
+    pub func serveConcurrentH2c(socket: net.AsyncTcpStream, options: ServeOptions) !void {
         serveConcurrentH2c(move(socket), options, null)
     }
-    func serveConcurrentH2c(socket: net.AsyncTcpStream, options: ServeOptions, stop: ?*const Shutdown) !void {
+    pub func serveConcurrentH2c(socket: net.AsyncTcpStream, options: ServeOptions, stop: ?*const Shutdown) !void {
         var settings = http2.Settings();
         settings.maxStreams = options.maxConcurrentStreams;
         var session = http2.Connection.open(http2.Role.Server, settings)!;
         var stream = Transport(StreamSocket.AsyncClear(move(socket)));
         serve(&stream, &session, options, true, stop)
     }
-    func acceptConcurrentTls(listener: *net.AsyncTcpListener, acceptor: *const tls.TlsAcceptor,
+    pub func acceptConcurrentTls(listener: *net.AsyncTcpListener, acceptor: *const tls.TlsAcceptor,
                              options: ServeOptions, deadline: ?time.Deadline) !void {
         acceptConcurrentTls(listener, acceptor, options, deadline, null)
     }
-    func acceptConcurrentTls(listener: *net.AsyncTcpListener, acceptor: *const tls.TlsAcceptor,
+    pub func acceptConcurrentTls(listener: *net.AsyncTcpListener, acceptor: *const tls.TlsAcceptor,
                              options: ServeOptions, deadline: ?time.Deadline, stop: ?*const Shutdown) !void {
         socket, peer := listener.accept(deadline)!;
         var secure = acceptor.acceptAsync(move(socket), some(time.Deadline.after(options.timeout)!))!;
@@ -128,14 +127,13 @@ public:
         var stream = Transport(StreamSocket.AsyncSecure(move(secure)));
         serve(&stream, &session, options, true, stop)
     }
-    func acceptTls(listener: *net.TcpListener, acceptor: *const tls.TlsAcceptor, options: ServeOptions) !void {
+    pub func acceptTls(listener: *net.TcpListener, acceptor: *const tls.TlsAcceptor, options: ServeOptions) !void {
         raw, _ := listener.accept()!;
         raw.setReadTimeout(some(options.timeout))!;
         raw.setWriteTimeout(some(options.timeout))!;
         var secure = acceptor.accept(move(raw))!;
         serveTls(move(secure), options)
     }
-private:
     func registerRoute(path: str, handler: RouteHandler) !void {
         if !validMethod(path) || find(path) != null { return RpcError.InvalidMethod; }
         var name = text.fromBytes(path.asBytes())!;

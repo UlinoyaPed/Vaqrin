@@ -51,13 +51,12 @@ pub class RegexParser {
     var ranges: coll.Vec<CharRange>;
     var captureCount: usize;
     var captureNames: coll.Vec<CaptureName>;
-public:
-    func init(pattern: str, maxNodes: usize)
+    pub func init(pattern: str, maxNodes: usize)
         : source(pattern), position(0), nodeLimit(maxNodes),
           nodes(coll.Vec<AstNode>()), classes(coll.Vec<CharacterClass>()),
           ranges(coll.Vec<CharRange>()), captureCount(0), captureNames(coll.Vec<CaptureName>()) {}
 
-    func parse() !ParsedPattern {
+    pub func parse() !ParsedPattern {
         if nodeLimit == 0 { return RegexError.TooManyStates; }
         var root = parseExpression(0)!;
         if position != source.byteLen() { return RegexError.UnexpectedToken; }
@@ -71,7 +70,6 @@ public:
         }
     }
 
-private:
     func atEnd() bool { position >= source.byteLen() }
     func currentByte() u8 { source.asBytes()[position] }
     func nextByte() u8 { source.asBytes()[position + 1] }
@@ -399,8 +397,7 @@ pub class NfaCompiler {
     var flags: u8;
     var maxInput: usize;
     var maxSteps: usize;
-public:
-    func init(parsed: ParsedPattern, maxStates: usize, flags: u8,
+    pub func init(parsed: ParsedPattern, maxStates: usize, flags: u8,
               maxInput: usize, maxSteps: usize)
         : root(parsed.root), nodes(core.replace<coll.Vec<AstNode>>(&parsed.nodes, coll.Vec<AstNode>())), classes(core.replace<coll.Vec<CharacterClass>>(&parsed.classes, coll.Vec<CharacterClass>())),
           ranges(core.replace<coll.Vec<CharRange>>(&parsed.ranges, coll.Vec<CharRange>())), states(coll.Vec<State>()),
@@ -408,7 +405,7 @@ public:
           captureNames(core.replace<coll.Vec<CaptureName>>(&parsed.captureNames, coll.Vec<CaptureName>())), flags(flags),
           maxInput(maxInput), maxSteps(maxSteps) {}
 
-    func compile(pattern: str) !Regex {
+    pub func compile(pattern: str) !Regex {
         var fragment = compileNode(root, 0)!;
         var matchState = emit(State{op: Op.Match, value: 0, out: -1, alternate: -1})!;
         patchAll(&fragment.outs, matchState);
@@ -420,7 +417,6 @@ public:
               core.replace<coll.Vec<CaptureName>>(&captureNames, coll.Vec<CaptureName>()))
     }
 
-private:
     func emit(state: State) !i32 {
         if states.len() >= stateLimit { return RegexError.TooManyStates; }
         var index = i32(states.len())!;

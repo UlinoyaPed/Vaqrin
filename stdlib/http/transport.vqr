@@ -67,24 +67,22 @@ func exchange(reader: *io.Reader, writer: *io.Writer, request: *Request, limits:
 
 pub class Client {
     pub var limits: HttpLimits;
-public:
-    func init() : limits(HttpLimits()) {}
-    func setTimeout(value: time.Duration) void { limits.timeout = value; }
-    const func send(address: str, request: *Request) !Response {
+    pub func init() : limits(HttpLimits()) {}
+    pub func setTimeout(value: time.Duration) void { limits.timeout = value; }
+    pub const func send(address: str, request: *Request) !Response {
         var target = parseUrl(address)!;
         sendTo(&target, request)
     }
-    const func request(address: str, method: Method, body: Body) !Response {
+    pub const func request(address: str, method: Method, body: Body) !Response {
         var target = parseUrl(address)!;
         var path = pathTarget(&target)!;
         var message = Request.new(method, path)!;
         message.setBody(move(body));
         sendTo(&target, &message)
     }
-    const func get(address: str) !Response { request(address, Method.GET, Body()) }
-    const func head(address: str) !Response { request(address, Method.HEAD, Body()) }
-    const func post(address: str, body: Body) !Response { request(address, Method.POST, move(body)) }
-private:
+    pub const func get(address: str) !Response { request(address, Method.GET, Body()) }
+    pub const func head(address: str) !Response { request(address, Method.HEAD, Body()) }
+    pub const func post(address: str, body: Body) !Response { request(address, Method.POST, move(body)) }
     const func sendTo(target: *const Url, request: *Request) !Response {
         var secure = sameName(target.scheme(), "https");
         if !secure && !sameName(target.scheme(), "http") { return HttpError.UnsupportedScheme; }
@@ -118,11 +116,10 @@ pub class Server {
     var listener: net.TcpListener;
     pub var limits: HttpLimits;
     func init(value: net.TcpListener) : listener(move(value)), limits(HttpLimits()) {}
-public:
-    static func bind(address: net.SocketAddr) !Self { Server(net.listenTcp(address)!) }
-    const func localAddr() !net.SocketAddr { listener.localAddr() }
-    func close() !void { listener.close() }
-    func serveOne(handler: *Handler) !void {
+    pub static func bind(address: net.SocketAddr) !Self { Server(net.listenTcp(address)!) }
+    pub const func localAddr() !net.SocketAddr { listener.localAddr() }
+    pub func close() !void { listener.close() }
+    pub func serveOne(handler: *Handler) !void {
         var accepted = listener.accept()!;
         accepted.0.setReadTimeout(some(limits.timeout))!;
         accepted.0.setWriteTimeout(some(limits.timeout))!;

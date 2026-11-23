@@ -8,14 +8,13 @@ pub class Parser {
     var depth: usize;
     var elements: usize;
     var options: ParseOptions;
-public:
-    func init(value: str, options: ParseOptions)
+    pub func init(value: str, options: ParseOptions)
         : source(value), data(value.asBytes()), position(0), depth(0),
           elements(0), options(move(options)) {}
 
-    const func offset() usize { position }
+    pub const func offset() usize { position }
 
-    func parse() !Value {
+    pub func parse() !Value {
         if data.len() > options.maxBytes { return JsonError.SizeLimit; }
         skipWhitespace();
         var value = parseValue()!;
@@ -24,7 +23,6 @@ public:
         move(value)
     }
 
-private:
     func skipWhitespace() void {
         for position < data.len() {
             var byte = data[position];

@@ -7,9 +7,8 @@ class DeferredEvents {
     #copy: disabled
     var events: coll.Vec<http2.Event>;
     var buffered: usize;
-public:
-    func init() : events(coll.Vec<http2.Event>()), buffered(0) {}
-    func defer(event: http2.Event) !void {
+    pub func init() : events(coll.Vec<http2.Event>()), buffered(0) {}
+    pub func defer(event: http2.Event) !void {
         var size = event.payload().len();
         if events.len() >= 1024 || size > 4 * 1024 * 1024 - buffered {
             return http2.Http2Error.ResourceLimit;
@@ -17,17 +16,16 @@ public:
         events.push(move(event))!;
         buffered += size;
     }
-    func next(session: *http2.Connection) !?http2.Event {
+    pub func next(session: *http2.Connection) !?http2.Event {
         if events.len() != 0 { return take(0); }
         session.next()
     }
-    func forStream(stream: i32) ?http2.Event {
+    pub func forStream(stream: i32) ?http2.Event {
         for index in usize(0)..events.len() {
             if events.getPtr(index).unwrap().stream == stream { return take(index); }
         }
         null
     }
-private:
     func take(index: usize) ?http2.Event {
         var size = events.getPtr(index).unwrap().payload().len();
         buffered -= size;
@@ -53,8 +51,7 @@ pub class ServerStream {
     pub var deadline: ?time.Deadline;
     pub var initial: Metadata;
     pub var trailing: Metadata;
-public:
-    func init(socket: *Transport, session: *http2.Connection, deferred: *DeferredEvents,
+    pub func init(socket: *Transport, session: *http2.Connection, deferred: *DeferredEvents,
               id: i32, request: HeaderInfo, options: ServeOptions)
         : socket(socket), session(session), deferred(deferred), id(id),
           decoder(MessageReader(options.maxMessageBytes)), limit(options.maxMessageBytes),
@@ -69,12 +66,12 @@ public:
             decoder.useCompression(Compression.Gzip);
         }
     }
-    const func maxMessageBytes() usize { limit }
-    const func checkDeadline() !void {
+    pub const func maxMessageBytes() usize { limit }
+    pub const func checkDeadline() !void {
         if cancelled { return RpcError.Cancelled; }
         if deadline != null && deadline.unwrap().expired()! { return RpcError.DeadlineExceeded; }
     }
-    func sendHeaders() !void {
+    pub func sendHeaders() !void {
         checkDeadline()!;
         if acknowledged { return; }
         var headers = http2.HeaderBlock();
@@ -87,14 +84,14 @@ public:
         acknowledged = true;
         flush()
     }
-    func sendMessage(message: []const u8) !void {
+    pub func sendMessage(message: []const u8) !void {
         checkDeadline()!;
         var data = frameMessage(message, limit, compression)!;
         sendHeaders()!;
         session.sendData(id, data.asConstSlice(), false)!;
         flush()
     }
-    func recvMessage() !?coll.Vec<u8> {
+    pub func recvMessage() !?coll.Vec<u8> {
         for {
             checkDeadline()!;
             var payload = decoder.next()!;
@@ -116,7 +113,7 @@ public:
             };
         }
     }
-    func finish(result: Status) !void {
+    pub func finish(result: Status) !void {
         if cancelled { return; }
         socket.setTimeout(timeout)!;
         if acknowledged {
@@ -133,7 +130,6 @@ public:
         }
         session.flush(socket)
     }
-private:
     func nextEvent() !http2.Event {
         var waiting = deferred.forStream(id);
         if waiting != null {

@@ -1,7 +1,7 @@
 package num
 import (cmp)
 
-pub class Rational<T: Copyable & Movable> {
+pub class Rational<T: Copyable + Movable> {
     var numeratorValue: T;
     var denominatorValue: T;
 
@@ -20,7 +20,6 @@ pub class Rational<T: Copyable & Movable> {
         Rational<T>(reducedNumerator.toInteger<T>()!, reducedDenominator.toInteger<T>()!)
     }
 
-public:
     pub static func new(numerator: T, denominator: T) !Self {
         if denominator == T(0) { return NumError.ZeroDenominator; }
         var top = BigInt.fromInteger<T>(numerator)!;

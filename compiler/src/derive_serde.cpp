@@ -82,13 +82,13 @@ void generate(Decl &record, const std::string &serde, Span origin) {
   }
 
   std::string code =
-      "class VaqrinSerdeGenerated { public:\n"
-      "static func serdeFieldCount() usize { " + std::to_string(fields.size()) + " }\n"
-      "static func serdeFieldName(index: usize) ?str { switch index {\n";
+      "class VaqrinSerdeGenerated {\n"
+      "pub static func serdeFieldCount() usize { " + std::to_string(fields.size()) + " }\n"
+      "pub static func serdeFieldName(index: usize) ?str { switch index {\n";
   for (std::size_t i = 0; i < fields.size(); ++i)
     code += std::to_string(i) + " => some(" + fields[i].key + "),\n";
   code += "_ => null, } }\n";
-  code += "const func encodeSerde(vaqrinOutput: *" + serde + ".Serializer) !void {\n"
+  code += "pub const func encodeSerde(vaqrinOutput: *" + serde + ".Serializer) !void {\n"
           "vaqrinOutput.beginMap(some(usize(" + std::to_string(fields.size()) + ")))!;\n";
   for (std::size_t i = 0; i < fields.size(); ++i) {
     const auto &field = fields[i];
@@ -98,7 +98,7 @@ void generate(Decl &record, const std::string &serde, Span origin) {
             ">(&self." + field.declaration->name + ", vaqrinOutput)!;\n";
   }
   code += "vaqrinOutput.endMap() }\n"
-          "static func decodeSerde(vaqrinInput: *" + serde + ".Deserializer) !Self {\n"
+          "pub static func decodeSerde(vaqrinInput: *" + serde + ".Deserializer) !Self {\n"
           "vaqrinInput.beginMap()!;\n";
   for (std::size_t i = 0; i < fields.size(); ++i) {
     const auto &field = fields[i];

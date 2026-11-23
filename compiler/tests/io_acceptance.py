@@ -188,16 +188,15 @@ class IoAcceptance(CompilerCase):
                 #implements: io.Writer
                 var steps: usize;
                 var sink: io.MemoryWriter;
-            public:
-                func init() : steps(0), sink(io.MemoryWriter()) {}
-                func write(src: []const u8) !usize {
+                pub func init() : steps(0), sink(io.MemoryWriter()) {}
+                pub func write(src: []const u8) !usize {
                     steps++;
                     if steps == 2 { return io.IoError.WouldBlock; }
                     var chunk = if src.len() > 2 { usize(2) } else { src.len() };
                     sink.write(src[0..chunk])
                 }
-                func flush() !void {}
-                const func bytes() []const u8 { sink.asSlice() }
+                pub func flush() !void {}
+                pub const func bytes() []const u8 { sink.asSlice() }
             }
             func main() !void {
                 var native = InterruptWriter();

@@ -100,13 +100,12 @@ pub class ByteSplitIter {
     var tail: []const u8;
     var separator: []const u8;
     var finished: bool;
-public:
-    func init(data: []const u8, separator: []const u8) !void
+    pub func init(data: []const u8, separator: []const u8) !void
         : tail(data), separator(separator), finished(false) {
         if separator.len() == 0 { return BytesError.EmptyDelimiter; }
     }
 
-    func next() ?[]const u8 {
+    pub func next() ?[]const u8 {
         if finished { return null; }
         var part = tail;
         switch findSubslice(part, separator) {
@@ -135,8 +134,7 @@ pub class BytePattern {
     var needle: coll.Vec<u8>;
     var prefixes: coll.Vec<usize>;
     func init(pattern: coll.Vec<u8>, table: coll.Vec<usize>) : needle(move(pattern)), prefixes(move(table)) {}
-public:
-    static func compile(pattern: []const u8) !Self {
+    pub static func compile(pattern: []const u8) !Self {
         var needle = coll.Vec<u8>.fromSlice(pattern)!;
         var prefixes = coll.Vec<usize>.withCapacity(pattern.len())!;
         if pattern.len() != 0 { prefixes.push(0)!; }
@@ -149,7 +147,7 @@ public:
         BytePattern(move(needle), move(prefixes))
     }
 
-    const func find(haystack: []const u8) ?usize {
+    pub const func find(haystack: []const u8) ?usize {
         if needle.isEmpty() { return 0; }
         var matched: usize = 0;
         for index in usize(0)..haystack.len() {

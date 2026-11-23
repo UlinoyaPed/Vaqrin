@@ -29,19 +29,17 @@ func joinError(status: c_int) ErrorId {
     TaskError.StartFailed
 }
 
-class Completion<T: Movable & Sendable> {
+class Completion<T: Movable + Sendable> {
     pub var value: ?!T;
-public:
-    func init() : value(null) {}
+    pub func init() : value(null) {}
 }
 
-class Job<T: Movable & Sendable, F: Movable & Sendable> {
+class Job<T: Movable + Sendable, F: Movable + Sendable> {
     var callback: ?F;
     var completion: *Completion<T>;
-public:
-    func init(callback: F, completion: *Completion<T>) : callback(some(move(callback))), completion(completion) {}
+    pub func init(callback: F, completion: *Completion<T>) : callback(some(move(callback))), completion(completion) {}
 
-    func run() void {
+    pub func run() void {
         var own = unsafe { Box<Job<T, F>>.fromRaw(self) };
         var ready = opt.take<F>(&callback);
         var input = move(ready).unwrap();
@@ -53,28 +51,27 @@ public:
         completion.value = some(move(outcome));
     }
 
-    static func discard(value: *Completion<T>) void {
+    pub static func discard(value: *Completion<T>) void {
         var owned = unsafe { Box<Completion<T>>.fromRaw(value) };
     }
 }
 
-pub class Task<T: Movable & Sendable> {
+pub class Task<T: Movable + Sendable> {
     #copy: disabled
     var handle: *u8;
     var completion: *Completion<T>;
-public:
-    func init(handle: *u8, completion: *Completion<T>) : handle(handle), completion(completion) {}
-    const func id() TaskId { TaskId{value: __vqr_pointer_address(handle)} }
-    const func isFinished() bool { unsafe { __vqr_rt_task_finished(handle) } != 0 }
-    const func cancel() void { unsafe { __vqr_rt_task_cancel(handle); } }
+    pub func init(handle: *u8, completion: *Completion<T>) : handle(handle), completion(completion) {}
+    pub const func id() TaskId { TaskId{value: __vqr_pointer_address(handle)} }
+    pub const func isFinished() bool { unsafe { __vqr_rt_task_finished(handle) } != 0 }
+    pub const func cancel() void { unsafe { __vqr_rt_task_cancel(handle); } }
 
-    func join() !T {
+    pub func join() !T {
         var status = unsafe { __vqr_rt_task_join(handle, 1) };
         if status != 0 { return joinError(status); }
         takeResult()
     }
 
-    func tryJoin() !?T {
+    pub func tryJoin() !?T {
         var status = unsafe { __vqr_rt_task_join(handle, 0) };
         if status == 1 { return null; }
         if status != 0 { return joinError(status); }
@@ -82,8 +79,7 @@ public:
         some(move(item))
     }
 
-    func deinit() void { unsafe { __vqr_rt_task_release(handle); } }
-private:
+    pub func deinit() void { unsafe { __vqr_rt_task_release(handle); } }
     func takeResult() !T {
         var outcome = opt.take<!T>(&completion.value);
         move(outcome).unwrap()
@@ -100,15 +96,14 @@ pub class TaskGroup {
     func init(workers: usize) : runtime(null), workers(workers), cancelled(false), closed(false) {
         __vqr_task_validate();
     }
-public:
-    func init() : self(2) {}
+    pub func init() : self(2) {}
 
-    static func withWorkers(workers: usize) !Self {
+    pub static func withWorkers(workers: usize) !Self {
         if workers == 0 || workers > 256 { return TaskError.BadWorkerCount; }
         TaskGroup(workers)
     }
 
-    func spawn<T: Movable & Sendable, F: Movable & Sendable>(callback: F) !Task<T> {
+    pub func spawn<T: Movable + Sendable, F: Movable + Sendable>(callback: F) !Task<T> {
         var scheduler = ensure()!;
         var stored = (new Completion<T>())!;
         var work = (new Job<T, F>(move(callback), stored.asPtr()))!;
@@ -125,7 +120,7 @@ public:
         }
     }
 
-    func cancel() void {
+    pub func cancel() void {
         cancelled = true;
         switch runtime {
             some(group) => unsafe { __vqr_rt_group_cancel(group); },
@@ -133,8 +128,8 @@ public:
         }
     }
 
-    const func isCancelled() bool { cancelled }
-    const func activeCount() usize {
+    pub const func isCancelled() bool { cancelled }
+    pub const func activeCount() usize {
         switch runtime {
             some(group) => unsafe { __vqr_rt_group_active(group) },
             null => 0,
@@ -142,7 +137,7 @@ public:
     }
 
     // The group owns this descriptor. Do not close it or read it directly.
-    func completionDescriptor() !i32 {
+    pub func completionDescriptor() !i32 {
         var group = ensure()!;
         var reason: i32 = 0;
         var descriptor = unsafe { __vqr_rt_group_completion_fd(group, &reason) };
@@ -151,7 +146,7 @@ public:
     }
 
     // Clear before scanning completed handles to avoid losing a wakeup.
-    func clearCompletionSignal() !void {
+    pub func clearCompletionSignal() !void {
         if closed { return TaskError.GroupClosed; }
         if runtime != null {
             var reason = unsafe { __vqr_rt_group_clear_completion(runtime.unwrap()) };
@@ -159,7 +154,7 @@ public:
         }
     }
 
-    func joinAll() !void {
+    pub func joinAll() !void {
         if closed { return TaskError.GroupClosed; }
         switch runtime {
             some(group) => {
@@ -170,7 +165,7 @@ public:
         }
     }
 
-    func close() !void {
+    pub func close() !void {
         switch runtime {
             some(group) => {
                 var status = unsafe { __vqr_rt_group_close(group) };
@@ -183,8 +178,7 @@ public:
         cancelled = true;
     }
 
-    func deinit() void { close() catch { panic("a task cannot close its own group"); }; }
-private:
+    pub func deinit() void { close() catch { panic("a task cannot close its own group"); }; }
     func ensure() !*u8 {
         if closed { return TaskError.GroupClosed; }
         if cancelled { return TaskError.Cancelled; }
@@ -240,6 +234,6 @@ pub func scope<F: Movable>(callback: F) !void {
     group.joinAll()
 }
 
-pub func spawn<T: Movable & Sendable, F: Movable & Sendable>(group: *TaskGroup, callback: F) !Task<T> {
+pub func spawn<T: Movable + Sendable, F: Movable + Sendable>(group: *TaskGroup, callback: F) !Task<T> {
     group.spawn<T, F>(move(callback))
 }

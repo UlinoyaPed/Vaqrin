@@ -30,8 +30,7 @@ extern "C" func QueryPerformanceFrequency(output: *i64) i32;
 extern "C" func Sleep(milliseconds: u32) void;
 
 class WindowsClock {
-public:
-    static func read(clock: i32) !Timespec {
+    pub static func read(clock: i32) !Timespec {
         if clock == monotonicClock {
             var ticks: i64 = 0;
             var frequency: i64 = 0;
@@ -58,7 +57,7 @@ public:
                  nanoseconds: i64(ticks % ticksPerSecond)! * 100}
     }
 
-    static func waitUntil(seconds: i64, nanoseconds: i32) !void {
+    pub static func waitUntil(seconds: i64, nanoseconds: i32) !void {
         const maxMillis: i64 = 4294967294;
         for {
             var now = WindowsClock.read(monotonicClock)!;
@@ -82,13 +81,12 @@ public:
 }
 
 class NativeClock {
-public:
     comptime if __vqr_clock_platform() == windowsClock {
-        static func read(clock: i32) !Timespec { WindowsClock.read(clock) }
-        static func waitUntil(seconds: i64, nanos: i32) !void { WindowsClock.waitUntil(seconds, nanos) }
+        pub static func read(clock: i32) !Timespec { WindowsClock.read(clock) }
+        pub static func waitUntil(seconds: i64, nanos: i32) !void { WindowsClock.waitUntil(seconds, nanos) }
     } else {
       comptime if __vqr_clock_platform() == darwinClock {
-        static func read(clock: i32) !Timespec {
+        pub static func read(clock: i32) !Timespec {
             var seconds: i64 = 0;
             var nanoseconds: i64 = 0;
             if unsafe { __vqr_io_clock_now(clock, &seconds, &nanoseconds) } != 0 {
@@ -96,18 +94,18 @@ public:
             }
             Timespec{seconds: seconds, nanoseconds: nanoseconds}
         }
-        static func waitUntil(seconds: i64, nanoseconds: i32) !void {
+        pub static func waitUntil(seconds: i64, nanoseconds: i32) !void {
             if unsafe { __vqr_io_clock_sleep_until(seconds, nanoseconds) } != 0 {
                 return TimeError.ClockUnavailable;
             }
         }
       } else {
-        static func read(clock: i32) !Timespec {
+        pub static func read(clock: i32) !Timespec {
             var value = Timespec{seconds: 0, nanoseconds: 0};
             if unsafe { clock_gettime(clock, &value) } != 0 { return TimeError.ClockUnavailable; }
             value
         }
-        static func waitUntil(seconds: i64, nanoseconds: i32) !void {
+        pub static func waitUntil(seconds: i64, nanoseconds: i32) !void {
             var absolute = Timespec{seconds: seconds, nanoseconds: i64(nanoseconds)};
             var leftover = Timespec{seconds: 0, nanoseconds: 0};
             for {
@@ -125,23 +123,22 @@ func readClock(clock: i32) !Timespec { NativeClock.read(clock) }
 pub class Instant {
     var offset: Duration;
     func init(offset: Duration) : offset(offset) {}
-public:
-    static func now() !Self {
+    pub static func now() !Self {
         var time = readClock(monotonicClock)!;
         var nanos = i32(time.nanoseconds) catch { return TimeError.ClockUnavailable; };
         Instant(Duration.fromParts(time.seconds, nanos)!)
     }
 
-    const func compare(other: Self) cmp.Ordering { offset.compare(other.offset) }
-    const func elapsed() !Duration { Instant.now()!.durationSince(Instant(offset)) }
-    const func durationSince(earlier: Instant) !Duration { offset.sub(earlier.offset) }
+    pub const func compare(other: Self) cmp.Ordering { offset.compare(other.offset) }
+    pub const func elapsed() !Duration { Instant.now()!.durationSince(Instant(offset)) }
+    pub const func durationSince(earlier: Instant) !Duration { offset.sub(earlier.offset) }
 
-    const func checkedAdd(value: Duration) !Self { Instant(offset.add(value)!) }
-    const func checkedSub(value: Duration) !Self { Instant(offset.sub(value)!) }
+    pub const func checkedAdd(value: Duration) !Self { Instant(offset.add(value)!) }
+    pub const func checkedSub(value: Duration) !Self { Instant(offset.sub(value)!) }
 
-    unsafe const func monotonicParts() (i64, i32) { (offset.seconds(), offset.nanosPart()) }
+    pub unsafe const func monotonicParts() (i64, i32) { (offset.seconds(), offset.nanosPart()) }
 
-    const func waitUntil() !void {
+    pub const func waitUntil() !void {
         if offset.isNegative() || offset.isZero() { return; }
         NativeClock.waitUntil(offset.seconds(), offset.nanosPart())
     }
@@ -163,18 +160,17 @@ pub interface Clock {
 pub class Deadline {
     var target: Instant;
     func init(target: Instant) : target(target) {}
-public:
-    static func at(instant: Instant) Self { Deadline(instant) }
-    static func after(delay: Duration) !Self { Deadline(Instant.now()!.checkedAdd(delay)!) }
+    pub static func at(instant: Instant) Self { Deadline(instant) }
+    pub static func after(delay: Duration) !Self { Deadline(Instant.now()!.checkedAdd(delay)!) }
 
-    const func instant() Instant { target }
+    pub const func instant() Instant { target }
 
-    const func expired() !bool {
+    pub const func expired() !bool {
         var now = Instant.now()!;
         now.compare(target) != cmp.Ordering.Less
     }
 
-    const func remaining() !Duration {
+    pub const func remaining() !Duration {
         var now = Instant.now()!;
         if now.compare(target) != cmp.Ordering.Less { return Duration.zero(); }
         target.durationSince(now)
@@ -185,16 +181,15 @@ pub class Timer {
     #copy: disabled
     var target: ?Instant;
     func init(target: Instant) : target(some(target)) {}
-public:
-    static func at(deadline: Instant) !Self { Timer(deadline) }
-    static func after(delay: Duration) !Self { Timer(Instant.now()!.checkedAdd(delay)!) }
+    pub static func at(deadline: Instant) !Self { Timer(deadline) }
+    pub static func after(delay: Duration) !Self { Timer(Instant.now()!.checkedAdd(delay)!) }
 
-    func wait() !void {
+    pub func wait() !void {
         var deadline = target ?? { return TimeError.TimerCancelled; };
         sleepUntil(deadline)
     }
-    func cancel() void { target = null; }
-    func reset(delay: Duration) !void { target = some(Instant.now()!.checkedAdd(delay)!); }
+    pub func cancel() void { target = null; }
+    pub func reset(delay: Duration) !void { target = some(Instant.now()!.checkedAdd(delay)!); }
 }
 
 pub class Ticker {
@@ -202,18 +197,17 @@ pub class Ticker {
     var due: ?Instant;
     var period: Duration;
     func init(due: Instant, period: Duration) : due(some(due)), period(period) {}
-public:
-    static func every(period: Duration) !Self {
+    pub static func every(period: Duration) !Self {
         if period.isNegative() || period.isZero() { return TimeError.InvalidTime; }
         Ticker(Instant.now()!.checkedAdd(period)!, period)
     }
 
-    func next() !Instant {
+    pub func next() !Instant {
         var tick = due ?? { return TimeError.TimerCancelled; };
         var following = tick.checkedAdd(period)!;
         sleepUntil(tick)!;
         due = some(following);
         tick
     }
-    func stop() void { due = null; }
+    pub func stop() void { due = null; }
 }

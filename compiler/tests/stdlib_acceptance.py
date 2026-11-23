@@ -72,9 +72,8 @@ class StandardLibraryAcceptance(CompilerCase):
             import (bytes, cbor, result, serde)
             class Point {
                 #derive: serde
-            public:
-                var x: i16;
-                var y: f64;
+                pub var x: i16;
+                pub var y: f64;
             }
 
             func main() !void {
@@ -110,17 +109,15 @@ class StandardLibraryAcceptance(CompilerCase):
             import (json, result, serde as codec)
             class Entry {
                 #derive: serde
-            public:
-                var id: i128;
+                pub var id: i128;
                 #serde_name: "display-name"
-                var name: string;
+                pub var name: string;
             }
             class Record<T> {
                 #derive: serde
-            public:
-                var entry: Entry;
-                var data: T;
-                var maybe: ?i8;
+                pub var entry: Entry;
+                pub var data: T;
+                pub var maybe: ?i8;
             }
 
             func main() !void {
@@ -151,11 +148,10 @@ class StandardLibraryAcceptance(CompilerCase):
             class Counting {
                 #implements: log.Handler
                 var sender: channel.Sender<i32>;
-            public:
-                func init(value: channel.Sender<i32>) : sender(move(value)) {}
-                const func enabled(level: log.Level) bool { true }
-                func handle(record: *const log.Record) !void { sender.send(42) }
-                func flush() !void {}
+                pub func init(value: channel.Sender<i32>) : sender(move(value)) {}
+                pub const func enabled(level: log.Level) bool { true }
+                pub func handle(record: *const log.Record) !void { sender.send(42) }
+                pub func flush() !void {}
             }
 
             func main() !void {
@@ -264,7 +260,7 @@ class StandardLibraryAcceptance(CompilerCase):
                 var table = coll.HashMap<u16, i32>.withSecureHasher(feed, hash.eqU16)!;
                 var old = table.insert(200, 13)!;
                 var key: u16 = 200;
-                io.println(*table.get(&key).unwrap() == 13)!;
+                io.println(*table.get(key).unwrap() == 13)!;
             }
         """, "true\n" * 5)
 
@@ -342,9 +338,8 @@ class StandardLibraryAcceptance(CompilerCase):
             import (coll, json, parse, serde)
             class Pair<S, U> {
                 #derive: serde
-            public:
-                var signed: S;
-                var unsigned: U;
+                pub var signed: S;
+                pub var unsigned: U;
             }
 
             func exercise<S, U>() !void {

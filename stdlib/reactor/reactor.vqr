@@ -53,19 +53,18 @@ pub class Reactor {
     var generation: u64;
     func init(fd: i32) : epoll(fd), watches(coll.Vec<Watch>()), generation(0) {}
     func deinit() void { close(); }
-public:
-    static func open() !Self {
+    pub static func open() !Self {
         var reason: i32 = 0;
         var fd = unsafe { __vqr_io_reactor_open(&reason) };
         if fd < 0 { return io.systemError(reason); }
         Reactor(fd)
     }
     // Wait for readability, then use wait() to recover the ready watch.
-    const func systemDescriptor() !i32 {
+    pub const func systemDescriptor() !i32 {
         if epoll < 0 { return io.IoError.Closed; }
         epoll
     }
-    func register(descriptor: i32, interest: Interest) !WatchId {
+    pub func register(descriptor: i32, interest: Interest) !WatchId {
         if epoll < 0 { return io.IoError.Closed; }
         if generation == ~u64(0) { return ReactorError.WatchLimit; }
         var mask = encode(interest)!;
@@ -82,7 +81,7 @@ public:
         };
         WatchId{value: generation}
     }
-    func update(watch: WatchId, interest: Interest) !void {
+    pub func update(watch: WatchId, interest: Interest) !void {
         if epoll < 0 { return io.IoError.Closed; }
         var index = locate(watch) ?? { return ReactorError.UnknownWatch; };
         var mask = encode(interest)!;
@@ -90,7 +89,7 @@ public:
         var reason = unsafe { __vqr_io_reactor_update(epoll, descriptor, watch.value, mask) };
         if reason != 0 { return io.systemError(reason); }
     }
-    func remove(watch: WatchId) !void {
+    pub func remove(watch: WatchId) !void {
         if epoll < 0 { return io.IoError.Closed; }
         var index = locate(watch) ?? { return ReactorError.UnknownWatch; };
         var descriptor = watches[index].descriptor;
@@ -99,7 +98,7 @@ public:
         watches.swapRemove(index);
         unsafe { __vqr_io_reactor_close(descriptor); }
     }
-    func wait(timeout: ?time.Duration) !?Event {
+    pub func wait(timeout: ?time.Duration) !?Event {
         if epoll < 0 { return io.IoError.Closed; }
         var deadline: ?time.Deadline = null;
         if timeout != null {
@@ -125,7 +124,7 @@ public:
             if deadline != null && deadline.unwrap().expired()! { return null; }
         }
     }
-    func close() void {
+    pub func close() void {
         if epoll < 0 { return; }
         unsafe { __vqr_io_reactor_close(epoll); }
         epoll = -1;
@@ -134,7 +133,6 @@ public:
         }
         watches.clear();
     }
-private:
     const func locate(watch: WatchId) ?usize {
         for index in usize(0)..watches.len() {
             if watches[index].identity == watch.value { return some(index); }

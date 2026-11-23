@@ -16,12 +16,11 @@ pub class BigUint {
     func init() : limbs(coll.Vec<u32>()) {}
     func init(data: coll.Vec<u32>) : limbs(move(data)) { normalize(); }
 
-public:
-    static func zero() Self { BigUint() }
+    pub static func zero() Self { BigUint() }
 
-    static func fromU64(value: u64) !Self { BigUint.fromU128(u128(value)) }
+    pub static func fromU64(value: u64) !Self { BigUint.fromU128(u128(value)) }
 
-    static func fromU128(value: u128) !Self {
+    pub static func fromU128(value: u128) !Self {
         if value == 0 { return BigUint(); }
         var out = coll.Vec<u32>.withCapacity(4)!;
         var raw = value;
@@ -32,12 +31,12 @@ public:
         BigUint(move(out))
     }
 
-    static func fromUnsigned<T>(value: T) !Self {
+    pub static func fromUnsigned<T>(value: T) !Self {
         if __vqr_parse_signed<T>() && value < T(0) { return NumError.NegativeValue; }
         BigUint.fromU128(convert.checkedCast<u128, T>(value)!.unwrap())
     }
 
-    const func toU64() !u64 {
+    pub const func toU64() !u64 {
         if bitLength() > 64 { return NumError.Overflow; }
         var value: u64 = 0;
         if limbs.len() > 0 { value = u64(limbs.asConstSlice()[0]); }
@@ -45,7 +44,7 @@ public:
         value
     }
 
-    const func toU128() !u128 {
+    pub const func toU128() !u128 {
         if bitLength() > 128 { return NumError.Overflow; }
         var value: u128 = 0;
         for index in usize(0)..limbs.len() {
@@ -54,7 +53,7 @@ public:
         value
     }
 
-    static func fromBytes(bytes: []const u8, endian: meta.Endian) !Self {
+    pub static func fromBytes(bytes: []const u8, endian: meta.Endian) !Self {
         if bytes.len() == 0 { return BigUint(); }
         if bytes.len() > ~usize(0) - 3 { return coll.CapacityError.Overflow; }
         var count = (bytes.len() + 3) / 4;
@@ -70,11 +69,11 @@ public:
         BigUint(move(words))
     }
 
-    static func parse(value: str, radix: u8) !Self {
+    pub static func parse(value: str, radix: u8) !Self {
         BigUint.parseBytes(value.asBytes(), radix)
     }
 
-    static func parseBytes(bytes: []const u8, radix: u8) !Self {
+    pub static func parseBytes(bytes: []const u8, radix: u8) !Self {
         if radix < 2 || radix > 36 { return NumError.InvalidRadix; }
         if bytes.len() == 0 { return NumError.InvalidSyntax; }
         var result = BigUint();
@@ -87,16 +86,16 @@ public:
         move(result)
     }
 
-    const func isZero() bool { limbs.isEmpty() }
-    const func limbCount() usize { limbs.len() }
+    pub const func isZero() bool { limbs.isEmpty() }
+    pub const func limbCount() usize { limbs.len() }
 
-    const func bitLength() usize {
+    pub const func bitLength() usize {
         if limbs.isEmpty() { return 0; }
         var last = limbs.asConstSlice()[limbs.len() - 1];
         limbs.len() * 32 - 32 + (usize(32) - __vqr_parse_bits<usize>(u128(bits.leadingZeros(last))))
     }
 
-    const func compare(other: *const Self) cmp.Ordering {
+    pub const func compare(other: *const Self) cmp.Ordering {
         if limbs.len() < other.limbs.len() { return cmp.Ordering.Less; }
         if limbs.len() > other.limbs.len() { return cmp.Ordering.Greater; }
         var index = limbs.len();
@@ -110,13 +109,13 @@ public:
         cmp.Ordering.Equal
     }
 
-    const func clone() !Self {
+    pub const func clone() !Self {
         var out = coll.Vec<u32>.withCapacity(limbs.len())!;
         for limb in limbs.asConstSlice() { out.push(limb)!; }
         BigUint(move(out))
     }
 
-    const func add(other: *const Self) !Self {
+    pub const func add(other: *const Self) !Self {
         var count = if limbs.len() > other.limbs.len() { limbs.len() } else { other.limbs.len() };
         if count == ~usize(0) { return coll.CapacityError.Overflow; }
         var out = coll.Vec<u32>.withCapacity(count + 1)!;
@@ -132,7 +131,7 @@ public:
         BigUint(move(out))
     }
 
-    const func sub(other: *const Self) !Self {
+    pub const func sub(other: *const Self) !Self {
         if compare(other) == cmp.Ordering.Less { return NumError.Underflow; }
         var out = coll.Vec<u32>.withCapacity(limbs.len())!;
         var borrow: u64 = 0;
@@ -151,7 +150,7 @@ public:
         BigUint(move(out))
     }
 
-    const func mul(other: *const Self) !Self {
+    pub const func mul(other: *const Self) !Self {
         if isZero() || other.isZero() { return BigUint(); }
         if limbs.len() > ~usize(0) - other.limbs.len() { return coll.CapacityError.Overflow; }
         var count = limbs.len() + other.limbs.len();
@@ -179,7 +178,7 @@ public:
         BigUint(move(out))
     }
 
-    const func divMod(other: *const Self) !(Self, Self) {
+    pub const func divMod(other: *const Self) !(Self, Self) {
         if other.isZero() { return NumError.DivisionByZero; }
         var quotient = BigUint();
         var remainder = BigUint();
@@ -196,17 +195,17 @@ public:
         (move(quotient), move(remainder))
     }
 
-    const func div(other: *const Self) !Self {
+    pub const func div(other: *const Self) !Self {
         quotient, remainder := divMod(other)!;
         move(quotient)
     }
 
-    const func rem(other: *const Self) !Self {
+    pub const func rem(other: *const Self) !Self {
         quotient, remainder := divMod(other)!;
         move(remainder)
     }
 
-    func shl(count: usize) !Self {
+    pub func shl(count: usize) !Self {
         if isZero() { return BigUint(); }
         var words = count / 32;
         var shift = count % 32;
@@ -223,7 +222,7 @@ public:
         BigUint(move(out))
     }
 
-    func shr(count: usize) !Self {
+    pub func shr(count: usize) !Self {
         var words = count / 32;
         var shift = count % 32;
         if words >= limbs.len() { return BigUint(); }
@@ -243,7 +242,7 @@ public:
         BigUint(move(out))
     }
 
-    func toBytes(endian: meta.Endian) !coll.Vec<u8> {
+    pub func toBytes(endian: meta.Endian) !coll.Vec<u8> {
         if limbs.len() > ~usize(0) / 4 { return coll.CapacityError.Overflow; }
         var count = if limbs.isEmpty() { usize(1) } else { limbs.len() * 4 };
         var out = coll.Vec<u8>.withCapacity(count)!;
@@ -265,7 +264,7 @@ public:
         move(out)
     }
 
-    func toText(radix: u8) !string {
+    pub func toText(radix: u8) !string {
         if radix < 2 || radix > 36 { return NumError.InvalidRadix; }
         if isZero() { return "0"; }
         var work = clone()!;
@@ -279,7 +278,6 @@ public:
         text.fromBytes(output.asConstSlice())
     }
 
-private:
     const func getBit(index: usize) bool {
         var word = index / 32;
         if word >= limbs.len() { return false; }
@@ -377,12 +375,11 @@ pub class BigInt {
         : sign(if magnitude.isZero() { i8(0) } else if sign < 0 { i8(-1) } else { i8(1) }),
           magnitude(move(magnitude)) {}
 
-public:
-    static func zero() Self { BigInt() }
+    pub static func zero() Self { BigInt() }
 
-    static func fromI64(value: i64) !Self { BigInt.fromInteger<i64>(value) }
+    pub static func fromI64(value: i64) !Self { BigInt.fromInteger<i64>(value) }
 
-    static func fromInteger<T>(value: T) !Self {
+    pub static func fromInteger<T>(value: T) !Self {
         var negative = __vqr_parse_signed<T>() && value < T(0);
         var magnitudeValue = if negative {
             convert.checkedCast<u128, T>(~value)!.unwrap() + u128(1)
@@ -393,12 +390,12 @@ public:
         BigInt(if magnitudeValue == 0 { i8(0) } else if negative { i8(-1) } else { i8(1) }, move(mag))
     }
 
-    const func toU64() !u64 {
+    pub const func toU64() !u64 {
         if sign < 0 { return NumError.NegativeValue; }
         magnitude.toU64()
     }
 
-    const func toI64() !i64 {
+    pub const func toI64() !i64 {
         var raw = magnitude.toU64()!;
         if sign >= 0 {
             if raw > 0x7fffffffffffffffu64 { return NumError.Overflow; }
@@ -413,7 +410,7 @@ public:
         }
     }
 
-    static func fromTwosComplementBytes(bytes: []const u8, endian: meta.Endian) !Self {
+    pub static func fromTwosComplementBytes(bytes: []const u8, endian: meta.Endian) !Self {
         if bytes.len() == 0 { return NumError.InvalidSyntax; }
         var little = coll.Vec<u8>.withCapacity(bytes.len())!;
         for i in usize(0)..bytes.len() {
@@ -438,7 +435,7 @@ public:
         BigInt(if mag.isZero() { i8(0) } else { i8(-1) }, move(mag))
     }
 
-    static func parse(value: str, radix: u8) !Self {
+    pub static func parse(value: str, radix: u8) !Self {
         var bytes = value.asBytes();
         if bytes.len() == 0 { return NumError.InvalidSyntax; }
         var negative = false;
@@ -454,9 +451,9 @@ public:
         BigInt(if mag.isZero() { i8(0) } else if negative { i8(-1) } else { i8(1) }, move(mag))
     }
 
-    const func isZero() bool { sign == 0 }
-    const func isNegative() bool { sign < 0 }
-    const func compare(other: *const Self) cmp.Ordering {
+    pub const func isZero() bool { sign == 0 }
+    pub const func isNegative() bool { sign < 0 }
+    pub const func compare(other: *const Self) cmp.Ordering {
         if sign < other.sign { return cmp.Ordering.Less; }
         if sign > other.sign { return cmp.Ordering.Greater; }
         if sign == 0 { return cmp.Ordering.Equal; }
@@ -468,11 +465,11 @@ public:
         order
     }
 
-    const func clone() !Self {
+    pub const func clone() !Self {
         BigInt(sign, magnitude.clone()!)
     }
 
-    const func add(other: *const Self) !Self {
+    pub const func add(other: *const Self) !Self {
         if sign == 0 { return other.clone(); }
         if other.sign == 0 { return clone(); }
         if sign == other.sign {
@@ -488,17 +485,17 @@ public:
         }
     }
 
-    const func sub(other: *const Self) !Self {
+    pub const func sub(other: *const Self) !Self {
         var negative = other.negated()!;
         add(&negative)
     }
 
-    const func mul(other: *const Self) !Self {
+    pub const func mul(other: *const Self) !Self {
         if sign == 0 || other.sign == 0 { return BigInt(); }
         BigInt(if sign == other.sign { i8(1) } else { i8(-1) }, magnitude.mul(&other.magnitude)!)
     }
 
-    const func divMod(other: *const Self) !(Self, Self) {
+    pub const func divMod(other: *const Self) !(Self, Self) {
         if other.sign == 0 { return NumError.DivisionByZero; }
         quotient, remainder := magnitude.divMod(&other.magnitude)!;
         var quotientSign = if quotient.isZero() { i8(0) } else { i8(sign * other.sign)! };
@@ -506,21 +503,21 @@ public:
         (BigInt(quotientSign, move(quotient)), BigInt(remainderSign, move(remainder)))
     }
 
-    const func div(other: *const Self) !Self {
+    pub const func div(other: *const Self) !Self {
         quotient, remainder := divMod(other)!;
         move(quotient)
     }
 
-    const func rem(other: *const Self) !Self {
+    pub const func rem(other: *const Self) !Self {
         quotient, remainder := divMod(other)!;
         move(remainder)
     }
 
-    func shl(count: usize) !Self {
+    pub func shl(count: usize) !Self {
         BigInt(sign, magnitude.shl(count)!)
     }
 
-    func shr(count: usize) !Self {
+    pub func shr(count: usize) !Self {
         var shifted = magnitude.shr(count)!;
         if sign < 0 {
             var restored = shifted.shl(count)!;
@@ -532,11 +529,11 @@ public:
         BigInt(sign, move(shifted))
     }
 
-    const func abs() !Self {
+    pub const func abs() !Self {
         BigInt(if sign == 0 { i8(0) } else { i8(1) }, magnitude.clone()!)
     }
 
-    static const func gcd(a: *const Self, b: *const Self) !Self {
+    pub static const func gcd(a: *const Self, b: *const Self) !Self {
         var left = a.abs()!;
         var right = b.abs()!;
         for !right.isZero() {
@@ -547,7 +544,7 @@ public:
         move(left)
     }
 
-    const func toInteger<T>() !T {
+    pub const func toInteger<T>() !T {
         if sign < 0 && !__vqr_parse_signed<T>() { return NumError.NegativeValue; }
         var raw = magnitude.toU128()!;
         var limit = __vqr_parse_limit<T>(sign < 0);
@@ -559,15 +556,15 @@ public:
         }
     }
 
-    func negate() !Self { negated() }
+    pub func negate() !Self { negated() }
 
-    func negateInPlace() void { sign = i8(-sign) catch { panic("invalid BigInt sign"); }; }
+    pub func negateInPlace() void { sign = i8(-sign) catch { panic("invalid BigInt sign"); }; }
 
-    const func negated() !Self {
+    pub const func negated() !Self {
         BigInt(i8(-sign)!, magnitude.clone()!)
     }
 
-    func toText(radix: u8) !string {
+    pub func toText(radix: u8) !string {
         var digits = magnitude.toText(radix)!;
         if sign >= 0 { return digits; }
         var out = coll.Vec<u8>.withCapacity(digits.byteLen() + 1)!;
@@ -576,9 +573,9 @@ public:
         text.fromBytes(out.asConstSlice())
     }
 
-    func toBytes(endian: meta.Endian) !coll.Vec<u8> { toTwosComplementBytes(endian) }
+    pub func toBytes(endian: meta.Endian) !coll.Vec<u8> { toTwosComplementBytes(endian) }
 
-    func toTwosComplementBytes(endian: meta.Endian) !coll.Vec<u8> {
+    pub func toTwosComplementBytes(endian: meta.Endian) !coll.Vec<u8> {
         var out = magnitude.toBytes(meta.Endian.Little)!;
         if sign >= 0 {
             if (out.asConstSlice()[out.len() - 1] & 0x80) != 0 { out.push(0)!; }

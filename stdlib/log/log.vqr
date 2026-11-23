@@ -69,42 +69,41 @@ pub class Attr {
           boolValue(boolValue), errorValue(errorValue), children(coll.Vec<Attr>()) {
         for &attr in iterator.SliceIterRef<Attr>(values) { children.push(attr.clone()!)!; }
     }
-public:
-    static func string(key: str, value: str) !Self {
+    pub static func string(key: str, value: str) !Self {
         var empty = [0]Attr{};
         Attr(key, AttrKind.String, value, 0, false, null, empty[:])!
     }
-    static func int(key: str, value: i64) !Self {
+    pub static func int(key: str, value: i64) !Self {
         var empty = [0]Attr{};
         Attr(key, AttrKind.Int, "", value, false, null, empty[:])!
     }
-    static func bool(key: str, value: bool) !Self {
+    pub static func bool(key: str, value: bool) !Self {
         var empty = [0]Attr{};
         Attr(key, AttrKind.Bool, "", 0, value, null, empty[:])!
     }
-    static func errorId(key: str, value: ErrorId) !Self {
+    pub static func errorId(key: str, value: ErrorId) !Self {
         var empty = [0]Attr{};
         Attr(key, AttrKind.Error, "", 0, false, some(value), empty[:])!
     }
-    static func group(name: str, values: []const Attr) !Self {
+    pub static func group(name: str, values: []const Attr) !Self {
         Attr(name, AttrKind.Group, "", 0, false, null, values)!
     }
-    const func key() str { keyValue }
-    const func kind() AttrKind { kindValue }
-    const func asString() ?str {
+    pub const func key() str { keyValue }
+    pub const func kind() AttrKind { kindValue }
+    pub const func asString() ?str {
         if kindValue == AttrKind.String { some(stringValue) } else { null }
     }
-    const func asInt() ?i64 {
+    pub const func asInt() ?i64 {
         if kindValue == AttrKind.Int { some(intValue) } else { null }
     }
-    const func asBool() ?bool {
+    pub const func asBool() ?bool {
         if kindValue == AttrKind.Bool { some(boolValue) } else { null }
     }
-    const func asError() ?ErrorId {
+    pub const func asError() ?ErrorId {
         if kindValue == AttrKind.Error { errorValue } else { null }
     }
-    const func asGroup() []const Attr { children.asConstSlice() }
-    const func clone() !Self {
+    pub const func asGroup() []const Attr { children.asConstSlice() }
+    pub const func clone() !Self {
         Attr(keyValue, kindValue, stringValue, intValue, boolValue, errorValue,
             children.asConstSlice())!
     }
@@ -121,19 +120,18 @@ pub class Record {
           attrsValue(coll.Vec<Attr>()) {
         for &attr in iterator.SliceIterRef<Attr>(attrs) { attrsValue.push(attr.clone()!)!; }
     }
-public:
-    const func level() Level { levelValue }
-    const func timestamp() ?time.Instant { timestampValue }
-    const func message() str { messageValue }
-    const func attrs() []const Attr { attrsValue.asConstSlice() }
-    static func fromOwned(level: Level, message: str, attrs: coll.Vec<Attr>) !Self {
+    pub const func level() Level { levelValue }
+    pub const func timestamp() ?time.Instant { timestampValue }
+    pub const func message() str { messageValue }
+    pub const func attrs() []const Attr { attrsValue.asConstSlice() }
+    pub static func fromOwned(level: Level, message: str, attrs: coll.Vec<Attr>) !Self {
         var empty = [0]Attr{};
         var record = Record(level, message, empty[:])!;
         record.attrsValue = move(attrs);
         move(record)
     }
-    func setTimestamp(value: ?time.Instant) void { timestampValue = move(value); }
-    const func clone() !Self {
+    pub func setTimestamp(value: ?time.Instant) void { timestampValue = move(value); }
+    pub const func clone() !Self {
         var result = Record(levelValue, messageValue, attrsValue.asConstSlice())!;
         result.timestampValue = timestampValue;
         move(result)
@@ -171,17 +169,16 @@ pub class Logger {
           groupValue(text.fromBytes(group.asBytes())!), clock(clock) {
         for &attr in iterator.SliceIterRef<Attr>(attrs) { fixed.push(attr.clone()!)!; }
     }
-public:
-    static func new(handler: *Handler) !Self {
+    pub static func new(handler: *Handler) !Self {
         var empty = [0]Attr{};
         Logger(handler, Level.Trace, empty[:], "", null)!
     }
-    const func enabled(level: Level) bool {
+    pub const func enabled(level: Level) bool {
         levelRank(level) >= levelRank(minimum) && target.enabled(level)
     }
-    func setLevel(level: Level) void { minimum = level; }
-    func setClock(value: ?*time.Clock) void { clock = value; }
-    func log(level: Level, message: str, attrs: []const Attr) !void {
+    pub func setLevel(level: Level) void { minimum = level; }
+    pub func setClock(value: ?*time.Clock) void { clock = value; }
+    pub func log(level: Level, message: str, attrs: []const Attr) !void {
         if !enabled(level) { return; }
         if attrs.len() > ~usize(0) - fixed.len() { return LogError.Overflow; }
         var all = coll.Vec<Attr>.withCapacity(fixed.len() + attrs.len())!;
@@ -196,14 +193,14 @@ public:
             emitRecord(target, level, message, move(output), clock)
         }
     }
-    func with(attrs: []const Attr) !Self {
+    pub func with(attrs: []const Attr) !Self {
         if attrs.len() > ~usize(0) - fixed.len() { return LogError.Overflow; }
         var all = coll.Vec<Attr>.withCapacity(fixed.len() + attrs.len())!;
         for &item in iterator.SliceIterRef<Attr>(fixed.asConstSlice()) { all.push(item.clone()!)!; }
         for &item in iterator.SliceIterRef<Attr>(attrs) { all.push(item.clone()!)!; }
         Logger(target, minimum, all.asConstSlice(), groupValue, clock)!
     }
-    func withGroup(name: str) !Self {
+    pub func withGroup(name: str) !Self {
         var builder = text.StringBuilder();
         if groupValue.byteLen() != 0 {
             builder.append(groupValue)!;
@@ -213,7 +210,7 @@ public:
         var group = builder.build()!;
         Logger(target, minimum, fixed.asConstSlice(), group, clock)!
     }
-    func flush() !void { target.flush() }
+    pub func flush() !void { target.flush() }
 }
 
 func writeHexByte(writer: *io.Writer, value: u8) !void {
@@ -282,48 +279,45 @@ pub class TextHandler {
     #implements: Handler
     var writer: *io.Writer;
     func init(writer: *io.Writer) : writer(writer) {}
-public:
-    static func new(writer: *io.Writer) Self { TextHandler(writer) }
-    const func enabled(level: Level) bool { true }
-    func handle(record: *const Record) !void {
+    pub static func new(writer: *io.Writer) Self { TextHandler(writer) }
+    pub const func enabled(level: Level) bool { true }
+    pub func handle(record: *const Record) !void {
         io.writeString(writer, levelText(record.level()))!;
         io.writeString(writer, " ")!;
         writeQuoted(writer, record.message())!;
         for &attr in iterator.SliceIterRef<Attr>(record.attrs()) { writeAttribute(writer, &attr, "")!; }
         io.writeString(writer, "\n")
     }
-    func flush() !void { writer.flush() }
+    pub func flush() !void { writer.flush() }
 }
 
 pub class BufferHandler {
     #implements: Handler
     var stored: coll.Vec<Record>;
     pub func init() : stored(coll.Vec<Record>()) {}
-public:
-    const func enabled(level: Level) bool { true }
-    func handle(record: *const Record) !void { stored.push(record.clone()!) }
-    func flush() !void {}
-    const func len() usize { stored.len() }
-    const func records() []const Record { stored.asConstSlice() }
-    func clear() void { stored.clear(); }
+    pub const func enabled(level: Level) bool { true }
+    pub func handle(record: *const Record) !void { stored.push(record.clone()!) }
+    pub func flush() !void {}
+    pub const func len() usize { stored.len() }
+    pub const func records() []const Record { stored.asConstSlice() }
+    pub func clear() void { stored.clear(); }
 }
 
 pub class MultiHandler {
     #implements: Handler
     var handlers: []const *Handler;
     func init(handlers: []const *Handler) : handlers(handlers) {}
-public:
-    static func new(handlers: []const *Handler) Self { MultiHandler(handlers) }
-    const func enabled(level: Level) bool {
+    pub static func new(handlers: []const *Handler) Self { MultiHandler(handlers) }
+    pub const func enabled(level: Level) bool {
         for handler in handlers { if handler.enabled(level) { return true; } }
         false
     }
-    func handle(record: *const Record) !void {
+    pub func handle(record: *const Record) !void {
         for handler in handlers {
             if handler.enabled(record.level()) { handler.handle(record)!; }
         }
     }
-    func flush() !void { for handler in handlers { handler.flush()!; } }
+    pub func flush() !void { for handler in handlers { handler.flush()!; } }
 }
 
 func formatU64(value: u64) !string {

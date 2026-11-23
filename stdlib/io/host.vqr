@@ -97,16 +97,15 @@ pub class HostMetadata {
     var modified: i64;
     var kind: i32;
     var fileId: ?FileIdentity;
-public:
-    func init(size: u64, mode: u32, modified: i64, kind: i32)
+    pub func init(size: u64, mode: u32, modified: i64, kind: i32)
         : self(size, mode, modified, kind, null) {}
-    func init(size: u64, mode: u32, modified: i64, kind: i32, fileId: ?FileIdentity)
+    pub func init(size: u64, mode: u32, modified: i64, kind: i32, fileId: ?FileIdentity)
         : fileSize(size), permissionMode(mode), modified(modified), kind(kind), fileId(fileId) {}
-    const func size() u64 { fileSize }
-    const func mode() u32 { permissionMode }
-    const func modifiedUnixSeconds() i64 { modified }
-    const func kindCode() i32 { kind }
-    const func identity() ?FileIdentity { fileId }
+    pub const func size() u64 { fileSize }
+    pub const func mode() u32 { permissionMode }
+    pub const func modifiedUnixSeconds() i64 { modified }
+    pub const func kindCode() i32 { kind }
+    pub const func identity() ?FileIdentity { fileId }
 }
 
 pub class HostFile {
@@ -116,11 +115,9 @@ pub class HostFile {
     var owns: bool;
     var appendMode: bool;
     var closed: bool;
-private:
     func init(fd: i32, ownsDescriptor: bool, append: bool)
         : descriptor(fd), owns(ownsDescriptor), appendMode(append), closed(false) {}
-public:
-    static func open(path: []const u8, flags: u32, mode: u32) !Self {
+    pub static func open(path: []const u8, flags: u32, mode: u32) !Self {
         var name = cString(path)!;
         var errorCode: i32 = 0;
         var fd = unsafe { __vqr_io_open(&name[0], flags, mode, &errorCode) };
@@ -128,7 +125,7 @@ public:
         HostFile(fd, true, (flags & 4) != 0)
     }
 
-    static func tempIn(parent: *const HostDirectory) !(Self, string) {
+    pub static func tempIn(parent: *const HostDirectory) !(Self, string) {
         var dir = parent.systemDescriptor()!;
         var name = mem.zeroedBytes<25>();
         var reason: i32 = 0;
@@ -142,17 +139,17 @@ public:
         (move(file), move(path))
     }
 
-    static func standardInput() Self { HostFile(0, false, false) }
-    static func standardOutput() Self { HostFile(1, false, false) }
-    static func standardError() Self { HostFile(2, false, false) }
+    pub static func standardInput() Self { HostFile(0, false, false) }
+    pub static func standardOutput() Self { HostFile(1, false, false) }
+    pub static func standardError() Self { HostFile(2, false, false) }
 
     // A borrowed OS descriptor. Its ownership remains with this file.
-    const func systemDescriptor() !i32 {
+    pub const func systemDescriptor() !i32 {
         if closed { return IoError.Closed; }
         descriptor
     }
 
-    func read(dst: []u8) !usize {
+    pub func read(dst: []u8) !usize {
         if closed { return IoError.Closed; }
         if dst.len() == 0 { return 0; }
         var errorCode: i32 = 0;
@@ -162,7 +159,7 @@ public:
         usize(count)
     }
 
-    func write(src: []const u8) !usize {
+    pub func write(src: []const u8) !usize {
         if closed { return IoError.Closed; }
         if src.len() == 0 { return 0; }
         var errorCode: i32 = 0;
@@ -173,7 +170,7 @@ public:
     }
 
 
-    func readAt(offset: u64, dst: []u8) !usize {
+    pub func readAt(offset: u64, dst: []u8) !usize {
         if closed { return IoError.Closed; }
         if dst.len() == 0 { return 0; }
         var errorCode: i32 = 0;
@@ -183,7 +180,7 @@ public:
         usize(count)
     }
 
-    func writeAt(offset: u64, src: []const u8) !usize {
+    pub func writeAt(offset: u64, src: []const u8) !usize {
         if closed { return IoError.Closed; }
         if appendMode { return IoError.Unsupported; }
         if src.len() == 0 { return 0; }
@@ -194,7 +191,7 @@ public:
         usize(count)
     }
 
-    func seek(offset: i64, origin: SeekOrigin) !u64 {
+    pub func seek(offset: i64, origin: SeekOrigin) !u64 {
         if closed { return IoError.Closed; }
         var base = switch origin {
             SeekOrigin.Start => 0,
@@ -207,9 +204,9 @@ public:
         u64(position)
     }
 
-    func flush() !void { if closed { return IoError.Closed; } }
+    pub func flush() !void { if closed { return IoError.Closed; } }
 
-    func syncAll() !void {
+    pub func syncAll() !void {
         if closed { return IoError.Closed; }
         var errorCode: i32 = 0;
         if unsafe { __vqr_io_file_sync(descriptor, 0, &errorCode) } != 0 {
@@ -217,7 +214,7 @@ public:
         }
     }
 
-    func syncData() !void {
+    pub func syncData() !void {
         if closed { return IoError.Closed; }
         var errorCode: i32 = 0;
         if unsafe { __vqr_io_file_sync(descriptor, 1, &errorCode) } != 0 {
@@ -225,7 +222,7 @@ public:
         }
     }
 
-    func truncate(size: u64) !void {
+    pub func truncate(size: u64) !void {
         if closed { return IoError.Closed; }
         var errorCode: i32 = 0;
         if unsafe { __vqr_io_file_truncate(descriptor, size, &errorCode) } != 0 {
@@ -233,7 +230,7 @@ public:
         }
     }
 
-    func metadata() !HostMetadata {
+    pub func metadata() !HostMetadata {
         if closed { return IoError.Closed; }
         var size: u64 = 0;
         var mode: u32 = 0;
@@ -248,7 +245,7 @@ public:
         HostMetadata(size, mode, modified, kind, some(FileIdentity{device: device, inode: inode}))
     }
 
-    func setMode(mode: u32) !void {
+    pub func setMode(mode: u32) !void {
         if closed { return IoError.Closed; }
         var errorCode: i32 = 0;
         if unsafe { __vqr_io_file_set_mode(descriptor, mode, &errorCode) } != 0 {
@@ -256,7 +253,7 @@ public:
         }
     }
 
-    func close() !void {
+    pub func close() !void {
         if closed || !owns { closed = true; return; }
         var fd = descriptor;
         descriptor = -1;
@@ -267,25 +264,22 @@ public:
         }
     }
 
-    func deinit() void { close() catch {}; }
+    pub func deinit() void { close() catch {}; }
 }
 
 pub class HostDirEntry {
     var entryName: string;
     var kind: i32;
-public:
-    func init(name: string, kind: i32) : entryName(name), kind(kind) {}
-    const func name() str { unsafe { __vqr_text_borrow_utf8(entryName.asBytes()) } }
-    const func kindCode() i32 { kind }
+    pub func init(name: string, kind: i32) : entryName(name), kind(kind) {}
+    pub const func name() str { unsafe { __vqr_text_borrow_utf8(entryName.asBytes()) } }
+    pub const func kindCode() i32 { kind }
 }
 
 pub class HostDirectory {
     #copy: disabled
     var handle: usize;
-private:
     func init(handle: usize) : handle(handle) {}
-public:
-    static func open(path: []const u8) !Self {
+    pub static func open(path: []const u8) !Self {
         var name = cString(path)!;
         var errorCode: i32 = 0;
         var directory = unsafe { __vqr_io_dir_open(&name[0], &errorCode) };
@@ -293,7 +287,7 @@ public:
         HostDirectory(directory)
     }
 
-    static func openNoFollow(path: []const u8) !Self {
+    pub static func openNoFollow(path: []const u8) !Self {
         var name = cString(path)!;
         var reason: i32 = 0;
         var directory = unsafe { __vqr_io_dir_open_nofollow(&name[0], &reason) };
@@ -301,12 +295,12 @@ public:
         HostDirectory(directory)
     }
 
-    const func systemDescriptor() !i32 {
+    pub const func systemDescriptor() !i32 {
         if handle == 0 { return IoError.Closed; }
         unsafe { __vqr_io_dir_fd(handle) }
     }
 
-    const func openChild(name: str) !Self {
+    pub const func openChild(name: str) !Self {
         var child = component(name)!;
         var fd = systemDescriptor()!;
         var reason: i32 = 0;
@@ -315,32 +309,32 @@ public:
         HostDirectory(directory)
     }
 
-    const func removeChild(name: str, directory: bool) !void {
+    pub const func removeChild(name: str, directory: bool) !void {
         var child = component(name)!;
         var fd = systemDescriptor()!;
         checkNative(unsafe { __vqr_io_unlink_at(fd, &child[0], if directory { 1 } else { 0 }) })
     }
 
-    const func removeTree(name: str, depth: u32) !void {
+    pub const func removeTree(name: str, depth: u32) !void {
         if depth > 128 { return IoError.LimitExceeded; }
         var child = component(name)!;
         var fd = systemDescriptor()!;
         checkNative(unsafe { __vqr_io_remove_tree_at(fd, &child[0], depth) })
     }
 
-    const func replaceChild(from: str, to: str) !void {
+    pub const func replaceChild(from: str, to: str) !void {
         var source = component(from)!;
         var destination = component(to)!;
         var fd = systemDescriptor()!;
         checkNative(unsafe { __vqr_io_rename_at(fd, &source[0], &destination[0]) })
     }
 
-    const func sync() !void {
+    pub const func sync() !void {
         var fd = systemDescriptor()!;
         checkNative(unsafe { __vqr_io_sync_dir(fd) })
     }
 
-    const func makeTempDir() !string {
+    pub const func makeTempDir() !string {
         var fd = systemDescriptor()!;
         var name = mem.zeroedBytes<25>();
         var reason: i32 = 0;
@@ -352,7 +346,7 @@ public:
         }
     }
 
-    func next() !?HostDirEntry {
+    pub func next() !?HostDirEntry {
         if handle == 0 { return IoError.Closed; }
         var directory = unsafe { ptrFromInt<*u8>(handle) };
         var storage = __vqr_uninitialized<[4096]u8>();
@@ -368,7 +362,7 @@ public:
         some(HostDirEntry(move(value), kind))
     }
 
-    func close() !void {
+    pub func close() !void {
         if handle == 0 { return; }
         var directory = unsafe { ptrFromInt<*u8>(handle) };
         handle = 0;
@@ -378,7 +372,7 @@ public:
         }
     }
 
-    func deinit() void { close() catch {}; }
+    pub func deinit() void { close() catch {}; }
 }
 pub func hostStat(path: []const u8, follow: bool) !HostMetadata {
     var name = cString(path)!;

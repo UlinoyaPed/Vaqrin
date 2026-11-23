@@ -16,9 +16,8 @@ pub func scalarCount(value: str) usize {
 pub class Scalars {
     var bytes: []const u8;
     var index: usize;
-public:
-    func init(value: str) : bytes(value.asBytes()), index(0) {}
-    func next() ?char {
+    pub func init(value: str) : bytes(value.asBytes()), index(0) {}
+    pub func next() ?char {
         if index == bytes.len() { return null; }
         var head = u32(bytes[index]);
         index++;
@@ -68,18 +67,17 @@ pub func fromBytes(values: []const u8) !string {
 
 pub class StringBuilder {
     var buffer: coll.Vec<u8>;
-public:
-    func init() : buffer(coll.Vec<u8>()) {}
-    const func byteLen() usize { buffer.len() }
-    func clear() void { buffer.clear(); }
+    pub func init() : buffer(coll.Vec<u8>()) {}
+    pub const func byteLen() usize { buffer.len() }
+    pub func clear() void { buffer.clear(); }
 
-    func append(value: str) !void {
+    pub func append(value: str) !void {
         if value.byteLen() > ~usize(0) - buffer.len() { return coll.CapacityError.Overflow; }
         buffer.reserve(buffer.len() + value.byteLen())!;
         for byte in value.asBytes() { buffer.push(byte)!; }
     }
 
-    const func build() !string {
+    pub const func build() !string {
         unsafe { __vqr_text_from_utf8(buffer.asSlice()) }
     }
 }

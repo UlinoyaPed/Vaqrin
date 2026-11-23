@@ -78,23 +78,22 @@ pub class TimeZone {
               offsets: coll.Vec<i32>, recurring: ?RecurringZone)
         : identifier(move(name)), initialOffset(initial), transitions(move(transitions)),
           offsets(move(offsets)), recurring(recurring) {}
-public:
-    static func utc() Self {
+    pub static func utc() Self {
         TimeZone("UTC", 0, coll.Vec<Transition>(), coll.Vec<i32>(), null)
     }
 
-    static func fixedOffset(seconds: i32) !Self {
+    pub static func fixedOffset(seconds: i32) !Self {
         if seconds < -89999 || seconds > 93599 { return TimeError.InvalidZone; }
         TimeZone("fixed", seconds, coll.Vec<Transition>(), coll.Vec<i32>(), null)
     }
 
-    static func load(name: str) !Self {
+    pub static func load(name: str) !Self {
         var path = zoneFile(name)!;
         var bytes = fs.readFile(path, 2097152)!;
         return TimeZone.fromTzif(name, bytes.asConstSlice());
     }
 
-    static func fromTzif(name: str, data: []const u8) !Self {
+    pub static func fromTzif(name: str, data: []const u8) !Self {
         var reader = binary.Reader(data, binary.Endian.Big);
         var header = zoneHeader(&reader)!;
         var width = usize(4);
@@ -147,13 +146,13 @@ public:
         TimeZone(text.fromBytes(name.asBytes())!, initial, move(transitions), move(offsets), recurring)
     }
 
-    const func name() str { identifier }
-    const func offsetAt(utc: UtcDateTime) Duration { Duration.fromSeconds(i64(offsetSeconds(utc.unixSeconds()))) }
-    const func clone() !Self {
+    pub const func name() str { identifier }
+    pub const func offsetAt(utc: UtcDateTime) Duration { Duration.fromSeconds(i64(offsetSeconds(utc.unixSeconds()))) }
+    pub const func clone() !Self {
         TimeZone(text.fromBytes(identifier.asBytes())!, initialOffset, transitions.clone()!, offsets.clone()!, recurring)
     }
 
-    const func offsetSeconds(utc: i64) i32 {
+    pub const func offsetSeconds(utc: i64) i32 {
         var low = usize(0);
         var high = transitions.len();
         if recurring != null && (high == 0 || utc > transitions.at(high - 1).at) {
@@ -167,7 +166,7 @@ public:
         transitions.at(low - 1).offset
     }
 
-    const func resolve(local: LocalDateTime, policy: LocalTimePolicy) !UtcDateTime {
+    pub const func resolve(local: LocalDateTime, policy: LocalTimePolicy) !UtcDateTime {
         var seconds = local.date().toOrdinal() * secondsPerDay + i64(local.time().secondsSinceMidnight());
         var earliest: ?i64 = null;
         var latest: ?i64 = null;
@@ -208,18 +207,17 @@ pub class ZonedDateTime {
     var instant: UtcDateTime;
     var location: TimeZone;
     func init(utc: UtcDateTime, zone: TimeZone) : instant(utc), location(move(zone)) {}
-public:
-    static func fromUtc(utc: UtcDateTime, zone: TimeZone) Self { ZonedDateTime(utc, move(zone)) }
-    static func fromLocal(local: LocalDateTime, zone: TimeZone, policy: LocalTimePolicy) !Self {
+    pub static func fromUtc(utc: UtcDateTime, zone: TimeZone) Self { ZonedDateTime(utc, move(zone)) }
+    pub static func fromLocal(local: LocalDateTime, zone: TimeZone, policy: LocalTimePolicy) !Self {
         var utc = zone.resolve(local, policy)!;
         ZonedDateTime(utc, move(zone))
     }
-    const func utc() UtcDateTime { instant }
-    const func local() !LocalDateTime { toLocal(instant, &location) }
-    const func zoneName() str { location.name() }
-    const func offset() Duration { location.offsetAt(instant) }
-    const func withZone(zone: TimeZone) Self { ZonedDateTime(instant, move(zone)) }
-    const func add(value: Duration) !Self { ZonedDateTime(instant.add(value)!, location.clone()!) }
+    pub const func utc() UtcDateTime { instant }
+    pub const func local() !LocalDateTime { toLocal(instant, &location) }
+    pub const func zoneName() str { location.name() }
+    pub const func offset() Duration { location.offsetAt(instant) }
+    pub const func withZone(zone: TimeZone) Self { ZonedDateTime(instant, move(zone)) }
+    pub const func add(value: Duration) !Self { ZonedDateTime(instant.add(value)!, location.clone()!) }
 }
 
 pub func toUtc(local: LocalDateTime, zone: *const TimeZone, policy: LocalTimePolicy) !UtcDateTime {

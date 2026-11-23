@@ -16,23 +16,22 @@ pub class TomlDomSerializer {
     #implements: serde.Serializer
     var frames: coll.Vec<TomlWriteFrame>;
     var root: ?Value;
-public:
-    func init() : frames(coll.Vec<TomlWriteFrame>()), root(null) {}
-    func writeNull() !void { return serde.SerdeError.Unsupported; }
-    func writeBool(value: bool) !void { appendValue(Value.Bool(value)) }
-    func writeI64(value: i64) !void { appendValue(Value.Integer(value)) }
-    func writeU64(value: u64) !void {
+    pub func init() : frames(coll.Vec<TomlWriteFrame>()), root(null) {}
+    pub func writeNull() !void { return serde.SerdeError.Unsupported; }
+    pub func writeBool(value: bool) !void { appendValue(Value.Bool(value)) }
+    pub func writeI64(value: i64) !void { appendValue(Value.Integer(value)) }
+    pub func writeU64(value: u64) !void {
         if value > 9223372036854775807 { return serde.SerdeError.IntegerOutOfRange; }
         var narrowed = convert.narrow<i64>(value)!;
         appendValue(Value.Integer(narrowed))
     }
-    func writeF64(value: f64) !void {
+    pub func writeF64(value: f64) !void {
         if math.isNan(value) { return writeNumber(if math.signbit(value) { "-nan" } else { "nan" }); }
         if math.isInfinite(value) { return writeNumber(if math.signbit(value) { "-inf" } else { "inf" }); }
         var raw = fmt.formatShortestScientific(value)!;
         writeNumber(raw)
     }
-    func writeNumber(value: str) !void {
+    pub func writeNumber(value: str) !void {
         var options = TomlOptions();
         var parsed = parseValue(value, 0, &options)!;
         switch move(parsed) {
@@ -41,35 +40,34 @@ public:
             _ => TomlSerdeError.UnsupportedValue,
         }
     }
-    func writeString(value: str) !void {
+    pub func writeString(value: str) !void {
         var owned = text.fromBytes(value.asBytes())!;
         appendValue(Value.String(move(owned)))
     }
-    func beginSeq(length: ?usize) !void { frames.push(TomlWriteFrame(false))!; }
-    func endSeq() !void {
+    pub func beginSeq(length: ?usize) !void { frames.push(TomlWriteFrame(false))!; }
+    pub func endSeq() !void {
         if frames.isEmpty() { return TomlSerdeError.InvalidState; }
         var frame = frames.pop().unwrap();
         if frame.mapMode { return TomlSerdeError.InvalidState; }
         appendValue(Value.Array(core.replace<coll.Vec<Value>>(&frame.array, coll.Vec<Value>())))
     }
-    func beginMap(length: ?usize) !void { frames.push(TomlWriteFrame(true))!; }
-    func writeKey(value: str) !void {
+    pub func beginMap(length: ?usize) !void { frames.push(TomlWriteFrame(true))!; }
+    pub func writeKey(value: str) !void {
         if frames.isEmpty() { return TomlSerdeError.InvalidState; }
         var frame = frames.getMutPtr(frames.len() - 1).unwrap();
         if !frame.mapMode || frame.pendingKey != null { return TomlSerdeError.InvalidState; }
         frame.pendingKey = some(text.fromBytes(value.asBytes())!);
     }
-    func endMap() !void {
+    pub func endMap() !void {
         if frames.isEmpty() { return TomlSerdeError.InvalidState; }
         var frame = frames.pop().unwrap();
         if !frame.mapMode || frame.pendingKey != null { return TomlSerdeError.InvalidState; }
         appendValue(Value.Table(core.replace<Document>(&frame.table, Document())))
     }
-    func takeValue() !Value {
+    pub func takeValue() !Value {
         if !frames.isEmpty() { return TomlSerdeError.InvalidState; }
         core.replace<?Value>(&root, null) ?? { return TomlSerdeError.MissingRoot; }
     }
-private:
     func appendValue(value: Value) !void {
         if frames.isEmpty() {
             if root != null { return TomlSerdeError.InvalidState; }
@@ -99,12 +97,11 @@ pub class TomlDomDeserializer {
     var root: Value;
     var current: ?*const Value;
     var frames: coll.Vec<TomlReadFrame>;
-public:
-    func init(value: Value)
+    pub func init(value: Value)
         : root(move(value)), current(null), frames(coll.Vec<TomlReadFrame>()) {
         current = some(&root);
     }
-    func kind() !serde.DataKind {
+    pub func kind() !serde.DataKind {
         var value = current ?? { return serde.SerdeError.InvalidState; };
         switch *value {
             Value.String(_) => serde.DataKind.String,
@@ -115,19 +112,19 @@ public:
             Value.DateTime(_) => serde.DataKind.String,
         }
     }
-    func readNull() !void { return serde.SerdeError.TypeMismatch; }
-    func readBool() !bool {
+    pub func readNull() !void { return serde.SerdeError.TypeMismatch; }
+    pub func readBool() !bool {
         var currentValue = opt.okOr(current, serde.SerdeError.InvalidState)!;
         switch *currentValue { Value.Bool(value) => value, _ => serde.SerdeError.TypeMismatch }
     }
-    func readI64() !i64 {
+    pub func readI64() !i64 {
         var currentValue = opt.okOr(current, serde.SerdeError.InvalidState)!;
         switch *currentValue {
             Value.Integer(value) => value,
             _ => serde.SerdeError.TypeMismatch,
         }
     }
-    func readU64() !u64 {
+    pub func readU64() !u64 {
         var currentValue = opt.okOr(current, serde.SerdeError.InvalidState)!;
         switch *currentValue {
             Value.Integer(value) => {
@@ -137,14 +134,14 @@ public:
             _ => serde.SerdeError.TypeMismatch,
         }
     }
-    func readF64() !f64 {
+    pub func readF64() !f64 {
         var currentValue = opt.okOr(current, serde.SerdeError.InvalidState)!;
         switch *currentValue {
             Value.Integer(_), Value.Float(_) => asF64(currentValue),
             _ => serde.SerdeError.TypeMismatch,
         }
     }
-    func readNumber() !string {
+    pub func readNumber() !string {
         var currentValue = opt.okOr(current, serde.SerdeError.InvalidState)!;
         switch *currentValue {
             Value.Integer(value) => serdeIntegerText(value),
@@ -152,7 +149,7 @@ public:
             _ => serde.SerdeError.TypeMismatch,
         }
     }
-    func readString() !string {
+    pub func readString() !string {
         var currentValue = opt.okOr(current, serde.SerdeError.InvalidState)!;
         switch *currentValue {
             Value.String(value) => text.fromBytes(value.asBytes()),
@@ -160,7 +157,7 @@ public:
             _ => serde.SerdeError.TypeMismatch,
         }
     }
-    func beginSeq() !?usize {
+    pub func beginSeq() !?usize {
         var parent = current ?? { return serde.SerdeError.InvalidState; };
         switch *parent {
             Value.Array(ref array) => {
@@ -170,7 +167,7 @@ public:
             _ => serde.SerdeError.TypeMismatch,
         }
     }
-    func nextElement() !bool {
+    pub func nextElement() !bool {
         if frames.isEmpty() { return TomlSerdeError.InvalidState; }
         var frame = frames.getMutPtr(frames.len() - 1).unwrap();
         if frame.mapMode { return TomlSerdeError.InvalidState; }
@@ -180,7 +177,7 @@ public:
         frame.index++;
         true
     }
-    func endSeq() !void {
+    pub func endSeq() !void {
         if frames.isEmpty() { return TomlSerdeError.InvalidState; }
         var frame = frames.pop().unwrap();
         if frame.mapMode { return TomlSerdeError.InvalidState; }
@@ -188,7 +185,7 @@ public:
         if frame.index != array.len() { return serde.SerdeError.InvalidLength; }
         current = some(frame.parent);
     }
-    func beginMap() !?usize {
+    pub func beginMap() !?usize {
         var parent = current ?? { return serde.SerdeError.InvalidState; };
         switch *parent {
             Value.Table(ref table) => {
@@ -198,7 +195,7 @@ public:
             _ => serde.SerdeError.TypeMismatch,
         }
     }
-    func nextKey() !?string {
+    pub func nextKey() !?string {
         if frames.isEmpty() { return TomlSerdeError.InvalidState; }
         var frame = frames.getMutPtr(frames.len() - 1).unwrap();
         if !frame.mapMode { return TomlSerdeError.InvalidState; }
@@ -209,7 +206,7 @@ public:
         frame.index++;
         some(text.fromBytes(key.asBytes())!)
     }
-    func endMap() !void {
+    pub func endMap() !void {
         if frames.isEmpty() { return TomlSerdeError.InvalidState; }
         var frame = frames.pop().unwrap();
         if !frame.mapMode { return TomlSerdeError.InvalidState; }
@@ -217,7 +214,7 @@ public:
         if frame.index != table.len() { return serde.SerdeError.InvalidLength; }
         current = some(frame.parent);
     }
-    func finish() !void {
+    pub func finish() !void {
         if !frames.isEmpty() || current == null { return TomlSerdeError.InvalidState; }
     }
 }

@@ -118,7 +118,7 @@ pub interface ConcurrentService_Greeter {
     const func rpc_SayHello(request: Msg_HelloRequest, context: *const grpc.UnaryRequest) !grpc.TypedResponse<Msg_HelloReply>;
 }
 
-class ConcurrentAdapter_Greeter_SayHello<H: ConcurrentService_Greeter & Shareable> {
+class ConcurrentAdapter_Greeter_SayHello<H: ConcurrentService_Greeter + Shareable> {
     #implements: grpc.ConcurrentUnaryHandler
     var service: mem.Shared<H>;
     pub func init(service: mem.Shared<H>) : service(move(service)) {}
@@ -133,7 +133,7 @@ class ConcurrentAdapter_Greeter_SayHello<H: ConcurrentService_Greeter & Shareabl
     }
 }
 
-pub class ConcurrentServer_Greeter<H: ConcurrentService_Greeter & Shareable> {
+pub class ConcurrentServer_Greeter<H: ConcurrentService_Greeter + Shareable> {
     #copy: disabled
     var handle_SayHello: ConcurrentAdapter_Greeter_SayHello<H>;
     pub func init(service: mem.Shared<H>) : handle_SayHello(ConcurrentAdapter_Greeter_SayHello<H>(service.clone())) {}

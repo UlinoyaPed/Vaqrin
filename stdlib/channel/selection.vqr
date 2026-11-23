@@ -8,13 +8,12 @@ var choiceRotation: usize = 0;
 
 class ChoiceLock {
     #copy: disabled
-public:
-    func init() {
+    pub func init() {
         for __vqr_atomic_swap(&choiceLock, 1u32, atomic.Order.Acquire) != 0 {
             __vqr_sync_wait(&choiceLock, 1u32);
         }
     }
-    func deinit() void {
+    pub func deinit() void {
         __vqr_atomic_store(&choiceLock, 0u32, atomic.Order.Release);
         __vqr_sync_wake(&choiceLock, 1u32);
     }
@@ -24,31 +23,30 @@ class Choice {
     #copy: disabled
     pub var index: usize;
     pub var failure: ?ErrorId;
-public:
-    func init() : index(~usize(0)), failure(null) {
+    pub func init() : index(~usize(0)), failure(null) {
         var old = __vqr_atomic_add(&activeChoices, 1u32, atomic.Order.Relaxed);
         if old == ~u32(0) { panic("too many active selections"); }
     }
-    func deinit() void {
+    pub func deinit() void {
         var old = __vqr_atomic_sub(&activeChoices, 1u32, atomic.Order.Relaxed);
     }
     // Caller holds ChoiceLock while accessing these fields.
-    const func pending() bool { index == ~usize(0) && failure == null }
-    func observeCancellation() void {
+    pub const func pending() bool { index == ~usize(0) && failure == null }
+    pub func observeCancellation() void {
         if !__vqr_task_channel_cancelled() { return; }
         var guard = ChoiceLock();
         if pending() { failure = some(ChannelError.Cancelled); }
     }
-    const func decided() bool {
+    pub const func decided() bool {
         var guard = ChoiceLock();
         !pending()
     }
-    const func decision() !usize {
+    pub const func decision() !usize {
         var guard = ChoiceLock();
         if failure != null { return failure.unwrap(); }
         index
     }
-    func choose(candidate: usize) void {
+    pub func choose(candidate: usize) void {
         var guard = ChoiceLock();
         if pending() { index = candidate; }
     }
@@ -106,30 +104,28 @@ func choiceTimer(choice: *Choice, index: usize, alarm: ?time.Deadline) void {
     if alarm.unwrap().expired() catch true { choice.choose(index); }
 }
 
-class SelectNode<T: Movable & Sendable> {
+class SelectNode<T: Movable + Sendable> {
     pub var choice: *Choice;
     pub var index: usize;
     pub var source: ?*T;
     pub var value: ?T;
     pub var next: ?*SelectNode<T>;
-public:
-    func init(choice: *Choice, index: usize, source: ?*T)
+    pub func init(choice: *Choice, index: usize, source: ?*T)
         : choice(choice), index(index), source(source), value(null), next(null) {}
 }
 
-func takeOffered<T: Movable & Sendable>(node: *SelectNode<T>) T {
+func takeOffered<T: Movable + Sendable>(node: *SelectNode<T>) T {
     unsafe { __vqr_slot_take<T>(node.source.unwrap()) }
 }
 
-class Ticket<T: Movable & Sendable> {
+class Ticket<T: Movable + Sendable> {
     var state: mem.Shared<State<T>>;
     var node: SelectNode<T>;
     var linked: bool;
-public:
-    func init(state: mem.Shared<State<T>>, choice: *Choice, index: usize, source: ?*T)
+    pub func init(state: mem.Shared<State<T>>, choice: *Choice, index: usize, source: ?*T)
         : state(move(state)), node(SelectNode<T>(choice, index, source)), linked(false) {}
 
-    func link() void {
+    pub func link() void {
         var channel = state.asPtr();
         var guard = channel.lock();
         var box = guard.get();
@@ -140,7 +136,7 @@ public:
         channel.notifyAll();
     }
 
-    func unlink() void {
+    pub func unlink() void {
         if !linked { return; }
         var channel = state.asPtr();
         var guard = channel.lock();
@@ -157,10 +153,10 @@ public:
         linked = false;
     }
 
-    func deinit() void { unlink(); }
-    func take() ?T { opt.take<T>(&node.value) }
+    pub func deinit() void { unlink(); }
+    pub func take() ?T { opt.take<T>(&node.value) }
 
-    func probe() void {
+    pub func probe() void {
         var channel = state.asPtr();
         var guard = channel.lock();
         var box = guard.get();
@@ -169,7 +165,6 @@ public:
         var changed = if node.source != null { probeSend(box) } else { probeReceive(box) };
         if changed { channel.notifyAll(); }
     }
-private:
     func probeSend(box: *Mailbox<T>) bool {
         if box.closed {
             node.choice.failure = some(ChannelError.Closed);

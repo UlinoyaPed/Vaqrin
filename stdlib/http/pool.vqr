@@ -23,19 +23,18 @@ pub class AsyncPool {
               idleTimeout: time.Duration)
         : client(move(client)), entries(move(entries)), capacity(capacity), idleTimeout(idleTimeout),
           closed(false) {}
-public:
-    static func new(client: AsyncClient, capacity: usize, idleTimeout: time.Duration) !Self {
+    pub static func new(client: AsyncClient, capacity: usize, idleTimeout: time.Duration) !Self {
         if idleTimeout.isNegative() { return io.IoError.InvalidArgument; }
         var entries = coll.Vec<IdleConnection>.withCapacity(capacity)!;
         AsyncPool(move(client), move(entries), capacity, idleTimeout)
     }
 
-    func close() void {
+    pub func close() void {
         closed = true;
         entries.clear();
     }
 
-    func request(address: str, method: Method, body: Body) !Response {
+    pub func request(address: str, method: Method, body: Body) !Response {
         var target = parseUrl(address)!;
         var path = pathTarget(&target)!;
         var request = Request.new(method, path)!;
@@ -43,9 +42,9 @@ public:
         send(address, &request)
     }
 
-    func get(address: str) !Response { request(address, Method.GET, Body()) }
+    pub func get(address: str) !Response { request(address, Method.GET, Body()) }
 
-    func send(address: str, request: *Request) !Response {
+    pub func send(address: str, request: *Request) !Response {
         var deadline = some(time.Deadline.after(client.limits.timeout)!);
         secure, authority, connection := acquire(address, deadline)!;
         var response = connection.sendUntil(request, deadline)!;
@@ -53,7 +52,7 @@ public:
         move(response)
     }
 
-    func sendStreaming(address: str, request: *Request, source: ?*io.Reader,
+    pub func sendStreaming(address: str, request: *Request, source: ?*io.Reader,
                        consumer: *ResponseConsumer) !void {
         var deadline = some(time.Deadline.after(client.limits.timeout)!);
         secure, authority, connection := acquire(address, deadline)!;
@@ -61,7 +60,6 @@ public:
         recycle(secure, move(authority), move(connection));
     }
 
-private:
     func acquire(address: str, deadline: ?time.Deadline) !(bool, string, AsyncConnection) {
         if closed { return io.IoError.Closed; }
         var target = parseUrl(address)!;

@@ -5,56 +5,54 @@ pub class SizeHint {
     pub var upper: ?usize;
 }
 
-pub class SliceIter<T: Copyable & Movable> {
+pub class SliceIter<T: Copyable + Movable> {
     var values: []const T;
     var front: usize;
     var back: usize;
-public:
-    func init(values: []const T) : values(values), front(0), back(values.len()) {}
+    pub func init(values: []const T) : values(values), front(0), back(values.len()) {}
 
-    func next() ?T {
+    pub func next() ?T {
         if front == back { return null; }
         var value = values[front];
         front++;
         some(move(value))
     }
 
-    func nextBack() ?T {
+    pub func nextBack() ?T {
         if front == back { return null; }
         back--;
         some(values[back])
     }
 
-    const func remaining() usize { back - front }
-    const func sizeHint() SizeHint {
+    pub const func remaining() usize { back - front }
+    pub const func sizeHint() SizeHint {
         var n = remaining();
         SizeHint{lower: n, upper: some(n)}
     }
 }
 
-pub func iter<T: Copyable & Movable>(values: []const T) SliceIter<T> { SliceIter<T>(values) }
+pub func iter<T: Copyable + Movable>(values: []const T) SliceIter<T> { SliceIter<T>(values) }
 
 pub class SliceIterRef<T> {
     var values: []const T;
     var front: usize;
     var back: usize;
-public:
-    func init(values: []const T) : values(values), front(0), back(values.len()) {}
+    pub func init(values: []const T) : values(values), front(0), back(values.len()) {}
 
-    func next() ?*const T {
+    pub func next() ?*const T {
         if front == back { return null; }
         var value = &values[front];
         front++;
         some(move(value))
     }
 
-    func nextBack() ?*const T {
+    pub func nextBack() ?*const T {
         if front == back { return null; }
         back--;
         some(&values[back])
     }
 
-    const func remaining() usize { back - front }
+    pub const func remaining() usize { back - front }
 }
 
 pub func iterRef<T>(values: []const T) SliceIterRef<T> { SliceIterRef<T>(values) }
@@ -63,23 +61,22 @@ pub class SliceIterMut<T> {
     var values: []T;
     var front: usize;
     var back: usize;
-public:
-    func init(values: []T) : values(values), front(0), back(values.len()) {}
+    pub func init(values: []T) : values(values), front(0), back(values.len()) {}
 
-    func next() ?*T {
+    pub func next() ?*T {
         if front == back { return null; }
         var value = &values[front];
         front++;
         some(move(value))
     }
 
-    func nextBack() ?*T {
+    pub func nextBack() ?*T {
         if front == back { return null; }
         back--;
         some(&values[back])
     }
 
-    const func remaining() usize { back - front }
+    pub const func remaining() usize { back - front }
 }
 
 pub func iterMut<T>(values: []T) SliceIterMut<T> { SliceIterMut<T>(values) }

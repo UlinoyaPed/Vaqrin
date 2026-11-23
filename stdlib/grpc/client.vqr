@@ -65,14 +65,13 @@ pub class ClientConn {
     var lastAccepted: ?i32;
     var terminated: bool;
     var serial: u64;
-public:
-    func init(wire: Transport, session: http2.Connection, authority: string, secure: bool, options: DialOptions)
+    pub func init(wire: Transport, session: http2.Connection, authority: string, secure: bool, options: DialOptions)
         : wire(move(wire)), connection(move(session)), authority(move(authority)), secure(secure),
           timeout(options.timeout), limit(options.maxMessageBytes), active(coll.Vec<ActiveCall>()),
           deferred(DeferredEvents()), maxCalls(options.maxConcurrentCalls), lastAccepted(null),
           terminated(false), serial(0) {}
-    const func maxMessageBytes() usize { limit }
-    func close() !void {
+    pub const func maxMessageBytes() usize { limit }
+    pub func close() !void {
         terminated = true;
         active.clear();
         connection.goAway(0) catch {};
@@ -80,7 +79,7 @@ public:
         connection.close();
         wire.close()
     }
-    func start(path: str, options: *const CallOptions) !Call {
+    pub func start(path: str, options: *const CallOptions) !Call {
         if terminated || lastAccepted != null { return RpcError.ConnectionClosed; }
         if active.len() >= maxCalls { return RpcError.ResourceExhausted; }
         if !validMethod(path) { return RpcError.InvalidMethod; }
@@ -105,7 +104,7 @@ public:
         active.push(ActiveCall(stream, serial))!;
         Call.withCompression(stream, options.deadline, serial, limit, options.compression)
     }
-    func sendMessage(call: *Call, message: []const u8) !void {
+    pub func sendMessage(call: *Call, message: []const u8) !void {
         requireActive(call)!;
         if call.sentEnd { return RpcError.CallClosed; }
         var encoded = frameMessage(message, limit, call.sendCompression())!;
@@ -113,7 +112,7 @@ public:
         updateTimeout(call)!;
         connection.flush(&wire)
     }
-    func finishSend(call: *Call) !void {
+    pub func finishSend(call: *Call) !void {
         requireActive(call)!;
         if call.sentEnd { return; }
         connection.sendData(call.stream, "".asBytes(), true)!;
@@ -121,7 +120,7 @@ public:
         updateTimeout(call)!;
         connection.flush(&wire)
     }
-    func cancel(call: *Call) !void {
+    pub func cancel(call: *Call) !void {
         requireActive(call)!;
         call.cancelled = true;
         removeCall(call.stream);
@@ -131,7 +130,7 @@ public:
         wire.setTimeout(timeout)!;
         connection.flush(&wire)
     }
-    func recvMessage(call: *Call) !?coll.Vec<u8> {
+    pub func recvMessage(call: *Call) !?coll.Vec<u8> {
         if call.cancelled { return RpcError.Cancelled; }
         if call.remoteEnd { return null; }
         requireActive(call)!;
@@ -149,7 +148,7 @@ public:
             return reason;
         }
     }
-    func unary(path: str, message: []const u8, options: *const CallOptions) !UnaryResponse {
+    pub func unary(path: str, message: []const u8, options: *const CallOptions) !UnaryResponse {
         var call = start(path, options)!;
         sendMessage(&call, message) catch (reason) { cancel(&call) catch {}; return reason; };
         finishSend(&call) catch (reason) { cancel(&call) catch {}; return reason; };
@@ -161,7 +160,6 @@ public:
         response.body = move(body);
         move(response)
     }
-private:
     const func requireActive(call: *const Call) !void {
         if call.cancelled { return RpcError.Cancelled; }
         if terminated { return RpcError.ConnectionClosed; }

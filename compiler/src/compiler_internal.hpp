@@ -110,7 +110,6 @@ struct Type {
   Function *callEntry = nullptr;
   bool consuming = false;
   std::vector<Ast> patterns;
-  bool compatible = false;
   ParameterMode parameterMode = ParameterMode::Value;
   std::vector<unsigned> moveParameters;
 };
@@ -368,7 +367,7 @@ public:
   Type *aggregate(Kind kind, std::vector<Type *> parts, std::uint64_t count = 0, bool cAbi = false,
                   std::vector<unsigned> moveParameters = {});
   Type *pointer(Type *t, bool readOnly);
-  Type *reference(Type *t, bool readOnly, bool compatible = false, ParameterMode mode = ParameterMode::Value);
+  Type *reference(Type *t, bool readOnly, ParameterMode mode = ParameterMode::Value);
   bool hasReference(Type *t);
   int borrowParameter(Definition def, const std::vector<Type *> &parameters, Type *result, bool receiver);
   Type *slice(Type *t, bool readOnly);

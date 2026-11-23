@@ -71,12 +71,12 @@ struct GenericSignature {
 
   int borrowRoot() const {
     const auto &decl = *definition.decl;
-    auto name = decl.borrowSource.empty() ? program.attribute(decl, "return_borrow") : decl.borrowSource;
+    const auto &name = decl.borrowSource;
     if (name.empty()) return -2;
     if (name == "self") return -1;
     for (unsigned i = 0; i < decl.params.size(); ++i)
       if (decl.params[i].name == name) return static_cast<int>(i);
-    fail(decl.span, "#return_borrow must name self or a parameter", "E230");
+    fail(decl.span, "from must name self or a parameter", "E230");
   }
 };
 

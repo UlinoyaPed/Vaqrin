@@ -3,21 +3,20 @@ package mem
 pub class MaybeUninit<T: Movable> {
     var storage: __vqr_RawStorage<T>;
     func init() : storage(__vqr_uninitialized<T>()) {}
-public:
-    static func uninit() Self { MaybeUninit<T>() }
+    pub static func uninit() Self { MaybeUninit<T>() }
 
-    func asPtr() *T { __vqr_raw_address(&storage) }
-    const func asConstPtr() *const T { __vqr_raw_address(&storage) }
+    pub func asPtr() *T { __vqr_raw_address(&storage) }
+    pub const func asConstPtr() *const T { __vqr_raw_address(&storage) }
 
-    unsafe func write(value: T) *T {
+    pub unsafe func write(value: T) *T {
         var address = asPtr();
         unsafe { __vqr_slot_write<T>(address, move(value)); }
         address
     }
 
-    unsafe func assumeInit() T { unsafe { __vqr_slot_take<T>(asPtr()) } }
-    unsafe func assumeInitRef() *T { asPtr() }
-    unsafe func assumeInitDrop() void { unsafe { __vqr_slot_drop<T>(asPtr()); } }
+    pub unsafe func assumeInit() T { unsafe { __vqr_slot_take<T>(asPtr()) } }
+    pub unsafe func assumeInitRef() *T { asPtr() }
+    pub unsafe func assumeInitDrop() void { unsafe { __vqr_slot_drop<T>(asPtr()); } }
 }
 
 pub class ManuallyDrop<T: Movable> {
@@ -25,28 +24,26 @@ pub class ManuallyDrop<T: Movable> {
     func init(value: T) : slot(MaybeUninit<T>.uninit()) {
         unsafe { slot.write(move(value)); }
     }
-public:
-    static func new(value: T) Self { ManuallyDrop<T>(move(value)) }
-    func asPtr() *T { slot.asPtr() }
-    static func intoInner(value: Self) T { unsafe { value.slot.assumeInit() } }
-    unsafe func dropInPlace() void { unsafe { slot.assumeInitDrop(); } }
+    pub static func new(value: T) Self { ManuallyDrop<T>(move(value)) }
+    pub func asPtr() *T { slot.asPtr() }
+    pub static func intoInner(value: Self) T { unsafe { value.slot.assumeInit() } }
+    pub unsafe func dropInPlace() void { unsafe { slot.assumeInitDrop(); } }
 }
 
 pub class ScopeGuard<F: Movable> {
     #copy: disabled
     var callback: F;
     var armed: bool;
-public:
-    func init(callback: F) : callback(move(callback)), armed(true) {}
-    func dismiss() void { armed = false; }
-    const func isArmed() bool { armed }
+    pub func init(callback: F) : callback(move(callback)), armed(true) {}
+    pub func dismiss() void { armed = false; }
+    pub const func isArmed() bool { armed }
 
-    func runNow() void {
+    pub func runNow() void {
         if armed {
             armed = false;
             callback();
         }
     }
 
-    func deinit() void { runNow(); }
+    pub func deinit() void { runNow(); }
 }

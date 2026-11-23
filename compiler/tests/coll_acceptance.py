@@ -92,7 +92,7 @@ class ContainerAcceptance(CompilerCase):
                 io.println(*tree.first().unwrap().1 == 100 && *tree.last().unwrap().1 == 200)!;
                 var table = coll.HashMap<i32, i32>.withHasher(hash.hashI32, hash.eqI32);
                 for i in 0..30 { var previous = table.insert(i, i * 2)!; }
-                var removed = table.remove(&start);
+                var removed = table.remove(start);
                 var keys = table.keys();
                 var values = table.values();
                 var total = 0;
@@ -243,24 +243,24 @@ class ContainerAcceptance(CompilerCase):
                 var map = coll.HashMap<i32, Probe>.withHasher(collision, hash.eqI32);
                 for id in 1..81 { var old = map.insert(id, Probe{id: id})!; }
                 for id in 1..41 {
-                    var taken = map.remove(&id);
+                    var taken = map.remove(id);
                     var value = move(taken).unwrap();
                     if value.id != id { panic("wrong removal"); }
                 }
                 for id in 41..81 {
-                    if map.get(&id).unwrap().id != id { panic("probe stopped at tombstone"); }
+                    if map.get(id).unwrap().id != id { panic("probe stopped at tombstone"); }
                 }
                 for id in 81..121 { var old = map.insert(id, Probe{id: id})!; }
                 var key = 55;
                 var replacement = map.insert(key, Probe{id: 121})!;
                 var old = move(replacement).unwrap();
-                if old.id != 55 || map.get(&key).unwrap().id != 121 { panic("replace failed"); }
+                if old.id != 55 || map.get(key).unwrap().id != 121 { panic("replace failed"); }
                 var iterator = map.iterRef()!;
                 var count = 0;
                 for entry in move(iterator) { count++; }
                 if count != 80 { panic("map iterator count"); }
                 var set = coll.HashSet<i32>.withHasher(collision, hash.eqI32);
-                if !set.insert(key)! || set.insert(key)! || !set.remove(&key) || set.contains(&key) {
+                if !set.insert(key)! || set.insert(key)! || !set.remove(key) || set.contains(key) {
                     panic("set uniqueness");
                 }
                 if hash.hashBytes("hello".asBytes()) != usize(1335831723) { panic("FNV-1a"); }
@@ -307,13 +307,13 @@ class ContainerAcceptance(CompilerCase):
                 }
                 for step in 0..129 {
                     var id = (step * 107) % 129;
-                    var picked = tree.remove(&id);
+                    var picked = tree.remove(id);
                     var item = move(picked).unwrap();
-                    if item.id != id || tree.containsKey(&id) { panic("incorrect removal"); }
+                    if item.id != id || tree.containsKey(id) { panic("incorrect removal"); }
                 }
                 if !tree.isEmpty() { panic("root did not contract"); }
                 var set = coll.BTreeSet<i32>.withComparator(less);
-                if !set.insert(k)! || set.insert(k)! || !set.remove(&k) || set.contains(&k) {
+                if !set.insert(k)! || set.insert(k)! || !set.remove(k) || set.contains(k) {
                     panic("B-tree set uniqueness");
                 }
             }
@@ -335,8 +335,8 @@ class ContainerAcceptance(CompilerCase):
                     var query = Key{id: id};
                     var borrowed = tree.lowerBound(&query).unwrap();
                     if borrowed.id != id { panic("borrowed key lookup"); }
-                    var entry = tree.removeEntry(borrowed).unwrap();
-                    if entry.0.id != id || entry.1 != id || tree.containsKey(&query) {
+                    var entry = tree.removeEntry(query).unwrap();
+                    if entry.0.id != id || entry.1 != id || tree.containsKey(query) {
                         panic("removal invalidated its own query");
                     }
                 }
@@ -363,15 +363,14 @@ class ContainerAcceptance(CompilerCase):
                 var owner: mem.GlobalAllocator;
                 pub var fail: bool;
                 pub var live: usize;
-            public:
-                func init() : owner(mem.GlobalAllocator()), fail(false), live(0) {}
-                func alloc(layout: mem.Layout) !?*u8 {
+                pub func init() : owner(mem.GlobalAllocator()), fail(false), live(0) {}
+                pub func alloc(layout: mem.Layout) !?*u8 {
                     if fail { return Injected.Exhausted; }
                     var allocation = owner.alloc(layout)!;
                     if allocation != null { live += layout.size(); }
                     allocation
                 }
-                func free(ptr: *u8, layout: mem.Layout) void {
+                pub func free(ptr: *u8, layout: mem.Layout) void {
                     live -= layout.size();
                     owner.free(ptr, layout);
                 }
@@ -417,7 +416,7 @@ class ContainerAcceptance(CompilerCase):
                         rejected = true;
                     };
                     var key = 1;
-                    if !rejected || map.len() != 1 || map.get(&key).unwrap().id != 3 {
+                    if !rejected || map.len() != 1 || map.get(key).unwrap().id != 3 {
                         panic("failed rehash lost entry");
                     }
                     {
@@ -438,7 +437,7 @@ class ContainerAcceptance(CompilerCase):
                             break;
                         };
                     }
-                    if !insertionFailed || map.len() != 7 || map.get(&key).unwrap().id != 3 {
+                    if !insertionFailed || map.len() != 7 || map.get(key).unwrap().id != 3 {
                         panic("getOrInsert failed growth changed the map");
                     }
                     allocator.fail = false;
@@ -464,7 +463,7 @@ class ContainerAcceptance(CompilerCase):
                 };
                 if !rejected || tree.len() != 7 { return 1; }
                 for key in 0..7 {
-                    if *tree.get(&key).unwrap() != key * 3 { return 2; }
+                    if *tree.get(key).unwrap() != key * 3 { return 2; }
                 }
                 var after = tree.insert(7, 21)!;
                 if after != null || tree.len() != 8 { return 3; }

@@ -3,9 +3,8 @@ package iter
 pub class EnumerateIter<I: Movable, T: Movable> {
     var source: I;
     var index: usize;
-public:
-    func init(source: I) : source(move(source)), index(0) {}
-    func next() ?(usize, T) {
+    pub func init(source: I) : source(move(source)), index(0) {}
+    pub func next() ?(usize, T) {
         switch source.next() {
             null => null,
             some(value) => {
@@ -20,22 +19,20 @@ public:
 pub class TakeIter<I: Movable, T> {
     var source: I;
     var limit: usize;
-public:
-    func init(source: I, count: usize) : source(move(source)), limit(count) {}
-    func next() ?T {
+    pub func init(source: I, count: usize) : source(move(source)), limit(count) {}
+    pub func next() ?T {
         if limit == 0 { return null; }
         limit--;
         source.next()
     }
-    const func remainingLimit() usize { limit }
+    pub const func remainingLimit() usize { limit }
 }
 
 pub class SkipIter<I: Movable, T: Movable> {
     var source: I;
     var skipCount: usize;
-public:
-    func init(source: I, count: usize) : source(move(source)), skipCount(count) {}
-    func next() ?T {
+    pub func init(source: I, count: usize) : source(move(source)), skipCount(count) {}
+    pub func next() ?T {
         for skipCount > 0 {
             skipCount--;
             switch source.next() {
@@ -50,9 +47,8 @@ public:
 pub class FuseIter<I: Movable, T: Movable> {
     var source: I;
     var ended: bool;
-public:
-    func init(source: I) : source(move(source)), ended(false) {}
-    func next() ?T {
+    pub func init(source: I) : source(move(source)), ended(false) {}
+    pub func next() ?T {
         if ended { return null; }
         switch source.next() {
             null => { ended = true; null },
@@ -81,9 +77,8 @@ pub class ChainIter<IA: Movable, IB: Movable, T: Movable> {
     var first: IA;
     var second: IB;
     var useFirst: bool;
-public:
-    func init(a: IA, b: IB) : first(move(a)), second(move(b)), useFirst(true) {}
-    func next() ?T {
+    pub func init(a: IA, b: IB) : first(move(a)), second(move(b)), useFirst(true) {}
+    pub func next() ?T {
         if useFirst {
             switch first.next() {
                 null => { useFirst = false; },
@@ -98,9 +93,8 @@ pub class ZipIter<IA: Movable, IB: Movable, A: Movable, B: Movable> {
     var first: IA;
     var second: IB;
     var ended: bool;
-public:
-    func init(a: IA, b: IB) : first(move(a)), second(move(b)), ended(false) {}
-    func next() ?(A, B) {
+    pub func init(a: IA, b: IB) : first(move(a)), second(move(b)), ended(false) {}
+    pub func next() ?(A, B) {
         if ended { return null; }
         switch first.next() {
             null => { ended = true; null },
@@ -114,9 +108,8 @@ public:
 
 pub class RevIter<I: Movable, T> {
     var source: I;
-public:
-    func init(source: I) : source(move(source)) {}
-    func next() ?T { source.nextBack() }
+    pub func init(source: I) : source(move(source)) {}
+    pub func next() ?T { source.nextBack() }
 }
 
 pub func chain<IA: Movable, IB: Movable, T: Movable>(a: IA, b: IB) ChainIter<IA, IB, T> {

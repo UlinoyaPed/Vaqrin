@@ -17,11 +17,10 @@ pub class BitReader {
     var order: BitOrder;
     var cursor: usize;
     var end: usize;
-public:
-    func init(source: []const u8, order: BitOrder)
+    pub func init(source: []const u8, order: BitOrder)
         : source(source), order(order), cursor(0), end(bitLength(source.len())) {}
 
-    const func peekBits(count: usize) !?u64 {
+    pub const func peekBits(count: usize) !?u64 {
         if count > 64 { return BitError.OutOfRange; }
         if count > remaining() { return null; }
         var value = 0u64;
@@ -35,16 +34,16 @@ public:
         some(value)
     }
 
-    func readBits(count: usize) !?u64 {
+    pub func readBits(count: usize) !?u64 {
         switch peekBits(count)! {
             null => null,
             some(value) => { cursor += count; some(value) },
         }
     }
 
-    func alignByte() void { cursor += (usize(8) - cursor % 8) % 8; }
-    const func position() usize { cursor }
-    const func remaining() usize { end - cursor }
+    pub func alignByte() void { cursor += (usize(8) - cursor % 8) % 8; }
+    pub const func position() usize { cursor }
+    pub const func remaining() usize { end - cursor }
 }
 
 pub class BitWriter {
@@ -52,11 +51,10 @@ pub class BitWriter {
     var order: BitOrder;
     var cursor: usize;
     var end: usize;
-public:
-    func init(dest: []u8, order: BitOrder)
+    pub func init(dest: []u8, order: BitOrder)
         : destination(dest), order(order), cursor(0), end(bitLength(dest.len())) {}
 
-    func writeBits(value: u64, count: usize) !void {
+    pub func writeBits(value: u64, count: usize) !void {
         if count > 64 || count > remaining() { return BitError.OutOfRange; }
         for i in usize(0)..count {
             var index = cursor + i;
@@ -68,11 +66,11 @@ public:
         cursor += count;
     }
 
-    func alignByte(fillBit: bool) !void {
+    pub func alignByte(fillBit: bool) !void {
         writeBits(if (fillBit) ~0u64 else 0u64, (usize(8) - cursor % 8) % 8)
     }
 
-    const func position() usize { cursor }
-    const func writtenBytes() usize { cursor / 8 + (if (cursor % 8 == 0) usize(0) else usize(1)) }
-    const func remaining() usize { end - cursor }
+    pub const func position() usize { cursor }
+    pub const func writtenBytes() usize { cursor / 8 + (if (cursor % 8 == 0) usize(0) else usize(1)) }
+    pub const func remaining() usize { end - cursor }
 }

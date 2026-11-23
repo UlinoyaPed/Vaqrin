@@ -4,46 +4,45 @@ pub class Reader {
     var data: []const u8;
     var endian: Endian;
     var cursor: usize;
-public:
-    func init(data: []const u8, endian: Endian) : data(data), endian(endian), cursor(0) {}
-    const func position() usize { cursor }
-    const func remaining() usize { data.len() - cursor }
+    pub func init(data: []const u8, endian: Endian) : data(data), endian(endian), cursor(0) {}
+    pub const func position() usize { cursor }
+    pub const func remaining() usize { data.len() - cursor }
 
-    func seek(position: usize) !void {
+    pub func seek(position: usize) !void {
         if position > data.len() { return BinaryError.EndOfBuffer; }
         cursor = position;
     }
 
-    func readBytes(n: usize) ![]const u8 {
+    pub func readBytes(n: usize) ![]const u8 {
         if n > remaining() { return BinaryError.EndOfBuffer; }
         var first = cursor;
         cursor += n;
         data[first..cursor]
     }
 
-    func readU8() !u8 {
+    pub func readU8() !u8 {
         var bytes = readBytes(1)!;
         bytes[0]
     }
-    func readI8() !i8 { bitCast<i8>(readU8()!) }
+    pub func readI8() !i8 { bitCast<i8>(readU8()!) }
 
-    func readU16() !u16 { u16(readUnsigned(readBytes(2)!, 2, endian)!) }
-    func readU32() !u32 { u32(readUnsigned(readBytes(4)!, 4, endian)!) }
-    func readU64() !u64 { readUnsigned(readBytes(8)!, 8, endian) }
-    func readI16() !i16 { bitCast<i16>(readU16()!) }
-    func readI32() !i32 { bitCast<i32>(readU32()!) }
-    func readI64() !i64 { bitCast<i64>(readU64()!) }
-    func readF32() !f32 { bitCast<f32>(readU32()!) }
-    func readF64() !f64 { bitCast<f64>(readU64()!) }
+    pub func readU16() !u16 { u16(readUnsigned(readBytes(2)!, 2, endian)!) }
+    pub func readU32() !u32 { u32(readUnsigned(readBytes(4)!, 4, endian)!) }
+    pub func readU64() !u64 { readUnsigned(readBytes(8)!, 8, endian) }
+    pub func readI16() !i16 { bitCast<i16>(readU16()!) }
+    pub func readI32() !i32 { bitCast<i32>(readU32()!) }
+    pub func readI64() !i64 { bitCast<i64>(readU64()!) }
+    pub func readF32() !f32 { bitCast<f32>(readU32()!) }
+    pub func readF64() !f64 { bitCast<f64>(readU64()!) }
 
-    func readVarUint() !u64 {
+    pub func readVarUint() !u64 {
         value, count := readVarintWord(data[cursor..data.len()])!;
         cursor += count;
         value
     }
-    func readVarInt() !i64 { zigZagDecode(readVarUint()!) }
+    pub func readVarInt() !i64 { zigZagDecode(readVarUint()!) }
 
-    func readLengthPrefixed(max: usize) ![]const u8 {
+    pub func readLengthPrefixed(max: usize) ![]const u8 {
         length, prefix := readVarintWord(data[cursor..data.len()])!;
         if length > u64(max) { return BinaryError.LengthLimit; }
         var converted: !usize = usize(length);
@@ -58,41 +57,40 @@ pub class Writer {
     var data: []u8;
     var endian: Endian;
     var cursor: usize;
-public:
-    func init(data: []u8, endian: Endian) : data(data), endian(endian), cursor(0) {}
-    const func position() usize { cursor }
-    const func remaining() usize { data.len() - cursor }
-    const func written() []const u8 { data[0..cursor] }
+    pub func init(data: []u8, endian: Endian) : data(data), endian(endian), cursor(0) {}
+    pub const func position() usize { cursor }
+    pub const func remaining() usize { data.len() - cursor }
+    pub const func written() []const u8 { data[0..cursor] }
 
-    func writeU8(value: u8) !void {
+    pub func writeU8(value: u8) !void {
         if remaining() == 0 { return BinaryError.EndOfBuffer; }
         data[cursor] = value;
         cursor++;
     }
-    func writeU16(value: u16) !void {
+    pub func writeU16(value: u16) !void {
         writeUnsigned(data[cursor..data.len()], u64(value), 2, endian)!;
         cursor += 2;
     }
-    func writeU32(value: u32) !void {
+    pub func writeU32(value: u32) !void {
         writeUnsigned(data[cursor..data.len()], u64(value), 4, endian)!;
         cursor += 4;
     }
-    func writeU64(value: u64) !void {
+    pub func writeU64(value: u64) !void {
         writeUnsigned(data[cursor..data.len()], value, 8, endian)!;
         cursor += 8;
     }
-    func writeI16(value: i16) !void { writeU16(bitCast<u16>(value)) }
-    func writeI32(value: i32) !void { writeU32(bitCast<u32>(value)) }
-    func writeI64(value: i64) !void { writeU64(bitCast<u64>(value)) }
-    func writeF32(value: f32) !void { writeU32(bitCast<u32>(value)) }
-    func writeF64(value: f64) !void { writeU64(bitCast<u64>(value)) }
+    pub func writeI16(value: i16) !void { writeU16(bitCast<u16>(value)) }
+    pub func writeI32(value: i32) !void { writeU32(bitCast<u32>(value)) }
+    pub func writeI64(value: i64) !void { writeU64(bitCast<u64>(value)) }
+    pub func writeF32(value: f32) !void { writeU32(bitCast<u32>(value)) }
+    pub func writeF64(value: f64) !void { writeU64(bitCast<u64>(value)) }
 
-    func writeVarUint(value: u64) !void {
+    pub func writeVarUint(value: u64) !void {
         cursor += writeVarintWord(value, data[cursor..data.len()])!;
     }
-    func writeVarInt(value: i64) !void { writeVarUint(zigZagEncode(value)) }
+    pub func writeVarInt(value: i64) !void { writeVarUint(zigZagEncode(value)) }
 
-    func writeBytes(value: []const u8) !void {
+    pub func writeBytes(value: []const u8) !void {
         var count = value.len();
         if count > remaining() { return BinaryError.EndOfBuffer; }
         if count != 0 {

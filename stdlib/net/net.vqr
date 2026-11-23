@@ -47,34 +47,32 @@ func formatIp(version: i32, data: []const u8) !string {
 pub class Ipv4Addr {
     var data: [4]u8;
     func init(bytes: [4]u8) : data(bytes) {}
-public:
-    static func new(a: u8, b: u8, c: u8, d: u8) Self {
+    pub static func new(a: u8, b: u8, c: u8, d: u8) Self {
         var octets = [4]u8{a, b, c, d};
         Ipv4Addr(octets)
     }
-    static func fromOctets(bytes: [4]u8) Self { Ipv4Addr(bytes) }
-    const func octets() [4]u8 { data }
-    const func isLoopback() bool { data[0] == 127 }
-    const func isPrivate() bool {
+    pub static func fromOctets(bytes: [4]u8) Self { Ipv4Addr(bytes) }
+    pub const func octets() [4]u8 { data }
+    pub const func isLoopback() bool { data[0] == 127 }
+    pub const func isPrivate() bool {
         data[0] == 10 || (data[0] == 172 && 16 <= data[1] && data[1] <= 31) ||
             (data[0] == 192 && data[1] == 168)
     }
-    const func isMulticast() bool { 224 <= data[0] && data[0] <= 239 }
-    const func toString() !string { formatIp(4, data[:]) }
+    pub const func isMulticast() bool { 224 <= data[0] && data[0] <= 239 }
+    pub const func toString() !string { formatIp(4, data[:]) }
 }
 
 pub class Ipv6Addr {
     var data: [16]u8;
     func init(bytes: [16]u8) : data(bytes) {}
-public:
-    static func fromOctets(bytes: [16]u8) Self { Ipv6Addr(bytes) }
-    const func octets() [16]u8 { data }
-    const func isLoopback() bool {
+    pub static func fromOctets(bytes: [16]u8) Self { Ipv6Addr(bytes) }
+    pub const func octets() [16]u8 { data }
+    pub const func isLoopback() bool {
         for byte in data[0..15] { if byte != 0 { return false; } }
         data[15] == 1
     }
-    const func isMulticast() bool { data[0] == 255 }
-    const func toString() !string { formatIp(6, data[:]) }
+    pub const func isMulticast() bool { data[0] == 255 }
+    pub const func toString() !string { formatIp(6, data[:]) }
 }
 
 pub enum IpAddr { V4(Ipv4Addr), V6(Ipv6Addr) }
@@ -84,15 +82,14 @@ pub class SocketAddr {
     var portNumber: u16;
     var scope: u32;
     func init(ip: IpAddr, port: u16, scope: u32) : address(ip), portNumber(port), scope(scope) {}
-public:
-    static func new(ip: IpAddr, port: u16) Self { SocketAddr(ip, port, 0) }
-    static func scoped(ip: Ipv6Addr, port: u16, scope: u32) Self {
+    pub static func new(ip: IpAddr, port: u16) Self { SocketAddr(ip, port, 0) }
+    pub static func scoped(ip: Ipv6Addr, port: u16, scope: u32) Self {
         SocketAddr(IpAddr.V6(ip), port, scope)
     }
-    const func ip() IpAddr { address }
-    const func port() u16 { portNumber }
-    const func scopeId() u32 { scope }
-    const func toString() !string {
+    pub const func ip() IpAddr { address }
+    pub const func port() u16 { portNumber }
+    pub const func scopeId() u32 { scope }
+    pub const func toString() !string {
         var out = text.StringBuilder();
         switch address {
             IpAddr.V4(value) => {
@@ -209,25 +206,24 @@ func checkStatus(reason: i32) !void {
 class Socket {
     #copy: disabled
     var descriptor: i32;
-public:
-    func init(fd: i32) : descriptor(fd) {}
-    const func fd() !i32 {
+    pub func init(fd: i32) : descriptor(fd) {}
+    pub const func fd() !i32 {
         if descriptor < 0 { return io.IoError.Closed; }
         descriptor
     }
-    func close() !void {
+    pub func close() !void {
         if descriptor < 0 { return; }
         var previous = descriptor;
         descriptor = -1;
         checkStatus(unsafe { __vqr_net_close(previous) })
     }
-    func deinit() void { close() catch {}; }
-    const func address(peer: i32) !SocketAddr {
+    pub func deinit() void { close() catch {}; }
+    pub const func address(peer: i32) !SocketAddr {
         var wire = mem.zeroedBytes<24>();
         checkStatus(unsafe { __vqr_net_address(fd()!, peer, &wire[0]) })!;
         fromWire(wire[:])
     }
-    const func option(option: i32, value: bool) !void {
+    pub const func option(option: i32, value: bool) !void {
         var raw = if value { 1 } else { 0 };
         checkStatus(unsafe { __vqr_net_set_option(fd()!, option, raw) })
     }
@@ -254,15 +250,14 @@ pub class TcpStream {
     #copy: disabled
     #implements: io.Reader, io.Writer, io.Closer
     var socket: Socket;
-public:
-    func init(value: Socket) : socket(move(value)) {}
-    static func connect(address: SocketAddr) !Self { TcpStream(openSocket(address, 0, -1)!) }
-    static func connectTimeout(address: SocketAddr, timeout: time.Duration) !Self {
+    pub func init(value: Socket) : socket(move(value)) {}
+    pub static func connect(address: SocketAddr) !Self { TcpStream(openSocket(address, 0, -1)!) }
+    pub static func connectTimeout(address: SocketAddr, timeout: time.Duration) !Self {
         if timeout.isNegative() || timeout.isZero() { return NetError.InvalidTimeout; }
         var nanos = timeout.toNanos()!;
         TcpStream(openSocket(address, 0, nanos)!)
     }
-    func read(dst: []u8) !usize {
+    pub func read(dst: []u8) !usize {
         var fd = socket.fd()!;
         if dst.len() == 0 { return 0; }
         var reason: i32 = 0;
@@ -270,30 +265,29 @@ public:
         checkStatus(reason)!;
         usize(count)
     }
-    func write(src: []const u8) !usize {
+    pub func write(src: []const u8) !usize {
         var fd = socket.fd()!;
         if src.len() == 0 { return 0; }
         sendBytes(fd, src)
     }
-    func flush() !void { var fd = socket.fd()!; }
-    func close() !void { socket.close() }
-    func shutdownRead() !void { checkStatus(unsafe { __vqr_net_shutdown(socket.fd()!, 0) }) }
-    func shutdownWrite() !void { checkStatus(unsafe { __vqr_net_shutdown(socket.fd()!, 1) }) }
+    pub func flush() !void { var fd = socket.fd()!; }
+    pub func close() !void { socket.close() }
+    pub func shutdownRead() !void { checkStatus(unsafe { __vqr_net_shutdown(socket.fd()!, 0) }) }
+    pub func shutdownWrite() !void { checkStatus(unsafe { __vqr_net_shutdown(socket.fd()!, 1) }) }
     // The stream retains ownership of this descriptor.
-    const func systemDescriptor() !i32 { socket.fd() }
-    const func localAddr() !SocketAddr { socket.address(0) }
-    const func peerAddr() !SocketAddr { socket.address(1) }
-    func setNonblocking(value: bool) !void { socket.option(0, value) }
-    func setNoDelay(value: bool) !void { socket.option(1, value) }
-    func setReadTimeout(value: ?time.Duration) !void { setTimeout(value, 0) }
-    func setWriteTimeout(value: ?time.Duration) !void { setTimeout(value, 1) }
-    const func tryClone() !Self {
+    pub const func systemDescriptor() !i32 { socket.fd() }
+    pub const func localAddr() !SocketAddr { socket.address(0) }
+    pub const func peerAddr() !SocketAddr { socket.address(1) }
+    pub func setNonblocking(value: bool) !void { socket.option(0, value) }
+    pub func setNoDelay(value: bool) !void { socket.option(1, value) }
+    pub func setReadTimeout(value: ?time.Duration) !void { setTimeout(value, 0) }
+    pub func setWriteTimeout(value: ?time.Duration) !void { setTimeout(value, 1) }
+    pub const func tryClone() !Self {
         var reason: i32 = 0;
         var copy = unsafe { __vqr_net_clone(socket.fd()!, &reason) };
         checkStatus(reason)!;
         TcpStream(Socket(copy))
     }
-private:
     func setTimeout(input: ?time.Duration, writing: i32) !void {
         var value = input ?? time.Duration.zero();
         if value.isNegative() || (value.isZero() && input != null) { return NetError.InvalidTimeout; }
@@ -305,9 +299,8 @@ pub class TcpListener {
     #copy: disabled
     var socket: Socket;
     func init(value: Socket) : socket(move(value)) {}
-public:
-    static func bind(address: SocketAddr) !Self { TcpListener(openSocket(address, 1, -1)!) }
-    func accept() !(TcpStream, SocketAddr) {
+    pub static func bind(address: SocketAddr) !Self { TcpListener(openSocket(address, 1, -1)!) }
+    pub func accept() !(TcpStream, SocketAddr) {
         var wire = mem.zeroedBytes<24>();
         var reason: i32 = 0;
         var client = unsafe { __vqr_net_accept(socket.fd()!, &wire[0], &reason) };
@@ -316,10 +309,10 @@ public:
         var peer = fromWire(wire[:])!;
         (move(stream), peer)
     }
-    const func localAddr() !SocketAddr { socket.address(0) }
-    const func systemDescriptor() !i32 { socket.fd() }
-    func setNonblocking(value: bool) !void { socket.option(0, value) }
-    func close() !void { socket.close() }
+    pub const func localAddr() !SocketAddr { socket.address(0) }
+    pub const func systemDescriptor() !i32 { socket.fd() }
+    pub func setNonblocking(value: bool) !void { socket.option(0, value) }
+    pub func close() !void { socket.close() }
 }
 
 pub class Datagram {
@@ -332,14 +325,13 @@ pub class UdpSocket {
     #copy: disabled
     var socket: Socket;
     func init(value: Socket) : socket(move(value)) {}
-public:
-    static func bind(address: SocketAddr) !Self { UdpSocket(openSocket(address, 2, -1)!) }
-    func connect(address: SocketAddr) !void {
+    pub static func bind(address: SocketAddr) !Self { UdpSocket(openSocket(address, 2, -1)!) }
+    pub func connect(address: SocketAddr) !void {
         var wire = toWire(address);
         checkStatus(unsafe { __vqr_net_connect(socket.fd()!, &wire[0]) })
     }
-    func send(src: []const u8) !usize { sendBytes(socket.fd()!, src) }
-    func sendTo(src: []const u8, address: SocketAddr) !usize {
+    pub func send(src: []const u8) !usize { sendBytes(socket.fd()!, src) }
+    pub func sendTo(src: []const u8, address: SocketAddr) !usize {
         var wire = toWire(address);
         var dummy: u8 = 0;
         var data: *const u8 = if src.len() == 0 { &dummy } else { &src[0] };
@@ -348,7 +340,7 @@ public:
         checkStatus(reason)!;
         usize(count)
     }
-    func recvFrom(dst: []u8) !Datagram {
+    pub func recvFrom(dst: []u8) !Datagram {
         var wire = mem.zeroedBytes<24>();
         var dummy: u8 = 0;
         var data = if dst.len() == 0 { &dummy } else { &dst[0] };
@@ -358,21 +350,20 @@ public:
         checkStatus(reason)!;
         Datagram{len: usize(count)!, source: fromWire(wire[:])!, truncated: truncated != 0}
     }
-    func recv(dst: []u8) !Datagram { recvFrom(dst) }
-    func setBroadcast(value: bool) !void { socket.option(2, value) }
-    func setNonblocking(value: bool) !void { socket.option(0, value) }
-    const func systemDescriptor() !i32 { socket.fd() }
-    const func localAddr() !SocketAddr { socket.address(0) }
-    func close() !void { socket.close() }
+    pub func recv(dst: []u8) !Datagram { recvFrom(dst) }
+    pub func setBroadcast(value: bool) !void { socket.option(2, value) }
+    pub func setNonblocking(value: bool) !void { socket.option(0, value) }
+    pub const func systemDescriptor() !i32 { socket.fd() }
+    pub const func localAddr() !SocketAddr { socket.address(0) }
+    pub func close() !void { socket.close() }
 }
 
 class ResolverResults {
     #copy: disabled
     var handle: usize;
-public:
-    func init(value: usize) : handle(value) {}
-    func deinit() void { unsafe { __vqr_net_free_addresses(handle); } }
-    const func copyAddresses(port: u16) !coll.Vec<SocketAddr> {
+    pub func init(value: usize) : handle(value) {}
+    pub func deinit() void { unsafe { __vqr_net_free_addresses(handle); } }
+    pub const func copyAddresses(port: u16) !coll.Vec<SocketAddr> {
         var addresses = coll.Vec<SocketAddr>();
         var cursor = handle;
         var wire = mem.zeroedBytes<24>();

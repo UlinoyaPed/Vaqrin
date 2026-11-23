@@ -15,7 +15,7 @@ func hasExpired(deadline: ?time.Deadline) bool {
     }
 }
 
-class Mailbox<T: Movable & Sendable> {
+class Mailbox<T: Movable + Sendable> {
     pub var queue: Queue<T>;
     pub var offer: Offer;
     pub var handoff: ?T;
@@ -25,11 +25,10 @@ class Mailbox<T: Movable & Sendable> {
     pub var senders: usize;
     pub var closed: bool;
     pub var choices: ?*SelectNode<T>;
-public:
-    func init(queue: Queue<T>) : queue(move(queue)), offer(Offer.Empty), handoff(null), sendDeadline(null),
+    pub func init(queue: Queue<T>) : queue(move(queue)), offer(Offer.Empty), handoff(null), sendDeadline(null),
                                 receiverWaiting(false), recvDeadline(null), senders(1), closed(false), choices(null) {}
 
-    func receiveQueue() TryRecv<T> {
+    pub func receiveQueue() TryRecv<T> {
         if offer == Offer.Committed || (offer == Offer.Pending && !closed && !hasExpired(sendDeadline)) {
             var item = opt.take<T>(&handoff);
             offer = if offer == Offer.Pending { Offer.Claimed } else { Offer.Empty };
@@ -42,7 +41,7 @@ public:
     }
 
     // Caller guards both the mailbox and the pending choice.
-    func findChoice(sending: bool, excluding: ?*Choice) ?*SelectNode<T> {
+    pub func findChoice(sending: bool, excluding: ?*Choice) ?*SelectNode<T> {
         if offer != Offer.Empty || closed { return null; }
         var current = choices;
         for current != null {
@@ -57,7 +56,7 @@ public:
         null
     }
 
-    func receive() TryRecv<T> {
+    pub func receive() TryRecv<T> {
         var outcome = receiveQueue();
         if choices == null { return move(outcome); }
         switch move(outcome) {
@@ -73,7 +72,7 @@ public:
         }
     }
 
-    func deliverToChoice(value: *?T) bool {
+    pub func deliverToChoice(value: *?T) bool {
         if choices == null { return false; }
         var guard = ChoiceLock();
         var receiver = findChoice(false, null) ?? { return false; };
@@ -82,9 +81,9 @@ public:
         true
     }
 
-    const func readyReceiver() bool { receiverWaiting && !hasExpired(recvDeadline) }
+    pub const func readyReceiver() bool { receiverWaiting && !hasExpired(recvDeadline) }
 
-    func deliver(value: T, state: Offer, deadline: ?time.Deadline) void {
+    pub func deliver(value: T, state: Offer, deadline: ?time.Deadline) void {
         offer = state;
         handoff = some(move(value));
         sendDeadline = deadline;
@@ -92,18 +91,17 @@ public:
     }
 }
 
-class State<T: Movable & Sendable> {
+class State<T: Movable + Sendable> {
     pub var data: sync.Mutex<Mailbox<T>>;
     var sequence: u32;
-public:
-    func init(queue: Queue<T>) : data(sync.Mutex<Mailbox<T>>.new(Mailbox<T>(move(queue)))),
+    pub func init(queue: Queue<T>) : data(sync.Mutex<Mailbox<T>>.new(Mailbox<T>(move(queue)))),
                                 sequence(0) {}
 
-    const func lock() sync.MutexGuard<Mailbox<T>> {
+    pub const func lock() sync.MutexGuard<Mailbox<T>> {
         data.lock() catch { panic("failed to acquire a channel lock"); }
     }
 
-    const func wait(guard: sync.MutexGuard<Mailbox<T>>, deadline: ?time.Deadline) sync.MutexGuard<Mailbox<T>> {
+    pub const func wait(guard: sync.MutexGuard<Mailbox<T>>, deadline: ?time.Deadline) sync.MutexGuard<Mailbox<T>> {
         var address = &sequence;
         var version = __vqr_atomic_load(address, atomic.Order.Relaxed);
         seconds, nanos := switch deadline {
@@ -119,7 +117,7 @@ public:
         unsafe { sync.MutexGuard<Mailbox<T>>.unlockWhile(move(guard), awaitChange) }
     }
 
-    const func notifyAll() void {
+    pub const func notifyAll() void {
         var address = unsafe { constCast<*u32>(&sequence) };
         var previous = __vqr_atomic_add(address, 1u32, atomic.Order.Relaxed);
         __vqr_task_channel_notify(address);
@@ -127,14 +125,14 @@ public:
         notifyChoices();
     }
 
-    const func close() void {
+    pub const func close() void {
         var guard = lock();
         guard.get().closed = true;
         notifyAll();
     }
 }
 
-pub class Channel<T: Movable & Sendable> {
+pub class Channel<T: Movable + Sendable> {
     static func open(capacity: ?usize) !(Sender<T>, Receiver<T>) {
         __vqr_validate_channel();
         var queue = Queue<T>(capacity)!;
@@ -142,18 +140,16 @@ pub class Channel<T: Movable & Sendable> {
         var sender = Sender<T>(shared.clone());
         (move(sender), Receiver<T>(move(shared)))
     }
-public:
-    static func bounded(capacity: usize) !(Sender<T>, Receiver<T>) { Channel<T>.open(some(capacity)) }
-    static func unbounded() !(Sender<T>, Receiver<T>) { Channel<T>.open(null) }
+    pub static func bounded(capacity: usize) !(Sender<T>, Receiver<T>) { Channel<T>.open(some(capacity)) }
+    pub static func unbounded() !(Sender<T>, Receiver<T>) { Channel<T>.open(null) }
 }
 
-pub class Sender<T: Movable & Sendable> {
+pub class Sender<T: Movable + Sendable> {
     #copy: enable
     var shared: mem.Shared<State<T>>;
-public:
-    func init(state: mem.Shared<State<T>>) : shared(move(state)) {}
+    pub func init(state: mem.Shared<State<T>>) : shared(move(state)) {}
 
-    const func copy() Self {
+    pub const func copy() Self {
         var state = shared.asPtr();
         var guard = state.lock();
         var data = guard.get();
@@ -161,14 +157,12 @@ public:
         data.senders++;
         Sender<T>(shared.clone())
     }
-private:
     const func selectTicket(choice: *Choice, index: usize, source: *T) Ticket<T> {
         Ticket<T>(shared.clone(), choice, index, some(source))
     }
-public:
-    const func clone() Self { copy() }
+    pub const func clone() Self { copy() }
 
-    const func send(value: T) !void {
+    pub const func send(value: T) !void {
         switch sendPreserving(move(value)) {
             SendResult.Sent => {},
             SendResult.Closed(item) => { return ChannelError.Closed; },
@@ -177,7 +171,7 @@ public:
         }
     }
 
-    const func trySend(value: T) TrySendResult<T> {
+    pub const func trySend(value: T) TrySendResult<T> {
         var state = shared.asPtr();
         var guard = state.lock();
         var data = guard.get();
@@ -198,14 +192,13 @@ public:
         TrySendResult<T>.Sent
     }
 
-    const func sendPreserving(value: T) SendResult<T> { sendBefore(move(value), null) }
+    pub const func sendPreserving(value: T) SendResult<T> { sendBefore(move(value), null) }
 
-    const func sendTimeout(value: T, timeout: time.Duration) SendResult<T> {
+    pub const func sendTimeout(value: T, timeout: time.Duration) SendResult<T> {
         var alarm = time.Deadline.after(timeout) catch { return SendResult<T>.Cancelled(move(value)); };
         sendBefore(move(value), some(alarm))
     }
 
-private:
     const func sendBefore(value: T, deadline: ?time.Deadline) SendResult<T> {
         var state = shared.asPtr();
         var guard = state.lock();
@@ -228,22 +221,21 @@ private:
         }
     }
 
-public:
-    const func close() void { shared.asPtr().close(); }
-    const func isClosed() bool {
+    pub const func close() void { shared.asPtr().close(); }
+    pub const func isClosed() bool {
         var guard = shared.asPtr().lock();
         guard.get().closed
     }
-    const func capacity() ?usize {
+    pub const func capacity() ?usize {
         var guard = shared.asPtr().lock();
         guard.get().queue.capacity()
     }
-    const func lenApprox() usize {
+    pub const func lenApprox() usize {
         var guard = shared.asPtr().lock();
         guard.get().queue.len()
     }
 
-    func deinit() void {
+    pub func deinit() void {
         var state = shared.asPtr();
         var guard = state.lock();
         var data = guard.get();
@@ -253,7 +245,6 @@ public:
             state.notifyAll();
         }
     }
-private:
     const func sendRendezvous(state: *const State<T>, guard: sync.MutexGuard<Mailbox<T>>, value: T,
                              deadline: ?time.Deadline)
         SendResult<T> {
@@ -304,22 +295,18 @@ private:
     }
 }
 
-pub class Receiver<T: Movable & Sendable> {
+pub class Receiver<T: Movable + Sendable> {
     #copy: disabled
     var shared: mem.Shared<State<T>>;
-public:
-    func init(state: mem.Shared<State<T>>) : shared(move(state)) {}
+    pub func init(state: mem.Shared<State<T>>) : shared(move(state)) {}
 
-private:
     func selectTicket(choice: *Choice, index: usize) Ticket<T> {
         Ticket<T>(shared.clone(), choice, index, null)
     }
 
-public:
-    func recv() !?T { recvBefore(null) }
-    func recvTimeout(timeout: time.Duration) !?T { recvBefore(some(time.Deadline.after(timeout)!)) }
+    pub func recv() !?T { recvBefore(null) }
+    pub func recvTimeout(timeout: time.Duration) !?T { recvBefore(some(time.Deadline.after(timeout)!)) }
 
-private:
     func recvBefore(deadline: ?time.Deadline) !?T {
         var state = shared.asPtr();
         var guard = state.lock();
@@ -339,8 +326,7 @@ private:
         }
     }
 
-public:
-    func tryRecv() TryRecv<T> {
+    pub func tryRecv() TryRecv<T> {
         var state = shared.asPtr();
         var guard = state.lock();
         var outcome = guard.get().receive();
@@ -351,22 +337,22 @@ public:
         move(outcome)
     }
 
-    func close() void { shared.asPtr().close(); }
-    func drain() Drain<T> { Drain<T>(self) }
-    const func isClosed() bool {
+    pub func close() void { shared.asPtr().close(); }
+    pub func drain() Drain<T> { Drain<T>(self) }
+    pub const func isClosed() bool {
         var guard = shared.asPtr().lock();
         guard.get().closed
     }
-    const func capacity() ?usize {
+    pub const func capacity() ?usize {
         var guard = shared.asPtr().lock();
         guard.get().queue.capacity()
     }
-    const func lenApprox() usize {
+    pub const func lenApprox() usize {
         var guard = shared.asPtr().lock();
         guard.get().queue.len()
     }
 
-    func deinit() void {
+    pub func deinit() void {
         var state = shared.asPtr();
         var guard = state.lock();
         var data = guard.get();
@@ -382,11 +368,10 @@ public:
     }
 }
 
-pub class Drain<T: Movable & Sendable> {
+pub class Drain<T: Movable + Sendable> {
     var source: *Receiver<T>;
-public:
-    func init(source: *Receiver<T>) : source(source) {}
-    func next() ?T {
+    pub func init(source: *Receiver<T>) : source(source) {}
+    pub func next() ?T {
         switch source.tryRecv() {
             TryRecv.Value(item) => some(move(item)),
             _ => null,
@@ -394,9 +379,9 @@ public:
     }
 }
 
-pub func bounded<T: Movable & Sendable>(capacity: usize) !(Sender<T>, Receiver<T>) { Channel<T>.bounded(capacity) }
-pub func unbounded<T: Movable & Sendable>() !(Sender<T>, Receiver<T>) { Channel<T>.unbounded() }
-pub func send<T: Movable & Sendable>(tx: *const Sender<T>, value: T) !void { tx.send(move(value)) }
-pub func recv<T: Movable & Sendable>(rx: *Receiver<T>) !?T { rx.recv() }
-pub func trySend<T: Movable & Sendable>(tx: *const Sender<T>, value: T) TrySendResult<T> { tx.trySend(move(value)) }
-pub func tryRecv<T: Movable & Sendable>(rx: *Receiver<T>) TryRecv<T> { rx.tryRecv() }
+pub func bounded<T: Movable + Sendable>(capacity: usize) !(Sender<T>, Receiver<T>) { Channel<T>.bounded(capacity) }
+pub func unbounded<T: Movable + Sendable>() !(Sender<T>, Receiver<T>) { Channel<T>.unbounded() }
+pub func send<T: Movable + Sendable>(tx: *const Sender<T>, value: T) !void { tx.send(move(value)) }
+pub func recv<T: Movable + Sendable>(rx: *Receiver<T>) !?T { rx.recv() }
+pub func trySend<T: Movable + Sendable>(tx: *const Sender<T>, value: T) TrySendResult<T> { tx.trySend(move(value)) }
+pub func tryRecv<T: Movable + Sendable>(rx: *Receiver<T>) TryRecv<T> { rx.tryRecv() }

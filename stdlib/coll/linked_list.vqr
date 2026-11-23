@@ -5,26 +5,25 @@ class ListNode<T: Movable> {
     #copy: disabled
     var slot: mem.MaybeUninit<T>;
     var initialized: bool;
-public:
-    var previous: ?*ListNode<T>;
-    var following: ?*ListNode<T>;
-    var ownerIndex: usize;
+    pub var previous: ?*ListNode<T>;
+    pub var following: ?*ListNode<T>;
+    pub var ownerIndex: usize;
 
-    func init(item: T)
+    pub func init(item: T)
         : slot(mem.MaybeUninit<T>.uninit()), initialized(false),
           previous(null), following(null), ownerIndex(0) {
         unsafe { slot.write(move(item)); }
         initialized = true;
     }
 
-    const func valueRef() *const T { slot.asConstPtr() }
-    func valueMut() *T { slot.asPtr() }
+    pub const func valueRef() *const T { slot.asConstPtr() }
+    pub func valueMut() *T { slot.asPtr() }
 
-    func take() T {
+    pub func take() T {
         initialized = false;
         unsafe { slot.assumeInit() }
     }
-    func deinit() void {
+    pub func deinit() void {
         if initialized { unsafe { slot.assumeInitDrop(); } }
     }
 }
@@ -33,11 +32,10 @@ pub class ListIterRef<T: Movable> {
     var front: ?*ListNode<T>;
     var back: ?*ListNode<T>;
     var remainingCount: usize;
-public:
-    func init(front: ?*ListNode<T>, back: ?*ListNode<T>, count: usize)
+    pub func init(front: ?*ListNode<T>, back: ?*ListNode<T>, count: usize)
         : front(front), back(back), remainingCount(count) {}
 
-    func next() ?*const T {
+    pub func next() ?*const T {
         if remainingCount == 0 { return null; }
         var node = front.unwrap();
         front = node.following;
@@ -45,7 +43,7 @@ public:
         some(node.valueRef())
     }
 
-    func nextBack() ?*const T {
+    pub func nextBack() ?*const T {
         if remainingCount == 0 { return null; }
         var node = back.unwrap();
         back = node.previous;
@@ -53,18 +51,17 @@ public:
         some(node.valueRef())
     }
 
-    const func remaining() usize { remainingCount }
+    pub const func remaining() usize { remainingCount }
 }
 
 pub class ListIterMut<T: Movable> {
     var front: ?*ListNode<T>;
     var back: ?*ListNode<T>;
     var remainingCount: usize;
-public:
-    func init(front: ?*ListNode<T>, back: ?*ListNode<T>, count: usize)
+    pub func init(front: ?*ListNode<T>, back: ?*ListNode<T>, count: usize)
         : front(front), back(back), remainingCount(count) {}
 
-    func next() ?*T {
+    pub func next() ?*T {
         if remainingCount == 0 { return null; }
         var node = front.unwrap();
         front = node.following;
@@ -72,7 +69,7 @@ public:
         some(node.valueMut())
     }
 
-    func nextBack() ?*T {
+    pub func nextBack() ?*T {
         if remainingCount == 0 { return null; }
         var node = back.unwrap();
         back = node.previous;
@@ -80,16 +77,15 @@ public:
         some(node.valueMut())
     }
 
-    const func remaining() usize { remainingCount }
+    pub const func remaining() usize { remainingCount }
 }
 
 pub class IntoListIter<T: Movable> {
     var source: LinkedList<T>;
-public:
-    func init(value: LinkedList<T>) : source(move(value)) {}
-    func next() ?T { source.popFront() }
-    func nextBack() ?T { source.popBack() }
-    const func remaining() usize { source.len() }
+    pub func init(value: LinkedList<T>) : source(move(value)) {}
+    pub func next() ?T { source.popFront() }
+    pub func nextBack() ?T { source.popBack() }
+    pub const func remaining() usize { source.len() }
 }
 
 pub class LinkedList<T: Movable> {
@@ -100,22 +96,20 @@ pub class LinkedList<T: Movable> {
     // Owns each node's Box so custom allocator release context remains attached to it.
     var nodes: Vec<^ListNode<T>>;
     var allocator: ?mem.AllocatorRef;
-public:
-    func init()
+    pub func init()
         : firstNode(null), lastNode(null), length(0),
           nodes(Vec<^ListNode<T>>()), allocator(null) {}
 
-    static func withAllocator(allocator: mem.AllocatorRef) Self {
+    pub static func withAllocator(allocator: mem.AllocatorRef) Self {
         var result = LinkedList<T>();
         result.allocator = some(allocator);
         result.nodes = Vec<^ListNode<T>>.withAllocator(allocator);
         move(result)
     }
 
-    const func len() usize { length }
-    const func isEmpty() bool { length == 0 }
+    pub const func len() usize { length }
+    pub const func isEmpty() bool { length == 0 }
 
-private:
     comptime if mem.hasDefaultAllocator() {
         func defaultNode(value: T) !^ListNode<T> { new ListNode<T>(move(value)) }
     } else {
@@ -166,8 +160,7 @@ private:
         node.take()
     }
 
-public:
-    func pushFront(value: T) !void {
+    pub func pushFront(value: T) !void {
         var owner = newNode(move(value))!;
         var node = owner.asPtr();
         node.ownerIndex = nodes.len();
@@ -182,7 +175,7 @@ public:
         length++;
     }
 
-    func pushBack(value: T) !void {
+    pub func pushBack(value: T) !void {
         var owner = newNode(move(value))!;
         var node = owner.asPtr();
         node.ownerIndex = nodes.len();
@@ -197,7 +190,7 @@ public:
         length++;
     }
 
-    func insert(index: usize, value: T) !void {
+    pub func insert(index: usize, value: T) !void {
         if index > length { return CapacityError.IndexOutOfBounds; }
         if index == 0 { pushFront(move(value))!; return; }
         if index == length { pushBack(move(value))!; return; }
@@ -216,66 +209,66 @@ public:
         length++;
     }
 
-    func popFront() ?T {
+    pub func popFront() ?T {
         if length == 0 { return null; }
         some(removeNode(firstNode.unwrap()))
     }
 
-    func popBack() ?T {
+    pub func popBack() ?T {
         if length == 0 { return null; }
         some(removeNode(lastNode.unwrap()))
     }
 
-    func remove(index: usize) ?T {
+    pub func remove(index: usize) ?T {
         switch nodeAt(index) {
             null => null,
             some(node) => some(removeNode(node)),
         }
     }
 
-    func get(index: usize) ?*const T {
+    pub func get(index: usize) ?*const T {
         switch nodeAt(index) {
             null => null,
             some(node) => some(node.valueRef()),
         }
     }
 
-    func getMut(index: usize) ?*T {
+    pub func getMut(index: usize) ?*T {
         switch nodeAt(index) {
             null => null,
             some(node) => some(node.valueMut()),
         }
     }
 
-    const func front() ?*const T {
+    pub const func front() ?*const T {
         switch firstNode {
             null => null,
             some(node) => some(node.valueRef()),
         }
     }
 
-    func frontMut() ?*T {
+    pub func frontMut() ?*T {
         switch firstNode {
             null => null,
             some(node) => some(node.valueMut()),
         }
     }
 
-    const func back() ?*const T {
+    pub const func back() ?*const T {
         switch lastNode {
             null => null,
             some(node) => some(node.valueRef()),
         }
     }
 
-    func backMut() ?*T {
+    pub func backMut() ?*T {
         switch lastNode {
             null => null,
             some(node) => some(node.valueMut()),
         }
     }
 
-    func append(other: *Self) !void {
+    pub func append(other: *Self) !void {
         if self == other || other.length == 0 { return; }
         if other.length > ~usize(0) - length { return CapacityError.Overflow; }
 
@@ -299,7 +292,7 @@ public:
         other.length = 0;
     }
 
-    func splitOff(index: usize) !Self {
+    pub func splitOff(index: usize) !Self {
         if index > length { return CapacityError.IndexOutOfBounds; }
         var count = length - index;
         var result = switch allocator {
@@ -345,7 +338,7 @@ public:
         move(result)
     }
 
-    func reverse() void {
+    pub func reverse() void {
         var current = firstNode;
         for current != null {
             var node = current.unwrap();
@@ -359,23 +352,23 @@ public:
         lastNode = oldFirst;
     }
 
-    const func iterRef() ListIterRef<T> {
+    pub const func iterRef() ListIterRef<T> {
         ListIterRef<T>(firstNode, lastNode, length)
     }
 
-    func iterMut() ListIterMut<T> {
+    pub func iterMut() ListIterMut<T> {
         ListIterMut<T>(firstNode, lastNode, length)
     }
 
-    static func intoIter(value: Self) IntoListIter<T> {
+    pub static func intoIter(value: Self) IntoListIter<T> {
         IntoListIter<T>(move(value))
     }
 
-    func clear() void {
+    pub func clear() void {
         for length > 0 {
             var value = popFront().unwrap();
         }
     }
 
-    func deinit() void { clear(); }
+    pub func deinit() void { clear(); }
 }

@@ -3,11 +3,10 @@ import (mem)
 
 pub error LaneError { OutOfRange }
 
-pub class Simd<T: Copyable & Movable, comptime N: usize> {
+pub class Simd<T: Copyable + Movable, comptime N: usize> {
     var lanes: [N]T;
     func init(data: [N]T) : lanes(move(data)) {}
-public:
-    static func splat(value: T) Self {
+    pub static func splat(value: T) Self {
         var array = mem.MaybeUninit<[N]T>.uninit();
         unsafe {
             var data = array.asPtr();
@@ -16,41 +15,41 @@ public:
         }
     }
 
-    static func fromArray(data: [N]T) Self { Simd<T, N>(move(data)) }
-    const func toArray() [N]T { lanes }
-    const func extract(index: usize) T { lanes[index] }
+    pub static func fromArray(data: [N]T) Self { Simd<T, N>(move(data)) }
+    pub const func toArray() [N]T { lanes }
+    pub const func extract(index: usize) T { lanes[index] }
 
-    const func replace(index: usize, value: T) Self {
+    pub const func replace(index: usize, value: T) Self {
         var data = lanes;
         data[index] = move(value);
         Simd<T, N>(move(data))
     }
 
-    const func add(other: Self) Self {
+    pub const func add(other: Self) Self {
         var data = lanes;
         for i in usize(0)..N { data[i] += other.lanes[i]; }
         Simd<T, N>(move(data))
     }
 
-    const func sub(other: Self) Self {
+    pub const func sub(other: Self) Self {
         var data = lanes;
         for i in usize(0)..N { data[i] -= other.lanes[i]; }
         Simd<T, N>(move(data))
     }
 
-    const func mul(other: Self) Self {
+    pub const func mul(other: Self) Self {
         var data = lanes;
         for i in usize(0)..N { data[i] *= other.lanes[i]; }
         Simd<T, N>(move(data))
     }
 
-    const func div(other: Self) Self {
+    pub const func div(other: Self) Self {
         var data = lanes;
         for i in usize(0)..N { data[i] /= other.lanes[i]; }
         Simd<T, N>(move(data))
     }
 
-    const func min(other: Self) Self {
+    pub const func min(other: Self) Self {
         var data = lanes;
         for i in usize(0)..N {
             if other.lanes[i] < data[i] { data[i] = other.lanes[i]; }
@@ -58,7 +57,7 @@ public:
         Simd<T, N>(move(data))
     }
 
-    const func reduceMin() T {
+    pub const func reduceMin() T {
         if N == 0 { panic("empty SIMD reduction"); }
         var out = lanes[0];
         for i in usize(1)..N {
@@ -67,7 +66,7 @@ public:
         move(out)
     }
 
-    const func max(other: Self) Self {
+    pub const func max(other: Self) Self {
         var data = lanes;
         for i in usize(0)..N {
             if other.lanes[i] > data[i] { data[i] = other.lanes[i]; }
@@ -75,7 +74,7 @@ public:
         Simd<T, N>(move(data))
     }
 
-    const func reduceMax() T {
+    pub const func reduceMax() T {
         if N == 0 { panic("empty SIMD reduction"); }
         var out = lanes[0];
         for i in usize(1)..N {
@@ -84,19 +83,19 @@ public:
         move(out)
     }
 
-    const func compareEq(other: Self) Mask<N> {
+    pub const func compareEq(other: Self) Mask<N> {
         var out = Mask<N>.splat(false);
         for i in usize(0)..N { out.set(i, lanes[i] == other.lanes[i]); }
         out
     }
 
-    const func compareLt(other: Self) Mask<N> {
+    pub const func compareLt(other: Self) Mask<N> {
         var out = Mask<N>.splat(false);
         for i in usize(0)..N { out.set(i, lanes[i] < other.lanes[i]); }
         out
     }
 
-    const func reduceAdd() T {
+    pub const func reduceAdd() T {
         var total = T(0);
         for i in usize(0)..N { total += lanes[i]; }
         total
@@ -106,32 +105,31 @@ public:
 pub class Mask<comptime N: usize> {
     var predicates: [N]bool;
     func init(values: [N]bool) : predicates(move(values)) {}
-public:
-    static func splat(value: bool) Self { Mask<N>(Simd<bool, N>.splat(value).toArray()) }
+    pub static func splat(value: bool) Self { Mask<N>(Simd<bool, N>.splat(value).toArray()) }
 
-    func set(index: usize, value: bool) void {
+    pub func set(index: usize, value: bool) void {
         predicates[index] = value;
     }
 
-    const func test(index: usize) bool { predicates[index] }
+    pub const func test(index: usize) bool { predicates[index] }
 
-    const func any() bool {
+    pub const func any() bool {
         for i in usize(0)..N {
             if test(i) { return true; }
         }
         false
     }
 
-    const func all() bool {
+    pub const func all() bool {
         for i in usize(0)..N {
             if !test(i) { return false; }
         }
         true
     }
 
-    const func none() bool { !any() }
+    pub const func none() bool { !any() }
 
-    const func countTrue() usize {
+    pub const func countTrue() usize {
         var count: usize = 0;
         for i in usize(0)..N {
             if test(i) { count++; }
@@ -139,25 +137,25 @@ public:
         count
     }
 
-    const func not() Self {
+    pub const func not() Self {
         var out = Mask<N>.splat(false);
         for i in usize(0)..N { out.set(i, !test(i)); }
         out
     }
 
-    const func and(other: Self) Self {
+    pub const func and(other: Self) Self {
         var out = Mask<N>.splat(false);
         for i in usize(0)..N { out.set(i, test(i) && other.test(i)); }
         out
     }
 
-    const func or(other: Self) Self {
+    pub const func or(other: Self) Self {
         var out = Mask<N>.splat(false);
         for i in usize(0)..N { out.set(i, test(i) || other.test(i)); }
         out
     }
 
-    const func xor(other: Self) Self {
+    pub const func xor(other: Self) Self {
         var out = Mask<N>.splat(false);
         for i in usize(0)..N { out.set(i, test(i) != other.test(i)); }
         out

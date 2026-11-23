@@ -127,9 +127,9 @@ private:
     return items;
   }
 
-  std::vector<Attribute> attributes(bool typeBody = false);
+  std::vector<Attribute> attributes();
   Decl declaration(bool member = false, bool iface = false);
-  void members(std::vector<Decl> &out, bool publicMembers, bool iface);
+  void members(std::vector<Decl> &out, bool iface);
   void parameters(Decl &d);
   void genericParameters(Decl &d);
   Ast type(bool inferArray = false);
@@ -190,12 +190,13 @@ File Parser::file() {
   return f;
 }
 
-std::vector<Attribute> Parser::attributes(bool typeBody) {
+std::vector<Attribute> Parser::attributes() {
   std::vector<Attribute> out;
   while (at("#")) {
-    if (typeBody && current(1).text == "return_borrow") break;
     take();
     auto t = at("move") ? take() : name();
+    if (t.text == "return_borrow")
+      fail(t.span, "use 'from name' after the return type to specify a borrow source", "E110");
     require(":");
     if (t.text == "implements") {
       Attribute attribute{t.text, t.span, ""};
@@ -250,10 +251,11 @@ void Parser::genericParameters(Decl &d) {
       constraint = type();
       if (!c) {
         auto current = constraint;
-        while (eat("+") || eat("&")) {
+        while (eat("+")) {
           current->tail = type();
           current = current->tail;
         }
+        if (at("&")) fail(this->current().span, "use '+' to combine trait constraints", "E110");
       }
     }
     if (c && !constraint) fail(t.span, "comptime parameter requires a type", "E110");
@@ -353,7 +355,7 @@ Decl Parser::declaration(bool member, bool iface) {
   d.nameSpan = id.span;
   genericParameters(d);
   require("{");
-  auto inside = attributes(true);
+  auto inside = attributes();
   d.attributes.insert(d.attributes.end(), inside.begin(), inside.end());
   if (d.kind == DeclKind::Enum || d.kind == DeclKind::Error) {
     list("}", [&] {
@@ -368,21 +370,17 @@ Decl Parser::declaration(bool member, bool iface) {
       d.members.push_back(std::move(m));
     });
   } else {
-    members(d.members, d.kind == DeclKind::Interface, d.kind == DeclKind::Interface);
+    members(d.members, d.kind == DeclKind::Interface);
   }
   eat(";");
   return d;
 }
 
-void Parser::members(std::vector<Decl> &out, bool publicMembers, bool iface) {
+void Parser::members(std::vector<Decl> &out, bool iface) {
   Nest nesting(*this);
   while (!eat("}")) {
-    if (at("public") || at("private")) {
-      if (iface) fail(current().span, "access labels require a class", "E110");
-      publicMembers = take().text == "public";
-      require(":");
-      continue;
-    }
+    if (at("public") || at("private"))
+      fail(current().span, "use 'pub' on each public member; class members are private by default", "E110");
     if (!iface && at("comptime") && current(1).kind == TokenKind::Keyword && current(1).text == "if") {
       Decl conditional{};
       conditional.kind = DeclKind::Conditional;
@@ -390,10 +388,10 @@ void Parser::members(std::vector<Decl> &out, bool publicMembers, bool iface) {
       require("if");
       conditional.body = expression(1, true);
       require("{");
-      members(conditional.members, publicMembers, false);
+      members(conditional.members, false);
       if (eat("else")) {
         require("{");
-        members(conditional.otherwise, publicMembers, false);
+        members(conditional.otherwise, false);
       }
       out.push_back(std::move(conditional));
       continue;
@@ -401,7 +399,6 @@ void Parser::members(std::vector<Decl> &out, bool publicMembers, bool iface) {
     auto member = declaration(true, iface);
     if (iface && (member.kind != DeclKind::Function || member.external || member.exported || member.associated))
       fail(member.span, "an interface member must be an instance method", "E110");
-    member.visible |= publicMembers;
     out.push_back(std::move(member));
   }
 }
@@ -437,10 +434,8 @@ Ast Parser::parameterType() {
   auto start = current();
   if (!eat("in") && !eatWord("mut") && !eat("move")) return type();
   auto data = type();
-  if (start.text == "in" && data->kind == NodeKind::TypePrefix) {
-    if (data->text == "&const") return make(NodeKind::TypePrefix, start.span, "in &const", data->children);
-    if (data->text == "&") fail(start.span, "'in &' requires a read-only reference parameter", "E110");
-  }
+  if (data->kind == NodeKind::TypePrefix && (data->text == "&" || data->text == "&const"))
+    fail(start.span, "write the data type directly after the parameter mode", "E110");
   return make(NodeKind::TypePrefix, start.span, start.text, {data});
 }
 
@@ -503,16 +498,8 @@ Ast Parser::type(bool inferArray) {
       types.push_back(parameterType());
     });
     auto n = make(NodeKind::TypeFunction, start.span, c ? "C" : "", std::move(types));
-    if (current().kind == TokenKind::Name && current().text == "borrow" && current(1).text == "(") {
-      take();
-      require("(");
-      auto argument = take();
-      if (argument.kind != TokenKind::Number)
-        fail(argument.span, "borrow source must be a 1-based parameter index", "E110");
-      n->names.push_back(std::move(argument.text));
-      n->bindingSpans.push_back(argument.span);
-      require(")");
-    }
+    if (atWord("borrow") && current(1).text == "(")
+      fail(current().span, "use named parameters and 'from name' to specify a borrow source", "E110");
     n->type = type();
     if (eatWord("from")) {
       auto source = name();

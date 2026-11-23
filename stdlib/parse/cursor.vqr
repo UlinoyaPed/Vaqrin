@@ -11,58 +11,56 @@ func isWhitespace(ch: char) bool {
 pub class Cursor {
     var source: str;
     var position: usize;
-public:
-    func init(value: str) : source(value), position(0) {}
+    pub func init(value: str) : source(value), position(0) {}
 
-    const func remaining() str {
+    pub const func remaining() str {
         unsafe { __vqr_text_borrow_utf8(source.asBytes()[position..source.byteLen()]) }
     }
-    const func offset() usize { position }
-    const func mark() usize { position }
-    const func isEnd() bool { position == source.byteLen() }
+    pub const func offset() usize { position }
+    pub const func mark() usize { position }
+    pub const func isEnd() bool { position == source.byteLen() }
 
-    const func peek() ?char {
+    pub const func peek() ?char {
         var scalars = text.chars(remaining());
         scalars.next()
     }
 
-    func next() ?char {
+    pub func next() ?char {
         var value = peek();
         if core.isSome(&value) { advanceScalar(); }
         value
     }
 
-    func skipWhitespace() void {
+    pub func skipWhitespace() void {
         for !isEnd() && isWhitespace(peek().unwrap()) { advanceScalar(); }
     }
 
-    func consumeChar(ch: char) bool {
+    pub func consumeChar(ch: char) bool {
         var nextChar = peek() ?? { return false; };
         if nextChar != ch { return false; }
         advanceScalar();
         true
     }
 
-    func consumeString(value: str) bool {
+    pub func consumeString(value: str) bool {
         if !bytes.startsWith(source.asBytes()[position..source.byteLen()], value.asBytes()) { return false; }
         position += value.byteLen();
         true
     }
 
-    func takeWhile<F>(pred: F) str {
+    pub func takeWhile<F>(pred: F) str {
         var start = position;
         for !isEnd() && pred(peek().unwrap()) { advanceScalar(); }
         unsafe { __vqr_text_borrow_utf8(source.asBytes()[start..position]) }
     }
 
-    func reset(mark: usize) void {
+    pub func reset(mark: usize) void {
         var data = source.asBytes();
         if mark > data.len() || (mark < data.len() && (data[mark] & 0xc0) == 0x80) {
             panic("parse.Cursor mark is not a UTF-8 scalar boundary");
         }
         position = mark;
     }
-private:
     func advanceScalar() void {
         var head = source.asBytes()[position];
         position += if head < 0x80 { 1 } else if head < 0xe0 { 2 }
@@ -72,9 +70,8 @@ private:
 
 pub class Fields {
     var cursor: Cursor;
-public:
-    func init(value: str) : cursor(Cursor(value)) {}
-    func next() ?str {
+    pub func init(value: str) : cursor(Cursor(value)) {}
+    pub func next() ?str {
         cursor.skipWhitespace();
         if cursor.isEnd() { return null; }
         var isField = (ch: char) bool => !isWhitespace(ch);

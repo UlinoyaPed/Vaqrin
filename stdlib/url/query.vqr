@@ -4,19 +4,17 @@ import (coll, encoding, text)
 pub class QueryParam {
     var keyValue: string;
     var dataValue: string;
-public:
-    func init(key: string, value: string) : keyValue(move(key)), dataValue(move(value)) {}
-    const func key() str { keyValue }
-    const func value() str { dataValue }
+    pub func init(key: string, value: string) : keyValue(move(key)), dataValue(move(value)) {}
+    pub const func key() str { keyValue }
+    pub const func value() str { dataValue }
 }
 
 pub class QueryValueIter {
     var entries: []const QueryParam;
     var keyValue: string;
     var index: usize;
-public:
-    func init(entries: []const QueryParam, key: string) : entries(entries), keyValue(key), index(0) {}
-    func next() ?str {
+    pub func init(entries: []const QueryParam, key: string) : entries(entries), keyValue(key), index(0) {}
+    pub func next() ?str {
         for index < entries.len() {
             var current = index;
             index++;
@@ -29,10 +27,9 @@ public:
 pub class QueryParams {
     #copy: disabled
     var entries: coll.Vec<QueryParam>;
-public:
-    func init() : entries(coll.Vec<QueryParam>()) {}
+    pub func init() : entries(coll.Vec<QueryParam>()) {}
 
-    static func parse(value: str) !Self {
+    pub static func parse(value: str) !Self {
         var result = QueryParams();
         var source = value.asBytes();
         if findByte(source, 35) != null { return UrlError.InvalidCharacter; }
@@ -63,13 +60,13 @@ public:
         move(result)
     }
 
-    func append(key: str, value: str) !void {
+    pub func append(key: str, value: str) !void {
         var ownedKey = text.fromBytes(key.asBytes())!;
         var ownedValue = text.fromBytes(value.asBytes())!;
         entries.push(QueryParam(move(ownedKey), move(ownedValue)))!
     }
 
-    func set(key: str, value: str) !void {
+    pub func set(key: str, value: str) !void {
         var found = false;
         var index: usize = 0;
         for index < entries.len() {
@@ -87,7 +84,7 @@ public:
         if !found { append(key, value)!; }
     }
 
-    const func get(key: str) ?str {
+    pub const func get(key: str) ?str {
         for index in usize(0)..entries.len() {
             var entry = entries.getPtr(index).unwrap();
             if entry.key() == key { return some(entry.value()); }
@@ -95,12 +92,12 @@ public:
         null
     }
 
-    const func getAll(key: str) !QueryValueIter {
+    pub const func getAll(key: str) !QueryValueIter {
         var owned = text.fromBytes(key.asBytes())!;
         QueryValueIter(entries.asConstSlice(), move(owned))
     }
 
-    func remove(key: str) usize {
+    pub func remove(key: str) usize {
         var removed: usize = 0;
         var index: usize = 0;
         for index < entries.len() {
@@ -112,11 +109,11 @@ public:
         removed
     }
 
-    const func len() usize { entries.len() }
-    const func isEmpty() bool { entries.isEmpty() }
-    const func items() []const QueryParam { entries.asConstSlice() }
+    pub const func len() usize { entries.len() }
+    pub const func isEmpty() bool { entries.isEmpty() }
+    pub const func items() []const QueryParam { entries.asConstSlice() }
 
-    const func encode() !string {
+    pub const func encode() !string {
         var output = text.StringBuilder();
         for i := usize(0); i < entries.len(); i++ {
             if i != 0 { output.append("&")!; }

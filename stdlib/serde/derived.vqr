@@ -4,65 +4,64 @@ import (convert, fmt, parse)
 comptime func valueKind<T>() u8 { __vqr_serde_value_kind<T>() }
 
 class ValueCodec<T> {
-public:
     comptime if valueKind<T>() == 1 {
-        static func encode(value: *const T, serializer: *Serializer) !void {
+        pub static func encode(value: *const T, serializer: *Serializer) !void {
             serializer.writeBool(*value)
         }
-        static func decode(deserializer: *Deserializer) !T { deserializer.readBool() }
+        pub static func decode(deserializer: *Deserializer) !T { deserializer.readBool() }
     } else {
         comptime if valueKind<T>() == 2 {
-            static func encode(value: *const T, serializer: *Serializer) !void {
+            pub static func encode(value: *const T, serializer: *Serializer) !void {
                 serializer.writeString(*value)
             }
-            static func decode(deserializer: *Deserializer) !T { deserializer.readString() }
+            pub static func decode(deserializer: *Deserializer) !T { deserializer.readString() }
         } else {
             comptime if valueKind<T>() == 3 {
-                static func encode(value: *const T, serializer: *Serializer) !void {
+                pub static func encode(value: *const T, serializer: *Serializer) !void {
                     var wide = convert.widen<i128>(*value);
                     var raw = fmt.formatInt(wide, 10)!;
                     serializer.writeNumber(raw)
                 }
-                static func decode(deserializer: *Deserializer) !T {
+                pub static func decode(deserializer: *Deserializer) !T {
                     var number = deserializer.readNumber()!;
                     parse.parseInt<T>(number, 10)
                 }
             } else {
                 comptime if valueKind<T>() == 4 {
-                    static func encode(value: *const T, serializer: *Serializer) !void {
+                    pub static func encode(value: *const T, serializer: *Serializer) !void {
                         var wide = convert.widen<u128>(*value);
                         var raw = fmt.formatUint(wide, 10)!;
                         serializer.writeNumber(raw)
                     }
-                    static func decode(deserializer: *Deserializer) !T {
+                    pub static func decode(deserializer: *Deserializer) !T {
                         var number = deserializer.readNumber()!;
                         parse.parseUint<T>(number, 10)
                     }
                 } else {
                     comptime if valueKind<T>() == 5 {
-                        static func encode(value: *const T, serializer: *Serializer) !void {
+                        pub static func encode(value: *const T, serializer: *Serializer) !void {
                             var codec = FloatCodec<T>{};
                             codec.encode(value, serializer)
                         }
-                        static func decode(deserializer: *Deserializer) !T {
+                        pub static func decode(deserializer: *Deserializer) !T {
                             var codec = FloatCodec<T>{};
                             codec.decode(deserializer)
                         }
                     } else {
                         comptime if valueKind<T>() == 6 {
-                            static func encode(value: *const T, serializer: *Serializer) !void {
+                            pub static func encode(value: *const T, serializer: *Serializer) !void {
                                 var codec = CharCodec{};
                                 codec.encode(value, serializer)
                             }
-                            static func decode(deserializer: *Deserializer) !T {
+                            pub static func decode(deserializer: *Deserializer) !T {
                                 var codec = CharCodec{};
                                 codec.decode(deserializer)
                             }
                         } else {
-                            static func encode(value: *const T, serializer: *Serializer) !void {
+                            pub static func encode(value: *const T, serializer: *Serializer) !void {
                                 value.encodeSerde(serializer)
                             }
-                            static func decode(deserializer: *Deserializer) !T {
+                            pub static func decode(deserializer: *Deserializer) !T {
                                 T.decodeSerde(deserializer)
                             }
                         }
@@ -98,7 +97,6 @@ pub func decodeOptional<T>(deserializer: *Deserializer) !?T {
 
 pub class DerivedCodec<T> {
     #implements: Codec<T>
-public:
-    func encode(value: *const T, serializer: *Serializer) !void { encodeValue<T>(value, serializer) }
-    func decode(deserializer: *Deserializer) !T { decodeValue<T>(deserializer) }
+    pub func encode(value: *const T, serializer: *Serializer) !void { encodeValue<T>(value, serializer) }
+    pub func decode(deserializer: *Deserializer) !T { decodeValue<T>(deserializer) }
 }

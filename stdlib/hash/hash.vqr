@@ -13,21 +13,20 @@ pub interface HashKey {
 pub class FnvHasher {
     #implements: Hasher
     var state: u32;
-public:
-    func init() : state(2166136261u32) {}
-    func init(seed: u32) : state(2166136261u32 ^ seed) {}
+    pub func init() : state(2166136261u32) {}
+    pub func init(seed: u32) : state(2166136261u32 ^ seed) {}
 
-    func writeByte(byte: u8) void {
+    pub func writeByte(byte: u8) void {
         state = (state ^ u32(byte)) *% 16777619u32;
     }
 
-    func write(bytes: []const u8) void {
+    pub func write(bytes: []const u8) void {
         for byte in bytes { writeByte(byte); }
     }
 
-    const func finish() usize { usize(state) }
-    func reset() void { state = 2166136261u32; }
-    func resetSeeded(seed: u32) void { state = 2166136261u32 ^ seed; }
+    pub const func finish() usize { usize(state) }
+    pub func reset() void { state = 2166136261u32; }
+    pub func resetSeeded(seed: u32) void { state = 2166136261u32 ^ seed; }
 }
 
 pub func hashValue<T: HashKey>(value: *const T) usize {

@@ -7,18 +7,17 @@ pub class BorrowRef<T> {
     #copy: disabled
     var pointer: *const T;
     var counter: *isize;
-public:
-    unsafe func init(pointer: *const T, counter: *isize) : pointer(pointer), counter(counter) {}
+    pub unsafe func init(pointer: *const T, counter: *isize) : pointer(pointer), counter(counter) {}
 
-    const func get() *const T { pointer }
+    pub const func get() *const T { pointer }
 
-    const func map<U, F: Movable>(project: F) BorrowRef<U> {
+    pub const func map<U, F: Movable>(project: F) BorrowRef<U> {
         var target = project(pointer);
         (*counter)++;
         unsafe { BorrowRef<U>(target, counter) }
     }
 
-    func deinit() void { *counter -= 1; }
+    pub func deinit() void { *counter -= 1; }
 }
 
 pub class BorrowMut<T> {
@@ -26,20 +25,19 @@ pub class BorrowMut<T> {
     var pointer: *T;
     var counter: *isize;
     var ownsBorrow: bool;
-public:
-    unsafe func init(pointer: *T, counter: *isize)
+    pub unsafe func init(pointer: *T, counter: *isize)
         : pointer(pointer), counter(counter), ownsBorrow(true) {}
 
-    func get() *T { pointer }
+    pub func get() *T { pointer }
 
-    static func map<U, F: Movable>(value: Self, project: F) BorrowMut<U> {
+    pub static func map<U, F: Movable>(value: Self, project: F) BorrowMut<U> {
         var target = project(value.pointer);
         var state = value.counter;
         value.ownsBorrow = false;
         unsafe { BorrowMut<U>(target, state) }
     }
 
-    func deinit() void {
+    pub func deinit() void {
         if ownsBorrow {
             *counter = 0;
         }
@@ -51,10 +49,9 @@ pub class RefCell<T: Movable> {
     var value: ?T;
     var count: isize;
     func init(initial: T) : value(some(move(initial))), count(0) {}
-public:
-    static func new(value: T) Self { RefCell<T>(move(value)) }
+    pub static func new(value: T) Self { RefCell<T>(move(value)) }
 
-    func tryBorrow() ?BorrowRef<T> {
+    pub func tryBorrow() ?BorrowRef<T> {
         if count < 0 { return null; }
         count++;
         unsafe {
@@ -62,14 +59,14 @@ public:
         }
     }
 
-    func borrow() !BorrowRef<T> {
+    pub func borrow() !BorrowRef<T> {
         switch tryBorrow() {
             null => CellError.Borrowed,
             some(held) => move(held),
         }
     }
 
-    func tryBorrowMut() ?BorrowMut<T> {
+    pub func tryBorrowMut() ?BorrowMut<T> {
         if count != 0 { return null; }
         count = -1;
         unsafe {
@@ -77,19 +74,19 @@ public:
         }
     }
 
-    func borrowMut() !BorrowMut<T> {
+    pub func borrowMut() !BorrowMut<T> {
         switch tryBorrowMut() {
             null => CellError.Borrowed,
             some(held) => move(held),
         }
     }
 
-    func replace(replacement: T) !T {
+    pub func replace(replacement: T) !T {
         if count != 0 { return CellError.Borrowed; }
         opt.replace<T>(&value, move(replacement)).unwrap()
     }
 
-    static func intoInner(inner: Self) T {
+    pub static func intoInner(inner: Self) T {
         if inner.count != 0 { panic("ref cell still borrowed"); }
         opt.take<T>(&inner.value).unwrap()
     }

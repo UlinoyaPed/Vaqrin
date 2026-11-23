@@ -35,23 +35,22 @@ pub class EncodeOptions {
 pub class JsonNumber {
     var raw: string;
     func init(value: string) : raw(move(value)) {}
-public:
-    static func parse(value: str) !Self {
+    pub static func parse(value: str) !Self {
         validateNumber(value)!;
         var owned = text.fromBytes(value.asBytes())!;
         JsonNumber(move(owned))
     }
-    const func text() str { raw }
-    const func isInteger() bool { !hasFractionOrExponent(raw.asBytes()) }
-    const func asI64() !i64 {
+    pub const func text() str { raw }
+    pub const func isInteger() bool { !hasFractionOrExponent(raw.asBytes()) }
+    pub const func asI64() !i64 {
         if !isInteger() { return JsonError.InexactNumber; }
         parse.parseInt<i64>(raw, 10)
     }
-    const func asU64() !u64 {
+    pub const func asU64() !u64 {
         if !isInteger() { return JsonError.InexactNumber; }
         parse.parseUint<u64>(raw, 10)
     }
-    const func asF64() !f64 {
+    pub const func asF64() !f64 {
         if isInteger() {
             var integer = parse.parseInt<i64>(raw, 10)!;
             if integer < -9007199254740992 || integer > 9007199254740992 {
@@ -64,20 +63,19 @@ public:
 
 pub class JsonArray {
     var values: coll.Vec<Value>;
-public:
-    func init() : values(coll.Vec<Value>()) {}
-    const func len() usize { values.len() }
-    const func isEmpty() bool { values.isEmpty() }
-    func reserve(count: usize) !void { values.reserve(count) }
-    const func get(index: usize) ?*const Value { values.getPtr(index) }
-    func getMut(index: usize) ?*Value { values.getMutPtr(index) }
-    func push(value: Value) !void { values.push(move(value)) }
-    func pop() ?Value { values.pop() }
-    func insert(index: usize, value: Value) !void { values.insert(index, move(value)) }
-    func remove(index: usize) ?Value { values.remove(index) }
-    func replace(index: usize, value: Value) ?Value { values.replace(index, move(value)) }
-    const func asSlice() []const Value { values.asConstSlice() }
-    const func iterRef() iterator.SliceIterRef<Value> {
+    pub func init() : values(coll.Vec<Value>()) {}
+    pub const func len() usize { values.len() }
+    pub const func isEmpty() bool { values.isEmpty() }
+    pub func reserve(count: usize) !void { values.reserve(count) }
+    pub const func get(index: usize) ?*const Value { values.getPtr(index) }
+    pub func getMut(index: usize) ?*Value { values.getMutPtr(index) }
+    pub func push(value: Value) !void { values.push(move(value)) }
+    pub func pop() ?Value { values.pop() }
+    pub func insert(index: usize, value: Value) !void { values.insert(index, move(value)) }
+    pub func remove(index: usize) ?Value { values.remove(index) }
+    pub func replace(index: usize, value: Value) ?Value { values.replace(index, move(value)) }
+    pub const func asSlice() []const Value { values.asConstSlice() }
+    pub const func iterRef() iterator.SliceIterRef<Value> {
         iterator.SliceIterRef<Value>(values.asConstSlice())
     }
 }
@@ -89,32 +87,31 @@ class JsonEntry {
 
 pub class JsonObject {
     var entries: coll.Vec<JsonEntry>;
-public:
-    func init() : entries(coll.Vec<JsonEntry>()) {}
-    const func len() usize { entries.len() }
-    const func isEmpty() bool { entries.isEmpty() }
-    const func containsKey(key: str) bool {
+    pub func init() : entries(coll.Vec<JsonEntry>()) {}
+    pub const func len() usize { entries.len() }
+    pub const func isEmpty() bool { entries.isEmpty() }
+    pub const func containsKey(key: str) bool {
         for index in usize(0)..entries.len() {
             var entry = entries.getPtr(index).unwrap();
             if entry.key == key { return true; }
         }
         false
     }
-    const func get(key: str) ?*const Value {
+    pub const func get(key: str) ?*const Value {
         for index in usize(0)..entries.len() {
             var entry = entries.getPtr(index).unwrap();
             if entry.key == key { return some(&entry.value); }
         }
         null
     }
-    func getMut(key: str) ?*Value {
+    pub func getMut(key: str) ?*Value {
         for index in usize(0)..entries.len() {
             var entry = entries.getMutPtr(index).unwrap();
             if entry.key == key { return some(&entry.value); }
         }
         null
     }
-    func insert(key: string, value: Value) !?Value {
+    pub func insert(key: string, value: Value) !?Value {
         for index in usize(0)..entries.len() {
             var entry = entries.getMutPtr(index).unwrap();
             if entry.key == key {
@@ -125,7 +122,7 @@ public:
         entries.push(JsonEntry{key: move(key), value: move(value)})!;
         null
     }
-    func remove(key: str) ?Value {
+    pub func remove(key: str) ?Value {
         for index in usize(0)..entries.len() {
             var entry = entries.getPtr(index).unwrap();
             if entry.key == key {
@@ -138,28 +135,27 @@ public:
         }
         null
     }
-    const func keyAt(index: usize) ?str {
+    pub const func keyAt(index: usize) ?str {
         if index >= entries.len() { return null; }
         some(entries.getPtr(index).unwrap().key)
     }
-    const func valueAt(index: usize) ?*const Value {
+    pub const func valueAt(index: usize) ?*const Value {
         if index >= entries.len() { return null; }
         some(&entries.getPtr(index).unwrap().value)
     }
-    func valueAtMut(index: usize) ?*Value {
+    pub func valueAtMut(index: usize) ?*Value {
         if index >= entries.len() { return null; }
         some(&entries.getMutPtr(index).unwrap().value)
     }
-    const func keys() JsonKeyIter { JsonKeyIter(self) }
-    const func items() JsonItemIter { JsonItemIter(self) }
+    pub const func keys() JsonKeyIter { JsonKeyIter(self) }
+    pub const func items() JsonItemIter { JsonItemIter(self) }
 }
 
 pub class JsonKeyIter {
     var object: *const JsonObject;
     var index: usize;
-public:
-    func init(object: *const JsonObject) : object(object), index(0) {}
-    func next() ?str {
+    pub func init(object: *const JsonObject) : object(object), index(0) {}
+    pub func next() ?str {
         switch object.keyAt(index) {
             null => null,
             some(key) => { index++; some(key) },
@@ -170,9 +166,8 @@ public:
 pub class JsonItemIter {
     var object: *const JsonObject;
     var index: usize;
-public:
-    func init(object: *const JsonObject) : object(object), index(0) {}
-    func next() ?(str, *const Value) {
+    pub func init(object: *const JsonObject) : object(object), index(0) {}
+    pub func next() ?(str, *const Value) {
         if index >= object.len() { return null; }
         var key = object.keyAt(index).unwrap();
         var value = object.valueAt(index).unwrap();

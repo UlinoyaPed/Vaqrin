@@ -20,11 +20,10 @@ pub class Event {
     pub var stream: i32;
     pub var code: u32;
     var payloadBytes: coll.Vec<u8>;
-public:
-    func init(kind: EventKind, stream: i32, code: u32, payload: coll.Vec<u8>)
+    pub func init(kind: EventKind, stream: i32, code: u32, payload: coll.Vec<u8>)
         : kind(kind), stream(stream), code(code), payloadBytes(move(payload)) {}
-    const func payload() []const u8 { payloadBytes.asConstSlice() }
-    const func headers() !HeaderReader {
+    pub const func payload() []const u8 { payloadBytes.asConstSlice() }
+    pub const func headers() !HeaderReader {
         if kind != EventKind.Headers { return Http2Error.WrongEvent; }
         HeaderReader(payload())
     }
@@ -73,9 +72,8 @@ class NativeEvent {
     #copy: disabled
     var handle: usize;
     func deinit() void { unsafe { __vqr_http2_drop_event(handle); } }
-public:
-    func init(handle: usize) : handle(handle) {}
-    const func copyTo(dst: []u8) void {
+    pub func init(handle: usize) : handle(handle) {}
+    pub const func copyTo(dst: []u8) void {
         if dst.len() != 0 { unsafe { __vqr_http2_copy_event(handle, &dst[0]); } }
     }
 }
@@ -86,8 +84,7 @@ pub class Connection {
     var broken: bool;
     func init(handle: usize) : handle(handle), broken(false) {}
     func deinit() void { close(); }
-public:
-    static func open(role: Role, settings: Settings) !Self {
+    pub static func open(role: Role, settings: Settings) !Self {
         var server = if role == Role.Server { 1 } else { 0 };
         var reason: i32 = 0;
         var handle = unsafe { __vqr_http2_open(server, settings.maxStreams, settings.initialStreamWindow,
@@ -95,13 +92,13 @@ public:
         checkStatus(reason)!;
         Connection(handle)
     }
-    func close() void {
+    pub func close() void {
         if handle != 0 {
             unsafe { __vqr_http2_close(handle); }
             handle = 0;
         }
     }
-    func ingest(data: []const u8) !void {
+    pub func ingest(data: []const u8) !void {
         checkOpen()!;
         if data.len() != 0 {
             var reason = unsafe { __vqr_http2_ingest(handle, &data[0], data.len()) };
@@ -109,7 +106,7 @@ public:
             checkStatus(reason)!;
         }
     }
-    func receive(reader: *io.Reader) !bool {
+    pub func receive(reader: *io.Reader) !bool {
         checkOpen()!;
         var buffer = __vqr_uninitialized<[4096]u8>();
         var data = unsafe { (*__vqr_raw_address(&buffer))[:] };
@@ -119,7 +116,7 @@ public:
         ingest(data[0..count])!;
         true
     }
-    func flush(writer: *io.Writer) !void {
+    pub func flush(writer: *io.Writer) !void {
         checkOpen()!;
         for {
             var address: usize = 0;
@@ -138,7 +135,7 @@ public:
             return reason;
         }
     }
-    func next() !?Event {
+    pub func next() !?Event {
         if handle == 0 { return Http2Error.ConnectionClosed; }
         var info = [3]u32{0, 0, 0};
         var size: usize = 0;
@@ -153,28 +150,28 @@ public:
         source.copyTo(payload.asSlice());
         some(Event(eventKind(info[0])!, i32(info[1])!, info[2], move(payload)))
     }
-    func consume(stream: i32, count: usize) !void {
+    pub func consume(stream: i32, count: usize) !void {
         checkOpen()!;
         if stream <= 0 { return Http2Error.InvalidArgument; }
         checkStatus(unsafe { __vqr_http2_consume(handle, stream, count) })
     }
     // Credit the connection while an application queues a DATA event. Release
     // stream credit separately when the stream's consumer processes it.
-    func consumeConnection(count: usize) !void {
+    pub func consumeConnection(count: usize) !void {
         checkOpen()!;
         checkStatus(unsafe { __vqr_http2_consume_connection(handle, count) })
     }
-    func consumeStream(stream: i32, count: usize) !void {
+    pub func consumeStream(stream: i32, count: usize) !void {
         checkOpen()!;
         if stream <= 0 { return Http2Error.InvalidArgument; }
         checkStatus(unsafe { __vqr_http2_consume_stream(handle, stream, count) })
     }
-    func request(headers: *const HeaderBlock, end: bool) !i32 { sendHeaders(-1, headers, end) }
-    func respond(stream: i32, headers: *const HeaderBlock, end: bool) !void {
+    pub func request(headers: *const HeaderBlock, end: bool) !i32 { sendHeaders(-1, headers, end) }
+    pub func respond(stream: i32, headers: *const HeaderBlock, end: bool) !void {
         if stream <= 0 { return Http2Error.InvalidArgument; }
         sendHeaders(stream, headers, end)!;
     }
-    func sendData(stream: i32, data: []const u8, end: bool) !void {
+    pub func sendData(stream: i32, data: []const u8, end: bool) !void {
         checkOpen()!;
         if stream <= 0 { return Http2Error.InvalidArgument; }
         var flag = if end { 1 } else { 0 };
@@ -183,38 +180,37 @@ public:
         checkStatus(unsafe { __vqr_http2_send(handle, stream, input, data.len(), flag) })
     }
     // True while the transport needs more output or peer window credit for queued DATA.
-    const func hasPendingData(stream: i32) !bool {
+    pub const func hasPendingData(stream: i32) !bool {
         checkOpen()!;
         if stream <= 0 { return Http2Error.InvalidArgument; }
         var pending = unsafe { __vqr_http2_has_pending_data(handle, stream) };
         checkStatus(pending)!;
         pending != 0
     }
-    func sendTrailers(stream: i32, headers: *const HeaderBlock) !void {
+    pub func sendTrailers(stream: i32, headers: *const HeaderBlock) !void {
         checkOpen()!;
         var data = headers.encoded();
         if stream <= 0 || data.len() == 0 { return Http2Error.InvalidArgument; }
         checkStatus(unsafe { __vqr_http2_trailers(handle, stream, &data[0], data.len()) })
     }
-    func reset(stream: i32, code: u32) !void {
+    pub func reset(stream: i32, code: u32) !void {
         checkOpen()!;
         if stream <= 0 { return Http2Error.InvalidArgument; }
         checkStatus(unsafe { __vqr_http2_reset(handle, stream, code) })
     }
-    func goAway(code: u32) !void {
+    pub func goAway(code: u32) !void {
         checkOpen()!;
         checkStatus(unsafe { __vqr_http2_goaway(handle, code) })
     }
-    func goAway(lastProcessed: i32, code: u32) !void {
+    pub func goAway(lastProcessed: i32, code: u32) !void {
         checkOpen()!;
         if lastProcessed < 0 { return Http2Error.InvalidArgument; }
         checkStatus(unsafe { __vqr_http2_goaway_at(handle, lastProcessed, code) })
     }
-    func ping(token: [8]u8) !void {
+    pub func ping(token: [8]u8) !void {
         checkOpen()!;
         checkStatus(unsafe { __vqr_http2_ping(handle, &token[0]) })
     }
-private:
     const func checkOpen() !void {
         if handle == 0 || broken { return Http2Error.ConnectionClosed; }
     }

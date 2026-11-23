@@ -23,7 +23,7 @@ Zed 的 `run code` 任务可直接启动单文件和各项目的入口文件。
 | [language/generics.vqr](language/generics.vqr) | 类型参数和函数类型 | `42`、`true` |
 | [language/interfaces.vqr](language/interfaces.vqr) | 接口、带载荷的枚举和模式匹配 | `21`、`16`、`10` |
 | [language/ownership.vqr](language/ownership.vqr) | Box、借用、`move`、作用域退出时的析构 | `42`、`Counter released` |
-| [language/references.vqr](language/references.vqr) | 严格和兼容引用、裸指针、Box 的借用、返回引用 | 多组类型和值 |
+| [language/references.vqr](language/references.vqr) | 只读借用、显式解引用、Box 的借用、返回引用 | 多组类型和值 |
 | [language/parameter_modes.vqr](language/parameter_modes.vqr) | v0.2.0 开发分支的参数模式、重借用和返回借用 | `20`、`11`、`21`、`11` |
 
 函数尾部不带分号的表达式可以作为返回值。示例多用 `main() !void`，从而能把 I/O 错误传播给运行时。

@@ -734,10 +734,18 @@ void Inputs::load(const std::vector<Path> &inputs, const std::vector<Path> &pack
     roots.push_back(fs::weakly_canonical(p));
   std::set<Path> paths;
   std::optional<Path> selected;
+  std::optional<std::string> entryPackage;
   if (directory) {
     auto config = entry.empty() && hostedExecutable ? readManifest(project, true).entry : std::optional<Path>{};
-    if (!entry.empty() || config) {
-      auto relative = entry.empty() ? *config : entry;
+    auto relative = entry.empty() ? config.value_or(Path{}) : entry;
+    auto selector = relative.string();
+    if (auto separator = selector.find("::"); separator != std::string::npos) {
+      auto name = selector.substr(0, separator);
+      if (name.empty() || selector.substr(separator) != "::main" || identifier(name) != name)
+        fail({}, "entry must use the form package::main", "E301");
+      entryPackage = std::move(name);
+    }
+    if (!relative.empty() && !entryPackage) {
       auto path = fs::weakly_canonical(project / relative);
       auto within = path.lexically_relative(project);
       if (relative.is_absolute() || within.empty() || *within.begin() == "..")
@@ -763,10 +771,11 @@ void Inputs::load(const std::vector<Path> &inputs, const std::vector<Path> &pack
     }
   }
   if (paths.empty()) fail({}, "no .vqr source files found", "E301");
-  if (!selected && hostedExecutable) {
+  if (!selected && (hostedExecutable || entryPackage)) {
     std::vector<Path> candidates, malformed;
     for (auto &path : paths) {
       auto &o = outline(path, {});
+      if (entryPackage && o.package != *entryPackage) continue;
       if (o.mainCount == 1 && o.entrySignature)
         candidates.push_back(path);
       else if (o.mainCount)
@@ -775,8 +784,10 @@ void Inputs::load(const std::vector<Path> &inputs, const std::vector<Path> &pack
     if (candidates.empty()) candidates.swap(malformed);
     if (candidates.size() != 1)
       fail({},
-           pathsMessage(candidates.empty() ? "no main in the selected sources"
-                                           : "multiple entry files; specify --entry",
+           pathsMessage(entryPackage ? (candidates.empty() ? "no main in package " : "multiple main files in package ") +
+                                           *entryPackage
+                                     : candidates.empty() ? "no main in the selected sources"
+                                                          : "multiple entry files; specify --entry",
                         candidates),
            "E301");
     selected = candidates.front();

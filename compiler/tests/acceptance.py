@@ -665,9 +665,8 @@ class Acceptance(CompilerCase):
         self.hosted('''
             class Probe {
                 var number: i32;
-            public:
-                func init(n: i32) : number(n) {}
-                func deinit() void { io.println(number) catch {}; }
+                pub func init(n: i32) : number(n) {}
+                pub func deinit() void { io.println(number) catch {}; }
             }
             error Stop { Failure }
             func fail() !Probe { Stop.Failure }
@@ -689,11 +688,10 @@ class Acceptance(CompilerCase):
         self.hosted('''
             class Probe {
                 var number: i32;
-            public:
-                func init(n: i32) : number(n) {}
-                func init() : self(10) {}
-                const func get() i32 { number }
-                func deinit() void { io.println(number) catch {}; }
+                pub func init(n: i32) : number(n) {}
+                pub func init() : self(10) {}
+                pub const func get() i32 { number }
+                pub func deinit() void { io.println(number) catch {}; }
             }
             enum Pair { None, Both(Probe, Probe) }
             func main() !void {
@@ -859,10 +857,9 @@ class Acceptance(CompilerCase):
             import (coll)
             class Probe {
                 var id: i32;
-            public:
-                func init(id: i32) : id(id) {}
-                const func get() i32 { id }
-                func deinit() void { io.println(id + 100) catch {}; }
+                pub func init(id: i32) : id(id) {}
+                pub const func get() i32 { id }
+                pub func deinit() void { io.println(id + 100) catch {}; }
             }
             func main() !void {
                 var items = coll.Vec<Probe>();
@@ -885,9 +882,8 @@ class Acceptance(CompilerCase):
             extern "C" func dropped(id: c_int) void;
             class Probe {
                 var id: i32;
-            public:
-                func init(id: i32) : id(id) {}
-                func deinit() void { unsafe { dropped(id); } }
+                pub func init(id: i32) : id(id) {}
+                pub func deinit() void { unsafe { dropped(id); } }
             }
             func check() !i32 {
                 var vec = coll.Vec<Probe>();
@@ -1207,6 +1203,33 @@ class Acceptance(CompilerCase):
         c.write_text("func main() i32 { shared() }")
         self.assertIn(b"shared", self.process(VAQC, c, good=False).stderr)
 
+    def test_v020_named_package_entry(self):
+        self.source("a/main.vqr", "package alpha; func main() i32 { 13 }")
+        self.source("b/main.vqr", "package beta; func main() i32 { 27 }")
+        self.process(VAQC, "build", self.root, "--entry", "beta::main", "-o", "app")
+        self.assertEqual(self.process("./app", good=False).returncode, 27)
+        self.source("package.toml", "[package]\nname = 'project'\n[build]\nentry = 'alpha::main'\n")
+        self.process(VAQC, "build", self.root, "-o", "app")
+        self.assertEqual(self.process("./app", good=False).returncode, 13)
+        missing = self.process(VAQC, "build", self.root, "--entry", "missing::main", good=False)
+        self.assertIn(b"no main in package missing", missing.stderr)
+        self.source("a/second.vqr", "package alpha; func main() void {}")
+        duplicate = self.process(VAQC, "build", self.root, "--entry", "alpha::main", good=False)
+        self.assertIn(b"multiple main files in package alpha", duplicate.stderr)
+
+    def test_v020_removed_access_and_borrow_syntax(self):
+        for code, diagnostic in (
+            ("class C { public: func next() i32 { 1 } }", b"use 'pub'"),
+            ("class C { private: var n: i32; }", b"private by default"),
+            ("#return_borrow: x\nfunc f(x: in i32) ref i32 { x }", b"'from name'"),
+            ("type F = func(ref i32) borrow(1) ref i32;", b"'from name'"),
+            ("func f(x: in &const i32) void {}", b"write the data type"),
+            ("func f<T: Copyable & Movable>(x: T) void {}", b"use '+'"),
+        ):
+            with self.subTest(code=code):
+                source = self.source("removed.vqr", code)
+                self.assertIn(diagnostic, self.process(VAQC, "check", "--syntax-only", source, good=False).stderr)
+
     def test_file_imports_and_recursive_entry(self):
         entry = self.source("src/root.vqr", 'import ("lib/helper-tools.vqr" as h, "lib/./helper-tools.vqr" as j) '
                             "func main() i32 { h.answer() + j.answer() }")
@@ -1284,7 +1307,7 @@ class Acceptance(CompilerCase):
             enum Event { Link(*i32), Num(i32) }
             func inc(x: &i32) void { x++; }
             func pair(x: i32, p: *i32) (i32, *i32) { return (x, p); }
-            class C { private: pub var n: i32; pub const func value() !i32 { n } }
+            class C { pub var n: i32; pub const func value() !i32 { n } }
             func abort() never { panic("stop") }
             func liveValue(okay: bool) i32 { if okay { 7 } else { abort() } }
             func main() !void {
@@ -1402,7 +1425,7 @@ class Acceptance(CompilerCase):
             ("func f(v: ?i32) !!?i32 { v? }", "requires '?U' or '!?U'"),
             ("func f(v: ?^i32) ?^i32 { v? }", "move(value)?"),
             ("comptime const n = some(2)?;", "error[E220]"),
-            ("func read(x: in &const i32) ?&const i32 { x } "
+            ("func read(x: in i32) ?&const i32 { x } "
              "func leak() ?i32 { var view = read(5)?; view }", "temporary"),
             ("import (opt) func f(v: ?i32, wrong: func() i32) !i32 { opt.okOrElse(v, wrong) }", "expected 'ErrorId'"),
         ]:
@@ -1782,11 +1805,9 @@ class Acceptance(CompilerCase):
 
     def test_indirect_reference_return_contract(self):
         self.hosted(r"""
-            type Pick = func(&const i32, &const i32) borrow(2) &const i32;
-            #return_borrow: right
-            func pick(left, right: &const i32) &const i32 { right }
-            #return_borrow: right
-            func forward(fn: Pick, left, right: &const i32) &const i32 { fn(left, right) }
+            type Pick = func(left: in i32, right: in i32) ref i32 from right;
+            func pick(left, right: in i32) ref i32 from right { right }
+            func forward(fn: Pick, left, right: in i32) ref i32 from right { fn(left, right) }
             func main() !void {
                 var number = 42;
                 var first = 7;
@@ -1806,9 +1827,8 @@ class Acceptance(CompilerCase):
             }
         """, "42\n" * 3)
         mismatched = self.source("mismatch.vqr", r"""
-            type Pick = func(&const i32, &const i32) borrow(1) &const i32;
-            #return_borrow: right
-            func pick(left, right: &const i32) &const i32 { right }
+            type Pick = func(left: in i32, right: in i32) ref i32 from left;
+            func pick(left, right: in i32) ref i32 from right { right }
             func test() void { var invalid: Pick = pick; }
         """)
         self.process(VAQC, "check", mismatched, good=False)
@@ -1834,21 +1854,18 @@ class Acceptance(CompilerCase):
                 pub var values: [4]i32;
                 pub func init() : values([4]i32{0, 1, 2, 3}) {}
             }
-            func read(value: in &const Large) i32 { value.values[3] }
+            func read(value: in Large) i32 { value.values[3] }
             interface Reader {
-                #return_borrow: self
-                const func get() &const i32;
-                const func read(value: in &const Large) i32;
+                const func get() &const i32 from self;
+                const func read(value: in Large) i32;
             }
             class Impl {
                 #implements: Reader
-                #return_borrow: self
-                pub const func get() &const i32 { var result: &const i32 = id; result }
+                pub const func get() &const i32 from self { var result: &const i32 = id; result }
                 pub var id: i32;
-                pub const func read(value: in &const Large) i32 { value.values[2] }
+                pub const func read(value: in Large) i32 { value.values[2] }
             }
-            #return_borrow: second
-            func second(first, second: &const i32) &const i32 { second }
+            func second(first, second: in i32) ref i32 from second { second }
             func main() !void {
                 var owned = Large();
                 io.println(read(owned) + read(Large()))!;
@@ -1864,7 +1881,6 @@ class Acceptance(CompilerCase):
         self.hosted("""
             import (opt)
             class Items {
-                private:
                 var sent: bool;
                 pub func init() : sent(false) {}
                 pub func next() ?^i32 {
@@ -1893,7 +1909,7 @@ class Acceptance(CompilerCase):
                 pub var id: i32;
                 func deinit() void { io.println(id) catch {}; }
             }
-            func use(item: in &const Probe, value: i32) !void { io.println(item.id + value)!; }
+            func use(item: in Probe, value: i32) !void { io.println(item.id + value)!; }
             func stop() !i32 { return Failure.Stop; }
             func attempt() !void { use(Probe{id: 2}, stop()!)!; }
             func main() !void {
@@ -1911,22 +1927,22 @@ class Acceptance(CompilerCase):
             ("func f() void { var n = 0; var p: &i32 = &n; var q: &i32 = &n; }", "active borrow"),
             ("func f(x: &const i32) &const i32 { var n = 0; var r: &const i32 = &n; return r; }",
              "declared source"),
-            ("func get(x: in &const i32) &const i32 { x } func f() void { var r = get(7); }", "temporary"),
+            ("func get(x: in i32) &const i32 { x } func f() void { var r = get(7); }", "temporary"),
             ("func f() !void { var b = new i32(7)!; var r: &const i32 = b; var next = move(b); }",
              "active borrow"),
             ("func f() !void { var v = coll.Vec<i32>(); v.push(7)!; var r = v.get(0); v.push(8)!; }",
              "active borrow"),
             ("func f() !void { var b = new i32(7)!; var b2 = b; }", "cannot copy"),
-            ("func f() void { var r: in &const i32; }", "only permitted in parameter"),
-            ("func f() in &const i32 { return 0; }", "only permitted in parameter"),
-            ("func f(r: in &i32) void {}", "read-only reference parameter"),
+            ("func f() void { var r: in i32; }", "only permitted in parameter"),
+            ("func f() in i32 { return 0; }", "only permitted in parameter"),
+            ("func f(r: in &i32) void {}", "write the data type"),
             ("func f(r: &&i32) void {}", "indirect storage"),
-            ("func f(r: &const i32) void {} func f(r: in &const i32) void {}", "duplicate overload"),
+            ("func f(r: i32) void {} func f(r: in i32) void {}", "duplicate overload"),
             ("func f(a, b: &i32) void {} func g() void { var n = 0; var r: &i32 = &n; f(r, r); }",
              "active borrow"),
             ("func f(obj: ?i32) void { switch obj { some(&x) => {}, null => {}, } }",
              "requires a pointer, reference or Box"),
-            ("func f(r: in &const i32) void {} func g() void { var n = 0; var p = &n; var pp = &p; f(pp); }",
+            ("func f(r: in i32) void {} func g() void { var n = 0; var p = &n; var pp = &p; f(pp); }",
              "no accessible overload"),
             ("func f() !void { var v = coll.Vec<i32>(); v.push(7)!; var opt = v.getMut(0);"
              " switch opt { some(value) => { value++; }, null => {}, } }", "cannot copy"),
@@ -2313,16 +2329,15 @@ class Acceptance(CompilerCase):
             comptime const size: usize = 3;
             type Buffer<T, comptime N: usize> = [N]T;
             class Sized<T, comptime N: usize> {
-            public:
-                var data: Buffer<T, N>;
-                func init(data: Buffer<T, N>) : data(move(data)) {}
-                const func len() usize { N }
-                const func tail() [1]T { [1]T{data[N - 1]} }
+                pub var data: Buffer<T, N>;
+                pub func init(data: Buffer<T, N>) : data(move(data)) {}
+                pub const func len() usize { N }
+                pub const func tail() [1]T { [1]T{data[N - 1]} }
                 comptime if N == 3 {
-                    const func marker() i32 { 3 }
+                    pub const func marker() i32 { 3 }
                 } else {
-                    const func marker() i32 { 1 }
-                    var different: MissingType = invalid;
+                    pub const func marker() i32 { 1 }
+                    pub var different: MissingType = invalid;
                 }
             }
             class Selection<comptime Enabled: bool> {
@@ -2359,10 +2374,9 @@ class Acceptance(CompilerCase):
             import (coll, core, mem, meta)
             class Probe {
                 var number: i32;
-            public:
-                func init(number: i32) : number(number) {}
-                const func id() i32 { number }
-                func deinit() void { io.println(number) catch {}; }
+                pub func init(number: i32) : number(number) {}
+                pub const func id() i32 { number }
+                pub func deinit() void { io.println(number) catch {}; }
             }
             func even(n: *const i32) bool { *n % 2 == 0 }
             func cleanup<F: Movable>(callback: F) mem.ScopeGuard<F> {
@@ -2422,7 +2436,7 @@ class Acceptance(CompilerCase):
             class Node {
                 var next: ?^Node;
             }
-            func inspect<T: Sendable & Shareable>(value: T) bool { true }
+            func inspect<T: Sendable + Shareable>(value: T) bool { true }
             func main() !void {
                 var byte = mem.Layout.fromSizeAlign(1, 1)!;
                 var wordLayout = mem.layout<u32>();
@@ -2503,13 +2517,13 @@ class Acceptance(CompilerCase):
     def test_generic_interface_methods(self):
         self.hosted(r"""
             interface Transformer<C> {
-                const func apply<T: Movable & Copyable>(value: T, fallback: C) T;
+                const func apply<T: Movable + Copyable>(value: T, fallback: C) T;
                 const func block<comptime N: usize>(value: [N]u8) [N]u8;
                 const func number() i32;
             }
             class Identity {
                 #implements: Transformer<i32>
-                pub const func apply<U: Copyable & Movable>(value: U, unused: i32) U { value }
+                pub const func apply<U: Copyable + Movable>(value: U, unused: i32) U { value }
                 pub const func block<comptime Count: usize>(value: [Count]u8) [Count]u8 { value }
                 pub const func number() i32 { 1 }
             }
@@ -2536,7 +2550,7 @@ class Acceptance(CompilerCase):
             interface Transform { const func apply<T: Movable>(x: T) T; }
             class Bad {
                 #implements: Transform
-                pub const func apply<U: Copyable & Movable>(x: U) U { x }
+                pub const func apply<U: Copyable + Movable>(x: U) U { x }
             }
         """)
         failure = self.process(VAQC, "check", invalid, good=False)
@@ -2551,33 +2565,29 @@ class Acceptance(CompilerCase):
             class Cell {
                 #implements: Readable<i32>, Writable, Comparable
                 var number: i32;
-            public:
-                func init(number: i32) : number(number) {}
-                const func read() i32 { number }
-                func write(value: i32) void { number = value; }
-                const func same(other: *const Self) bool { number == other.number }
+                pub func init(number: i32) : number(number) {}
+                pub const func read() i32 { number }
+                pub func write(value: i32) void { number = value; }
+                pub const func same(other: *const Self) bool { number == other.number }
             }
             class Wrapper {
                 #implements: Readable<i32>, Writable
-            public:
-                embed cell: Cell;
-                func init(n: i32) : cell(Cell(n)) {}
-                const func read() i32 { cell.read() + 1 }
-                func write(flag: bool) void { cell.write(if (flag) 1 else 0); }
+                pub embed cell: Cell;
+                pub func init(n: i32) : cell(Cell(n)) {}
+                pub const func read() i32 { cell.read() + 1 }
+                pub func write(flag: bool) void { cell.write(if (flag) 1 else 0); }
             }
             class Outer {
                 #implements: Readable<i32>
-            public:
-                embed Wrapper;
-                func init(n: i32) : Wrapper(Wrapper(n)) {}
+                pub embed Wrapper;
+                pub func init(n: i32) : Wrapper(Wrapper(n)) {}
             }
             class Private {
                 embed cell: Cell;
-            public:
-                func init(n: i32) : cell(Cell(n)) {}
-                const func inside() i32 { read() }
+                pub func init(n: i32) : cell(Cell(n)) {}
+                pub const func inside() i32 { read() }
             }
-            func statically<T: Readable<i32> & Copyable>(target: *const T) i32 { target.read() }
+            func statically<T: Readable<i32> + Copyable>(target: *const T) i32 { target.read() }
             func dynamically(target: *const Readable<i32>) i32 {
                 var restored = target;
                 var call = [target]() i32 => target.read();
@@ -2635,27 +2645,25 @@ class Acceptance(CompilerCase):
             class Tracker {
                 #implements: mem.Allocator
                 var defaultAllocator: mem.GlobalAllocator;
-            public:
-                var releases: i32;
-                var refuse: bool;
-                func init() : defaultAllocator(mem.GlobalAllocator()), releases(0), refuse(false) {}
-                func alloc(layout: mem.Layout) !?*u8 {
+                pub var releases: i32;
+                pub var refuse: bool;
+                pub func init() : defaultAllocator(mem.GlobalAllocator()), releases(0), refuse(false) {}
+                pub func alloc(layout: mem.Layout) !?*u8 {
                     if refuse { return Trouble.Refused; }
                     defaultAllocator.alloc(layout)
                 }
-                func free(ptr: *u8, layout: mem.Layout) void {
+                pub func free(ptr: *u8, layout: mem.Layout) void {
                     releases++;
                     defaultAllocator.free(ptr, layout);
                 }
             }
             class Guarded {
                 var number: i32;
-            public:
-                func init(value: i32) !void : number(value) {
+                pub func init(value: i32) !void : number(value) {
                     if value < 0 { return Trouble.Constructor; }
                 }
-                const func get() i32 { number }
-                func deinit() void { io.println(number) catch {}; }
+                pub const func get() i32 { number }
+                pub func deinit() void { io.println(number) catch {}; }
             }
             func check(ref: mem.AllocatorRef) !i32 {
                 var value = new(ref) i32(33)!;
@@ -2755,9 +2763,8 @@ class Acceptance(CompilerCase):
             class ShortReader {
                 #implements: io.Reader
                 var remaining: usize;
-            public:
-                func init() : remaining(2) {}
-                func read(dst: []u8) !usize {
+                pub func init() : remaining(2) {}
+                pub func read(dst: []u8) !usize {
                     if dst.len() == 0 { return 0; }
                     if remaining == 0 { return io.IoError.WouldBlock; }
                     dst[0] = 55;
@@ -2768,15 +2775,14 @@ class Acceptance(CompilerCase):
             class ShortWriter {
                 #implements: io.Writer
                 var remaining: usize;
-            public:
-                func init() : remaining(3) {}
-                func write(src: []const u8) !usize {
+                pub func init() : remaining(3) {}
+                pub func write(src: []const u8) !usize {
                     if src.len() == 0 { return 0; }
                     if remaining == 0 { return io.IoError.Interrupted; }
                     remaining--;
                     1
                 }
-                func flush() !void {}
+                pub func flush() !void {}
             }
             func main() !void {
                 var source = [_]u8{2, 4, 6, 9};
@@ -3332,8 +3338,7 @@ class Acceptance(CompilerCase):
                 pub var counter: sync.Mutex<Counter>;
                 pub var pending: sync.WaitGroup;
                 pub var condition: sync.CondVar;
-            public:
-                func init() : counter(sync.Mutex<Counter>.new(Counter{value: 0, waiting: false})),
+                pub func init() : counter(sync.Mutex<Counter>.new(Counter{value: 0, waiting: false})),
                               pending(sync.WaitGroup.new()), condition(sync.CondVar.new()) {}
             }
             export "C" func make_state() *State {

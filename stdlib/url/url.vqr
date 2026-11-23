@@ -284,8 +284,7 @@ pub class Url {
           hostLiteral(false), hasPort(false), portEmpty(false), portValue(0), pathValue(""),
           hasQuery(false), queryValue(""), hasFragment(false), fragmentValue("") {}
 
-public:
-    static func parse(value: str) !Self {
+    pub static func parse(value: str) !Self {
         var source = value.asBytes();
         var result = Url();
         var end = source.len();
@@ -357,27 +356,27 @@ public:
         move(result)
     }
 
-    const func scheme() str { schemeValue }
-    const func host() ?str {
+    pub const func scheme() str { schemeValue }
+    pub const func host() ?str {
         if hasHost { some(hostValue) } else { null }
     }
-    const func port() ?u16 {
+    pub const func port() ?u16 {
         if hasPort && !portEmpty { some(portValue) } else { null }
     }
-    const func userInfo() ?str {
+    pub const func userInfo() ?str {
         if hasUserInfo { some(userInfoValue) } else { null }
     }
-    const func path() str { pathValue }
-    const func query() ?str {
+    pub const func path() str { pathValue }
+    pub const func query() ?str {
         if hasQuery { some(queryValue) } else { null }
     }
-    const func fragment() ?str {
+    pub const func fragment() ?str {
         if hasFragment { some(fragmentValue) } else { null }
     }
-    const func hasAuthorityComponent() bool { hasAuthority }
-    const func isAbsolute() bool { hasScheme }
+    pub const func hasAuthorityComponent() bool { hasAuthority }
+    pub const func isAbsolute() bool { hasScheme }
 
-    func resolve(reference: str) !Self {
+    pub func resolve(reference: str) !Self {
         var ref = Url.parse(reference)!;
         if ref.hasScheme { return ref.normalize(); }
         if !hasScheme { return UrlError.InvalidBase; }
@@ -422,7 +421,7 @@ public:
         move(target)
     }
 
-    const func normalize() !Self {
+    pub const func normalize() !Self {
         var result = Url();
         result.hasScheme = hasScheme;
         result.schemeValue = schemeValue;
@@ -453,7 +452,7 @@ public:
         move(result)
     }
 
-    const func toString() !string {
+    pub const func toString() !string {
         var output = text.StringBuilder();
         if hasScheme {
             output.append(schemeValue)!;
@@ -487,7 +486,6 @@ public:
         output.build()
     }
 
-private:
     func parseAuthority(value: []const u8) !void {
         var at = findByte(value, 64);
         switch at {
@@ -589,49 +587,48 @@ pub class UrlBuilder {
           hostValue(""), hasHost(false), hasPort(false), portValue(0),
           pathValue(""), queryValue(""), hasQuery(false), fragmentValue(""),
           hasFragment(false) {}
-public:
-    const func scheme(value: str) !Self {
+    pub const func scheme(value: str) !Self {
         var result = clone();
         result.schemeValue = text.fromBytes(value.asBytes())!;
         result.hasScheme = true;
         move(result)
     }
-    const func userInfo(value: str) !Self {
+    pub const func userInfo(value: str) !Self {
         var result = clone();
         result.userInfoValue = text.fromBytes(value.asBytes())!;
         result.hasUserInfo = true;
         move(result)
     }
-    const func host(value: str) !Self {
+    pub const func host(value: str) !Self {
         var result = clone();
         result.hostValue = text.fromBytes(value.asBytes())!;
         result.hasHost = true;
         move(result)
     }
-    const func port(value: u16) Self {
+    pub const func port(value: u16) Self {
         var result = clone();
         result.hasPort = true;
         result.portValue = value;
         move(result)
     }
-    const func path(value: str) !Self {
+    pub const func path(value: str) !Self {
         var result = clone();
         result.pathValue = text.fromBytes(value.asBytes())!;
         move(result)
     }
-    const func query(value: str) !Self {
+    pub const func query(value: str) !Self {
         var result = clone();
         result.queryValue = text.fromBytes(value.asBytes())!;
         result.hasQuery = true;
         move(result)
     }
-    const func fragment(value: str) !Self {
+    pub const func fragment(value: str) !Self {
         var result = clone();
         result.fragmentValue = text.fromBytes(value.asBytes())!;
         result.hasFragment = true;
         move(result)
     }
-    func build() !Url {
+    pub func build() !Url {
         var output = text.StringBuilder();
         if hasScheme { output.append(schemeValue)!; output.append(":")!; }
         if hasHost || hasUserInfo || hasPort {
@@ -654,7 +651,6 @@ public:
         Url.parse(value)
     }
 
-private:
     const func clone() Self {
         UrlBuilder(schemeValue, hasScheme, userInfoValue, hasUserInfo, hostValue,
             hasHost, hasPort, portValue, pathValue, queryValue, hasQuery,

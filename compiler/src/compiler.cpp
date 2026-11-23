@@ -108,13 +108,12 @@ Type *Program::pointer(Type *t, bool readOnly) {
   return p;
 }
 
-Type *Program::reference(Type *t, bool readOnly, bool compatible, ParameterMode mode) {
+Type *Program::reference(Type *t, bool readOnly, ParameterMode mode) {
   auto key = std::string(mode == ParameterMode::In ? "in " : mode == ParameterMode::Mut ? "mut "
-                         : compatible ? "in &const " : readOnly ? "&const " : "&") + t->name;
+                         : readOnly ? "&const " : "&") + t->name;
   if (auto i = canonical.find(key); i != canonical.end()) return i->second;
   auto *ref = add(Kind::Reference, pointer(t, readOnly)->ir, key, {t});
   ref->readOnly = readOnly;
-  ref->compatible = compatible;
   ref->parameterMode = mode;
   return ref;
 }
@@ -128,13 +127,7 @@ bool Program::hasReference(Type *t) {
 }
 
 int Program::borrowParameter(Definition def, const std::vector<Type *> &params, Type *result, bool receiver) {
-  if (std::ranges::count(def.decl->attributes, "return_borrow", &Attribute::name) > 1)
-    fail(def.decl->span, "duplicate attribute 'return_borrow'");
-  auto source = attribute(*def.decl, "return_borrow");
-  if (!def.decl->borrowSource.empty()) {
-    if (!source.empty()) fail(def.decl->span, "borrow source is specified twice", "E230");
-    source = def.decl->borrowSource;
-  }
+  const auto &source = def.decl->borrowSource;
   if (!hasReference(result)) {
     if (!source.empty()) fail(def.decl->span, "borrow source requires a reference result", "E230");
     return -1;
@@ -169,7 +162,7 @@ std::size_t Program::functionBorrow(ArrayRef<Type *> parameters, Type *result, s
   std::size_t source = 0;
   for (std::size_t i = 0; i < parameters.size(); ++i) {
     if (!hasReference(parameters[i])) continue;
-    if (source) fail(span, "reference result requires borrow(index) to identify its source", "E230");
+    if (source) fail(span, "reference result requires 'from name' to identify its source", "E230");
     source = i + 1;
   }
   if (!source) fail(span, "reference result requires a reference parameter", "E230");
@@ -456,11 +449,11 @@ Type *Program::type(const Ast &n, const File &file, const Types &generics, const
     if (n->text != "?" && n->text != "!" && hasReference(inner))
       fail(n->span, "indirect storage of a reference-bearing type is not supported", "E230");
     if (n->text == "*" || n->text == "*const") return pointer(inner, n->text == "*const");
-    if (n->text == "&" || n->text == "&const" || n->text == "in &const" || n->text == "ref" ||
+    if (n->text == "&" || n->text == "&const" || n->text == "ref" ||
         n->text == "ref mut" || mode == ParameterMode::In || mode == ParameterMode::Mut) {
       if (inner == voidTy || inner == neverTy) fail(n->span, "reference requires an object type");
       return reference(inner, n->text != "&" && n->text != "ref mut" && mode != ParameterMode::Mut,
-                       n->text == "in &const", mode);
+                       mode);
     }
     if (n->text == "^") return box(inner);
     if (n->text == "[]" || n->text == "[]const") return slice(inner, n->text == "[]const");
@@ -560,7 +553,7 @@ void Program::fill(Type *t, const Types &substitutions) {
   collect(collect, d.members);
   bool referenceField = false;
   auto validateBorrowField = [&](Type *field, Span span) {
-    if (field->kind == Kind::Reference && field->readOnly && !field->compatible)
+    if (field->kind == Kind::Reference && field->readOnly)
       referenceField = true;
     else if (field->kind != Kind::Int && field->kind != Kind::Bool &&
              field->kind != Kind::Char && field->kind != Kind::Float)
@@ -1152,8 +1145,6 @@ FunctionEntry &Program::function(Definition d, Types substitutions, Type *owner,
   for (auto *&param : overloadParams) {
     if (param->parameterMode != ParameterMode::Value)
       param = param->parts[0];
-    else if (param->compatible)
-      param = reference(param->parts[0], true);
   }
   auto instance = typeKey(typeKey(id, genericTypes), overloadParams);
   for (const auto &[name, value] : values) {
@@ -1299,7 +1290,6 @@ std::unique_ptr<Module> Program::build() {
                (d.kind == DeclKind::Class || d.kind == DeclKind::Enum)) ||
               (a.name == "repr" &&
                (d.kind == DeclKind::Enum || (d.kind == DeclKind::Class && a.value == "C"))) ||
-              (d.kind == DeclKind::Function && a.name == "return_borrow") ||
               (d.kind == DeclKind::Class &&
                ((a.name == "copy" && (a.value == "enable" || a.value == "disabled")) ||
                 (a.name == "move" && a.value == "disabled") || a.name == "implements" || a.name == "derive")))

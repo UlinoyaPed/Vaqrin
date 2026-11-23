@@ -1119,7 +1119,7 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
         const auto &op = pattern->text;
         if (parameterMode(pattern) == ParameterMode::Move)
           recurse(recurse, pattern->children[0], actual);
-        else if (op == "in &const" || parameterMode(pattern) == ParameterMode::In ||
+        else if (parameterMode(pattern) == ParameterMode::In ||
                  parameterMode(pattern) == ParameterMode::Mut)
           recurse(recurse, pattern->children[0], actual->kind == Kind::Reference ? actual->parts[0] : actual);
         else if (!actual->parts.empty() && (((op == "*" || op == "*const") && actual->kind == Kind::Pointer) ||
@@ -1149,7 +1149,7 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
       }
       for (const auto &[parameter, t] : untyped)
         if ((parameter->kind == NodeKind::TypeName && !subst.contains(parameter->text)) ||
-            parameter->text == "in &const" || parameterMode(parameter) != ParameterMode::Value)
+            parameterMode(parameter) != ParameterMode::Value)
           infer(infer, parameter, t);
     }
     if (!consistent) continue;
@@ -1215,7 +1215,7 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
         auto *target = t;
         while (target->kind == Kind::Optional || target->kind == Kind::Result)
           target = target->parts[0];
-        if (target->kind != Kind::Pointer && !(target->kind == Kind::Reference && target->compatible)) {
+        if (target->kind != Kind::Pointer) {
           valid = false;
           break;
         }
@@ -1227,19 +1227,10 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
         if (math && t->kind == Kind::Int && fits(*math, t->bits, t->sign)) break;
         if (a->kind == NodeKind::Null && t->kind == Kind::Optional) break;
         if (t->kind == Kind::Reference) {
-          if (!from && a->kind != NodeKind::Null && (!math || t->compatible)) {
-            rank += t->compatible ? 2 : 0;
-            break;
-          }
+          if (!from && a->kind != NodeKind::Null && !math) break;
           if (from && from->kind == Kind::Reference && t->parts == from->parts &&
               (t->readOnly || !from->readOnly)) {
             rank += t->readOnly && !from->readOnly;
-            break;
-          }
-          if (t->compatible && from &&
-              (from == t->parts[0] ||
-               ((from->kind == Kind::Pointer || from->kind == Kind::Box) && from->parts[0] == t->parts[0]))) {
-            rank += 2;
             break;
           }
           valid = false;

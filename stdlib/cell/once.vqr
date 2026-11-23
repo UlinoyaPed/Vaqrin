@@ -1,16 +1,15 @@
 package cell
 import (core, opt)
 
-pub class Cell<T: Copyable & Movable> {
+pub class Cell<T: Copyable + Movable> {
     var slot: ?T;
     func init(value: T) : slot(some(move(value))) {}
-public:
-    static func new(value: T) Self { Cell<T>(move(value)) }
-    const func get() T { slot.unwrap() }
-    func set(value: T) void { slot = some(move(value)); }
-    func replace(value: T) T { opt.replace<T>(&slot, move(value)).unwrap() }
-    func update<F: Movable>(transform: F) void { set(transform(get())); }
-    static func intoInner(value: Self) T { opt.take<T>(&value.slot).unwrap() }
+    pub static func new(value: T) Self { Cell<T>(move(value)) }
+    pub const func get() T { slot.unwrap() }
+    pub func set(value: T) void { slot = some(move(value)); }
+    pub func replace(value: T) T { opt.replace<T>(&slot, move(value)).unwrap() }
+    pub func update<F: Movable>(transform: F) void { set(transform(get())); }
+    pub static func intoInner(value: Self) T { opt.take<T>(&value.slot).unwrap() }
 }
 
 pub class OnceCell<T: Movable> {
@@ -18,23 +17,22 @@ pub class OnceCell<T: Movable> {
     var slot: ?T;
     var initializing: bool;
     func init() : slot(null), initializing(false) {}
-public:
-    static func new() Self { OnceCell<T>() }
-    const func get() ?*const T { opt.asPtr<T>(&slot) }
-    func getMut() ?*T { opt.asMutPtr<T>(&slot) }
+    pub static func new() Self { OnceCell<T>() }
+    pub const func get() ?*const T { opt.asPtr<T>(&slot) }
+    pub func getMut() ?*T { opt.asMutPtr<T>(&slot) }
 
-    func set(value: T) ?T {
+    pub func set(value: T) ?T {
         if initializing || core.isSome<T>(&slot) { return some(move(value)); }
         slot = some(move(value));
         null
     }
 
-    func take() ?T {
+    pub func take() ?T {
         if initializing { return null; }
         opt.take<T>(&slot)
     }
 
-    func getOrInit<F: Movable>(factory: F) *const T {
+    pub func getOrInit<F: Movable>(factory: F) *const T {
         switch get() {
             some(ptr) => ptr,
             null => {
@@ -47,7 +45,7 @@ public:
         }
     }
 
-    func getOrTryInit<F: Movable>(factory: F) !*const T {
+    pub func getOrTryInit<F: Movable>(factory: F) !*const T {
         switch get() {
             some(ptr) => ptr,
             null => {
@@ -70,10 +68,9 @@ pub class Lazy<T: Movable, F: Movable> {
     var slot: ?T;
     var factory: F;
     var initializing: bool;
-public:
-    func init(factory: F) : slot(null), factory(move(factory)), initializing(false) {}
+    pub func init(factory: F) : slot(null), factory(move(factory)), initializing(false) {}
 
-    func force() !*const T {
+    pub func force() !*const T {
         switch opt.asPtr<T>(&slot) {
             some(ptr) => ptr,
             null => {
@@ -96,7 +93,6 @@ pub class UnsafeCell<T: Movable> {
     #copy: disabled
     var slot: T;
     func init(value: T) : slot(move(value)) {}
-public:
-    static func new(value: T) Self { UnsafeCell<T>(move(value)) }
-    unsafe func get() *T { &slot }
+    pub static func new(value: T) Self { UnsafeCell<T>(move(value)) }
+    pub unsafe func get() *T { &slot }
 }

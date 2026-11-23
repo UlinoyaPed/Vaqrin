@@ -2,53 +2,47 @@ package serde
 import (coll, convert, opt, parse, text)
 
 pub class BoolCodec {
-public:
-    func encode(value: *const bool, serializer: *Serializer) !void { serializer.writeBool(*value) }
-    func decode(deserializer: *Deserializer) !bool { deserializer.readBool() }
+    pub func encode(value: *const bool, serializer: *Serializer) !void { serializer.writeBool(*value) }
+    pub func decode(deserializer: *Deserializer) !bool { deserializer.readBool() }
 }
 
 pub class SignedIntegerCodec<T> {
-public:
-    func encode(value: *const T, serializer: *Serializer) !void {
+    pub func encode(value: *const T, serializer: *Serializer) !void {
         serializer.writeI64(convert.widen<i64>(*value))
     }
-    func decode(deserializer: *Deserializer) !T {
+    pub func decode(deserializer: *Deserializer) !T {
         var value = deserializer.readI64()!;
         convert.narrow<T>(value)
     }
 }
 
 pub class UnsignedIntegerCodec<T> {
-public:
-    func encode(value: *const T, serializer: *Serializer) !void {
+    pub func encode(value: *const T, serializer: *Serializer) !void {
         serializer.writeU64(convert.widen<u64>(*value))
     }
-    func decode(deserializer: *Deserializer) !T {
+    pub func decode(deserializer: *Deserializer) !T {
         var value = deserializer.readU64()!;
         convert.narrow<T>(value)
     }
 }
 
 pub class FloatCodec<T> {
-public:
-    func encode(value: *const T, serializer: *Serializer) !void {
+    pub func encode(value: *const T, serializer: *Serializer) !void {
         serializer.writeF64(convert.widen<f64>(*value))
     }
-    func decode(deserializer: *Deserializer) !T {
+    pub func decode(deserializer: *Deserializer) !T {
         var value = deserializer.readF64()!;
         convert.narrow<T>(value)
     }
 }
 
 pub class StringCodec {
-public:
-    func encode(value: *const string, serializer: *Serializer) !void { serializer.writeString(*value) }
-    func decode(deserializer: *Deserializer) !string { deserializer.readString() }
+    pub func encode(value: *const string, serializer: *Serializer) !void { serializer.writeString(*value) }
+    pub func decode(deserializer: *Deserializer) !string { deserializer.readString() }
 }
 
 pub class CharCodec {
-public:
-    func encode(value: *const char, serializer: *Serializer) !void {
+    pub func encode(value: *const char, serializer: *Serializer) !void {
         var bytes = coll.Vec<u8>();
         var scalar = convert.fromChar(*value);
         if scalar < 0x80 {
@@ -69,7 +63,7 @@ public:
         var encoded = text.fromBytes(bytes.asConstSlice())!;
         serializer.writeString(encoded)
     }
-    func decode(deserializer: *Deserializer) !char {
+    pub func decode(deserializer: *Deserializer) !char {
         var value = deserializer.readString()!;
         parse.parseChar(value)
     }
@@ -77,15 +71,14 @@ public:
 
 pub class OptionalCodec<T> {
     var element: *Codec<T>;
-public:
-    func init(element: *Codec<T>) : element(element) {}
-    func encode(value: *const ?T, serializer: *Serializer) !void {
+    pub func init(element: *Codec<T>) : element(element) {}
+    pub func encode(value: *const ?T, serializer: *Serializer) !void {
         switch *value {
             null => serializer.writeNull(),
             some(ref item) => element.encode(&item, serializer),
         }
     }
-    func decode(deserializer: *Deserializer) !?T {
+    pub func decode(deserializer: *Deserializer) !?T {
         if deserializer.kind()! == DataKind.Null {
             deserializer.readNull()!;
             return null;
@@ -96,16 +89,15 @@ public:
 
 pub class SequenceCodec<T> {
     var element: *Codec<T>;
-public:
-    func init(element: *Codec<T>) : element(element) {}
-    func encode(value: *const coll.Vec<T>, serializer: *Serializer) !void {
+    pub func init(element: *Codec<T>) : element(element) {}
+    pub func encode(value: *const coll.Vec<T>, serializer: *Serializer) !void {
         serializer.beginSeq(some(value.len()))!;
         for index in usize(0)..value.len() {
             element.encode(value.getPtr(index).unwrap(), serializer)!;
         }
         serializer.endSeq()
     }
-    func decode(deserializer: *Deserializer) !coll.Vec<T> {
+    pub func decode(deserializer: *Deserializer) !coll.Vec<T> {
         var length = deserializer.beginSeq()!;
         var output = coll.Vec<T>();
         switch length { some(count) => output.reserve(count)!, null => {}, }
@@ -120,9 +112,8 @@ public:
 
 pub class StringMapCodec<T> {
     var element: *Codec<T>;
-public:
-    func init(element: *Codec<T>) : element(element) {}
-    func encode(value: *const coll.Vec<(string, T)>, serializer: *Serializer) !void {
+    pub func init(element: *Codec<T>) : element(element) {}
+    pub func encode(value: *const coll.Vec<(string, T)>, serializer: *Serializer) !void {
         serializer.beginMap(some(value.len()))!;
         for index in usize(0)..value.len() {
             var entry = value.getPtr(index).unwrap();
@@ -131,7 +122,7 @@ public:
         }
         serializer.endMap()
     }
-    func decode(deserializer: *Deserializer) !coll.Vec<(string, T)> {
+    pub func decode(deserializer: *Deserializer) !coll.Vec<(string, T)> {
         var length = deserializer.beginMap()!;
         var output = coll.Vec<(string, T)>();
         switch length { some(count) => output.reserve(count)!, null => {}, }

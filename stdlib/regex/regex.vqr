@@ -44,19 +44,18 @@ pub class Match {
 pub class Captures {
     var groups: coll.Vec<?(usize, usize)>;
     var source: str;
-public:
-    func init(source: str, groups: coll.Vec<?(usize, usize)>)
+    pub func init(source: str, groups: coll.Vec<?(usize, usize)>)
         : groups(move(groups)), source(source) {}
 
-    const func len() usize { groups.len() }
-    const func get(index: usize) ?Match {
+    pub const func len() usize { groups.len() }
+    pub const func get(index: usize) ?Match {
         if index >= groups.len() { return null; }
         switch groups[index] {
             some(span) => some(Match{startByte: span.0, endByte: span.1, source: source}),
             null => null
         }
     }
-    const func full() Match { get(0).unwrap() }
+    pub const func full() Match { get(0).unwrap() }
 }
 
 pub class Regex {
@@ -71,8 +70,7 @@ pub class Regex {
     var captureNames: coll.Vec<CaptureName>;
     var startState: i32;
 
-public:
-    func init(states: coll.Vec<State>, classes: coll.Vec<CharacterClass>,
+    pub func init(states: coll.Vec<State>, classes: coll.Vec<CharacterClass>,
               ranges: coll.Vec<CharRange>, pattern: string, flags: u8,
               maxInputBytes: usize, maxSteps: usize, captureCount: usize, startState: i32)
         : states(move(states)), classes(move(classes)), ranges(move(ranges)),
@@ -80,12 +78,12 @@ public:
           maxSteps(maxSteps), captureGroups(captureCount),
           captureNames(coll.Vec<CaptureName>()), startState(startState) {}
 
-    static func compile(pattern: str) !Self {
+    pub static func compile(pattern: str) !Self {
         RegexBuilder(pattern).compile()
     }
 
-    const func pattern() str { patternText }
-    func init(states: coll.Vec<State>, classes: coll.Vec<CharacterClass>,
+    pub const func pattern() str { patternText }
+    pub func init(states: coll.Vec<State>, classes: coll.Vec<CharacterClass>,
               ranges: coll.Vec<CharRange>, pattern: string, flags: u8,
               maxInputBytes: usize, maxSteps: usize, captureCount: usize, startState: i32,
               names: coll.Vec<CaptureName>)
@@ -94,38 +92,38 @@ public:
         captureNames = move(names);
     }
 
-    const func captureIndex(name: str) ?usize {
+    pub const func captureIndex(name: str) ?usize {
         for entry in captureNames.iterRef() {
             if text.equal(entry.name, name) { return some(entry.index); }
         }
         null
     }
 
-    const func captureNamed(groups: *const Captures, name: str) ?Match {
+    pub const func captureNamed(groups: *const Captures, name: str) ?Match {
         var index = captureIndex(name) ?? { return null; };
         groups.get(index)
     }
 
-    const func captureCount() usize { captureGroups }
-    const func stateCount() usize { states.len() }
-    const func stateAt(index: usize) State { states[index] }
-    const func classCount() usize { classes.len() }
-    const func classAt(index: usize) CharacterClass { classes[index] }
-    const func rangeAt(index: usize) CharRange { ranges[index] }
-    const func flagsValue() u8 { flags }
-    const func inputLimit() usize { maxInputBytes }
-    const func workLimit() usize { maxSteps }
-    const func captureGroupCount() usize { captureGroups }
-    const func entryState() i32 { startState }
+    pub const func captureCount() usize { captureGroups }
+    pub const func stateCount() usize { states.len() }
+    pub const func stateAt(index: usize) State { states[index] }
+    pub const func classCount() usize { classes.len() }
+    pub const func classAt(index: usize) CharacterClass { classes[index] }
+    pub const func rangeAt(index: usize) CharRange { ranges[index] }
+    pub const func flagsValue() u8 { flags }
+    pub const func inputLimit() usize { maxInputBytes }
+    pub const func workLimit() usize { maxSteps }
+    pub const func captureGroupCount() usize { captureGroups }
+    pub const func entryState() i32 { startState }
 
-    const func isMatch(value: str) !bool {
+    pub const func isMatch(value: str) !bool {
         var found = find(value)!;
         found != null
     }
 
-    const func find(value: str) !?Match { findAt(value, 0) }
+    pub const func find(value: str) !?Match { findAt(value, 0) }
 
-    const func findAt(value: str, byteOffset: usize) !?Match {
+    pub const func findAt(value: str, byteOffset: usize) !?Match {
         if value.byteLen() > maxInputBytes { return RegexError.InputTooLarge; }
         if byteOffset > value.byteLen() { return RegexError.InvalidOffset; }
         if byteOffset < value.byteLen() && (value.asBytes()[byteOffset] & 0xc0) == 0x80 {
@@ -138,9 +136,9 @@ public:
         }
     }
 
-    const func captures(value: str) !?Captures { capturesAt(value, 0) }
+    pub const func captures(value: str) !?Captures { capturesAt(value, 0) }
 
-    const func capturesAt(value: str, byteOffset: usize) !?Captures {
+    pub const func capturesAt(value: str, byteOffset: usize) !?Captures {
         if value.byteLen() > maxInputBytes { return RegexError.InputTooLarge; }
         if byteOffset > value.byteLen() { return RegexError.InvalidOffset; }
         if byteOffset < value.byteLen() && (value.asBytes()[byteOffset] & 0xc0) == 0x80 {
@@ -153,18 +151,17 @@ public:
         }
     }
 
-    const func findAll(value: str) FindIter { FindIter(self, value) }
-    const func capturesAll(value: str) CaptureIter { CaptureIter(self, value) }
-    const func split(value: str) SplitIter { SplitIter(self, value) }
+    pub const func findAll(value: str) FindIter { FindIter(self, value) }
+    pub const func capturesAll(value: str) CaptureIter { CaptureIter(self, value) }
+    pub const func split(value: str) SplitIter { SplitIter(self, value) }
 
-    const func replace(value: str, replacement: str) !string {
+    pub const func replace(value: str, replacement: str) !string {
         replaceMatches(value, replacement, false)
     }
-    const func replaceAll(value: str, replacement: str) !string {
+    pub const func replaceAll(value: str, replacement: str) !string {
         replaceMatches(value, replacement, true)
     }
 
-private:
     const func replaceMatches(value: str, replacement: str, all: bool) !string {
         if value.byteLen() > maxInputBytes { return RegexError.InputTooLarge; }
         var output = coll.Vec<u8>();
@@ -215,20 +212,19 @@ pub class RegexBuilder {
     var stateLimit: usize;
     var inputLimit: usize;
     var stepLimit: usize;
-public:
-    func init(pattern: str) : source(pattern), ignoreCaseValue(false),
+    pub func init(pattern: str) : source(pattern), ignoreCaseValue(false),
         multiLineValue(false), dotAllValue(false), unicodeValue(true),
         stateLimit(4096), inputLimit(16 * 1024 * 1024), stepLimit(64 * 1024 * 1024) {}
 
-    func ignoreCase(value: bool) Self { ignoreCaseValue = value; *self }
-    func multiLine(value: bool) Self { multiLineValue = value; *self }
-    func dotAll(value: bool) Self { dotAllValue = value; *self }
-    func unicode(value: bool) Self { unicodeValue = value; *self }
-    func maxStates(value: usize) Self { stateLimit = value; *self }
-    func maxInputBytes(value: usize) Self { inputLimit = value; *self }
-    func maxSteps(value: usize) Self { stepLimit = value; *self }
+    pub func ignoreCase(value: bool) Self { ignoreCaseValue = value; *self }
+    pub func multiLine(value: bool) Self { multiLineValue = value; *self }
+    pub func dotAll(value: bool) Self { dotAllValue = value; *self }
+    pub func unicode(value: bool) Self { unicodeValue = value; *self }
+    pub func maxStates(value: usize) Self { stateLimit = value; *self }
+    pub func maxInputBytes(value: usize) Self { inputLimit = value; *self }
+    pub func maxSteps(value: usize) Self { stepLimit = value; *self }
 
-    func compile() !Regex {
+    pub func compile() !Regex {
         var flags: u8 = 0;
         if ignoreCaseValue { flags |= 1; }
         if multiLineValue { flags |= 2; }
@@ -243,11 +239,10 @@ pub class FindIter {
     var source: str;
     var offset: usize;
     var done: bool;
-public:
-    func init(regex: *const Regex, source: str)
+    pub func init(regex: *const Regex, source: str)
         : regex(regex), source(source), offset(0), done(false) {}
 
-    func next() !?Match {
+    pub func next() !?Match {
         if done { return null; }
         var found = regex.findAt(source, offset)!;
         switch move(found) {
@@ -272,11 +267,10 @@ pub class CaptureIter {
     var source: str;
     var offset: usize;
     var done: bool;
-public:
-    func init(regex: *const Regex, source: str)
+    pub func init(regex: *const Regex, source: str)
         : regex(regex), source(source), offset(0), done(false) {}
 
-    func next() !?Captures {
+    pub func next() !?Captures {
         if done { return null; }
         var found = regex.capturesAt(source, offset)!;
         switch move(found) {
@@ -304,11 +298,10 @@ pub class SplitIter {
     var search: usize;
     var done: bool;
     var trailingEmpty: bool;
-public:
-    func init(regex: *const Regex, source: str)
+    pub func init(regex: *const Regex, source: str)
         : regex(regex), source(source), cursor(0), search(0), done(false), trailingEmpty(false) {}
 
-    func next() !?str {
+    pub func next() !?str {
         if done { return null; }
         if trailingEmpty {
             trailingEmpty = false;

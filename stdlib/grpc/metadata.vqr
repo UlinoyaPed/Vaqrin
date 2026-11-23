@@ -26,32 +26,31 @@ func base64Options() encoding.Base64Options {
 pub class Metadata {
     #copy: disabled
     var entries: coll.Vec<MetadataField>;
-public:
-    func init() : entries(coll.Vec<MetadataField>()) {}
-    func addText(name: str, value: str) !void {
+    pub func init() : entries(coll.Vec<MetadataField>()) {}
+    pub func addText(name: str, value: str) !void {
         if !metadataKey(name) || binaryKey(name) { return RpcError.InvalidMetadata; }
         for byte in value.asBytes() {
             if byte < 32 || byte > 126 { return RpcError.InvalidMetadata; }
         }
         add(name, value.asBytes())
     }
-    func addBinary(name: str, value: []const u8) !void {
+    pub func addBinary(name: str, value: []const u8) !void {
         if !metadataKey(name) || !binaryKey(name) { return RpcError.InvalidMetadata; }
         add(name, value)
     }
-    const func cloneOwned() !Self {
+    pub const func cloneOwned() !Self {
         var owned = Metadata();
         for field in entries.iterRef() { owned.add(field.name, field.value.asConstSlice())!; }
         move(owned)
     }
-    const func items() []const MetadataField { entries.asConstSlice() }
-    const func get(name: str) ?[]const u8 {
+    pub const func items() []const MetadataField { entries.asConstSlice() }
+    pub const func get(name: str) ?[]const u8 {
         for item in entries.iterRef() {
             if item.name == name { return some(item.value.asConstSlice()); }
         }
         null
     }
-    const func writeTo(headers: *http2.HeaderBlock) !void {
+    pub const func writeTo(headers: *http2.HeaderBlock) !void {
         for field in entries.iterRef() {
             if binaryKey(field.name) {
                 var encoded = encoding.base64Encode(field.value.asConstSlice(), base64Options())!;
@@ -61,7 +60,7 @@ public:
             }
         }
     }
-    func readField(header: *const http2.Header) !void {
+    pub func readField(header: *const http2.Header) !void {
         var name: str = header.name;
         if !metadataKey(name) { return; }
         var value = header.value;
@@ -79,7 +78,6 @@ public:
             addText(name, decoded)!;
         }
     }
-private:
     func add(name: str, value: []const u8) !void {
         var key = text.fromBytes(name.asBytes())!;
         var data = coll.Vec<u8>.fromSlice(value)!;

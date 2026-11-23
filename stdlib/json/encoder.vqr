@@ -74,12 +74,10 @@ class ObjectKey {
 pub class Encoder {
     var writer: *io.Writer;
     var options: EncodeOptions;
-public:
-    func init(writer: *io.Writer, options: EncodeOptions)
+    pub func init(writer: *io.Writer, options: EncodeOptions)
         : writer(writer), options(move(options)) {}
-    func encodeValue(value: *const Value) !void { writeValue(value, 0) }
-    func flush() !void { writer.flush() }
-private:
+    pub func encodeValue(value: *const Value) !void { writeValue(value, 0) }
+    pub func flush() !void { writer.flush() }
     func writeIndent(depth: usize) !void {
         if depth != 0 && options.indent > ~usize(0) / depth { return JsonError.SizeLimit; }
         io.writeString(writer, "\n")!;

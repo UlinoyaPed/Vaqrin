@@ -32,15 +32,14 @@ pub class MessageReader {
     var limit: usize;
     var encoding: MessageEncoding;
     var readAhead: usize;
-public:
-    func init(limit: usize) : data(coll.Vec<u8>()), offset(0),
+    pub func init(limit: usize) : data(coll.Vec<u8>()), offset(0),
         limit(if limit > 0x7fffffff { 0x7fffffff } else { limit }), encoding(MessageEncoding.Identity), readAhead(4096) {}
-    func useCompression(value: Compression) void {
+    pub func useCompression(value: Compression) void {
         encoding = if value == Compression.Gzip { MessageEncoding.Gzip } else { MessageEncoding.Identity };
     }
-    const func unreadBytes() usize { data.len() - offset }
-    func useReceiveWindow() void { readAhead += 65535; }
-    func feed(fragment: []const u8) !void {
+    pub const func unreadBytes() usize { data.len() - offset }
+    pub func useReceiveWindow() void { readAhead += 65535; }
+    pub func feed(fragment: []const u8) !void {
         var unread = unreadBytes();
         // One partial message plus the transport read-ahead or unconsumed window.
         var capacity = limit + 5 + readAhead;
@@ -58,7 +57,7 @@ public:
         }
         for byte in fragment { data.push(byte)!; }
     }
-    func next() !?coll.Vec<u8> {
+    pub func next() !?coll.Vec<u8> {
         var available = data.len() - offset;
         if available < 5 { return null; }
         var flag = data[offset];
@@ -74,7 +73,7 @@ public:
         offset = end;
         some(move(message))
     }
-    const func finish() !void {
+    pub const func finish() !void {
         if offset != data.len() { return RpcError.Protocol; }
     }
 }

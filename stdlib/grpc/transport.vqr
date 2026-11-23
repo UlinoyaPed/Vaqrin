@@ -7,9 +7,8 @@ class Transport {
     #copy: disabled
     #implements: io.Reader, io.Writer
     var stream: StreamSocket;
-public:
-    func init(socket: StreamSocket) : stream(move(socket)) {}
-    func read(dst: []u8) !usize {
+    pub func init(socket: StreamSocket) : stream(move(socket)) {}
+    pub func read(dst: []u8) !usize {
         switch stream {
             StreamSocket.Clear(ref mut raw) => raw.read(dst),
             StreamSocket.Secure(ref mut secure) => secure.read(dst),
@@ -17,7 +16,7 @@ public:
             StreamSocket.AsyncSecure(ref mut secure) => secure.read(dst),
         }
     }
-    func write(src: []const u8) !usize {
+    pub func write(src: []const u8) !usize {
         switch stream {
             StreamSocket.Clear(ref mut raw) => raw.write(src),
             StreamSocket.Secure(ref mut secure) => secure.write(src),
@@ -25,7 +24,7 @@ public:
             StreamSocket.AsyncSecure(ref mut secure) => secure.write(src),
         }
     }
-    func flush() !void {
+    pub func flush() !void {
         switch stream {
             StreamSocket.Clear(ref mut raw) => raw.flush(),
             StreamSocket.Secure(ref mut secure) => secure.flush(),
@@ -33,7 +32,7 @@ public:
             StreamSocket.AsyncSecure(ref mut secure) => secure.flush(),
         }
     }
-    func close() !void {
+    pub func close() !void {
         switch stream {
             StreamSocket.Clear(ref mut raw) => raw.close(),
             StreamSocket.Secure(ref mut secure) => secure.close(),
@@ -41,7 +40,7 @@ public:
             StreamSocket.AsyncSecure(ref mut secure) => secure.close(),
         }
     }
-    func setTimeout(timeout: time.Duration) !void {
+    pub func setTimeout(timeout: time.Duration) !void {
         switch stream {
             StreamSocket.Clear(ref mut raw) => {
                 raw.setReadTimeout(some(timeout))!;
@@ -63,14 +62,14 @@ public:
             },
         };
     }
-    const func descriptor() !i32 {
+    pub const func descriptor() !i32 {
         switch stream {
             StreamSocket.AsyncClear(ref raw) => raw.systemDescriptor(),
             StreamSocket.AsyncSecure(ref secure) => secure.systemDescriptor(),
             _ => { return io.IoError.Unsupported; },
         }
     }
-    func tryRead(dst: []u8) !(usize, ?reactor.Interest) {
+    pub func tryRead(dst: []u8) !(usize, ?reactor.Interest) {
         switch stream {
             StreamSocket.AsyncClear(ref mut raw) => {
                 var count = raw.tryRead(dst) catch (reason) {

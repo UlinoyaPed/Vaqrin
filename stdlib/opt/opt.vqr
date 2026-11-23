@@ -27,7 +27,7 @@ pub func isNone<T>(value: *const ?T) bool { core.isNone(value) }
 pub func asPtr<T>(value: *const ?T) ?*const T { __vqr_optional_pointer(value) }
 pub func asMutPtr<T>(value: *?T) ?*T { __vqr_optional_pointer(value) }
 
-pub func asRef<T>(value: in &const ?T) ?&const T {
+pub func asRef<T>(value: in ?T) ?ref T {
     switch value {
         null => { return null; },
         some(ref item) => { return item; },

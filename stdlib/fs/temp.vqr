@@ -12,19 +12,18 @@ pub class TempFile {
     func init(parent: io.HostDirectory, base: path.Path, leaf: string, file: File)
         : parent(move(parent)), base(move(base)), leaf(move(leaf)), file(move(file)), keep(false) {}
     func deinit() void { close() catch {}; }
-public:
-    static func inDir(directory: path.Path) !Self {
+    pub static func inDir(directory: path.Path) !Self {
         var parent = io.HostDirectory.open(directory.asString().asBytes())!;
         handle, leaf := io.HostFile.tempIn(&parent)!;
         TempFile(move(parent), move(directory), move(leaf), File(move(handle)))
     }
-    static func inDir(directory: str) !Self { TempFile.inDir(path.fromString(directory)!) }
-    const func location() !path.Path { path.join(base, path.fromString(leaf)!) }
-    func read(dst: []u8) !usize { file.read(dst) }
-    func write(src: []const u8) !usize { file.write(src) }
-    func flush() !void { file.flush() }
-    func seek(offset: i64, origin: io.SeekOrigin) !u64 { file.seek(offset, origin) }
-    func commit(name: str) !void {
+    pub static func inDir(directory: str) !Self { TempFile.inDir(path.fromString(directory)!) }
+    pub const func location() !path.Path { path.join(base, path.fromString(leaf)!) }
+    pub func read(dst: []u8) !usize { file.read(dst) }
+    pub func write(src: []const u8) !usize { file.write(src) }
+    pub func flush() !void { file.flush() }
+    pub func seek(offset: i64, origin: io.SeekOrigin) !u64 { file.seek(offset, origin) }
+    pub func commit(name: str) !void {
         if keep { return io.IoError.Closed; }
         file.syncAll()!;
         file.close()!;
@@ -33,7 +32,7 @@ public:
         parent.sync()!;
         parent.close()
     }
-    func close() !void {
+    pub func close() !void {
         var outcome = file.close();
         if !keep {
             parent.removeChild(leaf, false) catch (reason) {
@@ -56,15 +55,14 @@ pub class TempDir {
     func init(parent: io.HostDirectory, base: path.Path, leaf: string)
         : parent(move(parent)), base(move(base)), leaf(move(leaf)), cleaned(false) {}
     func deinit() void { close() catch {}; }
-public:
-    static func inDir(directory: path.Path) !Self {
+    pub static func inDir(directory: path.Path) !Self {
         var parent = io.HostDirectory.open(directory.asString().asBytes())!;
         var leaf = parent.makeTempDir()!;
         TempDir(move(parent), move(directory), move(leaf))
     }
-    static func inDir(directory: str) !Self { TempDir.inDir(path.fromString(directory)!) }
-    const func location() !path.Path { path.join(base, path.fromString(leaf)!) }
-    func close() !void {
+    pub static func inDir(directory: str) !Self { TempDir.inDir(path.fromString(directory)!) }
+    pub const func location() !path.Path { path.join(base, path.fromString(leaf)!) }
+    pub func close() !void {
         if cleaned { return; }
         parent.removeTree(leaf, 128)!;
         cleaned = true;

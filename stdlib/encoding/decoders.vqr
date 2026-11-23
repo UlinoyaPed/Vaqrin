@@ -6,10 +6,9 @@ pub class Utf8Decoder {
     var minimum: u32;
     var required: usize;
     var consumed: usize;
-public:
-    func init() : code(0), minimum(0), required(0), consumed(0) {}
+    pub func init() : code(0), minimum(0), required(0), consumed(0) {}
 
-    func push(bytes: []const u8) !void {
+    pub func push(bytes: []const u8) !void {
         for byte in bytes {
             if consumed == ~usize(0) { return EncodingError.Overflow; }
             var value = u32(byte);
@@ -32,13 +31,13 @@ public:
         }
     }
 
-    const func finish() !void {
+    pub const func finish() !void {
         if required != 0 { return text.Utf8Error.InvalidUtf8; }
     }
 
-    const func offset() usize { consumed }
+    pub const func offset() usize { consumed }
 
-    func reset() void { required = 0; consumed = 0; }
+    pub func reset() void { required = 0; consumed = 0; }
 }
 
 pub class Utf16Decoder {
@@ -47,12 +46,11 @@ pub class Utf16Decoder {
     var high: ?u32;
     var output: coll.Vec<u8>;
     var finished: bool;
-public:
-    func init(endian: meta.Endian)
+    pub func init(endian: meta.Endian)
         : little(endian == meta.Endian.Little), first(null), high(null),
           output(coll.Vec<u8>()), finished(false) {}
 
-    func feed(bytes: []const u8) !void {
+    pub func feed(bytes: []const u8) !void {
         if finished { return EncodingError.InvalidLength; }
         for byte in bytes {
             switch first {
@@ -67,7 +65,7 @@ public:
         }
     }
 
-    func finish() !string {
+    pub func finish() !string {
         if core.isSome<u8>(&first) { return EncodingError.InvalidLength; }
         if core.isSome<u32>(&high) { return EncodingError.InvalidUtf16; }
         var text = text.fromBytes(output.asConstSlice())!;
@@ -75,7 +73,6 @@ public:
         move(text)
     }
 
-private:
     func accept(unit: u32) !void {
         switch high {
             null => {

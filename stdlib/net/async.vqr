@@ -15,8 +15,7 @@ pub class AsyncTcpStream {
     var readDeadline: ?time.Deadline;
     var writeDeadline: ?time.Deadline;
     func init(value: TcpStream) : stream(move(value)), readDeadline(null), writeDeadline(null) {}
-public:
-    static func connect(address: SocketAddr, deadline: ?time.Deadline) !Self {
+    pub static func connect(address: SocketAddr, deadline: ?time.Deadline) !Self {
         checkWait(deadline)!;
         var tcp = TcpStream(openSocket(address, 3, -1)!);
         var descriptor = tcp.systemDescriptor()!;
@@ -24,20 +23,20 @@ public:
         checkStatus(unsafe { __vqr_net_socket_error(descriptor) })!;
         AsyncTcpStream(move(tcp))
     }
-    static func fromTcp(socket: TcpStream) !Self {
+    pub static func fromTcp(socket: TcpStream) !Self {
         socket.setNonblocking(true)!;
         AsyncTcpStream(move(socket))
     }
-    static func intoTcp(value: Self) TcpStream {
+    pub static func intoTcp(value: Self) TcpStream {
         core.replace<TcpStream>(&value.stream, TcpStream(Socket(-1)))
     }
-    const func systemDescriptor() !i32 { stream.systemDescriptor() }
-    const func localAddr() !SocketAddr { stream.localAddr() }
-    const func peerAddr() !SocketAddr { stream.peerAddr() }
-    func setReadDeadline(value: ?time.Deadline) void { readDeadline = value; }
-    func setWriteDeadline(value: ?time.Deadline) void { writeDeadline = value; }
-    func tryRead(dst: []u8) !usize { stream.read(dst) }
-    func read(dst: []u8) !usize {
+    pub const func systemDescriptor() !i32 { stream.systemDescriptor() }
+    pub const func localAddr() !SocketAddr { stream.localAddr() }
+    pub const func peerAddr() !SocketAddr { stream.peerAddr() }
+    pub func setReadDeadline(value: ?time.Deadline) void { readDeadline = value; }
+    pub func setWriteDeadline(value: ?time.Deadline) void { writeDeadline = value; }
+    pub func tryRead(dst: []u8) !usize { stream.read(dst) }
+    pub func read(dst: []u8) !usize {
         var fd = systemDescriptor()!;
         if dst.len() == 0 { return 0; }
         for {
@@ -50,7 +49,7 @@ public:
             return result;
         }
     }
-    func write(src: []const u8) !usize {
+    pub func write(src: []const u8) !usize {
         var fd = systemDescriptor()!;
         if src.len() == 0 { return 0; }
         for {
@@ -63,24 +62,23 @@ public:
             return result;
         }
     }
-    func shutdownRead() !void { stream.shutdownRead() }
-    func shutdownWrite() !void { stream.shutdownWrite() }
-    func flush() !void { stream.flush() }
-    func close() !void { stream.close() }
+    pub func shutdownRead() !void { stream.shutdownRead() }
+    pub func shutdownWrite() !void { stream.shutdownWrite() }
+    pub func flush() !void { stream.flush() }
+    pub func close() !void { stream.close() }
 }
 
 pub class AsyncTcpListener {
     #copy: disabled
     var listener: TcpListener;
     func init(value: TcpListener) : listener(move(value)) {}
-public:
-    static func bind(address: SocketAddr) !Self {
+    pub static func bind(address: SocketAddr) !Self {
         var listener = TcpListener.bind(address)!;
         listener.setNonblocking(true)!;
         AsyncTcpListener(move(listener))
     }
-    const func localAddr() !SocketAddr { listener.localAddr() }
-    func accept(deadline: ?time.Deadline) !(AsyncTcpStream, SocketAddr) {
+    pub const func localAddr() !SocketAddr { listener.localAddr() }
+    pub func accept(deadline: ?time.Deadline) !(AsyncTcpStream, SocketAddr) {
         var fd = listener.systemDescriptor()!;
         for {
             checkWait(deadline)!;
@@ -93,7 +91,7 @@ public:
             return (AsyncTcpStream.fromTcp(move(socket))!, peer);
         }
     }
-    func close() !void { listener.close() }
+    pub func close() !void { listener.close() }
 }
 
 extern "C" func __vqr_net_resolve_start(host: *const u8, status: *i32) usize;
@@ -104,9 +102,8 @@ extern "C" func __vqr_net_resolve_release(handle: usize) void;
 class PendingResolution {
     #copy: disabled
     var handle: usize;
-public:
-    func init(value: usize) : handle(value) {}
-    const func wait(port: u16, deadline: ?time.Deadline) !coll.Vec<SocketAddr> {
+    pub func init(value: usize) : handle(value) {}
+    pub const func wait(port: u16, deadline: ?time.Deadline) !coll.Vec<SocketAddr> {
         var event = unsafe { __vqr_net_resolve_event(handle) };
         task.waitDescriptor(event, reactor.Interest.read(), deadline)!;
         checkWait(deadline)!;
@@ -117,7 +114,7 @@ public:
         checkStatus(reason)!;
         addresses.copyAddresses(port)
     }
-    func deinit() void { unsafe { __vqr_net_resolve_release(handle); } }
+    pub func deinit() void { unsafe { __vqr_net_resolve_release(handle); } }
 }
 
 pub func resolveAddrAsync(host: str, port: u16, deadline: ?time.Deadline) !coll.Vec<SocketAddr> {
@@ -134,15 +131,14 @@ pub class AsyncUdpSocket {
     #copy: disabled
     var socket: UdpSocket;
     func init(value: UdpSocket) : socket(move(value)) {}
-public:
-    static func bind(address: SocketAddr) !Self { AsyncUdpSocket.fromUdp(UdpSocket.bind(address)!) }
-    static func fromUdp(value: UdpSocket) !Self {
+    pub static func bind(address: SocketAddr) !Self { AsyncUdpSocket.fromUdp(UdpSocket.bind(address)!) }
+    pub static func fromUdp(value: UdpSocket) !Self {
         value.setNonblocking(true)!;
         AsyncUdpSocket(move(value))
     }
-    const func localAddr() !SocketAddr { socket.localAddr() }
-    func close() !void { socket.close() }
-    func sendTo(src: []const u8, address: SocketAddr, deadline: ?time.Deadline) !usize {
+    pub const func localAddr() !SocketAddr { socket.localAddr() }
+    pub func close() !void { socket.close() }
+    pub func sendTo(src: []const u8, address: SocketAddr, deadline: ?time.Deadline) !usize {
         var fd = socket.systemDescriptor()!;
         for {
             checkWait(deadline)!;
@@ -154,7 +150,7 @@ public:
             return count;
         }
     }
-    func recvFrom(dst: []u8, deadline: ?time.Deadline) !Datagram {
+    pub func recvFrom(dst: []u8, deadline: ?time.Deadline) !Datagram {
         var fd = socket.systemDescriptor()!;
         for {
             checkWait(deadline)!;

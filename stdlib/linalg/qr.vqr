@@ -24,8 +24,7 @@ pub class QR<T: Copyable> {
     var orthogonal: Matrix<T>;
     var triangular: Matrix<T>;
     func init(q: Matrix<T>, r: Matrix<T>) : orthogonal(move(q)), triangular(move(r)) {}
-public:
-    static func factor(matrix: *const Matrix<T>) !Self {
+    pub static func factor(matrix: *const Matrix<T>) !Self {
         var rows = matrix.rows();
         var cols = matrix.cols();
         if rows < cols { return LinalgError.ShapeMismatch; }
@@ -72,10 +71,10 @@ public:
         QR<T>(move(q), move(r))
     }
 
-    const func q() !Matrix<T> { orthogonal.clone() }
-    const func r() !Matrix<T> { triangular.clone() }
+    pub const func q() !Matrix<T> { orthogonal.clone() }
+    pub const func r() !Matrix<T> { triangular.clone() }
 
-    const func solveLeastSquares(rhs: *const Vector<T>) !Vector<T> {
+    pub const func solveLeastSquares(rhs: *const Vector<T>) !Vector<T> {
         var rows = orthogonal.rows();
         var cols = triangular.cols();
         if rhs.len() != rows { return LinalgError.ShapeMismatch; }

@@ -40,8 +40,7 @@ pub class TomlOptions {
     pub var maxDepth: usize;
     pub var maxBytes: usize;
     pub var maxEntries: usize;
-public:
-    func init() : maxDepth(64), maxBytes(4 * 1024 * 1024), maxEntries(100_000) {}
+    pub func init() : maxDepth(64), maxBytes(4 * 1024 * 1024), maxEntries(100_000) {}
 }
 
 pub class Entry {
@@ -55,14 +54,13 @@ enum TableKind { Implicit, Explicit, Dotted, Inline, ArrayElement }
 pub class Document {
     var origin: TableKind;
     var entries: coll.Vec<Entry>;
-public:
-    func init() : self(TableKind.Implicit) {}
-    func init(origin: TableKind) : origin(origin), entries(coll.Vec<Entry>()) {}
-    const func tableKind() TableKind { origin }
-    func setTableKind(value: TableKind) void { origin = value; }
-    const func len() usize { entries.len() }
+    pub func init() : self(TableKind.Implicit) {}
+    pub func init(origin: TableKind) : origin(origin), entries(coll.Vec<Entry>()) {}
+    pub const func tableKind() TableKind { origin }
+    pub func setTableKind(value: TableKind) void { origin = value; }
+    pub const func len() usize { entries.len() }
 
-    const func get(key: str) ?*const Value {
+    pub const func get(key: str) ?*const Value {
         for index in usize(0)..entries.len() {
             var entry = entries.getPtr(index).unwrap();
             if entry.key == key { return some(&entry.value); }
@@ -70,7 +68,7 @@ public:
         null
     }
 
-    func getMut(key: str) ?*Value {
+    pub func getMut(key: str) ?*Value {
         for index in usize(0)..entries.len() {
             var entry = entries.getMutPtr(index).unwrap();
             if entry.key == key { return some(&entry.value); }
@@ -78,7 +76,7 @@ public:
         null
     }
 
-    func set(key: string, value: Value) !void {
+    pub func set(key: string, value: Value) !void {
         for index in usize(0)..entries.len() {
             var entry = entries.getMutPtr(index).unwrap();
             if entry.key == key { entry.value = move(value); return; }
@@ -86,12 +84,12 @@ public:
         entries.push(Entry(move(key), move(value)))!
     }
 
-    func insertUnique(key: string, value: Value) !void {
+    pub func insertUnique(key: string, value: Value) !void {
         if get(key) != null { return TomlError.DuplicateKey; }
         entries.push(Entry(move(key), move(value)))!
     }
 
-    func remove(key: str) bool {
+    pub func remove(key: str) bool {
         for index in usize(0)..entries.len() {
             if entries.getPtr(index).unwrap().key == key {
                 var removed = entries.remove(index);
@@ -101,22 +99,22 @@ public:
         false
     }
 
-    const func keyAt(index: usize) ?str {
+    pub const func keyAt(index: usize) ?str {
         if index >= entries.len() { return null; }
         some(entries.getPtr(index).unwrap().key)
     }
 
-    const func valueAt(index: usize) ?*const Value {
+    pub const func valueAt(index: usize) ?*const Value {
         if index >= entries.len() { return null; }
         some(&entries.getPtr(index).unwrap().value)
     }
 
-    const func getPath(path: str) ?*const Value { lookupPath(self, path) }
-    func setPath(path: str, value: Value) !void {
+    pub const func getPath(path: str) ?*const Value { lookupPath(self, path) }
+    pub func setPath(path: str, value: Value) !void {
         var keys = parseKeyPath(path)!;
         setDotted(self, keys.asConstSlice(), move(value), true)
     }
-    const func stringify() !string { stringifyDocument(self) }
+    pub const func stringify() !string { stringifyDocument(self) }
 }
 
 func trim(value: str) str {
@@ -136,11 +134,10 @@ func tripleQuote(data: []const u8, index: usize, mark: u8) bool {
 class QuoteState {
     var mark: u8;
     var multiline: bool;
-public:
-    func init() : mark(0), multiline(false) {}
-    const func open() bool { mark != 0 }
+    pub func init() : mark(0), multiline(false) {}
+    pub const func open() bool { mark != 0 }
 
-    func skip(data: []const u8, cursor: *usize) bool {
+    pub func skip(data: []const u8, cursor: *usize) bool {
         var index = *cursor;
         var byte = data[index];
         if mark == 0 {

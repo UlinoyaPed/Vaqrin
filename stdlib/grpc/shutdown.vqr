@@ -13,8 +13,7 @@ pub class Shutdown {
     func init(fd: i32) : fd(fd) {}
     func deinit() void { unsafe { __vqr_rt_close_signal(fd); } }
 
-public:
-    static func open() !Self {
+    pub static func open() !Self {
         __vqr_task_validate();
         var status: i32 = 0;
         var fd = unsafe { __vqr_rt_open_signal(&status) };
@@ -22,12 +21,12 @@ public:
         Shutdown(fd)
     }
 
-    const func request() !void {
+    pub const func request() !void {
         var status = unsafe { __vqr_rt_signal_completion_fd(fd) };
         if status != 0 { return io.systemError(status); }
     }
 
-    const func requested() !bool {
+    pub const func requested() !bool {
         var status: i32 = 0;
         var ready = unsafe { __vqr_rt_signal_ready(fd, &status) };
         if ready < 0 { return io.systemError(status); }
@@ -35,5 +34,5 @@ public:
     }
 
     // This descriptor stays readable after request(). The token owns it.
-    const func descriptor() i32 { fd }
+    pub const func descriptor() i32 { fd }
 }

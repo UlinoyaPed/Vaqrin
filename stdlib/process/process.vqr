@@ -24,11 +24,10 @@ extern "C" func __vqr_process_parent_pid() u64;
 pub class ExitStatus {
     var exitCode: i32;
     var signalNumber: i32;
-public:
-    func init(code: i32, signal: i32) : exitCode(code), signalNumber(signal) {}
-    const func success() bool { exitCode == 0 }
-    const func code() ?i32 { if exitCode < 0 { null } else { some(exitCode) } }
-    const func signal() ?i32 { if signalNumber == 0 { null } else { some(signalNumber) } }
+    pub func init(code: i32, signal: i32) : exitCode(code), signalNumber(signal) {}
+    pub const func success() bool { exitCode == 0 }
+    pub const func code() ?i32 { if exitCode < 0 { null } else { some(exitCode) } }
+    pub const func signal() ?i32 { if signalNumber == 0 { null } else { some(signalNumber) } }
 }
 
 pub class Output {
@@ -36,22 +35,20 @@ pub class Output {
     var termination: ExitStatus;
     var outBytes: coll.Vec<u8>;
     var errBytes: coll.Vec<u8>;
-public:
-    func init(status: ExitStatus, out: coll.Vec<u8>, err: coll.Vec<u8>)
+    pub func init(status: ExitStatus, out: coll.Vec<u8>, err: coll.Vec<u8>)
         : termination(status), outBytes(move(out)), errBytes(move(err)) {}
-    const func status() ExitStatus { termination }
-    const func stdout() []const u8 { outBytes.asConstSlice() }
-    const func stderr() []const u8 { errBytes.asConstSlice() }
-    const func stdoutText() !string { text.fromBytes(stdout()) }
-    const func stderrText() !string { text.fromBytes(stderr()) }
+    pub const func status() ExitStatus { termination }
+    pub const func stdout() []const u8 { outBytes.asConstSlice() }
+    pub const func stderr() []const u8 { errBytes.asConstSlice() }
+    pub const func stdoutText() !string { text.fromBytes(stdout()) }
+    pub const func stderrText() !string { text.fromBytes(stderr()) }
 }
 
 class NativeOutput {
     #copy: disabled
     var handle: usize;
-public:
-    func init(handle: usize) : handle(handle) {}
-    const func toOutput() !Output {
+    pub func init(handle: usize) : handle(handle) {}
+    pub const func toOutput() !Output {
         var code: i32 = 0;
         var signal: i32 = 0;
         unsafe { __vqr_process_output_status(handle, &code, &signal); }
@@ -59,8 +56,7 @@ public:
         var err = copyStream(1)!;
         Output(ExitStatus(code, signal), move(out), move(err))
     }
-    func deinit() void { unsafe { __vqr_process_output_free(handle); } }
-private:
+    pub func deinit() void { unsafe { __vqr_process_output_free(handle); } }
     const func copyStream(stream: i32) !coll.Vec<u8> {
         var length: usize = 0;
         var address = unsafe { __vqr_process_output_bytes(handle, stream, &length) };
@@ -114,10 +110,9 @@ pub class ChildInput {
     #copy: disabled
     #implements: io.Writer, io.Closer
     var handle: usize;
-public:
-    func init(token: ChildHandle) : handle(token.address) {}
+    pub func init(token: ChildHandle) : handle(token.address) {}
     // The owned pipe stays nonblocking after its first asynchronous operation.
-    func writeAsync(source: []const u8, deadline: ?time.Deadline) !usize {
+    pub func writeAsync(source: []const u8, deadline: ?time.Deadline) !usize {
         if !hasPipe(handle, 0) { return io.IoError.Closed; }
         if source.len() == 0 { return 0; }
         checkPipeDeadline(deadline)!;
@@ -132,7 +127,7 @@ public:
             return count;
         }
     }
-    func write(source: []const u8) !usize {
+    pub func write(source: []const u8) !usize {
         if !hasPipe(handle, 0) { return io.IoError.Closed; }
         if source.len() == 0 { return 0; }
         var reason: i32 = 0;
@@ -140,10 +135,10 @@ public:
         if reason != 0 { return io.systemError(reason); }
         usize(count)
     }
-    func flush() !void {
+    pub func flush() !void {
         if !hasPipe(handle, 0) { return io.IoError.Closed; }
     }
-    func close() !void { unsafe { __vqr_process_child_close(handle, 0); } }
+    pub func close() !void { unsafe { __vqr_process_child_close(handle, 0); } }
 }
 
 pub class ChildOutput {
@@ -151,10 +146,9 @@ pub class ChildOutput {
     #implements: io.Reader, io.Closer
     var handle: usize;
     var stream: i32;
-public:
-    func init(token: ChildHandle, stream: i32) : handle(token.address), stream(stream) {}
+    pub func init(token: ChildHandle, stream: i32) : handle(token.address), stream(stream) {}
     // The owned pipe stays nonblocking after its first asynchronous operation.
-    func readAsync(destination: []u8, deadline: ?time.Deadline) !usize {
+    pub func readAsync(destination: []u8, deadline: ?time.Deadline) !usize {
         if !hasPipe(handle, stream) { return io.IoError.Closed; }
         if destination.len() == 0 { return 0; }
         checkPipeDeadline(deadline)!;
@@ -169,7 +163,7 @@ public:
             return count;
         }
     }
-    func read(destination: []u8) !usize {
+    pub func read(destination: []u8) !usize {
         if !hasPipe(handle, stream) { return io.IoError.Closed; }
         if destination.len() == 0 { return 0; }
         var reason: i32 = 0;
@@ -177,7 +171,7 @@ public:
         if reason != 0 { return io.systemError(reason); }
         usize(count)
     }
-    func close() !void { unsafe { __vqr_process_child_close(handle, stream); } }
+    pub func close() !void { unsafe { __vqr_process_child_close(handle, stream); } }
 }
 
 func waitState(handle: usize, mode: i32) !?ExitStatus {
@@ -196,32 +190,28 @@ pub class Child {
     var inputPipe: ChildInput;
     var outputPipe: ChildOutput;
     var errorPipe: ChildOutput;
-public:
-    func init(token: ChildHandle)
+    pub func init(token: ChildHandle)
         : handle(token.address), inputPipe(ChildInput(token)), outputPipe(ChildOutput(token, 1)),
           errorPipe(ChildOutput(token, 2)) {}
-    const func id() u64 { unsafe { __vqr_process_child_id(handle) } }
-    #return_borrow: self
-    func stdin() ?&ChildInput {
+    pub const func id() u64 { unsafe { __vqr_process_child_id(handle) } }
+    pub func stdin() ?ref mut ChildInput from self {
         if !hasPipe(handle, 0) { return null; }
         var pipe: &ChildInput = &inputPipe;
         some(pipe)
     }
-    #return_borrow: self
-    func stdout() ?&ChildOutput {
+    pub func stdout() ?ref mut ChildOutput from self {
         if !hasPipe(handle, 1) { return null; }
         var pipe: &ChildOutput = &outputPipe;
         some(pipe)
     }
-    #return_borrow: self
-    func stderr() ?&ChildOutput {
+    pub func stderr() ?ref mut ChildOutput from self {
         if !hasPipe(handle, 2) { return null; }
         var pipe: &ChildOutput = &errorPipe;
         some(pipe)
     }
-    func tryWait() !?ExitStatus { waitState(handle, 1) }
-    func wait() !ExitStatus { waitState(handle, 0)!.unwrap() }
-    func waitWithOutput(limit: usize) !Output {
+    pub func tryWait() !?ExitStatus { waitState(handle, 1) }
+    pub func wait() !ExitStatus { waitState(handle, 0)!.unwrap() }
+    pub func waitWithOutput(limit: usize) !Output {
         var reason: i32 = 0;
         var captured = unsafe { __vqr_process_child_output(handle, limit, &reason) };
         if reason == -1 { return ProcessError.OutputLimit; }
@@ -229,17 +219,16 @@ public:
         var result = NativeOutput(captured);
         result.toOutput()
     }
-    func terminate() !void { sendSignal(0) }
-    func kill() !void { sendSignal(1) }
-    func closeHandles() void {
+    pub func terminate() !void { sendSignal(0) }
+    pub func kill() !void { sendSignal(1) }
+    pub func closeHandles() void {
         unsafe {
             __vqr_process_child_close(handle, 0);
             __vqr_process_child_close(handle, 1);
             __vqr_process_child_close(handle, 2);
         }
     }
-    func deinit() void { unsafe { __vqr_process_child_free(handle); } }
-private:
+    pub func deinit() void { unsafe { __vqr_process_child_free(handle); } }
     func sendSignal(force: i32) !void {
         var reason = unsafe { __vqr_process_child_signal(handle, force) };
         if reason != 0 { return io.systemError(reason); }
@@ -279,13 +268,12 @@ pub class Command {
         : program(move(program)), arguments(coll.Vec<string>()), directory(path.Path("")),
           inputMode(null), outputMode(null), errorMode(null),
           environment(coll.Vec<string>()), inheritEnvironment(true) {}
-public:
-    static func new(program: path.Path) Self { Command(move(program)) }
-    func arg(value: str) !void {
+    pub static func new(program: path.Path) Self { Command(move(program)) }
+    pub func arg(value: str) !void {
         if containsNul(value) { return ProcessError.InvalidArgument; }
         arguments.push(text.fromBytes(value.asBytes())!)!
     }
-    func args(values: []const str) !void {
+    pub func args(values: []const str) !void {
         var pending = coll.Vec<string>.withCapacity(values.len())!;
         for value in values {
             if containsNul(value) { return ProcessError.InvalidArgument; }
@@ -296,17 +284,17 @@ public:
             arguments.push(move(value))!;
         }
     }
-    func cwd(value: path.Path) !void {
+    pub func cwd(value: path.Path) !void {
         if value.asString().byteLen() == 0 || containsNul(value.asString()) {
             return ProcessError.InvalidDirectory;
         }
         directory = move(value);
     }
-    func stdin(value: Stdio) void { inputMode = some(move(value)); }
-    func stdout(value: Stdio) void { outputMode = some(move(value)); }
-    func stderr(value: Stdio) void { errorMode = some(move(value)); }
+    pub func stdin(value: Stdio) void { inputMode = some(move(value)); }
+    pub func stdout(value: Stdio) void { outputMode = some(move(value)); }
+    pub func stderr(value: Stdio) void { errorMode = some(move(value)); }
 
-    func env(key: str, value: str) !void {
+    pub func env(key: str, value: str) !void {
         validateEnvironmentKey(key)!;
         if containsNul(value) { return env.EnvError.InvalidValue; }
         var entry = text.StringBuilder();
@@ -315,28 +303,27 @@ public:
         entry.append(value)!;
         environment.push(entry.build()!)!
     }
-    func envRemove(key: str) !void {
+    pub func envRemove(key: str) !void {
         validateEnvironmentKey(key)!;
         environment.push(text.fromBytes(key.asBytes())!)!
     }
-    func envClear() void {
+    pub func envClear() void {
         inheritEnvironment = false;
         environment.clear();
     }
 
-    const func spawn() !Child {
+    pub const func spawn() !Child {
         Child(ChildHandle{address: start(inheritStream, inheritStream)!})
     }
-    const func status() !ExitStatus {
+    pub const func status() !ExitStatus {
         var handle = start(inheritStream, inheritStream)!;
         var child = Child(ChildHandle{address: handle});
         waitState(handle, 2)!.unwrap()
     }
-    const func output(limit: usize) !Output {
+    pub const func output(limit: usize) !Output {
         var child = Child(ChildHandle{address: start(nullStream, pipedStream)!});
         child.waitWithOutput(limit)
     }
-private:
     const func start(defaultInput: i32, defaultOutput: i32) !usize {
         var argv = argumentBlock()!;
         var cwd = directoryBlock()!;

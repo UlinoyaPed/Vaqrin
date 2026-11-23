@@ -48,10 +48,9 @@ pub class GraphemeSegmenter {
     var epExtendRun: bool;
     var zwjAfterEp: bool;
     var indicState: u8;
-public:
-    func init() : previous(null), regionalRun(0), epExtendRun(false), zwjAfterEp(false), indicState(0) {}
+    pub func init() : previous(null), regionalRun(0), epExtendRun(false), zwjAfterEp(false), indicState(0) {}
 
-    func reset() void {
+    pub func reset() void {
         previous = null;
         regionalRun = 0;
         epExtendRun = false;
@@ -59,7 +58,7 @@ public:
         indicState = 0;
     }
 
-    func feed(ch: char) bool {
+    pub func feed(ch: char) bool {
         var boundary = true;
         switch previous {
             some(last) => { boundary = shouldBreak(last, ch); },
@@ -76,9 +75,8 @@ public:
         boundary
     }
 
-    const func hasPrevious() bool { previous != null }
+    pub const func hasPrevious() bool { previous != null }
 
-private:
     const func shouldBreak(previousChar: char, nextChar: char) bool {
         var a = graphemeProperty(previousChar);
         var b = graphemeProperty(nextChar);
@@ -145,11 +143,10 @@ pub class Graphemes {
     var segmenter: GraphemeSegmenter;
     var pendingFirst: bool;
     var pendingWidth: usize;
-public:
-    func init(value: str) : source(value), offset(0), segmenter(GraphemeSegmenter()),
+    pub func init(value: str) : source(value), offset(0), segmenter(GraphemeSegmenter()),
         pendingFirst(false), pendingWidth(0) {}
 
-    func next() ?str {
+    pub func next() ?str {
         var bytes = source.asBytes();
         if offset >= bytes.len() { return null; }
         var start = offset;

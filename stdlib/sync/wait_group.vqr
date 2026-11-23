@@ -7,10 +7,9 @@ pub class WaitGroup {
     #copy: disabled
     var pending: u32;
     func init() : pending(0) {}
-public:
-    static func new() Self { WaitGroup() }
+    pub static func new() Self { WaitGroup() }
 
-    const func add(n: usize) !void {
+    pub const func add(n: usize) !void {
         var amount = u32(n) catch { return SyncError.CountOverflow; };
         var state = unsafe { constCast<*u32>(&pending) };
         var old = __vqr_atomic_load(state, atomic.Order.Relaxed);
@@ -23,7 +22,7 @@ public:
         }
     }
 
-    const func done() void {
+    pub const func done() void {
         var state = unsafe { constCast<*u32>(&pending) };
         var old = __vqr_atomic_load(state, atomic.Order.Relaxed);
         for {
@@ -38,9 +37,9 @@ public:
         }
     }
 
-    const func count() usize { usize(__vqr_atomic_load(&pending, atomic.Order.Acquire)) }
+    pub const func count() usize { usize(__vqr_atomic_load(&pending, atomic.Order.Acquire)) }
 
-    const func wait() !void {
+    pub const func wait() !void {
         var state = &pending;
         for {
             var left = __vqr_atomic_load(state, atomic.Order.Acquire);

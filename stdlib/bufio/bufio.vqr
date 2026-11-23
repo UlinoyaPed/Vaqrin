@@ -38,14 +38,13 @@ pub class BufferedReader {
         func readSource(dst: []u8) !usize { io.read(source.unwrap(), dst) }
         func releaseOwnedSource() void {}
     }
-public:
-    func init(reader: *io.Reader, size: usize) !void : self(size) { source = some(reader); }
+    pub func init(reader: *io.Reader, size: usize) !void : self(size) { source = some(reader); }
     comptime if __vqr_host_supports_io() {
-        func init(reader: io.HostFile, size: usize) !void : self(size) {
+        pub func init(reader: io.HostFile, size: usize) !void : self(size) {
             ownedSource = some(move(reader));
         }
     }
-    func fill() !void {
+    pub func fill() !void {
         if eof { return; }
         var buffer = data.asSlice();
         if position != 0 {
@@ -59,7 +58,7 @@ public:
         if count == 0 { eof = true; return; }
         filled += count;
     }
-    func read(dst: []u8) !usize {
+    pub func read(dst: []u8) !usize {
         if !pending.isEmpty() { return BufferError.PendingRead; }
         if dst.len() == 0 { return 0; }
         if position == filled { fill()!; }
@@ -72,13 +71,13 @@ public:
         lastByte = some(dst[count - 1]);
         count
     }
-    func readByte() !?u8 {
+    pub func readByte() !?u8 {
         var one = mem.zeroedBytes<1>();
         var count = read(one[:])!;
         if count == 0 { return null; }
         some(one[0])
     }
-    func unreadByte(value: u8) !void {
+    pub func unreadByte(value: u8) !void {
         if !pending.isEmpty() { return BufferError.PendingRead; }
         if position == 0 { return BufferError.UnreadUnavailable; }
         switch lastByte {
@@ -88,7 +87,7 @@ public:
         position--;
         lastByte = null;
     }
-    func peek(count: usize) ![]const u8 {
+    pub func peek(count: usize) ![]const u8 {
         if !pending.isEmpty() { return BufferError.PendingRead; }
         if count > capacity { return BufferError.BufferFull; }
         for filled - position < count && !eof {
@@ -99,7 +98,7 @@ public:
         if count > filled - position { return BufferError.BufferFull; }
         data.asConstSlice()[position..position + count]
     }
-    func discard(count: usize) !usize {
+    pub func discard(count: usize) !usize {
         if !pending.isEmpty() { return BufferError.PendingRead; }
         var skipped: usize = 0;
         for skipped < count {
@@ -114,7 +113,7 @@ public:
         lastByte = null;
         skipped
     }
-    func readUntil(delimiter: u8, maxBytes: usize) !?coll.Vec<u8> {
+    pub func readUntil(delimiter: u8, maxBytes: usize) !?coll.Vec<u8> {
         if !pending.isEmpty() && pendingDelimiter != delimiter { return BufferError.PendingRead; }
         pendingDelimiter = delimiter;
         if pending.len() > maxBytes { return BufferError.PendingRead; }
@@ -144,14 +143,14 @@ public:
             }
         }
     }
-    func readString(delimiter: u8, maxBytes: usize) !?string {
+    pub func readString(delimiter: u8, maxBytes: usize) !?string {
         var bytes = readUntil(delimiter, maxBytes)!;
         switch move(bytes) {
             null => null,
             some(value) => some(text.fromBytes(value.asConstSlice())!),
         }
     }
-    func readLine(maxBytes: usize) !?string {
+    pub func readLine(maxBytes: usize) !?string {
         var line = readUntil(10, maxBytes)!;
         switch move(line) {
             null => null,
@@ -163,8 +162,8 @@ public:
             },
         }
     }
-    const func bufferLen() usize { filled - position }
-    func reset(reader: *io.Reader) void {
+    pub const func bufferLen() usize { filled - position }
+    pub func reset(reader: *io.Reader) void {
         releaseOwnedSource();
         source = some(reader);
         position = 0;
@@ -182,13 +181,12 @@ pub class BufferedWriter {
     var data: coll.Vec<u8>;
     var capacity: usize;
     var finished: bool;
-public:
-    func init(writer: *io.Writer, size: usize) !void
+    pub func init(writer: *io.Writer, size: usize) !void
         : target(writer), data(coll.Vec<u8>()), capacity(size), finished(false) {
         if size == 0 { return BufferError.InvalidCapacity; }
         data.reserve(size)!
     }
-    func retainPending(committed: usize) void {
+    pub func retainPending(committed: usize) void {
         var pending = data.len() - committed;
         var bytes = data.asSlice();
         if pending != 0 {
@@ -196,7 +194,7 @@ public:
         }
         data.truncate(pending);
     }
-    func write(src: []const u8) !usize {
+    pub func write(src: []const u8) !usize {
         if finished { return io.IoError.Closed; }
         var total: usize = 0;
         for total < src.len() {
@@ -214,13 +212,13 @@ public:
         }
         total
     }
-    func writeByte(byte: u8) !void {
+    pub func writeByte(byte: u8) !void {
         var one = mem.zeroedBytes<1>();
         one[0] = byte;
         var count = write(one[:])!;
         if count != 1 { return io.IoError.NoProgress; }
     }
-    func writeString(value: str) !void {
+    pub func writeString(value: str) !void {
         var offset: usize = 0;
         var bytes = value.asBytes();
         for offset < bytes.len() {
@@ -229,38 +227,37 @@ public:
             offset += count;
         }
     }
-    const func buffered() usize { data.len() }
-    const func available() usize { capacity - data.len() }
-    func flush() !void {
+    pub const func buffered() usize { data.len() }
+    pub const func available() usize { capacity - data.len() }
+    pub func flush() !void {
         if finished { return; }
         var progress = io.writeAllProgress(target, data.asConstSlice())!;
         retainPending(progress.processed);
         if progress.reason != null { return progress.reason.unwrap(); }
         target.flush()
     }
-    func finish() !void {
+    pub func finish() !void {
         if finished { return; }
         flush()!;
         finished = true;
     }
-    func reset(writer: *io.Writer) !void {
+    pub func reset(writer: *io.Writer) !void {
         flush()!;
         target = writer;
         finished = false;
     }
-    func deinit() void { finish() catch {}; }
+    pub func deinit() void { finish() catch {}; }
 }
 
 pub class Token {
     var contents: string;
     var first: u64;
     var last: u64;
-public:
-    func init(value: string, start: u64, end: u64)
+    pub func init(value: string, start: u64, end: u64)
         : contents(move(value)), first(start), last(end) {}
-    const func text() str { unsafe { __vqr_text_borrow_utf8(contents.asBytes()) } }
-    const func start() u64 { first }
-    const func end() u64 { last }
+    pub const func text() str { unsafe { __vqr_text_borrow_utf8(contents.asBytes()) } }
+    pub const func start() u64 { first }
+    pub const func end() u64 { last }
 }
 
 pub enum SplitMode { AsciiWhitespace, Delimiter(u8) }
@@ -270,9 +267,8 @@ pub class ByteToken {
     var data: coll.Vec<u8>;
     pub var start: u64;
     pub var end: u64;
-public:
-    func init(data: coll.Vec<u8>, start: u64, end: u64) : data(move(data)), start(start), end(end) {}
-    const func bytes() []const u8 { data.asConstSlice() }
+    pub func init(data: coll.Vec<u8>, start: u64, end: u64) : data(move(data)), start(start), end(end) {}
+    pub const func bytes() []const u8 { data.asConstSlice() }
 }
 
 pub class Scanner {
@@ -286,15 +282,14 @@ pub class Scanner {
     func init(buffered: BufferedReader, maxToken: usize)
         : reader(move(buffered)), maximum(maxToken), consumed(0), mode(SplitMode.AsciiWhitespace),
           pending(coll.Vec<u8>()), tokenStart(0) {}
-public:
-    func init(source: *io.Reader) !void : self(BufferedReader(source, 4096)!, 1048576) {}
+    pub func init(source: *io.Reader) !void : self(BufferedReader(source, 4096)!, 1048576) {}
     comptime if __vqr_host_supports_io() {
-        func init(source: io.HostFile) !void : self(BufferedReader(move(source), 4096)!, 1048576) {}
+        pub func init(source: io.HostFile) !void : self(BufferedReader(move(source), 4096)!, 1048576) {}
     }
-    func setMaxToken(value: usize) void { maximum = value; }
-    func setSplitMode(value: SplitMode) void { mode = value; }
-    const func position() u64 { consumed }
-    func nextBytes() !?ByteToken {
+    pub func setMaxToken(value: usize) void { maximum = value; }
+    pub func setSplitMode(value: SplitMode) void { mode = value; }
+    pub const func position() u64 { consumed }
+    pub func nextBytes() !?ByteToken {
         for {
             var next = reader.readByte()!;
             switch next {
@@ -326,45 +321,43 @@ public:
             }
         }
     }
-private:
     func finishToken(end: u64) ByteToken {
         var bytes = core.replace<coll.Vec<u8>>(&pending, coll.Vec<u8>());
         ByteToken(move(bytes), tokenStart, end)
     }
-public:
-    func next() !?Token {
+    pub func next() !?Token {
         var item = nextBytes()! ?? { return null; };
         var textValue = text.fromBytes(item.bytes())!;
         some(Token(move(textValue), item.start, item.end))
     }
-    func nextString() !?string {
+    pub func nextString() !?string {
         var item = next()!;
         switch item {
             null => null,
             some(value) => some(text.fromBytes(value.text().asBytes())!),
         }
     }
-    func nextInt<T>() !?T {
+    pub func nextInt<T>() !?T {
         var item = next()!;
         switch move(item) {
             null => null,
             some(token) => some(parse.parseInt<T>(token.text())!),
         }
     }
-    func readInt<T>() !T {
+    pub func readInt<T>() !T {
         nextInt<T>()! ?? { return io.IoError.UnexpectedEof; }
     }
-    func nextFloat<T>() !?T {
+    pub func nextFloat<T>() !?T {
         var item = next()!;
         switch move(item) {
             null => null,
             some(token) => some(parse.parseFloat<T>(token.text())!),
         }
     }
-    func readFloat<T>() !T {
+    pub func readFloat<T>() !T {
         nextFloat<T>()! ?? { return io.IoError.UnexpectedEof; }
     }
-    func reset(source: *io.Reader) void {
+    pub func reset(source: *io.Reader) void {
         reader.reset(source);
         consumed = 0;
         pending.clear();

@@ -56,20 +56,19 @@ pub class Vector<T: Copyable> {
     #copy: disabled
     var values: coll.Vec<T>;
     func init(values: coll.Vec<T>) : values(move(values)) {}
-public:
-    static func zeros(n: usize) !Self {
+    pub static func zeros(n: usize) !Self {
         var values = coll.Vec<T>.withCapacity(n)!;
         for i in usize(0)..n { values.push(T(0))!; }
         Vector<T>(move(values))
     }
-    static func fromSlice(values: []const T) !Self { Vector<T>(coll.Vec<T>.fromSlice(values)!) }
-    const func len() usize { values.len() }
-    const func get(index: usize) ?*const T { values.getPtr(index) }
-    func getMut(index: usize) ?*T { values.getMutPtr(index) }
-    const func asSlice() []const T { values.asConstSlice() }
-    func asMutSlice() []T { values.asSlice() }
-    const func clone() !Self { Vector<T>(values.clone()!) }
-    func resize(n: usize, value: T) !void {
+    pub static func fromSlice(values: []const T) !Self { Vector<T>(coll.Vec<T>.fromSlice(values)!) }
+    pub const func len() usize { values.len() }
+    pub const func get(index: usize) ?*const T { values.getPtr(index) }
+    pub func getMut(index: usize) ?*T { values.getMutPtr(index) }
+    pub const func asSlice() []const T { values.asConstSlice() }
+    pub func asMutSlice() []T { values.asSlice() }
+    pub const func clone() !Self { Vector<T>(values.clone()!) }
+    pub func resize(n: usize, value: T) !void {
         if n <= values.len() {
             values.truncate(n);
             return;
@@ -77,16 +76,16 @@ public:
         values.reserve(n)!;
         for i in values.len()..n { values.push(value)!; }
     }
-    const func dot(other: *const Self) !T { linalg.dot<T>(asSlice(), other.asSlice()) }
-    const func norm() T { norm2<T>(asSlice()) }
-    func normalize() !void { linalg.normalize<T>(asMutSlice()) }
-    const func add(other: *const Self) !Self {
+    pub const func dot(other: *const Self) !T { linalg.dot<T>(asSlice(), other.asSlice()) }
+    pub const func norm() T { norm2<T>(asSlice()) }
+    pub func normalize() !void { linalg.normalize<T>(asMutSlice()) }
+    pub const func add(other: *const Self) !Self {
         if len() != other.len() { return LinalgError.ShapeMismatch; }
         var out = Vector<T>.zeros(len())!;
         for i in usize(0)..len() { out.values[i] = values[i] + other.values[i]; }
         move(out)
     }
-    func scale(factor: T) void {
+    pub func scale(factor: T) void {
         for i in usize(0)..len() { values[i] *= factor; }
     }
 }
@@ -98,18 +97,17 @@ pub class Matrix<T: Copyable> {
     var values: coll.Vec<T>;
     func init(rows: usize, cols: usize, values: coll.Vec<T>)
         : height(rows), width(cols), values(move(values)) {}
-public:
-    static func zeros(rows: usize, cols: usize) !Self {
+    pub static func zeros(rows: usize, cols: usize) !Self {
         var count = area(rows, cols)!;
         var values = coll.Vec<T>.withCapacity(count)!;
         for i in usize(0)..count { values.push(T(0))!; }
         Matrix<T>(rows, cols, move(values))
     }
-    static func fromFlat(rows: usize, cols: usize, values: []const T) !Self {
+    pub static func fromFlat(rows: usize, cols: usize, values: []const T) !Self {
         if area(rows, cols)! != values.len() { return LinalgError.ShapeMismatch; }
         Matrix<T>(rows, cols, coll.Vec<T>.fromSlice(values)!)
     }
-    static func fromRows(rows: []const []const T) !Self {
+    pub static func fromRows(rows: []const []const T) !Self {
         var width = if rows.len() == 0 { usize(0) } else { rows[0].len() };
         var values = coll.Vec<T>.withCapacity(area(rows.len(), width)!)!;
         for row in rows {
@@ -118,55 +116,55 @@ public:
         }
         Matrix<T>(rows.len(), width, move(values))
     }
-    const func rows() usize { height }
-    const func cols() usize { width }
-    const func shape() (usize,usize) { (height, width) }
-    const func get(row: usize, col: usize) ?*const T {
+    pub const func rows() usize { height }
+    pub const func cols() usize { width }
+    pub const func shape() (usize,usize) { (height, width) }
+    pub const func get(row: usize, col: usize) ?*const T {
         if row >= height || col >= width { return null; }
         values.getPtr(row * width + col)
     }
-    func getMut(row: usize, col: usize) ?*T {
+    pub func getMut(row: usize, col: usize) ?*T {
         if row >= height || col >= width { return null; }
         values.getMutPtr(row * width + col)
     }
-    const func at(row: usize, col: usize) T { *get(row, col).unwrap() }
-    func set(row: usize, col: usize, value: T) void { *getMut(row, col).unwrap() = value; }
-    const func row(index: usize) ?[]const T {
+    pub const func at(row: usize, col: usize) T { *get(row, col).unwrap() }
+    pub func set(row: usize, col: usize, value: T) void { *getMut(row, col).unwrap() = value; }
+    pub const func row(index: usize) ?[]const T {
         if index >= height { return null; }
         var start = index * width;
         some(values.asConstSlice()[start..start + width])
     }
-    func rowMut(index: usize) ?[]T {
+    pub func rowMut(index: usize) ?[]T {
         if index >= height { return null; }
         var start = index * width;
         some(values.asSlice()[start..start + width])
     }
-    const func asSlice() []const T { values.asConstSlice() }
-    func asMutSlice() []T { values.asSlice() }
-    const func clone() !Self { Matrix<T>(height, width, values.clone()!) }
-    const func transposeCopy() !Self {
+    pub const func asSlice() []const T { values.asConstSlice() }
+    pub func asMutSlice() []T { values.asSlice() }
+    pub const func clone() !Self { Matrix<T>(height, width, values.clone()!) }
+    pub const func transposeCopy() !Self {
         var out = Matrix<T>.zeros(width, height)!;
         for i in usize(0)..height {
             for j in usize(0)..width { out.set(j, i, at(i, j)); }
         }
         move(out)
     }
-    const func add(other: *const Self) !Self {
+    pub const func add(other: *const Self) !Self {
         if height != other.height || width != other.width { return LinalgError.ShapeMismatch; }
         var out = clone()!;
         for i in usize(0)..values.len() { out.values[i] += other.values[i]; }
         move(out)
     }
-    const func sub(other: *const Self) !Self {
+    pub const func sub(other: *const Self) !Self {
         if height != other.height || width != other.width { return LinalgError.ShapeMismatch; }
         var out = clone()!;
         for i in usize(0)..values.len() { out.values[i] -= other.values[i]; }
         move(out)
     }
-    func scale(factor: T) void {
+    pub func scale(factor: T) void {
         for i in usize(0)..values.len() { values[i] *= factor; }
     }
-    const func matmul(other: *const Self) !Self {
+    pub const func matmul(other: *const Self) !Self {
         if width != other.height { return LinalgError.ShapeMismatch; }
         var out = Matrix<T>.zeros(height, other.width)!;
         for i in usize(0)..height {
@@ -179,7 +177,7 @@ public:
         }
         move(out)
     }
-    func swapRows(a: usize, b: usize) void {
+    pub func swapRows(a: usize, b: usize) void {
         if a >= height || b >= height { panic("matrix row out of bounds"); }
         if a == b { return; }
         for j in usize(0)..width { values.swap(a * width + j, b * width + j); }
@@ -224,8 +222,7 @@ pub class LU<T: Copyable> {
     var factors: Matrix<T>;
     var permutation: coll.Vec<usize>;
     var odd: bool;
-public:
-    static func factor(matrix: *const Matrix<T>) !Self {
+    pub static func factor(matrix: *const Matrix<T>) !Self {
         var size = matrix.rows();
         if size != matrix.cols() { return LinalgError.ShapeMismatch; }
         for entry in matrix.asSlice() {
@@ -261,7 +258,7 @@ public:
         }
         LU<T>(move(factors), move(permutation), odd)
     }
-    const func solve(rhs: *const Vector<T>) !Vector<T> {
+    pub const func solve(rhs: *const Vector<T>) !Vector<T> {
         var size = factors.rows();
         if rhs.len() != size { return LinalgError.ShapeMismatch; }
         var out = Vector<T>.zeros(size)!;
@@ -284,13 +281,13 @@ public:
         }
         move(out)
     }
-    const func determinant() !T {
+    pub const func determinant() !T {
         var value = if odd { T(-1) } else { T(1) };
         for i in usize(0)..factors.rows() { value *= factors.at(i, i); }
         if !math.isFinite<T>(value) { return LinalgError.NonFinite; }
         value
     }
-    const func inverse() !Matrix<T> {
+    pub const func inverse() !Matrix<T> {
         var size = factors.rows();
         var out = Matrix<T>.zeros(size, size)!;
         var basis = Vector<T>.zeros(size)!;
@@ -303,7 +300,6 @@ public:
         }
         move(out)
     }
-private:
     func init(factors: Matrix<T>, permutation: coll.Vec<usize>, odd: bool)
         : factors(move(factors)), permutation(move(permutation)), odd(odd) {}
 }

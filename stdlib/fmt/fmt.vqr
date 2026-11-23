@@ -14,8 +14,7 @@ pub class FormatOptions {
     pub var uppercase: bool;
     pub var showSign: bool;
     pub var floatStyle: FloatStyle;
-public:
-    func init() : radix(10), width(0), precision(-1), fill(' '),
+    pub func init() : radix(10), width(0), precision(-1), fill(' '),
         alignment(Alignment.Right), uppercase(false), showSign(false), floatStyle(FloatStyle.General) {}
 }
 

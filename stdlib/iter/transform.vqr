@@ -3,23 +3,21 @@ package iter
 pub class MapIter<I: Movable, T: Movable, U: Movable, F: Movable> {
     var source: I;
     var transform: F;
-public:
-    func init(source: I, transform: F) : source(move(source)), transform(move(transform)) {}
-    func next() ?U {
+    pub func init(source: I, transform: F) : source(move(source)), transform(move(transform)) {}
+    pub func next() ?U {
         switch source.next() {
             null => null,
             some(item) => some(transform(move(item))),
         }
     }
-    const func sizeHint() SizeHint { SizeHint{lower: 0, upper: null} }
+    pub const func sizeHint() SizeHint { SizeHint{lower: 0, upper: null} }
 }
 
 pub class FilterIter<I: Movable, T: Movable, F: Movable> {
     var source: I;
     var predicate: F;
-public:
-    func init(source: I, predicate: F) : source(move(source)), predicate(move(predicate)) {}
-    func next() ?T {
+    pub func init(source: I, predicate: F) : source(move(source)), predicate(move(predicate)) {}
+    pub func next() ?T {
         for {
             switch source.next() {
                 null => return null,
@@ -29,15 +27,14 @@ public:
             }
         }
     }
-    const func sizeHint() SizeHint { SizeHint{lower: 0, upper: null} }
+    pub const func sizeHint() SizeHint { SizeHint{lower: 0, upper: null} }
 }
 
 pub class FilterMapIter<I: Movable, T: Movable, U: Movable, F: Movable> {
     var source: I;
     var transform: F;
-public:
-    func init(source: I, transform: F) : source(move(source)), transform(move(transform)) {}
-    func next() ?U {
+    pub func init(source: I, transform: F) : source(move(source)), transform(move(transform)) {}
+    pub func next() ?U {
         for {
             switch source.next() {
                 null => return null,
@@ -50,15 +47,14 @@ public:
             }
         }
     }
-    const func sizeHint() SizeHint { SizeHint{lower: 0, upper: null} }
+    pub const func sizeHint() SizeHint { SizeHint{lower: 0, upper: null} }
 }
 
 pub class TryMapIter<I: Movable, T: Movable, U: Movable, F: Movable> {
     var source: I;
     var transform: F;
-public:
-    func init(source: I, transform: F) : source(move(source)), transform(move(transform)) {}
-    func next() !?U {
+    pub func init(source: I, transform: F) : source(move(source)), transform(move(transform)) {}
+    pub func next() !?U {
         switch source.next() {
             null => null,
             some(item) => some(transform(move(item))!),
@@ -69,9 +65,8 @@ public:
 pub class TryFilterIter<I: Movable, T: Movable, F: Movable> {
     var source: I;
     var predicate: F;
-public:
-    func init(source: I, predicate: F) : source(move(source)), predicate(move(predicate)) {}
-    func next() !?T {
+    pub func init(source: I, predicate: F) : source(move(source)), predicate(move(predicate)) {}
+    pub func next() !?T {
         for {
             switch source.next() {
                 null => return null,
@@ -87,9 +82,8 @@ pub class MapWhileIter<I: Movable, T: Movable, U: Movable, F: Movable> {
     var source: I;
     var transform: F;
     var ended: bool;
-public:
-    func init(source: I, transform: F) : source(move(source)), transform(move(transform)), ended(false) {}
-    func next() ?U {
+    pub func init(source: I, transform: F) : source(move(source)), transform(move(transform)), ended(false) {}
+    pub func next() ?U {
         if ended { return null; }
         var value = switch source.next() {
             null => { var missing: ?U = null; missing },
@@ -105,9 +99,8 @@ public:
 pub class InspectIter<I: Movable, T: Movable, F: Movable> {
     var source: I;
     var observer: F;
-public:
-    func init(source: I, observer: F) : source(move(source)), observer(move(observer)) {}
-    func next() ?T {
+    pub func init(source: I, observer: F) : source(move(source)), observer(move(observer)) {}
+    pub func next() ?T {
         switch source.next() {
             null => null,
             some(item) => {

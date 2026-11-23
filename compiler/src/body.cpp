@@ -298,15 +298,7 @@ ValueAt Body::argument(const Ast &n, Type *t, bool transfersOwnership) {
            "E201");
     return borrow(value, t, n->span, t->parameterMode == ParameterMode::In);
   }
-  if (!t->compatible) return expression(n, t);
-  int id = n->kind == NodeKind::Name ? findLocal(n->text) : -1;
-  auto *target = t->parts[0];
-  if (id >= 0 && locals[id].reference && target != locals[id].reference)
-    return borrow(referenceName(id, n->span), t, n->span, true);
-  auto *hinted = hint(n);
-  return borrow(
-      expression(n, !hinted && (target->kind == Kind::Int || target->kind == Kind::Float) ? target : nullptr),
-      t, n->span, true);
+  return expression(n, t);
 }
 
 static std::string bindingType(Type *type, const Source *source) {
@@ -341,7 +333,6 @@ static std::string bindingType(Type *type, const Source *source) {
   case Kind::Reference:
     return std::string(type->parameterMode == ParameterMode::In ? "in "
                        : type->parameterMode == ParameterMode::Mut ? "mut "
-                       : type->compatible ? "in &const "
                        : type->readOnly ? "ref "
                                         : "ref mut ") +
            bindingType(type->parts[0], source);

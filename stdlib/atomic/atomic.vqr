@@ -10,64 +10,62 @@ pub class CompareExchange<T> {
 pub class Atomic<T> {
     #copy: disabled
     var cell: T;
-public:
-    func init(value: T) : cell(value) {
+    pub func init(value: T) : cell(value) {
         __vqr_atomic_store(&cell, value, Order.Relaxed);
     }
-    static func new(value: T) Self { Atomic<T>(value) }
+    pub static func new(value: T) Self { Atomic<T>(value) }
 
-    const func load(order: Order) T { __vqr_atomic_load(&cell, order) }
-    const func load() T { load(Order.SeqCst) }
-    func store(value: T, order: Order) void { __vqr_atomic_store(&cell, value, order) }
-    func store(value: T) void { store(value, Order.SeqCst); }
-    func swap(value: T, order: Order) T { __vqr_atomic_swap(&cell, value, order) }
-    func swap(value: T) T { swap(value, Order.SeqCst) }
+    pub const func load(order: Order) T { __vqr_atomic_load(&cell, order) }
+    pub const func load() T { load(Order.SeqCst) }
+    pub func store(value: T, order: Order) void { __vqr_atomic_store(&cell, value, order) }
+    pub func store(value: T) void { store(value, Order.SeqCst); }
+    pub func swap(value: T, order: Order) T { __vqr_atomic_swap(&cell, value, order) }
+    pub func swap(value: T) T { swap(value, Order.SeqCst) }
 
-    func compareExchange(expected: T, desired: T, success: Order, failure: Order) CompareExchange<T> {
+    pub func compareExchange(expected: T, desired: T, success: Order, failure: Order) CompareExchange<T> {
         old, exchanged := __vqr_atomic_compare(&cell, expected, desired, success, failure);
         CompareExchange<T>{old: old, exchanged: exchanged}
     }
-    func compareExchange(expected: T, desired: T) CompareExchange<T> {
+    pub func compareExchange(expected: T, desired: T) CompareExchange<T> {
         compareExchange(expected, desired, Order.SeqCst, Order.SeqCst)
     }
 
-    func compareExchangeWeak(expected: T, desired: T, success: Order, failure: Order) CompareExchange<T> {
+    pub func compareExchangeWeak(expected: T, desired: T, success: Order, failure: Order) CompareExchange<T> {
         old, exchanged := __vqr_atomic_compare_weak(&cell, expected, desired, success, failure);
         CompareExchange<T>{old: old, exchanged: exchanged}
     }
-    func compareExchangeWeak(expected: T, desired: T) CompareExchange<T> {
+    pub func compareExchangeWeak(expected: T, desired: T) CompareExchange<T> {
         compareExchangeWeak(expected, desired, Order.SeqCst, Order.SeqCst)
     }
 
-    func fetchAdd(value: T, order: Order) T { __vqr_atomic_add(&cell, value, order) }
-    func fetchAdd(value: T) T { fetchAdd(value, Order.SeqCst) }
-    func fetchSub(value: T, order: Order) T { __vqr_atomic_sub(&cell, value, order) }
-    func fetchSub(value: T) T { fetchSub(value, Order.SeqCst) }
-    func fetchAnd(value: T, order: Order) T { __vqr_atomic_and(&cell, value, order) }
-    func fetchAnd(value: T) T { fetchAnd(value, Order.SeqCst) }
-    func fetchOr(value: T, order: Order) T { __vqr_atomic_or(&cell, value, order) }
-    func fetchOr(value: T) T { fetchOr(value, Order.SeqCst) }
-    func fetchXor(value: T, order: Order) T { __vqr_atomic_xor(&cell, value, order) }
-    func fetchXor(value: T) T { fetchXor(value, Order.SeqCst) }
-    func fetchMax(value: T, order: Order) T { __vqr_atomic_max(&cell, value, order) }
-    func fetchMax(value: T) T { fetchMax(value, Order.SeqCst) }
-    func fetchMin(value: T, order: Order) T { __vqr_atomic_min(&cell, value, order) }
-    func fetchMin(value: T) T { fetchMin(value, Order.SeqCst) }
+    pub func fetchAdd(value: T, order: Order) T { __vqr_atomic_add(&cell, value, order) }
+    pub func fetchAdd(value: T) T { fetchAdd(value, Order.SeqCst) }
+    pub func fetchSub(value: T, order: Order) T { __vqr_atomic_sub(&cell, value, order) }
+    pub func fetchSub(value: T) T { fetchSub(value, Order.SeqCst) }
+    pub func fetchAnd(value: T, order: Order) T { __vqr_atomic_and(&cell, value, order) }
+    pub func fetchAnd(value: T) T { fetchAnd(value, Order.SeqCst) }
+    pub func fetchOr(value: T, order: Order) T { __vqr_atomic_or(&cell, value, order) }
+    pub func fetchOr(value: T) T { fetchOr(value, Order.SeqCst) }
+    pub func fetchXor(value: T, order: Order) T { __vqr_atomic_xor(&cell, value, order) }
+    pub func fetchXor(value: T) T { fetchXor(value, Order.SeqCst) }
+    pub func fetchMax(value: T, order: Order) T { __vqr_atomic_max(&cell, value, order) }
+    pub func fetchMax(value: T) T { fetchMax(value, Order.SeqCst) }
+    pub func fetchMin(value: T, order: Order) T { __vqr_atomic_min(&cell, value, order) }
+    pub func fetchMin(value: T) T { fetchMin(value, Order.SeqCst) }
 
-    static func intoInner(value: Self) T { value.cell }
+    pub static func intoInner(value: Self) T { value.cell }
 }
 
 pub class AtomicFlag {
     #copy: disabled
     var cell: Atomic<bool>;
-public:
-    func init(value: bool) : cell(Atomic<bool>(value)) {}
-    const func test(order: Order) bool { cell.load(order) }
-    const func test() bool { test(Order.SeqCst) }
-    func testAndSet(order: Order) bool { cell.swap(true, order) }
-    func testAndSet() bool { testAndSet(Order.SeqCst) }
-    func clear(order: Order) void { cell.store(false, order); }
-    func clear() void { clear(Order.SeqCst); }
+    pub func init(value: bool) : cell(Atomic<bool>(value)) {}
+    pub const func test(order: Order) bool { cell.load(order) }
+    pub const func test() bool { test(Order.SeqCst) }
+    pub func testAndSet(order: Order) bool { cell.swap(true, order) }
+    pub func testAndSet() bool { testAndSet(Order.SeqCst) }
+    pub func clear(order: Order) void { cell.store(false, order); }
+    pub func clear() void { clear(Order.SeqCst); }
 }
 
 pub func fence(order: Order) void { __vqr_atomic_fence(order) }

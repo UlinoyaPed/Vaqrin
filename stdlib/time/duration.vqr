@@ -13,39 +13,38 @@ pub class Duration {
     var whole: i64;
     var fraction: i32;
     func init(seconds: i64, nanos: i32) : whole(seconds), fraction(nanos) {}
-public:
-    static func zero() Self { Duration(0, 0) }
-    static func fromNanos(value: i64) Self { Duration.split(value, 1000000000, 1) }
-    static func fromMicros(value: i64) Self { Duration.split(value, 1000000, 1000) }
-    static func fromMillis(value: i64) Self { Duration.split(value, 1000, 1000000) }
-    static func millis(value: i64) Self { Duration.fromMillis(value) }
-    static func fromSeconds(value: i64) Self { Duration(value, 0) }
-    static func fromMinutes(value: i64) Self { Duration.scaleSeconds(value, 60) }
-    static func fromHours(value: i64) Self { Duration.scaleSeconds(value, 3600) }
-    static func fromDays(value: i64) Self { Duration.scaleSeconds(value, 86400) }
+    pub static func zero() Self { Duration(0, 0) }
+    pub static func fromNanos(value: i64) Self { Duration.split(value, 1000000000, 1) }
+    pub static func fromMicros(value: i64) Self { Duration.split(value, 1000000, 1000) }
+    pub static func fromMillis(value: i64) Self { Duration.split(value, 1000, 1000000) }
+    pub static func millis(value: i64) Self { Duration.fromMillis(value) }
+    pub static func fromSeconds(value: i64) Self { Duration(value, 0) }
+    pub static func fromMinutes(value: i64) Self { Duration.scaleSeconds(value, 60) }
+    pub static func fromHours(value: i64) Self { Duration.scaleSeconds(value, 3600) }
+    pub static func fromDays(value: i64) Self { Duration.scaleSeconds(value, 86400) }
 
-    static func fromParts(seconds: i64, nanos: i32) !Self {
+    pub static func fromParts(seconds: i64, nanos: i32) !Self {
         Duration.checked(i128(seconds) * nanosPerSecond + i128(nanos))
     }
 
-    const func seconds() i64 { whole }
-    const func nanosPart() i32 { fraction }
-    const func isNegative() bool { whole < 0 || fraction < 0 }
-    const func isZero() bool { whole == 0 && fraction == 0 }
+    pub const func seconds() i64 { whole }
+    pub const func nanosPart() i32 { fraction }
+    pub const func isNegative() bool { whole < 0 || fraction < 0 }
+    pub const func isZero() bool { whole == 0 && fraction == 0 }
 
-    const func toMillis() !i64 {
+    pub const func toMillis() !i64 {
         i64(total() / 1000000) catch { return TimeError.Overflow; }
     }
-    const func toNanos() !i64 { i64(total()) catch { return TimeError.Overflow; } }
+    pub const func toNanos() !i64 { i64(total()) catch { return TimeError.Overflow; } }
 
-    const func abs() !Self {
+    pub const func abs() !Self {
         if isNegative() { return Duration.checked(-total()); }
         Duration(whole, fraction)
     }
-    const func add(other: Self) !Self { Duration.checked(total() + other.total()) }
-    const func sub(other: Self) !Self { Duration.checked(total() - other.total()) }
+    pub const func add(other: Self) !Self { Duration.checked(total() + other.total()) }
+    pub const func sub(other: Self) !Self { Duration.checked(total() - other.total()) }
 
-    const func mul(scale: i64) !Self {
+    pub const func mul(scale: i64) !Self {
         if scale == 0 { return Duration.zero(); }
         var value = total();
         var factor = i128(scale);
@@ -56,16 +55,15 @@ public:
         Duration.checked(value * factor)
     }
 
-    const func div(scale: i64) !Self {
+    pub const func div(scale: i64) !Self {
         if scale == 0 { return TimeError.DivisionByZero; }
         Duration.checked(total() / i128(scale))
     }
 
-    const func compare(other: Self) cmp.Ordering {
+    pub const func compare(other: Self) cmp.Ordering {
         if whole != other.whole { return cmp.compare<i64>(&whole, &other.whole); }
         cmp.compare<i32>(&fraction, &other.fraction)
     }
-private:
     const func total() i128 { i128(whole) * nanosPerSecond + i128(fraction) }
 
     static func checked(nanos: i128) !Self {

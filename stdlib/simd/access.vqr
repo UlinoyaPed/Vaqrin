@@ -1,7 +1,7 @@
 package simd
 import (mem)
 
-pub func load<T: Copyable & Movable, comptime N: usize>(src: []const T) !Simd<T, N> {
+pub func load<T: Copyable + Movable, comptime N: usize>(src: []const T) !Simd<T, N> {
     if src.len() < N { return LaneError.OutOfRange; }
     var array = mem.MaybeUninit<[N]T>.uninit();
     unsafe {
@@ -11,7 +11,7 @@ pub func load<T: Copyable & Movable, comptime N: usize>(src: []const T) !Simd<T,
     }
 }
 
-pub unsafe func loadUnaligned<T: Copyable & Movable, comptime N: usize>(ptr: *const T) Simd<T, N> {
+pub unsafe func loadUnaligned<T: Copyable + Movable, comptime N: usize>(ptr: *const T) Simd<T, N> {
     var array = mem.MaybeUninit<[N]T>.uninit();
     unsafe {
         var data = array.asPtr();
@@ -22,18 +22,18 @@ pub unsafe func loadUnaligned<T: Copyable & Movable, comptime N: usize>(ptr: *co
     }
 }
 
-pub func store<T: Copyable & Movable, comptime N: usize>(dst: []T, value: Simd<T, N>) !void {
+pub func store<T: Copyable + Movable, comptime N: usize>(dst: []T, value: Simd<T, N>) !void {
     if dst.len() < N { return LaneError.OutOfRange; }
     for i in usize(0)..N { dst[i] = value.extract(i); }
 }
 
-pub unsafe func storeUnaligned<T: Copyable & Movable, comptime N: usize>(ptr: *T, value: Simd<T, N>) void {
+pub unsafe func storeUnaligned<T: Copyable + Movable, comptime N: usize>(ptr: *T, value: Simd<T, N>) void {
     unsafe {
         for i in usize(0)..N { __vqr_unaligned_store(ptr.offset(i), value.extract(i)); }
     }
 }
 
-pub func select<T: Copyable & Movable, comptime N: usize>(
+pub func select<T: Copyable + Movable, comptime N: usize>(
     mask: Mask<N>, yes: Simd<T, N>, no: Simd<T, N>
 ) Simd<T, N> {
     var out = no.toArray();
@@ -43,13 +43,13 @@ pub func select<T: Copyable & Movable, comptime N: usize>(
     Simd<T, N>.fromArray(move(out))
 }
 
-pub func shuffle<T: Copyable & Movable, comptime N: usize>(value: Simd<T, N>, indices: [N]usize) Simd<T, N> {
+pub func shuffle<T: Copyable + Movable, comptime N: usize>(value: Simd<T, N>, indices: [N]usize) Simd<T, N> {
     var out = value.toArray();
     for i in usize(0)..N { out[i] = value.extract(indices[i]); }
     Simd<T, N>.fromArray(move(out))
 }
 
-pub func permute<T: Copyable & Movable, comptime N: usize>(
+pub func permute<T: Copyable + Movable, comptime N: usize>(
     a: Simd<T, N>, b: Simd<T, N>, indices: [N]usize
 ) Simd<T, N> {
     var out = a.toArray();
@@ -60,7 +60,7 @@ pub func permute<T: Copyable & Movable, comptime N: usize>(
     Simd<T, N>.fromArray(move(out))
 }
 
-pub func gather<T: Copyable & Movable, comptime N: usize>(src: []const T, indices: [N]usize) !Simd<T, N> {
+pub func gather<T: Copyable + Movable, comptime N: usize>(src: []const T, indices: [N]usize) !Simd<T, N> {
     for index in indices {
         if index >= src.len() { return LaneError.OutOfRange; }
     }
@@ -72,24 +72,24 @@ pub func gather<T: Copyable & Movable, comptime N: usize>(src: []const T, indice
     }
 }
 
-pub func scatter<T: Copyable & Movable, comptime N: usize>(dst: []T, indices: [N]usize, value: Simd<T, N>) !void {
+pub func scatter<T: Copyable + Movable, comptime N: usize>(dst: []T, indices: [N]usize, value: Simd<T, N>) !void {
     for index in indices {
         if index >= dst.len() { return LaneError.OutOfRange; }
     }
     for i in usize(0)..N { dst[indices[i]] = value.extract(i); }
 }
 
-pub func reduceAdd<T: Copyable & Movable, comptime N: usize>(value: Simd<T, N>) T { value.reduceAdd() }
-pub func reduceMin<T: Copyable & Movable, comptime N: usize>(value: Simd<T, N>) T { value.reduceMin() }
-pub func reduceMax<T: Copyable & Movable, comptime N: usize>(value: Simd<T, N>) T { value.reduceMax() }
+pub func reduceAdd<T: Copyable + Movable, comptime N: usize>(value: Simd<T, N>) T { value.reduceAdd() }
+pub func reduceMin<T: Copyable + Movable, comptime N: usize>(value: Simd<T, N>) T { value.reduceMin() }
+pub func reduceMax<T: Copyable + Movable, comptime N: usize>(value: Simd<T, N>) T { value.reduceMax() }
 
-pub func reduceMul<T: Copyable & Movable, comptime N: usize>(value: Simd<T, N>) T {
+pub func reduceMul<T: Copyable + Movable, comptime N: usize>(value: Simd<T, N>) T {
     var total = T(1);
     for i in usize(0)..N { total *= value.extract(i); }
     total
 }
 
-pub func horizontalSum<T: Copyable & Movable>(src: []const T) T {
+pub func horizontalSum<T: Copyable + Movable>(src: []const T) T {
     var total = T(0);
     for value in src { total += value; }
     total

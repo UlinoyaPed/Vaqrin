@@ -3,27 +3,26 @@ package atomic
 pub class AtomicPtr<T> {
     #copy: disabled
     var cell: Atomic<usize>;
-public:
-    func init(value: ?*T) : cell(Atomic<usize>(__vqr_atomic_encode(value))) {}
-    static func new(value: ?*T) Self { AtomicPtr<T>(value) }
+    pub func init(value: ?*T) : cell(Atomic<usize>(__vqr_atomic_encode(value))) {}
+    pub static func new(value: ?*T) Self { AtomicPtr<T>(value) }
 
-    const func load(order: Order) ?*T { __vqr_atomic_decode<T>(cell.load(order)) }
-    const func load() ?*T { load(Order.SeqCst) }
+    pub const func load(order: Order) ?*T { __vqr_atomic_decode<T>(cell.load(order)) }
+    pub const func load() ?*T { load(Order.SeqCst) }
 
-    func store(value: ?*T, order: Order) void { cell.store(__vqr_atomic_encode(value), order); }
-    func store(value: ?*T) void { store(value, Order.SeqCst); }
+    pub func store(value: ?*T, order: Order) void { cell.store(__vqr_atomic_encode(value), order); }
+    pub func store(value: ?*T) void { store(value, Order.SeqCst); }
 
-    func swap(value: ?*T, order: Order) ?*T {
+    pub func swap(value: ?*T, order: Order) ?*T {
         __vqr_atomic_decode<T>(cell.swap(__vqr_atomic_encode(value), order))
     }
-    func swap(value: ?*T) ?*T { swap(value, Order.SeqCst) }
+    pub func swap(value: ?*T) ?*T { swap(value, Order.SeqCst) }
 
-    func compareExchange(expected: ?*T, desired: ?*T, success: Order, failure: Order) CompareExchange<?*T> {
+    pub func compareExchange(expected: ?*T, desired: ?*T, success: Order, failure: Order) CompareExchange<?*T> {
         var result = cell.compareExchange(__vqr_atomic_encode(expected), __vqr_atomic_encode(desired),
                                           success, failure);
         CompareExchange<?*T>{old: __vqr_atomic_decode<T>(result.old), exchanged: result.exchanged}
     }
-    func compareExchange(expected: ?*T, desired: ?*T) CompareExchange<?*T> {
+    pub func compareExchange(expected: ?*T, desired: ?*T) CompareExchange<?*T> {
         compareExchange(expected, desired, Order.SeqCst, Order.SeqCst)
     }
 }

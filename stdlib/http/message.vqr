@@ -51,17 +51,16 @@ pub func statusText(code: u16) ?str {
 pub class StatusCode {
     var code: u16;
     func init(value: u16) : code(value) {}
-public:
-    static func new(value: u16) !Self {
+    pub static func new(value: u16) !Self {
         if value < 100 || value > 599 { return HttpError.InvalidStatus; }
         StatusCode(value)
     }
-    const func value() u16 { code }
-    const func isSuccess() bool { code >= 200 && code < 300 }
-    const func isRedirection() bool { code >= 300 && code < 400 }
-    const func isClientError() bool { code >= 400 && code < 500 }
-    const func isServerError() bool { code >= 500 }
-    const func reasonPhrase() ?str { statusText(code) }
+    pub const func value() u16 { code }
+    pub const func isSuccess() bool { code >= 200 && code < 300 }
+    pub const func isRedirection() bool { code >= 300 && code < 400 }
+    pub const func isClientError() bool { code >= 400 && code < 500 }
+    pub const func isServerError() bool { code >= 500 }
+    pub const func reasonPhrase() ?str { statusText(code) }
 }
 
 func lower(value: u8) u8 {
@@ -105,10 +104,9 @@ func validateValue(value: str) !void {
 pub class HeaderMap {
     #copy: disabled
     var entries: coll.Vec<(string,string)>;
-public:
-    func init() : entries(coll.Vec<(string,string)>()) {}
-    const func len() usize { entries.len() }
-    func append(name: str, value: str) !void {
+    pub func init() : entries(coll.Vec<(string,string)>()) {}
+    pub const func len() usize { entries.len() }
+    pub func append(name: str, value: str) !void {
         validateName(name)!;
         validateValue(value)!;
         var ownedName = text.fromBytes(name.asBytes())!;
@@ -120,7 +118,7 @@ public:
         var ownedValue = text.fromBytes(raw[first..end])!;
         entries.push((move(ownedName), move(ownedValue)))!
     }
-    func set(name: str, value: str) !void {
+    pub func set(name: str, value: str) !void {
         var pending = HeaderMap();
         pending.append(name, value)!;
         entries.reserveAdditional(1)!;
@@ -128,7 +126,7 @@ public:
         var field = pending.entries.pop().unwrap();
         entries.push(move(field))!
     }
-    const func get(name: str) ?str {
+    pub const func get(name: str) ?str {
         for field in entries.iterRef() {
             if sameName(field.0, name) {
                 var value: str = field.1;
@@ -137,16 +135,16 @@ public:
         }
         null
     }
-    const func getAll(name: str) !coll.Vec<string> {
+    pub const func getAll(name: str) !coll.Vec<string> {
         var out = coll.Vec<string>();
         for field in entries.iterRef() {
             if sameName(field.0, name) { out.push(field.1)!; }
         }
         move(out)
     }
-    const func items() []const (string,string) { entries.asConstSlice() }
-    const func contains(name: str) bool { get(name) != null }
-    func remove(name: str) bool {
+    pub const func items() []const (string,string) { entries.asConstSlice() }
+    pub const func contains(name: str) bool { get(name) != null }
+    pub func remove(name: str) bool {
         var found = false;
         var i: usize = 0;
         for i < entries.len() {
@@ -157,7 +155,7 @@ public:
         }
         found
     }
-    func clear() void { entries.clear(); }
+    pub func clear() void { entries.clear(); }
 }
 
 pub class Body {
@@ -165,36 +163,35 @@ pub class Body {
     #implements: io.Reader
     var data: coll.Vec<u8>;
     var position: usize;
-public:
-    func init() : data(coll.Vec<u8>()), position(0) {}
-    static func fromBytes(value: []const u8) !Self { Body.fromOwned(coll.Vec<u8>.fromSlice(value)!) }
-    static func fromOwned(value: coll.Vec<u8>) Self {
+    pub func init() : data(coll.Vec<u8>()), position(0) {}
+    pub static func fromBytes(value: []const u8) !Self { Body.fromOwned(coll.Vec<u8>.fromSlice(value)!) }
+    pub static func fromOwned(value: coll.Vec<u8>) Self {
         var body = Body();
         body.data = move(value);
         move(body)
     }
-    const func bytes() []const u8 { data.asConstSlice()[position..data.len()] }
-    const func len() usize { data.len() - position }
-    const func isComplete() bool { position == data.len() }
-    func read(destination: []u8) !usize {
+    pub const func bytes() []const u8 { data.asConstSlice()[position..data.len()] }
+    pub const func len() usize { data.len() - position }
+    pub const func isComplete() bool { position == data.len() }
+    pub func read(destination: []u8) !usize {
         var count = if destination.len() < len() { destination.len() } else { len() };
         for i in usize(0)..count { destination[i] = data[position + i]; }
         position += count;
         count
     }
-    func writeTo(writer: *io.Writer) !u64 {
+    pub func writeTo(writer: *io.Writer) !u64 {
         var progress = io.writeAllProgress(writer, bytes())!;
         position += progress.processed;
         progress.check()!;
         u64(progress.processed)
     }
-    func discard(limit: usize) !u64 {
+    pub func discard(limit: usize) !u64 {
         var count = len();
         if count > limit { return HttpError.BodyLimit; }
         position += count;
         u64(count)
     }
-    func close() !void { position = data.len(); }
+    pub func close() !void { position = data.len(); }
 }
 
 pub class HttpLimits {
@@ -220,20 +217,19 @@ pub class Request {
     var targetValue: string;
     var fields: HeaderMap;
     var payload: Body;
-public:
-    func init(method: Method, target: string)
+    pub func init(method: Method, target: string)
         : verb(method), targetValue(move(target)), fields(HeaderMap()), payload(Body()) {}
-    static func new(method: Method, target: str) !Self {
+    pub static func new(method: Method, target: str) !Self {
         requestTarget(target)!;
         Request(method, text.fromBytes(target.asBytes())!)
     }
-    const func method() Method { verb }
-    const func target() str { targetValue }
-    func headers() *HeaderMap { &fields }
-    const func header(name: str) ?str { fields.get(name) }
-    const func bodyBytes() []const u8 { payload.bytes() }
-    func body() *Body { &payload }
-    func setBody(body: Body) void { payload = move(body); }
+    pub const func method() Method { verb }
+    pub const func target() str { targetValue }
+    pub func headers() *HeaderMap { &fields }
+    pub const func header(name: str) ?str { fields.get(name) }
+    pub const func bodyBytes() []const u8 { payload.bytes() }
+    pub func body() *Body { &payload }
+    pub func setBody(body: Body) void { payload = move(body); }
 }
 
 pub class Response {
@@ -241,16 +237,15 @@ pub class Response {
     var code: StatusCode;
     var fields: HeaderMap;
     var payload: Body;
-public:
-    func init(status: StatusCode) : code(status), fields(HeaderMap()), payload(Body()) {}
-    static func new(status: u16) !Self { Response(StatusCode.new(status)!) }
-    const func status() StatusCode { code }
-    func headers() *HeaderMap { &fields }
-    const func header(name: str) ?str { fields.get(name) }
-    const func bodyBytes() []const u8 { payload.bytes() }
-    func body() *Body { &payload }
-    func setBody(body: Body) void { payload = move(body); }
-    func close() !void { payload.close() }
+    pub func init(status: StatusCode) : code(status), fields(HeaderMap()), payload(Body()) {}
+    pub static func new(status: u16) !Self { Response(StatusCode.new(status)!) }
+    pub const func status() StatusCode { code }
+    pub func headers() *HeaderMap { &fields }
+    pub const func header(name: str) ?str { fields.get(name) }
+    pub const func bodyBytes() []const u8 { payload.bytes() }
+    pub func body() *Body { &payload }
+    pub func setBody(body: Body) void { payload = move(body); }
+    pub func close() !void { payload.close() }
 }
 
 pub func parseUrl(value: str) !Url { uri.parse(value) }

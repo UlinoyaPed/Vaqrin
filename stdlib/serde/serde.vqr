@@ -13,11 +13,10 @@ pub class DecodeLimits {
     pub var maxDepth: usize;
     pub var maxElements: usize;
     pub var maxBytes: usize;
-public:
-    func init()
+    pub func init()
         : maxDepth(128), maxElements(1_000_000), maxBytes(16 * 1024 * 1024) {}
 
-    static func withLimits(depth: usize, elements: usize, bytes: usize) Self {
+    pub static func withLimits(depth: usize, elements: usize, bytes: usize) Self {
         var result = DecodeLimits();
         result.maxDepth = depth;
         result.maxElements = elements;
@@ -31,34 +30,33 @@ pub class DecodeBudget {
     var depth: usize;
     var elements: usize;
     var bytes: usize;
-public:
-    func init(limits: DecodeLimits)
+    pub func init(limits: DecodeLimits)
         : limits(move(limits)), depth(0), elements(0), bytes(0) {}
 
-    func enter() !void {
+    pub func enter() !void {
         if depth >= limits.maxDepth { return SerdeError.DepthLimit; }
         depth++;
     }
 
-    func leave() void {
+    pub func leave() void {
         if depth != 0 { depth--; }
     }
 
-    func consumeElement() !void {
+    pub func consumeElement() !void {
         if elements >= limits.maxElements { return SerdeError.ElementLimit; }
         elements++;
     }
 
-    func consumeBytes(count: usize) !void {
+    pub func consumeBytes(count: usize) !void {
         if count > limits.maxBytes || bytes > limits.maxBytes - count {
             return SerdeError.ByteLimit;
         }
         bytes += count;
     }
 
-    const func currentDepth() usize { depth }
-    const func elementCount() usize { elements }
-    const func byteCount() usize { bytes }
+    pub const func currentDepth() usize { depth }
+    pub const func elementCount() usize { elements }
+    pub const func byteCount() usize { bytes }
 }
 
 pub interface Serializer {

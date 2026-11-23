@@ -5,12 +5,11 @@ pub class LimitedReader {
     #implements: Reader
     var source: *Reader;
     var limit: u64;
-public:
-    func init(reader: *Reader, limit: u64) : source(reader), limit(limit) {}
+    pub func init(reader: *Reader, limit: u64) : source(reader), limit(limit) {}
 
-    const func remaining() u64 { limit }
+    pub const func remaining() u64 { limit }
 
-    func read(dst: []u8) !usize {
+    pub func read(dst: []u8) !usize {
         if limit == 0 || dst.len() == 0 { return 0; }
         var capacity = usableBytes(limit, dst.len());
         var count = source.read(dst[0..capacity])!;
@@ -26,11 +25,10 @@ pub class CountingReader {
     #implements: Reader
     var source: *Reader;
     var processed: u64;
-public:
-    func init(reader: *Reader) : source(reader), processed(0) {}
-    const func count() u64 { processed }
+    pub func init(reader: *Reader) : source(reader), processed(0) {}
+    pub const func count() u64 { processed }
 
-    func read(dst: []u8) !usize {
+    pub func read(dst: []u8) !usize {
         if dst.len() == 0 { return 0; }
         var count = source.read(dst)!;
         if count > dst.len() || u64(count) > ~u64(0) - processed { return IoError.InvalidCount; }
@@ -43,11 +41,10 @@ pub class CountingWriter {
     #implements: Writer
     var target: *Writer;
     var processed: u64;
-public:
-    func init(writer: *Writer) : target(writer), processed(0) {}
-    const func count() u64 { processed }
+    pub func init(writer: *Writer) : target(writer), processed(0) {}
+    pub const func count() u64 { processed }
 
-    func write(src: []const u8) !usize {
+    pub func write(src: []const u8) !usize {
         if src.len() == 0 { return 0; }
         var count = target.write(src)!;
         if count > src.len() || u64(count) > ~u64(0) - processed { return IoError.InvalidCount; }
@@ -56,17 +53,16 @@ public:
         count
     }
 
-    func flush() !void { target.flush() }
+    pub func flush() !void { target.flush() }
 }
 
 pub class MultiReader {
     #implements: Reader
     var sources: []const *Reader;
     var index: usize;
-public:
-    func init(sources: []const *Reader) : sources(sources), index(0) {}
+    pub func init(sources: []const *Reader) : sources(sources), index(0) {}
 
-    func read(dst: []u8) !usize {
+    pub func read(dst: []u8) !usize {
         if dst.len() == 0 { return 0; }
         for index < sources.len() {
             var count = sources[index].read(dst)!;
@@ -85,12 +81,11 @@ pub class MultiWriter {
     var pending: coll.Vec<u8>;
     var targetIndex: usize;
     var processed: usize;
-public:
-    func init(targets: []const *Writer)
+    pub func init(targets: []const *Writer)
         : targets(targets), pending(coll.Vec<u8>()), targetIndex(0), processed(0) {}
 
     // After an error, retry with the same unacknowledged prefix.
-    func write(data: []const u8) !usize {
+    pub func write(data: []const u8) !usize {
         if data.len() == 0 || targets.len() == 0 { return data.len(); }
         if pending.isEmpty() {
             pending.reserve(data.len())!;
@@ -112,7 +107,7 @@ public:
         count
     }
 
-    func flush() !void {
+    pub func flush() !void {
         if !pending.isEmpty() { return IoError.WouldBlock; }
         for target in targets { target.flush()!; }
     }
@@ -127,10 +122,9 @@ pub class TeeReader {
     var filled: usize;
     var written: usize;
     var delivered: usize;
-public:
-    func init(reader: *Reader, writer: *Writer)
+    pub func init(reader: *Reader, writer: *Writer)
         : source(reader), mirror(writer), pending(mem.zeroedBytes<4096>()), filled(0), written(0), delivered(0) {}
-    func read(dst: []u8) !usize {
+    pub func read(dst: []u8) !usize {
         if dst.len() == 0 { return 0; }
         var buffer = pending[:];
         if delivered == filled {

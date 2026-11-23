@@ -45,14 +45,13 @@ pub class ConcurrentServerStream {
           metadata(core.replace<Metadata>(&head.metadata, Metadata())), deadline(head.deadline),
           initial(Metadata()), trailing(Metadata()) {}
 
-public:
-    const func maxMessageBytes() usize { limit }
-    const func checkDeadline() !void {
+    pub const func maxMessageBytes() usize { limit }
+    pub const func checkDeadline() !void {
         if finished { return RpcError.CallClosed; }
         if deadline != null && deadline.unwrap().expired()! { return RpcError.DeadlineExceeded; }
         if task.isCancelled() { return RpcError.Cancelled; }
     }
-    func sendHeaders() !void {
+    pub func sendHeaders() !void {
         checkDeadline()!;
         if acknowledged { return; }
         var headers = http2.HeaderBlock();
@@ -64,13 +63,13 @@ public:
         send(StreamOperation.Headers(move(headers)))!;
         acknowledged = true;
     }
-    func sendMessage(message: []const u8) !void {
+    pub func sendMessage(message: []const u8) !void {
         checkDeadline()!;
         var data = frameMessage(message, limit, compression)!;
         sendHeaders()!;
         send(StreamOperation.Data(move(data)))
     }
-    func recvMessage() !?coll.Vec<u8> {
+    pub func recvMessage() !?coll.Vec<u8> {
         switch transact(StreamOperation.Receive)! {
             StreamResult.Message(bytes) => some(move(bytes)),
             StreamResult.End => null,
@@ -78,7 +77,7 @@ public:
         }
     }
 
-    func finish(result: *const Status) !void {
+    pub func finish(result: *const Status) !void {
         if finished { return; }
         var trailers = http2.HeaderBlock();
         trailing.writeTo(&trailers)!;
@@ -88,7 +87,6 @@ public:
         finished = true;
     }
 
-private:
     func send(operation: StreamOperation) !void {
         switch transact(move(operation))! {
             StreamResult.Sent => {},
@@ -232,7 +230,6 @@ class PendingStream {
         true
     }
 
-private:
     func receive(session: *http2.Connection) !void {
         var before = decoder.unreadBytes();
         var message = decoder.next() catch (reason) {

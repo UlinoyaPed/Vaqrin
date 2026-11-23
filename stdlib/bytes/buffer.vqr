@@ -4,24 +4,23 @@ import (coll, mem)
 pub class Buffer {
     var contents: coll.Vec<u8>;
     var cursor: usize;
-public:
-    func init() : contents(coll.Vec<u8>()), cursor(0) {}
+    pub func init() : contents(coll.Vec<u8>()), cursor(0) {}
 
-    static func withCapacity(n: usize) !Self {
+    pub static func withCapacity(n: usize) !Self {
         var result = Buffer();
         result.reserve(n)!;
         move(result)
     }
 
-    const func len() usize { contents.len() }
-    const func capacity() usize { contents.capacity() }
-    const func isEmpty() bool { contents.isEmpty() }
-    const func asSlice() []const u8 { contents.asConstSlice() }
-    func asMutSlice() []u8 { contents.asSlice() }
-    const func unread() []const u8 { contents.asConstSlice()[cursor..contents.len()] }
-    func reserve(n: usize) !void { contents.reserve(n) }
+    pub const func len() usize { contents.len() }
+    pub const func capacity() usize { contents.capacity() }
+    pub const func isEmpty() bool { contents.isEmpty() }
+    pub const func asSlice() []const u8 { contents.asConstSlice() }
+    pub func asMutSlice() []u8 { contents.asSlice() }
+    pub const func unread() []const u8 { contents.asConstSlice()[cursor..contents.len()] }
+    pub func reserve(n: usize) !void { contents.reserve(n) }
 
-    func write(data: []const u8) !usize {
+    pub func write(data: []const u8) !usize {
         var count = data.len();
         if count == 0 { return 0; }
         var original = contents.len();
@@ -41,39 +40,39 @@ public:
         count
     }
 
-    func writeByte(value: u8) !void { contents.push(value) }
+    pub func writeByte(value: u8) !void { contents.push(value) }
 
-    func read(dst: []u8) !usize {
+    pub func read(dst: []u8) !usize {
         var data = peek(dst.len());
         mem.copyBytes(data, dst)!;
         cursor += data.len();
         data.len()
     }
 
-    func readByte() ?u8 {
+    pub func readByte() ?u8 {
         if cursor == len() { return null; }
         var byte = contents[cursor];
         cursor++;
         some(byte)
     }
 
-    const func peek(n: usize) []const u8 {
+    pub const func peek(n: usize) []const u8 {
         var rest = unread();
         rest[0..shorter(n, rest.len())]
     }
 
-    func advance(n: usize) !void {
+    pub func advance(n: usize) !void {
         if n > len() - cursor { return BytesError.OutOfRange; }
         cursor += n;
     }
 
-    func discard(n: usize) usize {
+    pub func discard(n: usize) usize {
         var count = shorter(n, len() - cursor);
         cursor += count;
         count
     }
 
-    func compact() void {
+    pub func compact() void {
         var count = len() - cursor;
         if cursor == 0 { return; }
         var view = contents.asSlice();
@@ -82,9 +81,9 @@ public:
         cursor = 0;
     }
 
-    func clear() void { contents.clear(); cursor = 0; }
+    pub func clear() void { contents.clear(); cursor = 0; }
 
-    static func intoVec(value: Self) coll.Vec<u8> {
+    pub static func intoVec(value: Self) coll.Vec<u8> {
         mem.replace<coll.Vec<u8>>(&value.contents, coll.Vec<u8>())
     }
 }
@@ -94,41 +93,39 @@ func shorter(a: usize, b: usize) usize { if (a < b) a else b }
 pub class ByteReader {
     var source: []const u8;
     var position: usize;
-public:
-    func init(data: []const u8) : source(data), position(0) {}
+    pub func init(data: []const u8) : source(data), position(0) {}
 
-    func read(dst: []u8) usize {
+    pub func read(dst: []u8) usize {
         var bytes = peek(dst.len());
         mem.copyBytes(bytes, dst) catch { panic("byte reader invariant"); };
         position += bytes.len();
         bytes.len()
     }
 
-    func readByte() ?u8 {
+    pub func readByte() ?u8 {
         if remaining() == 0 { return null; }
         var byte = source[position];
         position++;
         some(byte)
     }
 
-    const func peek(n: usize) []const u8 { source[position..position + shorter(n, remaining())] }
+    pub const func peek(n: usize) []const u8 { source[position..position + shorter(n, remaining())] }
 
-    func skip(n: usize) !void {
+    pub func skip(n: usize) !void {
         if n > remaining() { return BytesError.OutOfRange; }
         position += n;
     }
 
-    const func offset() usize { position }
-    const func remaining() usize { source.len() - position }
+    pub const func offset() usize { position }
+    pub const func remaining() usize { source.len() - position }
 }
 
 pub class ByteWriter {
     var target: []u8;
     var position: usize;
-public:
-    func init(data: []u8) : target(data), position(0) {}
+    pub func init(data: []u8) : target(data), position(0) {}
 
-    func write(src: []const u8) usize {
+    pub func write(src: []const u8) usize {
         var count = shorter(src.len(), remaining());
         mem.copyBytes(src[0..count], target[position..position + count]) catch {
             panic("byte writer invariant");
@@ -137,14 +134,14 @@ public:
         count
     }
 
-    func writeByte(byte: u8) bool {
+    pub func writeByte(byte: u8) bool {
         if remaining() == 0 { return false; }
         target[position] = byte;
         position++;
         true
     }
 
-    const func written() []const u8 { target[0..position] }
-    const func remaining() usize { target.len() - position }
-    func reset() void { position = 0; }
+    pub const func written() []const u8 { target[0..position] }
+    pub const func remaining() usize { target.len() - position }
+    pub func reset() void { position = 0; }
 }

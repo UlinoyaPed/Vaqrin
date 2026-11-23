@@ -15,28 +15,27 @@ pub class Encoder {
     var root: bool;
     var limits: serde.DecodeLimits;
     var items: usize;
-public:
-    func init()
+    pub func init()
         : frames(coll.Vec<Frame>()), output(coll.Vec<u8>()), root(false), limits(serde.DecodeLimits()), items(0) {}
-    func init(limits: serde.DecodeLimits)
+    pub func init(limits: serde.DecodeLimits)
         : frames(coll.Vec<Frame>()), output(coll.Vec<u8>()), root(false), limits(limits), items(0) {}
-    func serializer() *serde.Serializer { self }
+    pub func serializer() *serde.Serializer { self }
 
-    func writeNull() !void { value()!; byte(246) }
-    func writeBool(content: bool) !void { value()!; byte(if content { 245 } else { 244 }) }
-    func writeU64(content: u64) !void { value()!; argument(0, content) }
-    func writeI64(content: i64) !void {
+    pub func writeNull() !void { value()!; byte(246) }
+    pub func writeBool(content: bool) !void { value()!; byte(if content { 245 } else { 244 }) }
+    pub func writeU64(content: u64) !void { value()!; argument(0, content) }
+    pub func writeI64(content: i64) !void {
         value()!;
         if content < 0 { return argument(1, u64(-(content + 1))!); }
         argument(0, u64(content)!)
     }
-    func writeF64(content: f64) !void {
+    pub func writeF64(content: f64) !void {
         value()!;
         byte(251)!;
         var encoded = binary.u64ToBytes(bitCast<u64>(content), binary.Endian.Big);
         bytes(encoded[:])
     }
-    func writeNumber(content: str) !void {
+    pub func writeNumber(content: str) !void {
         var floating = false;
         for ch in content.asBytes() {
             if ch == 46 || ch == 69 || ch == 101 { floating = true; break; }
@@ -53,13 +52,13 @@ public:
         var unsigned = parse.parseUint<u64>(content)!;
         writeU64(unsigned)
     }
-    func writeString(content: str) !void { value()!; writeText(content) }
-    func beginSeq(length: ?usize) !void { begin(4, length) }
-    func endSeq() !void { end(4) }
-    func beginMap(length: ?usize) !void { begin(5, length) }
-    func endMap() !void { end(5) }
+    pub func writeString(content: str) !void { value()!; writeText(content) }
+    pub func beginSeq(length: ?usize) !void { begin(4, length) }
+    pub func endSeq() !void { end(4) }
+    pub func beginMap(length: ?usize) !void { begin(5, length) }
+    pub func endMap() !void { end(5) }
 
-    func writeKey(content: str) !void {
+    pub func writeKey(content: str) !void {
         if frames.len() == 0 { return serde.SerdeError.InvalidState; }
         var parent = frames.atMut(frames.len() - 1);
         if parent.major != 5 || !parent.key || (parent.remaining != null && parent.remaining.unwrap() == 0) {
@@ -69,13 +68,12 @@ public:
         parent.key = false;
     }
 
-    func takeBytes() !coll.Vec<u8> {
+    pub func takeBytes() !coll.Vec<u8> {
         if !root || frames.len() != 0 { return serde.SerdeError.InvalidState; }
         root = false;
         items = 0;
         core.replace<coll.Vec<u8>>(&output, coll.Vec<u8>())
     }
-private:
     func byte(value: u8) !void {
         if output.len() == limits.maxBytes { return serde.SerdeError.ByteLimit; }
         output.push(value)
@@ -151,15 +149,14 @@ pub class Decoder {
     var ready: bool;
     var budget: serde.DecodeBudget;
     var limits: serde.DecodeLimits;
-public:
-    func init()
+    pub func init()
         : input(coll.Vec<u8>()), frames(coll.Vec<Frame>()), position(0), ready(false),
           budget(serde.DecodeBudget(serde.DecodeLimits())), limits(serde.DecodeLimits()) {}
-    func init(limits: serde.DecodeLimits)
+    pub func init(limits: serde.DecodeLimits)
         : input(coll.Vec<u8>()), frames(coll.Vec<Frame>()), position(0), ready(false),
           budget(serde.DecodeBudget(limits)), limits(limits) {}
 
-    func load(data: []const u8) !void {
+    pub func load(data: []const u8) !void {
         var checked = serde.DecodeBudget(limits);
         checked.consumeBytes(data.len())!;
         input = coll.Vec<u8>.fromSlice(data)!;
@@ -168,12 +165,12 @@ public:
         ready = true;
         budget = move(checked);
     }
-    func deserializer() *serde.Deserializer { self }
-    func finish() !void {
+    pub func deserializer() *serde.Deserializer { self }
+    pub func finish() !void {
         if frames.len() != 0 || ready { return serde.SerdeError.InvalidState; }
         if position != input.len() { return serde.SerdeError.TrailingInput; }
     }
-    func kind() !serde.DataKind {
+    pub func kind() !serde.DataKind {
         if !ready { return serde.SerdeError.InvalidState; }
         var head = peek()!;
         switch head >> 5 {
@@ -191,23 +188,23 @@ public:
             _ => { return serde.SerdeError.Unsupported; },
         }
     }
-    func readNull() !void {
+    pub func readNull() !void {
         require(serde.DataKind.Null)!;
         position++;
     }
-    func readBool() !bool {
+    pub func readBool() !bool {
         require(serde.DataKind.Bool)!;
         readByte()! == 245
     }
-    func readI64() !i64 {
+    pub func readI64() !i64 {
         var number = integer()!;
         i64(number) catch { return serde.SerdeError.IntegerOutOfRange; }
     }
-    func readU64() !u64 {
+    pub func readU64() !u64 {
         var number = integer()!;
         u64(number) catch { return serde.SerdeError.IntegerOutOfRange; }
     }
-    func readF64() !f64 {
+    pub func readF64() !f64 {
         if kind()! != serde.DataKind.Number { return serde.SerdeError.TypeMismatch; }
         var head = peek()!;
         if head < 64 {
@@ -218,7 +215,7 @@ public:
         position++;
         floatValue(head)
     }
-    func readNumber() !string {
+    pub func readNumber() !string {
         if kind()! != serde.DataKind.Number { return serde.SerdeError.TypeMismatch; }
         if peek()! < 64 {
             var number = integer()!;
@@ -226,26 +223,25 @@ public:
         }
         fmt.formatShortestScientific(readF64()!)
     }
-    func readString() !string {
+    pub func readString() !string {
         require(serde.DataKind.String)!;
         readText()
     }
-    func beginSeq() !?usize { begin(4, serde.DataKind.Sequence) }
-    func beginMap() !?usize { begin(5, serde.DataKind.Map) }
-    func endSeq() !void { end(4) }
-    func endMap() !void { end(5) }
-    func nextElement() !bool {
+    pub func beginSeq() !?usize { begin(4, serde.DataKind.Sequence) }
+    pub func beginMap() !?usize { begin(5, serde.DataKind.Map) }
+    pub func endSeq() !void { end(4) }
+    pub func endMap() !void { end(5) }
+    pub func nextElement() !bool {
         if !available(4)! { return false; }
         ready = true;
         true
     }
-    func nextKey() !?string {
+    pub func nextKey() !?string {
         if !available(5)! { return null; }
         var key = readText()!;
         ready = true;
         some(move(key))
     }
-private:
     const func peek() !u8 {
         if position == input.len() { return serde.SerdeError.UnexpectedEnd; }
         input[position]

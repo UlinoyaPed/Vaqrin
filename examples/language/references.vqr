@@ -6,42 +6,42 @@ class Point {
     pub func step() void { x++; }
 }
 
-func read(x: in &const i32) i32 { x }
-func readStrict(x: &const i32) i32 { x }
-func increment(x: &i32) void { x++; }
-func identity(x: in &const i32) &const i32 { x }
+func read(x: in i32) i32 { x }
+func readStrict(x: ref i32) i32 { x }
+func increment(x: mut i32) void { x++; }
+func identity(x: in i32) ref i32 { x }
 
-func inspect<T>(x: in &const T) str { meta.typeName<T>() }
+func inspect<T>(x: in T) str { meta.typeName<T>() }
 
 func main() !void {
     var n = 10;
-    var p: *i32 = &n;
+    var p: *i32 = raw n;
     {
-        var &x = p;
+        ref mut x = n;
         increment(x);
-        var ro: &const i32 = identity(x);
+        var ro: ref i32 = identity(x);
         io.println(readStrict(ro))!;
     }
-    io.println(read(n) + read(2) + read(p))!;
+    io.println(read(n) + read(2) + unsafe { read(*p) })!;
     io.println(inspect(p))!;
-    io.println(inspect<i32>(p))!;
+    io.println(unsafe { inspect<i32>(*p) })!;
     io.println(*identity(42))!;
 
     var point = new Point(4)!;
-    point.x = 8;
-    point.step();
+    (*point).x = 8;
+    (*point).step();
     (*point).x++;
-    io.println(point.x)!;
+    io.println((*point).x)!;
 
     var box = new i32(21)!;
-    io.println(read(box))!;
-    var callback: func(in &const i32) i32 = (x: in &const i32) i32 => x;
-    io.println(callback(p))!;
+    io.println(read(*box))!;
+    var callback: func(in i32) i32 = (x: in i32) i32 => x;
+    io.println(unsafe { callback(*p) })!;
 
     {
         var optional: ?*i32 = some(p);
         switch optional {
-            some(&value) => { value++; },
+            some(value) => { unsafe { increment(*value); } },
             null => {},
         }
     }

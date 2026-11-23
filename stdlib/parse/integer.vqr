@@ -4,10 +4,9 @@ import (core, text)
 pub error ParseError { InvalidRadix, InvalidSyntax, OutOfRange, TrailingInput }
 
 pub class Parsed<T> {
-public:
-    var value: T;
-    var consumed: usize;
-    func init(value: T, consumed: usize) : value(move(value)), consumed(consumed) {}
+    pub var value: T;
+    pub var consumed: usize;
+    pub func init(value: T, consumed: usize) : value(move(value)), consumed(consumed) {}
 }
 
 func digit(byte: u8) u32 {

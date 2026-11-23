@@ -8,38 +8,37 @@ class BTreeNode<K: Movable, V: Movable> {
     var leaf: bool;
     var entries: FixedVec<(K, V), 7>;
     var children: FixedVec<*BTreeNode<K, V>, 8>;
-public:
-    func init(isLeaf: bool)
+    pub func init(isLeaf: bool)
         : leaf(isLeaf), entries(FixedVec<(K, V), 7>()), children(FixedVec<*BTreeNode<K, V>, 8>()) {}
 
-    const func isLeaf() bool { leaf }
-    const func entryCount() usize { entries.len() }
-    const func childCount() usize { children.len() }
+    pub const func isLeaf() bool { leaf }
+    pub const func entryCount() usize { entries.len() }
+    pub const func childCount() usize { children.len() }
 
-    const func entryAt(index: usize) *const (K, V) { entries.get(index).unwrap() }
-    func entryAtMut(index: usize) *(K, V) { entries.getMut(index).unwrap() }
+    pub const func entryAt(index: usize) *const (K, V) { entries.get(index).unwrap() }
+    pub func entryAtMut(index: usize) *(K, V) { entries.getMut(index).unwrap() }
 
-    func insertEntry(index: usize, entry: (K, V)) void {
+    pub func insertEntry(index: usize, entry: (K, V)) void {
         switch entries.insert(index, move(entry)) {
             PushResult.Stored => {},
             else => panic("BTree node entry capacity invariant"),
         }
     }
 
-    func removeEntry(index: usize) (K, V) { entries.remove(index).unwrap() }
+    pub func removeEntry(index: usize) (K, V) { entries.remove(index).unwrap() }
 
-    func childAt(index: usize) *BTreeNode<K, V> {
+    pub func childAt(index: usize) *BTreeNode<K, V> {
         *children.get(index).unwrap()
     }
 
-    func insertChild(index: usize, child: *BTreeNode<K, V>) void {
+    pub func insertChild(index: usize, child: *BTreeNode<K, V>) void {
         switch children.insert(index, child) {
             PushResult.Stored => {},
             else => panic("BTree node child capacity invariant"),
         }
     }
 
-    func removeChild(index: usize) *BTreeNode<K, V> { children.remove(index).unwrap() }
+    pub func removeChild(index: usize) *BTreeNode<K, V> { children.remove(index).unwrap() }
 }
 
 func allocateBTreeNode<K: Movable, V: Movable>(
@@ -75,8 +74,7 @@ class BTreeCursor<K: Movable, V: Movable> {
     // A degree-four B-tree with a usize entry count has at most 32 levels.
     var stack: FixedVec<(*BTreeNode<K, V>, usize), 32>;
     var reverse: bool;
-public:
-    func init(root: ?*BTreeNode<K, V>, reverse: bool)
+    pub func init(root: ?*BTreeNode<K, V>, reverse: bool)
         : stack(FixedVec<(*BTreeNode<K, V>, usize), 32>()), reverse(reverse) {
         switch root {
             some(node) => push(node),
@@ -84,7 +82,7 @@ public:
         }
     }
 
-    func push(node: *BTreeNode<K, V>) void {
+    pub func push(node: *BTreeNode<K, V>) void {
         var eventCount = if node.isLeaf() { node.entryCount() } else { node.entryCount() * 2 + 1 };
         switch stack.push((node, if reverse { eventCount } else { 0 })) {
             PushResult.Stored => {},
@@ -92,7 +90,7 @@ public:
         }
     }
 
-    func seekLower(key: *const K, less: func(*const K, *const K) bool) void {
+    pub func seekLower(key: *const K, less: func(*const K, *const K) bool) void {
         for !stack.isEmpty() {
             var frame = stack.lastMut().unwrap();
             var node = frame.0;
@@ -106,7 +104,7 @@ public:
         }
     }
 
-    func next() ?*(K, V) {
+    pub func next() ?*(K, V) {
         for !stack.isEmpty() {
             var frame = stack.lastMut().unwrap();
             var node = frame.0;
@@ -131,34 +129,31 @@ class BTreeCursors<K: Movable, V: Movable> {
     var front: BTreeCursor<K, V>;
     var back: BTreeCursor<K, V>;
     var count: usize;
-public:
-    func init(root: ?*BTreeNode<K, V>, count: usize)
+    pub func init(root: ?*BTreeNode<K, V>, count: usize)
         : front(BTreeCursor<K, V>(root, false)), back(BTreeCursor<K, V>(root, true)), count(count) {}
-    func next(reverse: bool) ?*(K, V) {
+    pub func next(reverse: bool) ?*(K, V) {
         if count == 0 { return null; }
         count--;
         if reverse { back.next() } else { front.next() }
     }
-    const func remaining() usize { count }
+    pub const func remaining() usize { count }
 }
 
 pub class BTreeIterRef<K: Movable, V: Movable> {
     var cursors: BTreeCursors<K, V>;
     var snapshot: ?IteratorSnapshot<*const (K, V)>;
-public:
-    func init(root: ?*BTreeNode<K, V>, count: usize)
+    pub func init(root: ?*BTreeNode<K, V>, count: usize)
         : cursors(BTreeCursors<K, V>(root, count)), snapshot(null) {}
-    func init(items: Vec<*const (K, V)>, count: usize)
+    pub func init(items: Vec<*const (K, V)>, count: usize)
         : cursors(BTreeCursors<K, V>(null, 0)), snapshot(some(IteratorSnapshot<*const (K, V)>(move(items), count))) {}
-    func next() ?(*const K, *const V) { take(false) }
-    func nextBack() ?(*const K, *const V) { take(true) }
-    const func remaining() usize {
+    pub func next() ?(*const K, *const V) { take(false) }
+    pub func nextBack() ?(*const K, *const V) { take(true) }
+    pub const func remaining() usize {
         switch __vqr_optional_pointer(&snapshot) {
             some(saved) => saved.remaining(),
             null => cursors.remaining(),
         }
     }
-private:
     func take(reverse: bool) ?(*const K, *const V) {
         var entry: *const (K, V);
         switch __vqr_optional_pointer(&snapshot) {
@@ -172,20 +167,18 @@ private:
 pub class BTreeIterMut<K: Movable, V: Movable> {
     var cursors: BTreeCursors<K, V>;
     var snapshot: ?IteratorSnapshot<*(K, V)>;
-public:
-    func init(root: ?*BTreeNode<K, V>, count: usize)
+    pub func init(root: ?*BTreeNode<K, V>, count: usize)
         : cursors(BTreeCursors<K, V>(root, count)), snapshot(null) {}
-    func init(items: Vec<*(K, V)>, count: usize)
+    pub func init(items: Vec<*(K, V)>, count: usize)
         : cursors(BTreeCursors<K, V>(null, 0)), snapshot(some(IteratorSnapshot<*(K, V)>(move(items), count))) {}
-    func next() ?(*const K, *V) { take(false) }
-    func nextBack() ?(*const K, *V) { take(true) }
-    const func remaining() usize {
+    pub func next() ?(*const K, *V) { take(false) }
+    pub func nextBack() ?(*const K, *V) { take(true) }
+    pub const func remaining() usize {
         switch __vqr_optional_pointer(&snapshot) {
             some(saved) => saved.remaining(),
             null => cursors.remaining(),
         }
     }
-private:
     func take(reverse: bool) ?(*const K, *V) {
         var entry: *(K, V);
         switch __vqr_optional_pointer(&snapshot) {
@@ -200,8 +193,7 @@ pub class BTreeRangeRef<K: Movable, V: Movable> {
     var cursor: BTreeCursor<K, V>;
     var endKey: ?*const K;
     var done: bool;
-public:
-    func init(root: ?*BTreeNode<K, V>, lower: ?*const K, endKey: ?*const K,
+    pub func init(root: ?*BTreeNode<K, V>, lower: ?*const K, endKey: ?*const K,
               less: func(*const K, *const K) bool, empty: bool)
         : cursor(BTreeCursor<K, V>(root, false)), endKey(endKey), done(empty) {
         switch lower {
@@ -210,7 +202,7 @@ public:
         }
     }
 
-    func next() ?(*const K, *const V) {
+    pub func next() ?(*const K, *const V) {
         if done { return null; }
         var entry = cursor.next() ?? { done = true; return null; };
         switch endKey {
@@ -226,30 +218,28 @@ public:
 
 pub class BTreeSetIterRef<T: Movable> {
     var source: BTreeIterRef<T, u8>;
-public:
-    func init(source: BTreeIterRef<T, u8>) : source(move(source)) {}
-    func next() ?*const T {
+    pub func init(source: BTreeIterRef<T, u8>) : source(move(source)) {}
+    pub func next() ?*const T {
         switch source.next() {
             null => null,
             some(entry) => some(entry.0),
         }
     }
-    func nextBack() ?*const T {
+    pub func nextBack() ?*const T {
         switch source.nextBack() {
             null => null,
             some(entry) => some(entry.0),
         }
     }
-    const func remaining() usize { source.remaining() }
+    pub const func remaining() usize { source.remaining() }
 }
 
 pub class IntoBTreeIter<K: Movable, V: Movable> {
     var source: BTreeMap<K, V>;
-public:
-    func init(value: BTreeMap<K, V>) : source(move(value)) {}
-    func next() ?(K, V) { source.popFirst() }
-    func nextBack() ?(K, V) { source.popLast() }
-    const func remaining() usize { source.len() }
+    pub func init(value: BTreeMap<K, V>) : source(move(value)) {}
+    pub func next() ?(K, V) { source.popFirst() }
+    pub func nextBack() ?(K, V) { source.popLast() }
+    pub const func remaining() usize { source.len() }
 }
 
 pub class BTreeMap<K: Movable, V: Movable> {
@@ -257,18 +247,16 @@ pub class BTreeMap<K: Movable, V: Movable> {
     var root: ?*BTreeNode<K, V>;
     var length: usize;
     var less: func(*const K, *const K) bool;
-public:
-    func init(less: func(*const K, *const K) bool)
+    pub func init(less: func(*const K, *const K) bool)
         : root(null), length(0), less(less) {}
 
-    static func withComparator(less: func(*const K, *const K) bool) Self {
+    pub static func withComparator(less: func(*const K, *const K) bool) Self {
         BTreeMap<K, V>(less)
     }
 
-    const func len() usize { length }
-    const func isEmpty() bool { length == 0 }
+    pub const func len() usize { length }
+    pub const func isEmpty() bool { length == 0 }
 
-private:
     func splitChild(parent: *BTreeNode<K, V>, index: usize) !void {
         var left = parent.childAt(index);
         var right = allocateBTreeNode<K, V>(left.isLeaf())!;
@@ -465,8 +453,7 @@ private:
         current.entryAt(current.entryCount() - 1)
     }
 
-public:
-    func insert(key: K, value: V) !?V {
+    pub func insert(key: K, value: V) !?V {
         switch root {
             null => {
                 var node = allocateBTreeNode<K, V>(true)!;
@@ -494,8 +481,7 @@ public:
         move(result)
     }
 
-    #return_borrow: self
-    const func get(query: in &const K) ?&const V {
+    pub const func get(query: in K) ?ref V from self {
         var key = &query;
         var current = root;
         for current != null {
@@ -512,8 +498,7 @@ public:
         null
     }
 
-    #return_borrow: self
-    func getMut(query: in &const K) ?&V {
+    pub func getMut(query: in K) ?ref mut V from self {
         var key = &query;
         var current = root;
         for current != null {
@@ -530,9 +515,9 @@ public:
         null
     }
 
-    const func containsKey(key: in &const K) bool { get(key) != null }
+    pub const func containsKey(key: in K) bool { get(key) != null }
 
-    func removeEntry(key: in &const K) ?(K, V) {
+    pub func removeEntry(key: in K) ?(K, V) {
         switch root {
             null => return null,
             some(node) => {
@@ -544,7 +529,7 @@ public:
         }
     }
 
-    func remove(key: in &const K) ?V {
+    pub func remove(key: in K) ?V {
         switch removeEntry(key) {
             null => null,
             some(entry) => {
@@ -554,7 +539,7 @@ public:
         }
     }
 
-    const func first() ?(*const K, *const V) {
+    pub const func first() ?(*const K, *const V) {
         switch root {
             null => null,
             some(node) => {
@@ -564,7 +549,7 @@ public:
         }
     }
 
-    const func last() ?(*const K, *const V) {
+    pub const func last() ?(*const K, *const V) {
         switch root {
             null => null,
             some(node) => {
@@ -574,7 +559,7 @@ public:
         }
     }
 
-    func popFirst() ?(K, V) {
+    pub func popFirst() ?(K, V) {
         switch root {
             null => null,
             some(node) => {
@@ -586,7 +571,7 @@ public:
         }
     }
 
-    func popLast() ?(K, V) {
+    pub func popLast() ?(K, V) {
         switch root {
             null => null,
             some(node) => {
@@ -598,7 +583,7 @@ public:
         }
     }
 
-    const func lowerBound(key: *const K) ?*const K {
+    pub const func lowerBound(key: *const K) ?*const K {
         var current = root;
         var candidate: ?*const K = null;
         for current != null {
@@ -613,7 +598,7 @@ public:
         candidate
     }
 
-    const func upperBound(key: *const K) ?*const K {
+    pub const func upperBound(key: *const K) ?*const K {
         var current = root;
         var candidate: ?*const K = null;
         for current != null {
@@ -633,12 +618,12 @@ public:
         candidate
     }
 
-    const func iterRef() !BTreeIterRef<K, V> { BTreeIterRef<K, V>(root, length) }
+    pub const func iterRef() !BTreeIterRef<K, V> { BTreeIterRef<K, V>(root, length) }
 
-    func iterMut() !BTreeIterMut<K, V> { BTreeIterMut<K, V>(root, length) }
+    pub func iterMut() !BTreeIterMut<K, V> { BTreeIterMut<K, V>(root, length) }
 
     // Each non-null bound is inclusive at the start and exclusive at the end.
-    const func range(lower: ?*const K, upper: ?*const K) BTreeRangeRef<K, V> {
+    pub const func range(lower: ?*const K, upper: ?*const K) BTreeRangeRef<K, V> {
         var empty = false;
         var stop: ?*const K = null;
         switch upper {
@@ -654,11 +639,11 @@ public:
         BTreeRangeRef<K, V>(root, lower, stop, less, empty)
     }
 
-    static func intoIter(value: Self) IntoBTreeIter<K, V> {
+    pub static func intoIter(value: Self) IntoBTreeIter<K, V> {
         IntoBTreeIter<K, V>(move(value))
     }
 
-    func clear() void {
+    pub func clear() void {
         switch root {
             null => {},
             some(node) => {
@@ -669,39 +654,38 @@ public:
         length = 0;
     }
 
-    func deinit() void { clear(); }
+    pub func deinit() void { clear(); }
 }
 
 pub class BTreeSet<T: Movable> {
     #copy: disabled
     var values: BTreeMap<T, u8>;
-public:
-    func init(less: func(*const T, *const T) bool)
+    pub func init(less: func(*const T, *const T) bool)
         : values(BTreeMap<T, u8>(less)) {}
 
-    static func withComparator(less: func(*const T, *const T) bool) Self {
+    pub static func withComparator(less: func(*const T, *const T) bool) Self {
         BTreeSet<T>(less)
     }
 
-    const func len() usize { values.len() }
-    const func isEmpty() bool { values.isEmpty() }
-    const func contains(value: in &const T) bool { values.containsKey(value) }
+    pub const func len() usize { values.len() }
+    pub const func isEmpty() bool { values.isEmpty() }
+    pub const func contains(value: in T) bool { values.containsKey(value) }
 
-    func insert(value: T) !bool {
+    pub func insert(value: T) !bool {
         switch values.insert(move(value), 0u8)! {
             null => true,
             some(_) => false,
         }
     }
 
-    func remove(value: in &const T) bool {
+    pub func remove(value: in T) bool {
         switch values.remove(value) {
             null => false,
             some(_) => true,
         }
     }
 
-    func take(value: in &const T) ?T {
+    pub func take(value: in T) ?T {
         switch values.removeEntry(value) {
             null => null,
             some(entry) => {
@@ -711,21 +695,21 @@ public:
         }
     }
 
-    const func first() ?*const T {
+    pub const func first() ?*const T {
         switch values.first() {
             null => null,
             some(entry) => some(entry.0),
         }
     }
 
-    const func last() ?*const T {
+    pub const func last() ?*const T {
         switch values.last() {
             null => null,
             some(entry) => some(entry.0),
         }
     }
 
-    func popFirst() ?T {
+    pub func popFirst() ?T {
         switch values.popFirst() {
             null => null,
             some(entry) => {
@@ -735,7 +719,7 @@ public:
         }
     }
 
-    func popLast() ?T {
+    pub func popLast() ?T {
         switch values.popLast() {
             null => null,
             some(entry) => {
@@ -745,11 +729,11 @@ public:
         }
     }
 
-    const func lowerBound(value: *const T) ?*const T { values.lowerBound(value) }
-    const func upperBound(value: *const T) ?*const T { values.upperBound(value) }
-    const func iterRef() !BTreeSetIterRef<T> {
+    pub const func lowerBound(value: *const T) ?*const T { values.lowerBound(value) }
+    pub const func upperBound(value: *const T) ?*const T { values.upperBound(value) }
+    pub const func iterRef() !BTreeSetIterRef<T> {
         BTreeSetIterRef<T>(values.iterRef()!)
     }
-    func clear() void { values.clear(); }
-    func deinit() void { values.clear(); }
+    pub func clear() void { values.clear(); }
+    pub func deinit() void { values.clear(); }
 }

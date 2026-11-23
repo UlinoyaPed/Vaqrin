@@ -9,12 +9,11 @@ pub class PathComponents {
     var value: string;
     var position: usize;
     var rootPending: bool;
-public:
-    func init(source: string) : value(move(source)), position(0), rootPending(false) {
+    pub func init(source: string) : value(move(source)), position(0), rootPending(false) {
         rootPending = value.byteLen() != 0 && value.asBytes()[0] == 47u8;
         if rootPending { position = 1; }
     }
-    func next() ?Component {
+    pub func next() ?Component {
         if rootPending { rootPending = false; return some(Component.Root); }
         var bytes = value.asBytes();
         for position < bytes.len() && bytes[position] == 47u8 { position++; }
@@ -30,17 +29,16 @@ public:
 
 pub class Path {
     var value: string;
-public:
-    func init(source: string) : value(move(source)) {}
-    static func fromString(source: str) !Self { Path(text.fromBytes(source.asBytes())!) }
-    const func asString() str { value }
-    const func isAbsolute() bool {
+    pub func init(source: string) : value(move(source)) {}
+    pub static func fromString(source: str) !Self { Path(text.fromBytes(source.asBytes())!) }
+    pub const func asString() str { value }
+    pub const func isAbsolute() bool {
         var bytes = value.asBytes();
         bytes.len() != 0 && bytes[0] == 47u8
     }
-    const func isRelative() bool { !isAbsolute() }
+    pub const func isRelative() bool { !isAbsolute() }
 
-    const func filename() ?str {
+    pub const func filename() ?str {
         var bytes = value.asBytes();
         var end = bytes.len();
         for end > 0 && bytes[end - 1] == 47u8 { end--; }
@@ -50,7 +48,7 @@ public:
         some(unsafe { __vqr_text_borrow_utf8(bytes[start..end]) })
     }
 
-    const func parent() !?Path {
+    pub const func parent() !?Path {
         var bytes = value.asBytes();
         var end = bytes.len();
         for end > 0 && bytes[end - 1] == 47u8 { end--; }
@@ -64,7 +62,7 @@ public:
         some(Path(text.fromBytes(bytes[0..parentEnd])!))
     }
 
-    const func extension() ?str {
+    pub const func extension() ?str {
         var name = filename() ?? { return null; };
         var bytes = name.asBytes();
         var index = bytes.len();
@@ -73,7 +71,7 @@ public:
         some(unsafe { __vqr_text_borrow_utf8(bytes[index..bytes.len()]) })
     }
 
-    const func stem() ?str {
+    pub const func stem() ?str {
         var name = filename() ?? { return null; };
         var bytes = name.asBytes();
         var index = bytes.len();
@@ -82,9 +80,9 @@ public:
         some(unsafe { __vqr_text_borrow_utf8(bytes[0..index - 1]) })
     }
 
-    const func components() PathComponents { PathComponents(value) }
+    pub const func components() PathComponents { PathComponents(value) }
 
-    const func normalize() !Path {
+    pub const func normalize() !Path {
         var bytes = value.asBytes();
         var absolute = isAbsolute();
         var segments = coll.Vec<string>();
@@ -114,7 +112,7 @@ public:
         Path(output.build()!)
     }
 
-    const func withExtension(extension: str) !Path {
+    pub const func withExtension(extension: str) !Path {
         var original = filename() ?? { return PathError.Empty; };
         var name = stem() ?? { return PathError.Empty; };
         for byte in extension.asBytes() {

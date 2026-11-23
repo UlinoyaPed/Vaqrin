@@ -421,7 +421,7 @@ class Generator:
             adapter = f"{adapter_prefix}_{name}_{escape(method.name)}"
             return f"{adapter}<H>" if concurrent else adapter
 
-        server = f"ConcurrentServer_{name}<H: {interface} & Shareable>" if concurrent else f"{name}Server"
+        server = f"ConcurrentServer_{name}<H: {interface} + Shareable>" if concurrent else f"{name}Server"
         service_type = "mem.Shared<H>" if concurrent else f"*{interface}"
         argument = "service.clone()" if concurrent else "service"
         p.start(f"pub class {server}")
@@ -457,7 +457,7 @@ class Generator:
                 self.client_stream(suffix, input_type, output_type, encoder, decoder)
             self.server_stream(wrapper, raw, input_type, output_type, encoder, decoder)
         if concurrent:
-            p.start(f"class ConcurrentAdapter_{suffix}<H: {interface} & Shareable>")
+            p.start(f"class ConcurrentAdapter_{suffix}<H: {interface} + Shareable>")
             service_type = "mem.Shared<H>"
         else:
             p.start(f"class Adapter_{suffix}")

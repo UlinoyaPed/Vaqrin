@@ -124,7 +124,7 @@
   isSome<T>(value: *const ?T)->bool
   isNone<T>(value: *const ?T)->bool
   asPtr<T>(value: *const ?T)->?*const T
-  asRef<T>(value: in &const ?T)->?&const T
+  asRef<T>(value: in ?T)->?&const T
   asMutRef<T>(value: &?T)->?&T
   asMutPtr<T>(value: *?T)->?*T
   map<T,U,F>(value: ?T,f: F)->?U
@@ -895,14 +895,14 @@
   capacity()->usize
   isEmpty()->bool
   reserve(n: usize)->!void
-  get(key: in &const K)->?&const V
-  getMut(key: in &const K)->?&V
+  get(key: in K)->?&const V
+  getMut(key: in K)->?&V
   getKeyValue(key: *const K)->?( *const K,*const V )
-  containsKey(key: in &const K)->bool
+  containsKey(key: in K)->bool
   insert(key: K,value: V)->!?V
   tryInsert(key: K,value: V)->InsertResult<K,V>
-  remove(key: in &const K)->?V
-  removeEntry(key: in &const K)->?(K,V)
+  remove(key: in K)->?V
+  removeEntry(key: in K)->?(K,V)
   entry(key: K)->Entry<K,V>
   getOrInsert(key: K,initial: V)->!&V
   getOrInsertPtr(key: K,initial: V)->!*V
@@ -950,9 +950,9 @@
   len()->usize
   isEmpty()->bool
   insert(value: T)->!bool
-  remove(value: in &const T)->bool
-  take(value: in &const T)->?T
-  contains(value: in &const T)->bool
+  remove(value: in T)->bool
+  take(value: in T)->?T
+  contains(value: in T)->bool
   reserve(n: usize)->!void
   clear()->void
   retain<F>(pred: F)->void
@@ -994,12 +994,12 @@
   withComparator<C>(cmp: C)->Self
   len()->usize
   isEmpty()->bool
-  get(key: in &const K)->?&const V
-  getMut(key: in &const K)->?&V
-  containsKey(key: in &const K)->bool
+  get(key: in K)->?&const V
+  getMut(key: in K)->?&V
+  containsKey(key: in K)->bool
   insert(key: K,value: V)->!?V
-  remove(key: in &const K)->?V
-  removeEntry(key: in &const K)->?(K,V)
+  remove(key: in K)->?V
+  removeEntry(key: in K)->?(K,V)
   first()->?(*const K,*const V)
   last()->?(*const K,*const V)
   popFirst()->?(K,V)
@@ -1024,10 +1024,10 @@
 ```text
   init()->Self
   len()->usize
-  contains(value: in &const T)->bool
+  contains(value: in T)->bool
   insert(value: T)->!bool
-  remove(value: in &const T)->bool
-  take(value: in &const T)->?T
+  remove(value: in T)->bool
+  take(value: in T)->?T
   first()->?*const T
   last()->?*const T
   popFirst()->?T

@@ -17,11 +17,10 @@ func fileTypeFromCode(code: i32) FileType {
 
 pub class Permissions {
     var modeBits: u32;
-public:
-    func init(mode: u32) : modeBits(mode) {}
-    const func mode() u32 { modeBits }
-    const func readonly() bool { (modeBits & 146u32) == 0 }
-    func setReadonly(value: bool) void {
+    pub func init(mode: u32) : modeBits(mode) {}
+    pub const func mode() u32 { modeBits }
+    pub const func readonly() bool { (modeBits & 146u32) == 0 }
+    pub func setReadonly(value: bool) void {
         if value { modeBits = modeBits & ~u32(146); }
         else { modeBits = modeBits | 128u32; }
     }
@@ -35,17 +34,16 @@ pub class OpenOptions {
     pub var createNewEnabled: bool;
     pub var truncateEnabled: bool;
     pub var modeBits: u32;
-public:
-    func init() : readEnabled(false), writeEnabled(false), appendEnabled(false),
+    pub func init() : readEnabled(false), writeEnabled(false), appendEnabled(false),
         createEnabled(false), createNewEnabled(false), truncateEnabled(false), modeBits(420) {}
-    func read(value: bool) void { readEnabled = value; }
-    func write(value: bool) void { writeEnabled = value; }
-    func append(value: bool) void { appendEnabled = value; }
-    func create(value: bool) void { createEnabled = value; }
-    func createNew(value: bool) void { createNewEnabled = value; }
-    func truncate(value: bool) void { truncateEnabled = value; }
-    func mode(value: u32) void { modeBits = value; }
-    func open(name: path.Path) !File {
+    pub func read(value: bool) void { readEnabled = value; }
+    pub func write(value: bool) void { writeEnabled = value; }
+    pub func append(value: bool) void { appendEnabled = value; }
+    pub func create(value: bool) void { createEnabled = value; }
+    pub func createNew(value: bool) void { createNewEnabled = value; }
+    pub func truncate(value: bool) void { truncateEnabled = value; }
+    pub func mode(value: u32) void { modeBits = value; }
+    pub func open(name: path.Path) !File {
         if !readEnabled && !writeEnabled && !appendEnabled { return FsError.InvalidOptions; }
         if appendEnabled && !writeEnabled { return FsError.InvalidOptions; }
         if truncateEnabled && !writeEnabled { return FsError.InvalidOptions; }
@@ -56,72 +54,68 @@ public:
         var handle = io.HostFile.open(name.asString().asBytes(), flags, modeBits)!;
         File(move(handle))
     }
-    func open(name: str) !File { open(path.fromString(name)!) }
+    pub func open(name: str) !File { open(path.fromString(name)!) }
 }
 
 pub class Metadata {
     var value: io.HostMetadata;
-public:
-    func init(value: io.HostMetadata) : value(move(value)) {}
-    const func len() u64 { value.size() }
-    const func isFile() bool { value.kindCode() == 0 }
-    const func isDir() bool { value.kindCode() == 1 }
-    const func isSymlink() bool { value.kindCode() == 2 }
-    const func fileType() FileType { fileTypeFromCode(value.kindCode()) }
-    const func identity() ?io.FileIdentity { value.identity() }
-    const func permissions() Permissions { Permissions(value.mode()) }
-    const func modifiedUnixSeconds() i64 { value.modifiedUnixSeconds() }
+    pub func init(value: io.HostMetadata) : value(move(value)) {}
+    pub const func len() u64 { value.size() }
+    pub const func isFile() bool { value.kindCode() == 0 }
+    pub const func isDir() bool { value.kindCode() == 1 }
+    pub const func isSymlink() bool { value.kindCode() == 2 }
+    pub const func fileType() FileType { fileTypeFromCode(value.kindCode()) }
+    pub const func identity() ?io.FileIdentity { value.identity() }
+    pub const func permissions() Permissions { Permissions(value.mode()) }
+    pub const func modifiedUnixSeconds() i64 { value.modifiedUnixSeconds() }
 }
 
 pub class File {
     #copy: disabled
     #implements: io.Reader, io.Writer, io.Seeker, io.ReaderAt, io.WriterAt, io.Closer
     var handle: io.HostFile;
-public:
-    func init(handle: io.HostFile) : handle(move(handle)) {}
+    pub func init(handle: io.HostFile) : handle(move(handle)) {}
     // A borrowed OS descriptor. Its ownership remains with this file.
-    const func systemDescriptor() !i32 { handle.systemDescriptor() }
-    func read(dst: []u8) !usize { handle.read(dst) }
-    func write(src: []const u8) !usize { handle.write(src) }
-    func seek(offset: i64, origin: io.SeekOrigin) !u64 { handle.seek(offset, origin) }
-    func readAt(offset: u64, dst: []u8) !usize { handle.readAt(offset, dst) }
-    func writeAt(offset: u64, src: []const u8) !usize { handle.writeAt(offset, src) }
-    func flush() !void { handle.flush() }
-    func close() !void { handle.close() }
-    func syncAll() !void { handle.syncAll() }
-    func syncData() !void { handle.syncData() }
-    func truncate(size: u64) !void { handle.truncate(size) }
-    func metadata() !Metadata { Metadata(handle.metadata()!) }
-    func setPermissions(value: Permissions) !void { handle.setMode(value.mode()) }
-    func deinit() void { handle.close() catch {}; }
+    pub const func systemDescriptor() !i32 { handle.systemDescriptor() }
+    pub func read(dst: []u8) !usize { handle.read(dst) }
+    pub func write(src: []const u8) !usize { handle.write(src) }
+    pub func seek(offset: i64, origin: io.SeekOrigin) !u64 { handle.seek(offset, origin) }
+    pub func readAt(offset: u64, dst: []u8) !usize { handle.readAt(offset, dst) }
+    pub func writeAt(offset: u64, src: []const u8) !usize { handle.writeAt(offset, src) }
+    pub func flush() !void { handle.flush() }
+    pub func close() !void { handle.close() }
+    pub func syncAll() !void { handle.syncAll() }
+    pub func syncData() !void { handle.syncData() }
+    pub func truncate(size: u64) !void { handle.truncate(size) }
+    pub func metadata() !Metadata { Metadata(handle.metadata()!) }
+    pub func setPermissions(value: Permissions) !void { handle.setMode(value.mode()) }
+    pub func deinit() void { handle.close() catch {}; }
 }
 
 pub class DirectoryEntry {
     var entry: io.HostDirEntry;
     var parentPath: path.Path;
-public:
-    func init(entry: io.HostDirEntry, parent: path.Path) : entry(move(entry)), parentPath(parent) {}
-    const func name() str { entry.name() }
-    const func fileType() FileType { fileTypeFromCode(entry.kindCode()) }
-    const func path() !path.Path { path.join(parentPath, path.fromString(name())!) }
-    func metadata() !Metadata { stat(path()!) }
+    pub func init(entry: io.HostDirEntry, parent: path.Path) : entry(move(entry)), parentPath(parent) {}
+    pub const func name() str { entry.name() }
+    pub const func fileType() FileType { fileTypeFromCode(entry.kindCode()) }
+    pub const func path() !path.Path { path.join(parentPath, path.fromString(name())!) }
+    pub func metadata() !Metadata { stat(path()!) }
 }
 
 pub class Directory {
     #copy: disabled
     var handle: io.HostDirectory;
     var base: path.Path;
-public:
-    func init(handle: io.HostDirectory, base: path.Path) : handle(move(handle)), base(base) {}
-    func next() !?DirectoryEntry {
+    pub func init(handle: io.HostDirectory, base: path.Path) : handle(move(handle)), base(base) {}
+    pub func next() !?DirectoryEntry {
         var item = handle.next()!;
         switch item {
             null => null,
             some(entry) => some(DirectoryEntry(move(entry), base)),
         }
     }
-    func close() !void { handle.close() }
-    func deinit() void { handle.close() catch {}; }
+    pub func close() !void { handle.close() }
+    pub func deinit() void { handle.close() catch {}; }
 }
 
 pub func open(name: path.Path, options: OpenOptions) !File { options.open(name) }

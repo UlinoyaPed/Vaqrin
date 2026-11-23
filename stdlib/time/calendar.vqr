@@ -34,19 +34,18 @@ pub class Date {
     var m: u8;
     var d: u8;
     func init(year: i32, month: u8, day: u8) : y(year), m(month), d(day) {}
-public:
-    static func new(year: i32, month: u8, day: u8) !Self {
+    pub static func new(year: i32, month: u8, day: u8) !Self {
         var limit = daysInMonth(year, month)!;
         if day < 1 || day > limit { return TimeError.InvalidDate; }
         Date(year, month, day)
     }
 
-    const func year() i32 { y }
-    const func month() u8 { m }
-    const func day() u8 { d }
-    const func isLeapYear() bool { leapYear(y) }
+    pub const func year() i32 { y }
+    pub const func month() u8 { m }
+    pub const func day() u8 { d }
+    pub const func isLeapYear() bool { leapYear(y) }
 
-    const func dayOfYear() u16 {
+    pub const func dayOfYear() u16 {
         var total = u16(d);
         for month in u8(1)..m {
             total += u16(daysInMonth(y, month) catch { panic("invalid date month"); });
@@ -54,15 +53,15 @@ public:
         total
     }
 
-    const func dayOfWeek() Weekday {
+    pub const func dayOfWeek() Weekday {
         var day = (toOrdinal() + 3) % 7;
         if day < 0 { day += 7; }
         Weekday.fromInt(day).unwrap()
     }
 
-    const func toOrdinal() i64 { beforeYear(i64(y)) - epochOrdinal + i64(dayOfYear()) - 1 }
+    pub const func toOrdinal() i64 { beforeYear(i64(y)) - epochOrdinal + i64(dayOfYear()) - 1 }
 
-    static func fromOrdinal(ordinal: i64) !Self {
+    pub static func fromOrdinal(ordinal: i64) !Self {
         if ordinal < beforeYear(firstYear) - epochOrdinal ||
            ordinal >= beforeYear(pastLastYear) - epochOrdinal { return TimeError.Overflow; }
         var day = ordinal + epochOrdinal;
@@ -84,14 +83,14 @@ public:
         TimeError.InvalidDate
     }
 
-    const func addDays(amount: i64) !Self {
+    pub const func addDays(amount: i64) !Self {
         var ordinal = toOrdinal();
         if amount < beforeYear(firstYear) - epochOrdinal - ordinal ||
            amount >= beforeYear(pastLastYear) - epochOrdinal - ordinal { return TimeError.Overflow; }
         Date.fromOrdinal(ordinal + amount)
     }
 
-    const func addMonths(amount: i32, policy: MonthPolicy) !Self {
+    pub const func addMonths(amount: i32, policy: MonthPolicy) !Self {
         var index = 12i64 * i64(y) + i64(m) - 1 + i64(amount);
         var quotient = floorDiv(index, 12);
         var year = i32(quotient) catch { return TimeError.Overflow; };
@@ -114,24 +113,22 @@ pub class TimeOfDay {
     var sec: u8;
     var nano: u32;
     func init(hour, minute, second: u8, nanosecond: u32) : h(hour), min(minute), sec(second), nano(nanosecond) {}
-public:
-    static func new(hour, minute, second: u8, nano: u32) !Self {
+    pub static func new(hour, minute, second: u8, nano: u32) !Self {
         if hour > 23 || minute > 59 || second > 59 || nano >= 1000000000 { return TimeError.InvalidTime; }
         TimeOfDay(hour, minute, second, nano)
     }
-    const func hour() u8 { h }
-    const func minute() u8 { min }
-    const func second() u8 { sec }
-    const func nanosecond() u32 { nano }
-    const func secondsSinceMidnight() u32 { u32(h) * 3600 + u32(min) * 60 + u32(sec) }
+    pub const func hour() u8 { h }
+    pub const func minute() u8 { min }
+    pub const func second() u8 { sec }
+    pub const func nanosecond() u32 { nano }
+    pub const func secondsSinceMidnight() u32 { u32(h) * 3600 + u32(min) * 60 + u32(sec) }
 }
 
 pub class UtcDateTime {
     var timestamp: i64;
     var fraction: u32;
     func init(seconds: i64, nanos: u32) : timestamp(seconds), fraction(nanos) {}
-public:
-    static func fromUnixSeconds(seconds: i64, nanos: u32) !Self {
+    pub static func fromUnixSeconds(seconds: i64, nanos: u32) !Self {
         if nanos >= 1000000000 { return TimeError.InvalidTime; }
         var ordinal = floorDiv(seconds, secondsPerDay);
         if ordinal < beforeYear(firstYear) - epochOrdinal ||
@@ -139,12 +136,12 @@ public:
         UtcDateTime(seconds, nanos)
     }
 
-    const func unixSeconds() i64 { timestamp }
-    const func nanosecond() u32 { fraction }
-    const func date() Date {
+    pub const func unixSeconds() i64 { timestamp }
+    pub const func nanosecond() u32 { fraction }
+    pub const func date() Date {
         Date.fromOrdinal(floorDiv(timestamp, secondsPerDay)) catch { panic("invalid UTC date"); }
     }
-    const func time() TimeOfDay {
+    pub const func time() TimeOfDay {
         var seconds = timestamp - floorDiv(timestamp, secondsPerDay) * secondsPerDay;
         var hour = u8(seconds / 3600) catch { panic("invalid UTC hour"); };
         var minute = u8((seconds / 60) % 60) catch { panic("invalid UTC minute"); };
@@ -152,7 +149,7 @@ public:
         TimeOfDay.new(hour, minute, second, fraction) catch { panic("invalid UTC time"); }
     }
 
-    const func add(amount: Duration) !Self {
+    pub const func add(amount: Duration) !Self {
         var nanos = i32(fraction) catch { return TimeError.InvalidTime; };
         var value = Duration.fromParts(timestamp, nanos)!.add(amount)!;
         var whole = value.seconds();
@@ -170,11 +167,10 @@ pub class LocalDateTime {
     var datePart: Date;
     var timePart: TimeOfDay;
     func init(date: Date, time: TimeOfDay) : datePart(date), timePart(time) {}
-public:
-    static func new(date: Date, time: TimeOfDay) Self { LocalDateTime(date, time) }
-    const func date() Date { datePart }
-    const func time() TimeOfDay { timePart }
-    const func add(value: Duration) !Self {
+    pub static func new(date: Date, time: TimeOfDay) Self { LocalDateTime(date, time) }
+    pub const func date() Date { datePart }
+    pub const func time() TimeOfDay { timePart }
+    pub const func add(value: Duration) !Self {
         var seconds = datePart.toOrdinal() * secondsPerDay + i64(timePart.secondsSinceMidnight());
         var adjusted = UtcDateTime.fromUnixSeconds(seconds, timePart.nanosecond())!.add(value)!;
         LocalDateTime(adjusted.date(), adjusted.time())

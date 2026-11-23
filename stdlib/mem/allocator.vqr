@@ -13,15 +13,14 @@ pub comptime func hasDefaultAllocator() bool { __vqr_default_heap() }
 
 pub class GlobalAllocator {
     #implements: Allocator
-public:
-    func init() {}
+    pub func init() {}
 
-    func alloc(layout: Layout) !?*u8 {
+    pub func alloc(layout: Layout) !?*u8 {
         if layout.size() == 0 { return null; }
         __vqr_alloc_bytes(layout.size(), layout.align())
     }
 
-    func free(ptr: *u8, layout: Layout) void {
+    pub func free(ptr: *u8, layout: Layout) void {
         unsafe { __vqr_free<u8>(ptr); }
     }
 }
@@ -34,10 +33,9 @@ pub class FixedBufferAllocator {
     #implements: Allocator
     var buffer: []u8;
     var cursor: usize;
-public:
-    func init(bytes: []u8) : buffer(bytes), cursor(0) {}
+    pub func init(bytes: []u8) : buffer(bytes), cursor(0) {}
 
-    func alloc(layout: Layout) !?*u8 {
+    pub func alloc(layout: Layout) !?*u8 {
         if layout.size() == 0 { return null; }
         if cursor == buffer.len() { return AllocationError.OutOfMemory; }
         var base = __vqr_pointer_address(&buffer[0]);
@@ -50,7 +48,7 @@ public:
         some(&buffer[position])
     }
 
-    func free(ptr: *u8, layout: Layout) void {
+    pub func free(ptr: *u8, layout: Layout) void {
         if buffer.len() == 0 { return; }
         var base = __vqr_pointer_address(&buffer[0]);
         var address = __vqr_pointer_address(ptr);
@@ -59,11 +57,11 @@ public:
         if position <= cursor && layout.size() == cursor - position { cursor = position; }
     }
 
-    const func mark() usize { cursor }
-    unsafe func reset() void { cursor = 0; }
-    unsafe func rewind(mark: usize) void {
+    pub const func mark() usize { cursor }
+    pub unsafe func reset() void { cursor = 0; }
+    pub unsafe func rewind(mark: usize) void {
         if mark > cursor { panic("buffer allocator mark out of bounds"); }
         cursor = mark;
     }
-    const func remaining() usize { buffer.len() - cursor }
+    pub const func remaining() usize { buffer.len() - cursor }
 }

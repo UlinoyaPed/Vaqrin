@@ -225,19 +225,19 @@ pub func midpoint<T>(a: T, b: T) T {
     }
 }
 
-pub func sum<T: Copyable & Movable>(values: []const T) !T {
+pub func sum<T: Copyable + Movable>(values: []const T) !T {
     var result = T(0);
     for value in values { result = checkedAdd<T>(result, value)!; }
     result
 }
 
-pub func product<T: Copyable & Movable>(values: []const T) !T {
+pub func product<T: Copyable + Movable>(values: []const T) !T {
     var result = T(1);
     for value in values { result = checkedMul<T>(result, value)!; }
     result
 }
 
-pub func average<T: Copyable & Movable>(values: []const T) !?T {
+pub func average<T: Copyable + Movable>(values: []const T) !?T {
     if values.len() == 0 { return null; }
     var total = BigInt.zero();
     for value in values {

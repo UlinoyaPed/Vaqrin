@@ -24,9 +24,8 @@ pub class Header {
 
 pub class HeaderReader {
     var reader: binary.Reader;
-public:
-    func init(value: []const u8) : reader(binary.Reader(value, binary.Endian.Big)) {}
-    func next() !?Header {
+    pub func init(value: []const u8) : reader(binary.Reader(value, binary.Endian.Big)) {}
+    pub func next() !?Header {
         if reader.remaining() == 0 { return null; }
         var label = reader.readU32()!;
         var size = reader.readU32()!;
@@ -40,10 +39,9 @@ pub class HeaderBlock {
     #copy: disabled
     var data: coll.Vec<u8>;
     var cost: usize;
-public:
-    func init() : data(coll.Vec<u8>()), cost(0) {}
-    func add(name: str, value: str) !void { addBytes(name, value.asBytes(), false) }
-    func addBytes(name: str, value: []const u8, sensitive: bool) !void {
+    pub func init() : data(coll.Vec<u8>()), cost(0) {}
+    pub func add(name: str, value: str) !void { addBytes(name, value.asBytes(), false) }
+    pub func addBytes(name: str, value: []const u8, sensitive: bool) !void {
         var key = name.asBytes();
         var limit: usize = 262144 - cost;
         if key.len() == 0 || limit < 32 || key.len() > limit - 32 || value.len() > limit - 32 - key.len() {
@@ -65,5 +63,5 @@ public:
         for byte in value { data.push(byte)!; }
         cost += key.len() + value.len() + 32;
     }
-    const func encoded() []const u8 { data.asConstSlice() }
+    pub const func encoded() []const u8 { data.asConstSlice() }
 }

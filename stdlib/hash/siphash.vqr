@@ -24,13 +24,12 @@ pub class SipHasher {
     var tail: u64;
     var used: usize;
     var length: u64;
-public:
-    func init(seed: HashSeed)
+    pub func init(seed: HashSeed)
         : v0(seed.low ^ 0x736f6d6570736575u64), v1(seed.high ^ 0x646f72616e646f6du64),
           v2(seed.low ^ 0x6c7967656e657261u64), v3(seed.high ^ 0x7465646279746573u64),
           tail(0), used(0), length(0) {}
 
-    func write(bytes: []const u8) void {
+    pub func write(bytes: []const u8) void {
         for byte in bytes {
             tail |= u64(byte) << (used * 8);
             length +%= 1;
@@ -43,16 +42,15 @@ public:
         }
     }
 
-    const func finish64() u64 {
+    pub const func finish64() u64 {
         var finalized = *self;
         finalized.compress(tail | (length << 56));
         finalized.v2 ^= 0xffu64;
         for i in 0..4 { finalized.round(); }
         finalized.v0 ^ finalized.v1 ^ finalized.v2 ^ finalized.v3
     }
-    const func finish() usize { __vqr_parse_bits<usize>(u128(finish64())) }
+    pub const func finish() usize { __vqr_parse_bits<usize>(u128(finish64())) }
 
-private:
     func round() void {
         v0 +%= v1;
         v1 = bits.rotateLeft<u64>(v1, 13) ^ v0;

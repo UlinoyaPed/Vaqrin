@@ -30,11 +30,10 @@ pub class JsonHandler {
     var pending: coll.Vec<u8>;
     var position: usize;
     func init(writer: *io.Writer) : writer(writer), pending(coll.Vec<u8>()), position(0) {}
-public:
-    static func new(writer: *io.Writer) Self { JsonHandler(writer) }
-    const func enabled(level: Level) bool { true }
+    pub static func new(writer: *io.Writer) Self { JsonHandler(writer) }
+    pub const func enabled(level: Level) bool { true }
 
-    func handle(record: *const Record) !void {
+    pub func handle(record: *const Record) !void {
         drain()!;
         var object = json.JsonObject();
         var oldLevel = object.insert("level", keyword(levelText(record.level()))!)!;
@@ -59,11 +58,10 @@ public:
         drain()
     }
 
-    func flush() !void {
+    pub func flush() !void {
         drain()!;
         writer.flush()
     }
-private:
     func drain() !void {
         io.writeAll(writer, pending.asConstSlice(), &position)!;
         pending.clear();

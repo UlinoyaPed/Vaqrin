@@ -50,19 +50,18 @@ const wantRead: i32 = -10;
 const wantWrite: i32 = -11;
 
 class TlsReadiness {
-public:
     comptime if __vqr_host_supports_tasks() {
-        static func check(deadline: ?time.Deadline) !void {
+        pub static func check(deadline: ?time.Deadline) !void {
             if task.isCancelled() { return io.IoError.Cancelled; }
             if deadline != null && deadline.unwrap().expired()! { return io.IoError.DeadlineExceeded; }
         }
-        static func wait(fd: i32, status: i32, deadline: ?time.Deadline) !void {
+        pub static func wait(fd: i32, status: i32, deadline: ?time.Deadline) !void {
             var interest = if status == wantRead { reactor.Interest.read() } else { reactor.Interest.write() };
             task.waitDescriptor(fd, interest, deadline)
         }
     } else {
-        static func check(deadline: ?time.Deadline) !void { io.IoError.Unsupported }
-        static func wait(fd: i32, status: i32, deadline: ?time.Deadline) !void { io.IoError.Unsupported }
+        pub static func check(deadline: ?time.Deadline) !void { io.IoError.Unsupported }
+        pub static func wait(fd: i32, status: i32, deadline: ?time.Deadline) !void { io.IoError.Unsupported }
     }
 }
 
@@ -78,11 +77,10 @@ pub class TlsConfig {
     pub var requireProtocol: bool;
     var caFile: coll.Vec<u8>;
     var protocols: coll.Vec<u8>;
-public:
-    func init() : minimumVersion(Version.Tls12), requireProtocol(false),
+    pub func init() : minimumVersion(Version.Tls12), requireProtocol(false),
         caFile(coll.Vec<u8>()), protocols(coll.Vec<u8>()) {}
-    func setRootFile(path: str) !void { caFile = cString(path)!; }
-    func addProtocol(name: []const u8) !void {
+    pub func setRootFile(path: str) !void { caFile = cString(path)!; }
+    pub func addProtocol(name: []const u8) !void {
         if name.len() == 0 || name.len() > 255 || protocols.len() + name.len() + 1 > 65535 {
             return TlsError.InvalidProtocol;
         }
@@ -90,30 +88,29 @@ public:
         protocols.push(u8(name.len())!)!;
         for byte in name { protocols.push(byte)!; }
     }
-    const func connect(socket: net.TcpStream, host: str) !TlsStream {
+    pub const func connect(socket: net.TcpStream, host: str) !TlsStream {
         var name = cString(host)!;
         var empty: u8 = 0;
         open(move(socket), &name[0], &empty, &empty, false, null)
     }
-    const func accept(socket: net.TcpStream, cert: str, key: str) !TlsStream {
+    pub const func accept(socket: net.TcpStream, cert: str, key: str) !TlsStream {
         var certificate = cString(cert)!;
         var privateKey = cString(key)!;
         var empty: u8 = 0;
         open(move(socket), &empty, &certificate[0], &privateKey[0], false, null)
     }
-    const func connectAsync(socket: net.AsyncTcpStream, host: str, deadline: ?time.Deadline) !TlsStream {
+    pub const func connectAsync(socket: net.AsyncTcpStream, host: str, deadline: ?time.Deadline) !TlsStream {
         var name = cString(host)!;
         var empty: u8 = 0;
         open(net.AsyncTcpStream.intoTcp(move(socket)), &name[0], &empty, &empty, true, deadline)
     }
-    const func acceptAsync(socket: net.AsyncTcpStream, cert: str, key: str,
+    pub const func acceptAsync(socket: net.AsyncTcpStream, cert: str, key: str,
                            deadline: ?time.Deadline) !TlsStream {
         var certificate = cString(cert)!;
         var privateKey = cString(key)!;
         var empty: u8 = 0;
         open(net.AsyncTcpStream.intoTcp(move(socket)), &empty, &certificate[0], &privateKey[0], true, deadline)
     }
-private:
     const func open(socket: net.TcpStream, host: *const u8,
                     cert: *const u8, key: *const u8, suspendable: bool, deadline: ?time.Deadline) !TlsStream {
         if requireProtocol && protocols.len() == 0 { return TlsError.InvalidProtocol; }
@@ -147,16 +144,15 @@ pub class TlsAcceptor {
     var privateKey: string;
     func init(options: TlsConfig, cert: string, key: string)
         : config(move(options)), certificate(move(cert)), privateKey(move(key)) {}
-public:
-    static func fromPem(cert: str, key: str, options: TlsConfig) !Self {
+    pub static func fromPem(cert: str, key: str, options: TlsConfig) !Self {
         var certificate = text.fromBytes(cert.asBytes())!;
         var privateKey = text.fromBytes(key.asBytes())!;
         TlsAcceptor(move(options), move(certificate), move(privateKey))
     }
-    const func accept(socket: net.TcpStream) !TlsStream {
+    pub const func accept(socket: net.TcpStream) !TlsStream {
         config.accept(move(socket), certificate, privateKey)
     }
-    const func acceptAsync(socket: net.AsyncTcpStream, deadline: ?time.Deadline) !TlsStream {
+    pub const func acceptAsync(socket: net.AsyncTcpStream, deadline: ?time.Deadline) !TlsStream {
         config.acceptAsync(move(socket), certificate, privateKey, deadline)
     }
 }
@@ -170,10 +166,9 @@ pub class TlsStream {
     var readDeadline: ?time.Deadline;
     var writeDeadline: ?time.Deadline;
     func deinit() void { close() catch {}; }
-public:
-    func init(socket: net.TcpStream, native: NativeSession)
+    pub func init(socket: net.TcpStream, native: NativeSession)
         : stream(move(socket)), session(native.value), suspendable(false), readDeadline(null), writeDeadline(null) {}
-    func startAsync(deadline: ?time.Deadline) !void {
+    pub func startAsync(deadline: ?time.Deadline) !void {
         TlsReadiness.check(deadline)!;
         suspendable = true;
         readDeadline = deadline;
@@ -186,21 +181,21 @@ public:
             TlsReadiness.wait(fd, status, deadline)!;
         }
     }
-    func setReadDeadline(value: ?time.Deadline) void { readDeadline = value; }
-    func setWriteDeadline(value: ?time.Deadline) void { writeDeadline = value; }
-    static func connect(socket: net.TcpStream, host: str, config: *const TlsConfig) !Self {
+    pub func setReadDeadline(value: ?time.Deadline) void { readDeadline = value; }
+    pub func setWriteDeadline(value: ?time.Deadline) void { writeDeadline = value; }
+    pub static func connect(socket: net.TcpStream, host: str, config: *const TlsConfig) !Self {
         config.connect(move(socket), host)
     }
-    const func negotiatedProtocol() !?coll.Vec<u8> {
+    pub const func negotiatedProtocol() !?coll.Vec<u8> {
         if session == 0 { return io.IoError.Closed; }
         var bytes = mem.zeroedBytes<255>();
         var count = unsafe { __vqr_tls_alpn(session, &bytes[0]) };
         if count == 0 { return null; }
         some(coll.Vec<u8>.fromSlice(bytes[0..count])!)
     }
-    const func systemDescriptor() !i32 { stream.systemDescriptor() }
+    pub const func systemDescriptor() !i32 { stream.systemDescriptor() }
     // A pending read must be retried with the same buffer.
-    func tryRead(dst: []u8) !(usize, ?reactor.Interest) {
+    pub func tryRead(dst: []u8) !(usize, ?reactor.Interest) {
         if session == 0 { return io.IoError.Closed; }
         if !suspendable { return io.IoError.Unsupported; }
         if dst.len() == 0 { return (usize(0), null); }
@@ -211,9 +206,9 @@ public:
         checkStatus(status)!;
         (count, null)
     }
-    func setReadTimeout(value: ?time.Duration) !void { stream.setReadTimeout(value) }
-    func setWriteTimeout(value: ?time.Duration) !void { stream.setWriteTimeout(value) }
-    func read(dst: []u8) !usize {
+    pub func setReadTimeout(value: ?time.Duration) !void { stream.setReadTimeout(value) }
+    pub func setWriteTimeout(value: ?time.Duration) !void { stream.setWriteTimeout(value) }
+    pub func read(dst: []u8) !usize {
         if session == 0 { return io.IoError.Closed; }
         if dst.len() == 0 { return 0; }
         for {
@@ -235,7 +230,7 @@ public:
             };
         }
     }
-    func write(src: []const u8) !usize {
+    pub func write(src: []const u8) !usize {
         if session == 0 { return io.IoError.Closed; }
         if src.len() == 0 { return 0; }
         for {
@@ -257,8 +252,8 @@ public:
             };
         }
     }
-    func flush() !void { if session == 0 { return io.IoError.Closed; } }
-    func close() !void {
+    pub func flush() !void { if session == 0 { return io.IoError.Closed; } }
+    pub func close() !void {
         if session == 0 { return; }
         var current = session;
         session = 0;

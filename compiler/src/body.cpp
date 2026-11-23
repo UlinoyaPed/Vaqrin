@@ -284,10 +284,20 @@ static std::string bindingType(Type *type, const Source *source) {
   case Kind::Array: return "[" + std::to_string(type->count) + "]" + bindingType(type->parts[0], source);
   case Kind::Optional: return "?" + bindingType(type->parts[0], source);
   case Kind::Result: return "!" + bindingType(type->parts[0], source);
+  case Kind::Box:
+    return "^" + bindingType(type->parts[0], source);
+  case Kind::Function: {
+    auto parameters = llvm::ArrayRef(type->parts).drop_back();
+    return std::string(type->cAbi ? "extern \"C\" func(" : "func(") + arguments(parameters) + ") " +
+           bindingType(type->parts.back(), source);
+  }
   case Kind::Pointer:
     return std::string(type->readOnly ? "*const " : "*") + bindingType(type->parts[0], source);
   case Kind::Reference:
-    return std::string(type->readOnly ? "&const " : "&") + bindingType(type->parts[0], source);
+    return std::string(type->compatible ? "in &const "
+                       : type->readOnly ? "&const "
+                                        : "&") +
+           bindingType(type->parts[0], source);
   case Kind::Slice:
     return std::string(type->readOnly ? "[]const " : "[]") + bindingType(type->parts[0], source);
   case Kind::Class: case Kind::Interface: case Kind::Enum:
@@ -867,6 +877,67 @@ DIType *Program::debugType(Type *t) {
   case Kind::Float:
     out = debug->createBasicType(t->name, t->bits, dwarf::DW_ATE_float);
     break;
+  case Kind::Error:
+    out = debug->createBasicType(t->name, 32, dwarf::DW_ATE_unsigned);
+    break;
+  case Kind::Array: {
+    const auto &layout = module->getDataLayout();
+    auto *range = debug->getOrCreateSubrange(0, t->count);
+    out = debug->createArrayType(layout.getTypeSizeInBits(t->ir).getFixedValue(),
+                                 layout.getABITypeAlign(t->ir).value() * 8, debugType(t->parts[0]),
+                                 debug->getOrCreateArray({range}));
+    break;
+  }
+  case Kind::Class:
+  case Kind::Box:
+  case Kind::Tuple:
+  case Kind::Optional:
+  case Kind::Result: {
+    ensureSized(t, t->def.decl ? t->def.decl->span : Span{});
+    auto *file = unit->getFile();
+    unsigned line = 0;
+    if (t->def.decl) {
+      const auto span = t->def.decl->span;
+      const std::filesystem::path path(span.source->path);
+      file = debug->createFile(path.filename().string(), path.parent_path().string());
+      line = 1 + std::count(span.source->bytes.begin(), span.source->bytes.begin() + span.begin, '\n');
+    }
+    const auto &layout = module->getDataLayout();
+    auto *structure = cast<StructType>(t->ir);
+    auto *offsets = layout.getStructLayout(structure);
+    const auto size = layout.getTypeAllocSizeInBits(structure).getFixedValue();
+    const auto alignment = layout.getABITypeAlign(structure).value() * 8;
+    const auto name = bindingType(t, t->def.decl ? t->def.decl->span.source : nullptr);
+    auto *forward = debug->createReplaceableCompositeType(dwarf::DW_TAG_structure_type, name, file, file,
+                                                          line, 0, size, alignment);
+    debugTypes.emplace(t, forward);
+    SmallVector<Metadata *> members;
+    auto field = [&](unsigned index, StringRef name, DIType *type) {
+      auto *storage = structure->getElementType(index);
+      members.push_back(debug->createMemberType(
+          forward, name, file, line, layout.getTypeSizeInBits(storage).getFixedValue(),
+          layout.getABITypeAlign(storage).value() * 8, offsets->getElementOffsetInBits(index),
+          DINode::FlagZero, type));
+    };
+    if (t->kind == Kind::Class) {
+      for (const auto &member : t->fields)
+        field(member.index, member.decl->name, debugType(member.type));
+    } else if (t->kind == Kind::Box) {
+      field(0, "pointee", debug->createPointerType(debugType(t->parts[0]), pointerBits()));
+    } else if (t->kind == Kind::Tuple) {
+      for (unsigned i = 0; i < t->parts.size(); ++i)
+        field(i, "item" + std::to_string(i), debugType(t->parts[i]));
+    } else {
+      const bool optional = t->kind == Kind::Optional;
+      field(0, optional ? "present" : "error", debugType(optional ? boolTy : errorTy));
+      if (t->parts[0] != voidTy && t->parts[0] != neverTy) field(1, "value", debugType(t->parts[0]));
+    }
+    out = debug->createStructType(file, name, file, line, size, alignment, DINode::FlagZero, nullptr,
+                                  debug->getOrCreateArray(members));
+    out = debug->replaceTemporary(TempDICompositeType(forward), cast<DICompositeType>(out));
+    debugTypes[t] = out;
+    break;
+  }
   case Kind::Pointer:
   case Kind::Reference: {
     if (!t->ir->isPointerTy()) {

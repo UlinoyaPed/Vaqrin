@@ -11,8 +11,10 @@ cp -R "$source_dir/grammar/." "$grammar/"
 mkdir -p "$output/src"
 cp "$source_dir/Cargo.toml" "$output/"
 if [[ -f "$source_dir/Cargo.lock" ]]; then cp "$source_dir/Cargo.lock" "$output/"; fi
-cp "$source_dir/src/lib.rs" "$source_dir/src/server.py" "$output/src/"
+cp "$source_dir/src/lib.rs" "$source_dir/src/"*.py "$output/src/"
 cp -R "$source_dir/languages/." "$output/languages/"
+mkdir -p "$output/debug_adapter_schemas"
+cp "$source_dir/debug_adapter_schemas/vaqrin.json" "$output/debug_adapter_schemas/"
 git -C "$grammar" init --quiet
 git -C "$grammar" add -- grammar.js tree-sitter.json src
 if ! git -C "$grammar" diff --cached --quiet; then

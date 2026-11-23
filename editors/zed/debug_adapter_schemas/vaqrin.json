@@ -1,0 +1,20 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "request": { "enum": ["launch", "attach"] },
+    "program": { "type": "string", "minLength": 1 },
+    "pid": { "type": "integer", "minimum": 1 },
+    "args": { "type": "array", "items": { "type": "string" } },
+    "cwd": { "type": "string" },
+    "env": { "type": "object", "additionalProperties": { "type": "string" } },
+    "console": { "enum": ["internalConsole", "integratedTerminal", "externalTerminal"] },
+    "runInTerminal": { "type": "boolean" },
+    "stopOnEntry": { "type": "boolean" },
+    "disableASLR": { "type": "boolean" }
+  },
+  "required": ["request"],
+  "if": { "properties": { "request": { "const": "launch" } } },
+  "then": { "required": ["program"] },
+  "else": { "required": ["pid"] }
+}

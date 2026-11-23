@@ -22,6 +22,12 @@ Source readSource(const fs::path &path, const fs::path &contents) {
   return {path.string(), (*input)->getBuffer().str()};
 }
 
+Source readStdinSource() {
+  auto input = llvm::MemoryBuffer::getSTDIN();
+  if (!input) fail({}, input.getError().message(), "E301");
+  return {"<stdin>", (*input)->getBuffer().str()};
+}
+
 namespace {
 
 std::pair<int64_t, int64_t> position(std::string_view bytes, std::size_t offset) {
@@ -354,9 +360,7 @@ int formatCommand(int argc, char **argv) {
     for (const auto &path : paths) {
       if (path == "-") {
         if (mode != Mode::Print) fail({}, "stdin requires stdout format mode", "E300");
-        auto input = llvm::MemoryBuffer::getSTDIN();
-        if (!input) fail({}, input.getError().message(), "E301");
-        source = {"<stdin>", (*input)->getBuffer().str()};
+        source = readStdinSource();
       } else {
         if (path.extension() != ".vqr") fail({}, "format requires .vqr source files", "E300");
         source = readSource(path, path);

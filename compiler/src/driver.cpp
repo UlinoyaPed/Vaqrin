@@ -107,7 +107,7 @@ void help() {
                "  --entry FILE            Select a file-local main\n"
                "  --overlay FILE          Read replacement contents for one .vqr in check mode\n"
                "  --overlay-map FILE      Read a JSON object mapping source paths to replacement files\n"
-               "  --syntax-only          Check syntax without resolving imports or types\n"
+               "  --syntax-only          Check syntax without imports or types; '-' reads stdin\n"
                "  --diagnostics=json     Emit one JSON diagnostic per line with UTF-16 ranges\n"
                "  --editor-hints         Report inferred binding types as JSON in check mode\n"
                "  --editor-symbols       Report local binding occurrences as JSON in check mode\n"
@@ -149,7 +149,7 @@ Request arguments(int argc, char **argv) {
       r.options.optimization = a[2] - '0';
       continue;
     }
-    if (!a.starts_with('-')) {
+    if (!a.starts_with('-') || a == "-") {
       r.inputs.emplace_back(a);
       continue;
     }
@@ -196,6 +196,9 @@ Request arguments(int argc, char **argv) {
       fail({}, "unknown option '" + std::string(a) + "'", "E300");
   }
   if (r.inputs.empty()) fail({}, "no input files; see vaqc --help", "E300");
+  const auto stdinInputs = std::ranges::count(r.inputs, fs::path("-"));
+  if (stdinInputs && (!r.syntaxOnly || stdinInputs != 1 || !r.overlay.empty()))
+    fail({}, "'-' requires --syntax-only and may be specified once without --overlay", "E300");
   if ((!r.overlay.empty() || !r.dependencies.empty()) &&
       (r.inputs.size() != 1 || r.inputs.front().extension() != ".vqr" || fs::is_directory(r.inputs.front())))
     fail({}, "--overlay and --dependencies require exactly one .vqr input", "E300");
@@ -855,9 +858,13 @@ int main(int argc, char **argv) {
       bool failed = false;
       for (const auto &path : request.inputs) {
         try {
-          if (path.extension() != ".vqr" || fs::is_directory(path))
-            fail({}, "syntax check requires a .vqr source file: " + path.string(), "E300");
-          syntaxSource = readSource(fs::absolute(path), request.overlay.empty() ? path : request.overlay);
+          if (path == "-") {
+            syntaxSource = readStdinSource();
+          } else {
+            if (path.extension() != ".vqr" || fs::is_directory(path))
+              fail({}, "syntax check requires a .vqr source file: " + path.string(), "E300");
+            syntaxSource = readSource(fs::absolute(path), request.overlay.empty() ? path : request.overlay);
+          }
           parse(syntaxSource);
         } catch (const Diagnostic &diagnostic) {
           if (jsonDiagnostics)

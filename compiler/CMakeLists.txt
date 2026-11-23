@@ -21,15 +21,22 @@ target_include_directories(vaqc SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 separate_arguments(llvm_definitions NATIVE_COMMAND "${LLVM_DEFINITIONS}")
 target_compile_options(vaqc PRIVATE ${llvm_definitions}
     $<$<CXX_COMPILER_ID:Clang,GNU>:-Wall;-Wextra;-pedantic-errors>)
+add_executable(vaqdbg tools/vaqdbg.cpp)
+target_include_directories(vaqdbg SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+target_compile_options(vaqdbg PRIVATE ${llvm_definitions}
+    $<$<CXX_COMPILER_ID:Clang,GNU>:-Wall;-Wextra;-pedantic-errors>)
+add_dependencies(vaqdbg vaqc)
 option(VAQRIN_USE_LLVM_DYLIB "Prefer the complete LLVM shared library when exported by the SDK" ON)
 if(VAQRIN_USE_LLVM_DYLIB AND TARGET LLVM AND "all" IN_LIST LLVM_DYLIB_COMPONENTS)
     target_link_libraries(vaqc PRIVATE LLVM)
+    target_link_libraries(vaqdbg PRIVATE LLVM)
 else()
     # Installed SDKs can leave LLVM_COMPONENT_LIBS unset, making "all" expand to nothing.
     llvm_map_components_to_libnames(llvm_libs
         Core Support TargetParser BitReader BitWriter Object Passes IPO CodeGen MC Target
         AllTargetsCodeGens AllTargetsDescs AllTargetsInfos)
     target_link_libraries(vaqc PRIVATE ${llvm_libs})
+    target_link_libraries(vaqdbg PRIVATE LLVMSupport)
 endif()
 set(VAQRIN_STDLIB_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/../stdlib")
 file(GLOB_RECURSE vaqrin_package_files CONFIGURE_DEPENDS
@@ -65,7 +72,7 @@ foreach(runtime_file IN LISTS VAQRIN_RUNTIME_FILES)
 endforeach()
 install(FILES ${VAQRIN_RUNTIME_FILES} DESTINATION share/vaqrin/runtime)
 
-install(TARGETS vaqc RUNTIME DESTINATION bin)
+install(TARGETS vaqc vaqdbg RUNTIME DESTINATION bin)
 install(PROGRAMS tools/protoc-gen-vaqrin DESTINATION bin)
 install(FILES UNICODE-LICENSE DESTINATION share/licenses/vaqc)
 
@@ -90,5 +97,8 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/protocol_acceptance.py $<TARGET_FILE:vaqc>)
     add_test(NAME vaqc-editor-acceptance COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/editor_acceptance.py $<TARGET_FILE:vaqc>)
+    add_test(NAME vaqc-debug-acceptance COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/debug_acceptance.py $<TARGET_FILE:vaqc>)
     set_tests_properties(vaqc-editor-acceptance PROPERTIES TIMEOUT 40)
+    set_tests_properties(vaqc-debug-acceptance PROPERTIES TIMEOUT 50)
 endif()

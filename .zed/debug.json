@@ -1,0 +1,22 @@
+[
+  {
+    "label": "Debug current Vaqrin file",
+    "adapter": "Vaqrin",
+    "request": "launch",
+    "build": {
+      "command": "$ZED_WORKTREE_ROOT/build/host/vaqdbg",
+      "args": [
+        "--build-only",
+        "--output",
+        "$ZED_WORKTREE_ROOT/build/debug/$ZED_RELATIVE_FILE.debug",
+        "$ZED_FILE"
+      ],
+      "cwd": "$ZED_WORKTREE_ROOT"
+    },
+    "program": "$ZED_WORKTREE_ROOT/build/debug/$ZED_RELATIVE_FILE.debug",
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "runInTerminal": true,
+    "disableASLR": false,
+    "stopOnEntry": false
+  }
+]

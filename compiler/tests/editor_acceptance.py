@@ -1,4 +1,5 @@
 """Exercise the installed editor server's JSON-RPC entry point."""
+import io
 import json
 import os
 import subprocess
@@ -9,6 +10,14 @@ from acceptance import CompilerCase, REPOSITORY, VAQC
 
 
 class EditorAcceptance(CompilerCase):
+    def test_standard_library_sources_parse(self):
+        packages = REPOSITORY / "stdlib"
+        for directory in sorted(path for path in packages.iterdir() if path.is_dir()):
+            sources = sorted(directory.glob("*.vqr"))
+            if sources:
+                with self.subTest(package=directory.name):
+                    self.process(VAQC, "check", "--syntax-only", *sources)
+
     def test_formatter_and_syntax_only(self):
         source = self.source("tooling.vqr", "import (unavailable)\nfunc main() i32 {\n\treturn 0;  \n}\n")
         form = "import (unavailable)\nfunc main() i32 {\n    return 0;\n}\n"
@@ -33,6 +42,25 @@ class EditorAcceptance(CompilerCase):
                              source, valid, second, good=False)
         self.assertEqual([json.loads(line)["path"] for line in batch.stderr.splitlines()],
                          [str(source), str(second)])
+        self.process(VAQC, "check", "--syntax-only", "-", input=valid.read_bytes())
+        piped = self.process(VAQC, "check", "--syntax-only", "--diagnostics=json", "-",
+                             input=source.read_bytes(), good=False)
+        self.assertEqual(json.loads(piped.stderr), {**diagnostic, "path": "<stdin>"})
+
+    def test_box_and_callable_hints_use_source_names(self):
+        source = self.source("own.vqr", r'''
+            class Counter {
+                pub var value: i32;
+                pub func init(start: i32) : value(start) {}
+            }
+            func main() !void {
+                var owner = new Counter(41)!;
+                var transform = (value: i32) i32 => value + 1;
+            }
+        ''')
+        hints = self.process(VAQC, "check", "--editor-hints", source)
+        self.assertEqual([entry["type"] for entry in json.loads(hints.stdout)],
+                         ["^Counter", "func(i32) i32"])
 
     def test_formatter_preserves_expression_roles(self):
         source = self.source("style.vqr", """func main() i32 {
@@ -88,6 +116,66 @@ n
         self.assertTrue(all(data[item["begin"]:item["end"]] == b"n" for item in points))
         self.assertFalse(helper.exists())
 
+    def test_local_import_completion(self):
+        main = self.source("main.vqr", 'import (io, "report.vqr" as report, logic)\n'
+                           'func main() !void { io.println(report.total(10, logic.count()))!; }\n')
+        self.source("report.vqr", "pub func total(first: i32, second: i32) i32 { first + second }\n")
+        self.source("package.toml", '[build]\nentry = "main.vqr"\n[dependencies]\n'
+                    'logic = { path = "deps/logic-src" }\n')
+        self.source("custom/summary.vqr", "package custom\npub func count() i32 { 1 }\n")
+        self.source("deps/logic-src/main.vqr", "package logic\npub func count() i32 { 21 }\n")
+        self.process(VAQC, "lock", self.root)
+        self.process(VAQC, "check", main)
+        uri = main.as_uri()
+
+        def message(method, params, identifier=None):
+            data = {"jsonrpc": "2.0", "method": method, "params": params}
+            if identifier is not None:
+                data["id"] = identifier
+            body = json.dumps(data).encode()
+            return f"Content-Length: {len(body)}\r\n\r\n".encode() + body
+
+        requests = message("initialize", {}, 0)
+        cases = ['import (io, "rep|", custom)',
+                 'import (io, "report.vqr" as report, cus|)',
+                 ('import (io, /* hidden */ "report.vqr" as report)\n'
+                  'func main() !void {\n  rep|\n}'),
+                 'import (io, "report.vqr" as report)\nfunc main() !void {\n  report.|\n}',
+                 'import (rep|)',
+                 'import (log|)',
+                 'import (logic)\nfunc f() void { logic.| }']
+        for version, marked in enumerate(cases, 1):
+            before, after = marked.split("|")
+            source = before + after
+            position = {"line": before.count("\n"), "character": len(before.rsplit("\n", 1)[-1])}
+            document = {"uri": uri, "version": version}
+            if version == 1:
+                requests += message("textDocument/didOpen", {"textDocument": {**document, "text": source}})
+            else:
+                requests += message("textDocument/didChange", {"textDocument": document,
+                                    "contentChanges": [{"text": source}]})
+            requests += message("textDocument/completion", {"textDocument": {"uri": uri},
+                                "position": position}, version)
+        requests += message("shutdown", {}, len(cases) + 1) + message("exit", {})
+        result = self.process(sys.executable, REPOSITORY / "editors/zed/src/server.py", self.root, input=requests)
+        replies = {}
+        stream = io.BytesIO(result.stdout)
+        while header := stream.readline():
+            length = int(header.split(b":", 1)[1])
+            self.assertEqual(stream.readline(), b"\r\n")
+            reply = json.loads(stream.read(length))
+            if "id" in reply:
+                self.assertNotIn("error", reply)
+                replies[reply["id"]] = reply["result"]
+        files = {item["label"]: item for item in replies[1]}
+        self.assertEqual(files["report.vqr"]["textEdit"]["newText"], "report.vqr")
+        self.assertEqual(replies[2], [{"label": "custom", "kind": 9}])
+        self.assertIn({"label": "report", "kind": 9}, replies[3])
+        self.assertEqual([item["label"] for item in replies[4]], ["total"])
+        self.assertEqual(replies[5][0]["insertText"], '"report.vqr"')
+        self.assertEqual(replies[6], [{"label": "logic", "kind": 9}])
+        self.assertEqual([item["label"] for item in replies[7]], ["count"])
+
     def test_editor_features_on_unsaved_source(self):
         original = self.source("main.vqr", "func f() void {}\n")
         source = "import (parse as reader)\nfunc f() void {\n    var value = 10;\n    reader.\n}\n"
@@ -114,8 +202,10 @@ n
                 self.assertEqual(server.stdout.readline(), b"\r\n")
                 return json.loads(server.stdout.read(size))
 
-            send("initialize", {"capabilities": {"textDocument": {"completion": {
-                "completionItem": {"snippetSupport": True}}}}}, identifier=1)
+            send("initialize", {"capabilities": {"textDocument": {
+                "completion": {"completionItem": {"snippetSupport": True}},
+                "signatureHelp": {"signatureInformation": {
+                    "parameterInformation": {"labelOffsetSupport": True}}}}}}, identifier=1)
             capabilities = receive()["result"]["capabilities"]
             self.assertEqual(capabilities["positionEncoding"], "utf-16")
             for name in ("hover", "definition", "declaration", "implementation", "typeDefinition", "inlayHint",
@@ -166,6 +256,11 @@ func sample(value: i32) !i32 {
                 self.assertNotIn("error", reply)
                 return reply["result"]
 
+            def parameter_labels(signature):
+                label = signature["label"].encode("utf-16-le")
+                return [label[first * 2:last * 2].decode("utf-16-le")
+                        for first, last in (param["label"] for param in signature["parameters"])]
+
             def go(method, row, word, destination):
                 found = request(method, position=position(row, word))
                 self.assertEqual([(item["uri"], item["range"]["start"]["line"]) for item in found],
@@ -184,7 +279,10 @@ func sample(value: i32) !i32 {
             self.assertTrue(imported and all(item["uri"].endswith("/stdlib/parse/integer.vqr") for item in imported))
             signatures = request("signatureHelp", position=position(12, '"7"'))
             self.assertEqual(signatures["activeParameter"], 0)
-            self.assertTrue(any({"label": "radix: u8"} in item["parameters"] for item in signatures["signatures"]))
+            active = signatures["signatures"][signatures["activeSignature"]]
+            self.assertEqual(parameter_labels(active), ["value: str"])
+            self.assertIn("parseInt<i32>(value: str) !i32", active["label"])
+            self.assertTrue(any("radix: u8" in parameter_labels(item) for item in signatures["signatures"]))
             existing_call = request("completion", position=position(12, "<i32>"))
             self.assertNotIn("insertText", next(item for item in existing_call if item["label"] == "parseInt"))
             hints = request("inlayHint", range={"start": {"line": 9, "character": 0},
@@ -356,6 +454,43 @@ pub class Other { pub var size: i32; }
             field = request("rename", position=cursor, newName="capacity")
             self.assertEqual({edit["textDocument"]["uri"]: len(edit["edits"])
                               for edit in field["documentChanges"]}, {uri: 2, helper.as_uri(): 3})
+
+            source = """import (parse as reader, coll)
+func 𐐀(left, right: i32) i32 { left + right }
+func makePair<A, B>(first: A, second: B) (A, B) { (first, second) }
+func invoke<T>(call: func(T, T) T, pair: (T, T), fallback: T) T { fallback }
+func test() !i32 {
+    var callback: func(i32, i32) i32 = 𐐀;
+    var value = invoke<i32>(callback, makePair<i32, i32>(1, 2), 3);
+    var grouped = invoke<i32>(callback, (7, 8), 9);
+    var n = reader.parseInt<i32>("7", 10)!;
+    var vec = coll.Vec<i32>();
+    var rest = vec.splitOff(0)!;
+    value + grouped + n + callback(10, 11) + 𐐀(12, 13)
+}
+"""
+            send("textDocument/didChange", {"textDocument": {"uri": uri, "version": 11},
+                                           "contentChanges": [{"text": source}]})
+            self.assertEqual(receive()["params"]["diagnostics"], [])
+
+            def signature_at(row, word):
+                cursor = position(row, word)
+                cursor["character"] = len(source.splitlines()[row][:cursor["character"]].encode("utf-16-le")) // 2
+                help = request("signatureHelp", position=cursor)
+                return help["activeParameter"], help["signatures"][help["activeSignature"]]
+
+            active, signature = signature_at(6, "3);")
+            self.assertEqual(active, 2)
+            self.assertEqual(parameter_labels(signature), ["call: func(i32, i32) i32", "pair: (i32, i32)", "fallback: i32"])
+            self.assertEqual(signature_at(7, "8),")[0], 1)
+            active, signature = signature_at(8, '"7"')
+            self.assertEqual((active, parameter_labels(signature)), (0, ["value: str", "radix: u8"]))
+            _, signature = signature_at(10, "0)!")
+            self.assertIn("!coll.Vec<i32>", signature["label"])
+            active, signature = signature_at(11, "11)")
+            self.assertEqual((active, parameter_labels(signature)), (1, ["i32", "i32"]))
+            active, signature = signature_at(11, "13)")
+            self.assertEqual((active, parameter_labels(signature)), (1, ["left: i32", "right: i32"]))
 
             send("shutdown", identifier=3)
             self.assertEqual(receive()["id"], 3)

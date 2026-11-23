@@ -7,6 +7,7 @@
 namespace vqr {
 
 Source readSource(const std::filesystem::path &path, const std::filesystem::path &contents);
+Source readStdinSource();
 void printJsonDiagnostic(const Diagnostic &error);
 int formatCommand(int argc, char **argv);
 

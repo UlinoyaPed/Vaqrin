@@ -1,7 +1,7 @@
 id = "vaqrin"
 name = "Vaqrin"
-description = "Vaqrin highlighting, completion, diagnostics, type hints, formatting and code navigation"
-version = "0.3.0"
+description = "Vaqrin editing, diagnostics, code navigation and LLDB debugging"
+version = "0.4.0"
 schema_version = 1
 authors = ["Vaqrin contributors"]
 repository = "https://github.com/UlinoyaPed/Vaqrin"
@@ -9,3 +9,6 @@ repository = "https://github.com/UlinoyaPed/Vaqrin"
 [language_servers.vaqrin-lsp]
 name = "Vaqrin Language Server"
 languages = ["Vaqrin"]
+
+[debug_adapters.Vaqrin]
+schema_path = "debug_adapter_schemas/vaqrin.json"

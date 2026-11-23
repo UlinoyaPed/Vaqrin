@@ -16,6 +16,9 @@ from urllib.request import url2pathname
 
 from dataclasses import dataclass, replace
 
+if "debug_hover_frames" not in globals():
+    from debug_hover import debug_hover_frames
+
 KEYWORDS = """package import as pub var const comptime func class interface enum error type public
 private static operator embed self extern export unsafe return break continue if else switch
 select for in move new catch true false null ref""".split()
@@ -24,6 +27,8 @@ i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f16 f32 f64""".split()
 IDENT = r"[^\W\d]\w*"
 MASK = re.compile(r'''//[^\n]*|/\*[\s\S]*?(?:\*/|\Z)|"(?:\\.|[^"\\\r\n])*"?|'(?:\\.|[^'\\\r\n])*'?''')
 IMPORT = re.compile(r"\bimport\s*\(([^)]*)\)", re.S)
+IMPORT_START = re.compile(r"\bimport\s*\(")
+IMPORT_ITEM = re.compile(rf'\s*(?:"([^"\n]+)"|({IDENT}(?:\s*/\s*{IDENT})*))(?:\s+as\s+({IDENT}))?\s*')
 PACKAGE = re.compile(rf"\s*package\s+({IDENT})")
 ERROR = re.compile(r"^(.*):(\d+):(\d+): error\[([^]]+)\]: (.+(?:\n  candidate [^\n]+)*)$", re.M)
 GLOBAL_ERROR = re.compile(r"^vaqc: error\[([^]]+)\]: (.+)$", re.M)
@@ -33,6 +38,25 @@ DECLARED_TYPES = {"class", "interface", "enum", "error", "type"}
 
 def masked(text):
     return MASK.sub(lambda match: re.sub(r"[^\r\n]", " ", match[0]), text)
+
+
+def import_text(text):
+    return MASK.sub(lambda match: match[0] if match[0].startswith('"') else masked(match[0]), text)
+
+
+def import_items(model):
+    for group in IMPORT.finditer(model.code):
+        start = group.start(1)
+        for part in re.finditer(r"[^,]+", group[1]):
+            item = import_text(model.text[start + part.start():start + part.end()])
+            if match := IMPORT_ITEM.fullmatch(item):
+                filename, name, alias = match.groups()
+                if name:
+                    name = re.sub(r"\s+", "", name)
+                default = Path(filename).stem if filename else name.rsplit("/", 1)[-1]
+                if alias or (re.fullmatch(IDENT, default) and default != "_"
+                             and (default not in KEYWORDS or default == "ref")):
+                    yield filename, name, alias or default
 
 
 def matching_delimiter(code, start, left, right):
@@ -118,6 +142,77 @@ def generic_arguments(text):
     return tuple(part for part in parts if part)
 
 
+def parameter_bindings(code):
+    pending = []
+    start = 0
+    for part in generic_arguments(code):
+        offset = code.index(part, start)
+        start = offset + len(part)
+        match = re.fullmatch(rf"(comptime\s+)?({IDENT})(?:\s*:\s*(.+))?", part, re.S)
+        if not match:
+            continue
+        pending.append((offset + match.start(2), match[2], match[1] or ""))
+        if match[3]:
+            type_name = " ".join(match[3].split())
+            modifier = "comptime " if pending[0][2] else ""
+            yield from ((position, name, modifier, type_name) for position, name, _ in pending)
+            pending.clear()
+
+
+def call_tokens(code, start=0):
+    skip = start
+    for token in re.finditer(r"[()\[\]{},<]", code[start:]):
+        offset = start + token.start()
+        if offset < skip:
+            continue
+        if token[0] == "<":
+            if not re.search(r"\w\s*$", code[max(start, offset - 64):offset]):
+                continue
+            depth = 1
+            for part in re.finditer(r"[<>()[\]{};=]", code[offset + 1:]):
+                at = offset + 1 + part.start()
+                if at < skip:
+                    continue
+                symbol = part[0]
+                if symbol in "([":
+                    skip = matching_delimiter(code, at, symbol, ")" if symbol == "(" else "]") + 1
+                elif symbol == "<":
+                    depth += 1
+                elif symbol == ">":
+                    depth -= 1
+                    if depth == 0:
+                        if code[at + 1:].lstrip().startswith(("(", ".", "{")):
+                            skip = at + 1
+                        else:
+                            skip = offset
+                        break
+                else:
+                    skip = offset
+                    break
+            else:
+                skip = offset
+            continue
+        yield token[0], offset
+
+
+def call_head(code, opening):
+    head = code[:opening].rstrip()
+    arguments = ()
+    if head.endswith(">"):
+        depth = 1
+        for start in range(len(head) - 2, -1, -1):
+            if head[start] == ">":
+                depth += 1
+            elif head[start] == "<":
+                depth -= 1
+                if not depth:
+                    arguments = generic_arguments(head[start + 1:-1])
+                    head = head[:start].rstrip()
+                    break
+    if name := re.search(rf"{IDENT}$", head):
+        return name[0], member_qualifier(code, name.start()), arguments, name.start()
+
+
 def member_qualifier(code, offset):
     dot = re.search(r"\??\.\s*$", code[:offset])
     if not dot:
@@ -194,8 +289,8 @@ class SourceIndex:
             type_parameters = ()
             if self.code[bracket:bracket + 1] == "<":
                 end = matching_delimiter(self.code, bracket, "<", ">")
-                type_parameters = tuple(p.strip().split(":", 1)[0].strip()
-                                        for p in self.code[bracket + 1:end].split(","))
+                type_parameters = tuple(p.split(":", 1)[0].strip().removeprefix("comptime ")
+                                        for p in generic_arguments(self.code[bracket + 1:end]))
                 bracket = end + 1
                 while self.code[bracket:bracket+1].isspace():
                     bracket += 1
@@ -206,7 +301,7 @@ class SourceIndex:
                 terminator = re.search(r"[{;\r\n]", self.code[close + 1:])
                 finish = close + 1 + terminator.start() if terminator else len(self.code)
                 result = self.text[close + 1:finish].split(":", 1)[0].strip()
-                params = list(re.finditer(rf"(?:^|,)\s*&?({IDENT})\s*:\s*([^,]+)", self.code[bracket+1:close]))
+                params = list(parameter_bindings(self.code[bracket + 1:close]))
             public = "pub" in modifiers[1].split()
             if owner:
                 outer = next((item for item in self.classes if item.name == owner), None)
@@ -214,10 +309,14 @@ class SourceIndex:
                 labels = re.findall(r"(?m)^\s*(public|private):", access)
                 public |= bool(outer and outer.kind == "interface" or labels and labels[-1] == "public")
             signature = self.text[line + modifiers.start(1):finish].strip()
+            labels = tuple(f"{modifier}{name}: {type_name}" for _, name, modifier, type_name in params)
+            if kind == "func" and self.code[bracket:bracket + 1] == "(":
+                head = " ".join(self.text[line + modifiers.start(1):bracket].split())
+                signature = f"{head}({', '.join(labels)})" + (f" {result}" if result else "")
             symbol = Symbol(self.file, name, kind, start, match.end(), signature, owner=owner, type=result,
                             public=public, type_parameters=type_parameters,
                             declaration_only=kind == "func" and finish not in self.scopes,
-                            parameters=tuple(p[0].lstrip(", ").strip() for p in params))
+                            parameters=labels)
             self.symbols.append(symbol)
             if finish in self.scopes and kind in ("class", "interface", "enum", "error"):
                 symbol.scope = (finish, self.scopes[finish])
@@ -228,10 +327,10 @@ class SourceIndex:
                         symbol.implements = tuple(part.strip() for part in match_impl[1].split(","))
                 self.classes.append(symbol)
             if finish in self.scopes and kind == "func":
-                for param in params:
-                    p_start = bracket + 1 + param.start(1)
-                    self.symbols.append(Symbol(self.file, param[1], "var", p_start, p_start + len(param[1]),
-                                               param[2].strip(), (finish, self.scopes[finish]), type=param[2].strip()))
+                for position, name, _, type_name in params:
+                    p_start = bracket + 1 + position
+                    self.symbols.append(Symbol(self.file, name, "var", p_start, p_start + len(name), type_name,
+                                               (finish, self.scopes[finish]), type=type_name))
 
     def parse_bindings(self):
         pattern = re.compile(rf"(?m)(?:\b(var|const)\s+&?({IDENT})(?:\s*:\s*([^=;\n{{]+))?\s*(=|;)|(?<!\w)&?({IDENT})\s*:=)")
@@ -276,6 +375,7 @@ class Server:
         self.inlay_refresh = False
         self.refresh_id = 0
         self.snippets = False
+        self.signature_offsets = False
         self.thread = ThreadPoolExecutor(max_workers=2)
         self.lock = threading.Lock()
         self.output = threading.Lock()
@@ -316,30 +416,104 @@ class Server:
         self.indices[path] = (stamp, model)
         return model
 
-    def roots(self, path):
+    def standard_roots(self):
         compiler = self.compiler()
         roots = [p / "stdlib" for p in (self.root, *self.root.parents) if (p / "stdlib").is_dir()]
         if compiler:
             roots.extend(p / "share/vaqrin/stdlib" for p in list(compiler.parents)[:2])
-        package = next((p for p in path.parents if (p / "package.toml").is_file()), self.root)
-        return [*roots, package, package.parent, path.parent]
+        if sources := os.environ.get("VAQRIN_STDLIB_DIR"):
+            roots.insert(0, Path(sources))
+        return roots
+
+    def project_root(self, path):
+        return next((p for p in path.parents if (p / "package.toml").is_file()), path.parent)
+
+    def local_dependencies(self, project):
+        try:
+            manifest = (project / "package.toml").read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            return {}
+        section = re.search(r"(?ms)^[ \t]*\[dependencies\][^\n]*\n(.*?)(?=^[ \t]*\[|\Z)", manifest)
+        if not section:
+            return {}
+        paths = re.findall(rf'''(?m)^\s*({IDENT})\s*=\s*\{{\s*path\s*=\s*("|')([^"'\n]+)\2\s*\}}''',
+                           section[1])
+        return {name: project / path for name, _, path in paths if not Path(path).is_absolute()}
+
+    def source_paths(self, folder):
+        paths = {p for p in folder.glob("*.vqr") if p.is_file()}
+        paths.update(p for uri in self.documents if (p := file_path(uri))
+                     and p.parent == folder and p.suffix == ".vqr")
+        return sorted(paths)
 
     def imports(self, model):
-        for group in IMPORT.finditer(model.code):
-            original = model.text[group.start(1):group.end(1)]
-            for item in re.finditer(rf'"([^"\n]+)"(?:\s+as\s+({IDENT}))?|((?:{IDENT}/)*{IDENT})(?:\s+as\s+({IDENT}))?', original):
-                filename, file_alias, name, package_alias = item.groups()
-                if filename:
-                    target = (model.file.parent / filename).resolve()
-                    if target.is_file():
-                        yield file_alias or target.stem, [target]
-                else:
-                    for root in self.roots(model.file):
-                        folder = root / name.removeprefix("std/")
-                        paths = sorted(p for p in folder.glob("*.vqr") if p.is_file())
+        for filename, name, alias in import_items(model):
+            if filename:
+                target = (model.file.parent / filename).resolve()
+                if target.is_file() or target.as_uri() in self.documents:
+                    yield alias, [target]
+            else:
+                logical = name.removeprefix("std/")
+                folders = [root / logical for root in self.standard_roots()]
+                if not name.startswith("std/"):
+                    project = self.project_root(model.file)
+                    if dependency := self.local_dependencies(project).get(logical):
+                        folders.append(dependency)
+                    folders.extend(root / logical for root in (project, project.parent, model.file.parent))
+                for folder in dict.fromkeys(folders):
+                    if folder.is_dir():
+                        paths = sorted({path.resolve() for path in self.source_paths(folder.resolve())})
                         if paths:
-                            yield package_alias or name.split("/")[-1], paths
-                            break
+                            yield alias, paths
+                        break
+
+    def complete_import(self, model, offset, start):
+        prefix = model.code[start:offset]
+        start += prefix.rfind(",") + 1
+        item = import_text(model.text[start:offset]).lstrip()
+        if item.startswith('"') and item.count('"') == 1:
+            path = Path(item[1:])
+            if path.is_absolute() or "\n" in item or "\\" in item:
+                return []
+            parent, _, leaf = item[1:].rpartition("/")
+            folder = (model.file.parent / parent).resolve()
+            tail = re.match(r'([^"\r\n]*)"', model.text[offset:])
+            end = offset + len(tail[1]) if tail else offset
+            closed = tail is not None
+            edit_range = {"start": offset_position(model.text, offset - len(leaf)),
+                          "end": offset_position(model.text, end)}
+            choices = {(p.name, 17) for p in self.source_paths(folder) if p.resolve() != model.file}
+            if folder.is_dir():
+                choices.update((p.name + "/", 19) for p in folder.iterdir()
+                               if p.is_dir() and not p.name.startswith("."))
+            return [{"label": name, "kind": kind, "textEdit": {
+                "range": edit_range, "newText": name + ('"' if kind == 17 and not closed else "")}}
+                    for name, kind in sorted(choices) if name.startswith(leaf) and not re.search(r'["\\\r\n]', name)]
+
+        if not re.fullmatch(rf"(?:(?:{IDENT}/)*\w*)", item):
+            return []
+        parent, _, leaf = item.rpartition("/")
+        roots = self.standard_roots()
+        names = set()
+        if parent != "std" and not parent.startswith("std/"):
+            project = self.project_root(model.file)
+            roots.extend((project, project.parent, model.file.parent))
+            if not parent:
+                names.update(name for name in self.local_dependencies(project) if name.startswith(leaf))
+        parent = parent.removeprefix("std/") if parent != "std" else ""
+        for root in dict.fromkeys(roots):
+            folder = root / parent
+            if folder.is_dir():
+                names.update(p.name for p in folder.iterdir() if p.is_dir() and p.name.startswith(leaf)
+                             and re.fullmatch(IDENT, p.name) and any(p.glob("*.vqr")))
+        results = [{"label": name, "kind": 9} for name in sorted(names)]
+        if "/" not in item:
+            for path in self.source_paths(model.file.parent):
+                if path.resolve() == model.file or not path.name.startswith(leaf) or re.search(r'["\\\r\n]', path.name):
+                    continue
+                quoted = '"' + path.name + '"'
+                results.append({"label": quoted, "filterText": path.name, "insertText": quoted, "kind": 17})
+        return results
 
     def symbols_in(self, paths):
         for path in paths:
@@ -349,8 +523,7 @@ class Server:
             except (OSError, UnicodeError):
                 continue
 
-    def package_symbols(self, model, package):
-        paths = dict(self.imports(model)).get(package, [])
+    def package_symbols(self, paths):
         return [symbol for symbol in self.symbols_in(paths) if not symbol.owner and symbol.public
                 and (not symbol.scope or symbol.kind in ("class", "interface", "enum", "error"))]
 
@@ -454,13 +627,19 @@ class Server:
         def substitute(text):
             return re.sub(IDENT, lambda token: substitutions.get(token[0], token[0]), text)
 
-        return replace(symbol, type=substitute(symbol.type), detail=substitute(symbol.detail),
+        detail = substitute(symbol.detail)
+        if arguments and len(arguments) == len(symbol.type_parameters):
+            generic = re.search(rf"\bfunc\s+{re.escape(symbol.name)}\s*<", symbol.detail)
+            if generic:
+                end = matching_delimiter(symbol.detail, generic.end() - 1, "<", ">")
+                detail = symbol.detail[:generic.end()] + ", ".join(arguments) + substitute(symbol.detail[end:])
+        return replace(symbol, type=substitute(symbol.type), detail=detail,
                        parameters=tuple(substitute(param) for param in symbol.parameters))
 
     def members(self, model, offset, qualifier, seen=None):
         aliases = dict(self.imports(model))
         if qualifier in aliases:
-            return self.package_symbols(model, qualifier)
+            return self.package_symbols(aliases[qualifier])
         head, generic, arguments = qualifier.partition("<")
         base = head.rstrip().split(".")
         if qualifier == "self" and model.owner(offset):
@@ -515,6 +694,25 @@ class Server:
         return model, sum(len(line) + 1 for line in lines[:row]) + position_offset(
             lines[row], params["position"]["character"])
 
+    def debug_value(self, model, target):
+        if target.file != model.file or not target.scope or target.owner:
+            return None
+        matching = []
+        lines = model.text.split("\n")
+        for frame in debug_hover_frames(self.root):
+            row = frame["line"]
+            if Path(frame["path"]).resolve() != model.file or not 0 <= row < len(lines):
+                continue
+            matching.append(frame)
+        if len(matching) != 1:
+            return None
+        frame = matching[0]
+        row = frame["line"]
+        offset = sum(len(line) + 1 for line in lines[:row]) + position_offset(lines[row], frame["column"])
+        live = next((symbol for symbol in model.visible(offset) if symbol.name == target.name), None)
+        if live is target and target.start < offset:
+            return frame["values"].get(target.name)
+
     def lookup(self, params, mode):
         model, offset = self.editor_position(params)
         if not model:
@@ -547,7 +745,10 @@ class Server:
                 detail = target.detail
                 if target.kind in ("var", "const"):
                     detail = f"{target.kind} {target.name}" + (f": {inferred}" if inferred else "")
-                return {"contents": {"kind": "markdown", "value": f"```vaqrin\n{detail}\n```"},
+                    if (value := self.debug_value(model, target)) is not None:
+                        detail += " = " + value.replace("\n", r"\n").replace("\r", r"\r")
+                fence = "`" * max(3, 1 + max(map(len, re.findall(r"`+", detail)), default=0))
+                return {"contents": {"kind": "markdown", "value": f"{fence}vaqrin\n{detail}\n{fence}"},
                         "range": {"start": offset_position(model.text, token.start()),
                                   "end": offset_position(model.text, token.end())}}
             if mode == "typeDefinition":
@@ -558,8 +759,8 @@ class Server:
                 targets = [item for item in self.resolve(model, offset, name, package)
                            if item.kind in DECLARED_TYPES]
                 if not targets and not package:
-                    targets = [item for alias, _ in self.imports(model)
-                               for item in self.package_symbols(model, alias)
+                    targets = [item for _, paths in self.imports(model)
+                               for item in self.package_symbols(paths)
                                if item.name == name and item.kind in DECLARED_TYPES]
                     if len({(item.file, item.start) for item in targets}) > 1:
                         return None
@@ -661,66 +862,117 @@ class Server:
             else:
                 self.send(id=identifier, result=self.inlay_hints(params))
 
+    def call_signatures(self, model, opening):
+        head = call_head(model.code, opening)
+        if not head:
+            return []
+        name, qualifier, generics, start = head
+        signatures = []
+        for item in self.resolve(model, start, name, qualifier):
+            if item.kind == "func":
+                if item.file == model.file and item.start == start:
+                    continue
+                if len(generics) <= len(item.type_parameters):
+                    signatures.append(self.specialize(item, arguments=generics))
+            elif item.kind in ("var", "const"):
+                callable_type = self.type_of(model, item)
+                if callable_type.startswith("func("):
+                    end = matching_delimiter(callable_type, 4, "(", ")")
+                    types = generic_arguments(callable_type[5:end])
+                    result = callable_type[end + 1:].strip()
+                    signatures.append(replace(item, parameters=types,
+                                              detail=f"func {name}({', '.join(types)}) {result}".rstrip()))
+        return signatures
+
     def signature_help(self, params):
         model, offset = self.editor_position(params)
         if not model:
             return None
         stack = []
-        for token in re.finditer(r"[()\[\]{},]", model.code[:offset]):
-            symbol = token[0]
+        for symbol, position in call_tokens(model.code):
+            if position >= offset:
+                break
             if symbol in "([{":
-                stack.append([symbol, token.start(), 0])
+                stack.append([symbol, position, 0])
             elif symbol in ")]}":
                 if stack:
                     stack.pop()
             elif stack:
                 stack[-1][2] += 1
-        if not stack or stack[-1][0] != "(":
+        for bracket, opening, argument in reversed(stack):
+            if bracket == "(" and (functions := self.call_signatures(model, opening)):
+                break
+        else:
             return None
-        _, opening, argument = stack[-1]
-        call = re.search(rf"({IDENT}(?:\.{IDENT})*)(?:\s*<[^()]*>)?\s*$", model.code[:opening])
-        if not call:
-            return None
-        package, _, name = call[1].rpartition(".")
-        functions = [item for item in self.resolve(model, call.start(), name, package) if item.kind == "func"]
-        if not functions:
-            return None
-        signatures = [{"label": item.detail, "parameters": [{"label": p} for p in item.parameters]}
-                      for item in functions]
-        active = next((index for index, item in enumerate(functions) if argument < len(item.parameters)), 0)
-        return {"signatures": signatures, "activeSignature": active, "activeParameter": argument}
+
+        depth = count = 0
+        last = opening
+        for symbol, position in call_tokens(model.code, opening + 1):
+            if symbol in "([{":
+                depth += 1
+            elif symbol in ")]}":
+                if not depth:
+                    expression = model.text[last + 1:position]
+                    if model.code[last + 1:position].strip() or any(
+                            token[0].startswith(('"', "'")) for token in MASK.finditer(expression)):
+                        count += 1
+                    break
+                depth -= 1
+            elif not depth:
+                count += 1
+                last = position
+        else:
+            count = argument + 1
+        desired = max(count, argument + (argument > 0))
+
+        def rank(index):
+            size = len(functions[index].parameters)
+            return (size != desired, size < desired, abs(size - desired))
+
+        signatures = []
+        for item in functions:
+            labels = ", ".join(item.parameters)
+            start = item.detail.find(f"({labels})") + 1
+            parameters = []
+            for parameter in item.parameters:
+                end = start + len(parameter)
+                label = [columns(item.detail[:start]), columns(item.detail[:end])] if self.signature_offsets else parameter
+                parameters.append({"label": label})
+                start = end + 2
+            signature = {"label": item.detail, "parameters": parameters}
+            if argument < len(parameters):
+                signature["activeParameter"] = argument
+            signatures.append(signature)
+        active = min(range(len(functions)), key=rank)
+        result = {"signatures": signatures, "activeSignature": active}
+        if "activeParameter" in signatures[active]:
+            result["activeParameter"] = argument
+        return result
 
     def complete(self, uri, position):
         if uri not in self.documents:
             return []
-        _, text = self.documents[uri]
-        lines = text.split("\n")
-        row = position["line"]
-        if not 0 <= row < len(lines):
-            return []
-        # Keep code-point offsets when comments include supplementary-plane characters.
-        index = position_offset(lines[row], position["character"])
-        clean = masked(text)
-        prefix = clean.split("\n")[row][:index]
-        if lines[row][:index].rstrip() and prefix != prefix.rstrip():
-            offset = sum(len(line) + 1 for line in lines[:row]) + index
-            if any(match.start() < offset <= match.end() for match in MASK.finditer(text)):
-                return []
         model, offset = self.editor_position({"textDocument": {"uri": uri}, "position": position})
         if not model:
             return []
+        masked_token = next((match for match in MASK.finditer(model.text)
+                             if match.start() < offset <= match.end()), None)
+        if masked_token and not masked_token[0].startswith('"'):
+            return []
+        for group in IMPORT_START.finditer(model.code, 0, offset):
+            if ")" not in model.code[group.end():offset]:
+                return self.complete_import(model, offset, group.end())
+        if masked_token:
+            return []
+        prefix = model.code[model.code.rfind("\n", 0, offset) + 1:offset]
         entries = {}
         qualifier = re.search(rf"({IDENT}(?:\.{IDENT})*)\??\.\w*$", prefix)
         if qualifier:
             candidates = self.members(model, offset, qualifier[1])
-        elif re.search(r"\bimport\s*\([^)]*$", clean[:offset]):
-            for root in self.roots(model.file):
-                if root.is_dir():
-                    entries.update({p.name: 9 for p in root.iterdir() if p.is_dir() and any(p.glob("*.vqr"))})
-            candidates = []
         else:
             entries.update({name: 14 for name in KEYWORDS})
             entries.update({name: 7 for name in TYPES})
+            entries.update({alias: 9 for _, _, alias in import_items(model)})
             candidates = self.local_symbols(model, offset)
         items = {name: {"label": name, "kind": kind} for name, kind in entries.items()}
         for symbol in reversed(candidates):
@@ -774,6 +1026,19 @@ class Server:
         if not compiler:
             return [diagnostic("Build vaqc or set VAQC/PATH to enable compiler diagnostics.", severity=2)], None
         try:
+            if not symbols:
+                syntax = subprocess.run(
+                    [compiler, "check", "--syntax-only", "--diagnostics=json", "-"],
+                    input=text.encode("utf-8"), cwd=self.root, capture_output=True, timeout=20)
+                if syntax.returncode:
+                    try:
+                        report = json.loads(syntax.stderr)
+                    except ValueError:
+                        report = None
+                    if isinstance(report, dict) and report.get("path") == "<stdin>":
+                        item = diagnostic(report["message"], report.get("code"))
+                        item["range"] = report.get("range", item["range"])
+                        return [item], None
             with tempfile.TemporaryDirectory(prefix="vaqrin-lsp-") as temp:
                 overlay = Path(temp) / "buffer.vqr"
                 overlay.write_bytes(text.encode("utf-8"))
@@ -812,17 +1077,11 @@ class Server:
                     flag = "--editor-workspace-symbols" if workspace else "--editor-symbols"
                     result = run(flag, "--diagnostics=json")
                 else:
-                    # Check the edited buffer independently of dependency discovery.
-                    # A parse error here also makes a semantic check unnecessary.
-                    result = subprocess.run([compiler, "check", "--syntax-only", "--diagnostics=json",
-                                             "--overlay", overlay, source], cwd=self.root,
-                                            capture_output=True, encoding="utf-8", errors="replace", timeout=20)
-                    if result.returncode == 0 or "unknown option" in result.stderr:
-                        result = run("--editor-hints", "--diagnostics=json")
-                        if "unknown option '--diagnostics=json'" in result.stderr:
-                            result = run("--editor-hints")
-                        if "unknown option '--editor-hints'" in result.stderr:
-                            result = run()
+                    result = run("--editor-hints", "--diagnostics=json")
+                    if "unknown option '--diagnostics=json'" in result.stderr:
+                        result = run("--editor-hints")
+                    if "unknown option '--editor-hints'" in result.stderr:
+                        result = run()
         except (OSError, subprocess.TimeoutExpired) as error:
             return [diagnostic(str(error), severity=2)], None
         try:
@@ -1084,11 +1343,14 @@ class Server:
             capabilities = params.get("capabilities", {})
             completion = capabilities.get("textDocument", {}).get("completion", {})
             self.snippets = completion.get("completionItem", {}).get("snippetSupport", False)
+            signature = capabilities.get("textDocument", {}).get("signatureHelp", {})
+            self.signature_offsets = signature.get("signatureInformation", {}).get(
+                "parameterInformation", {}).get("labelOffsetSupport", False)
             self.inlay_refresh = capabilities.get("workspace", {}).get("inlayHint", {}).get("refreshSupport", False)
             return {"capabilities": {"positionEncoding": "utf-16",
                                      "textDocumentSync": {"openClose": True, "change": 1, "save": True},
-                                     "completionProvider": {"triggerCharacters": [".", "/"]},
-                                     "signatureHelpProvider": {"triggerCharacters": ["(", ","]},
+                                     "completionProvider": {"triggerCharacters": [".", "/", '"']},
+                                     "signatureHelpProvider": {"triggerCharacters": ["(", ","], "retriggerCharacters": [")"]},
                                      "hoverProvider": True, "definitionProvider": True,
                                      "declarationProvider": True, "implementationProvider": True,
                                      "typeDefinitionProvider": True, "inlayHintProvider": True,

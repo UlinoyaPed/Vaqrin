@@ -1,10 +1,10 @@
 package main
-import (env, grpc, net, pb_example as generated, text, tls)
+import ("../settings.vqr" as settings, grpc, io, net, pb_example as generated, text, tls)
 
 class Greeter {
     #implements: generated.GreeterService
     pub func rpc_SayHello(request: generated.Msg_HelloRequest,
-                          context: *const grpc.UnaryRequest) !grpc.TypedResponse<generated.Msg_HelloReply> {
+        context: *const grpc.UnaryRequest) !grpc.TypedResponse<generated.Msg_HelloReply> {
         var builder = text.StringBuilder();
         builder.append("Hello, ")!;
         builder.append(request.f_name)!;
@@ -15,8 +15,8 @@ class Greeter {
 }
 
 func main() !void {
-    var certificate = env.get("VAQRIN_GRPC_CERT")!.unwrap();
-    var key = env.get("VAQRIN_GRPC_KEY")!.unwrap();
+    var certificate = settings.certificate()!;
+    var key = settings.privateKey()!;
     var config = tls.TlsConfig();
     config.requireProtocol = true;
     config.addProtocol("h2".asBytes())!;
@@ -25,6 +25,8 @@ func main() !void {
     var adapter = generated.GreeterServer(&service);
     var server = grpc.Server();
     adapter.register(&server)!;
-    var listener = net.listenTcp(net.parseSocketAddr("127.0.0.1:50051")!)!;
+    var loopback = net.IpAddr.V4(net.Ipv4Addr.new(127, 0, 0, 1));
+    var listener = net.listenTcp(net.SocketAddr.new(loopback, settings.port()!))!;
+    io.println(listener.localAddr()!.port())!;
     server.acceptTls(&listener, &acceptor, grpc.ServeOptions())
 }

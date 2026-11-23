@@ -80,7 +80,7 @@ shareable implementation in `mem.Shared`, and pass it to
 `ConcurrentServer_<Name>`. Streaming methods receive the corresponding
 `ConcurrentStream_<Name>_<Method>` wrapper. Register the adapter in an
 unsafe block and keep it at a stable address for the lifetime of its routes.
-See the [Greeter example](../../examples/grpc/README.md).
+See the [Greeter example](../../examples/projects/grpc/README.md).
 
 The transport uses OpenSSL 3, nghttp2 and zlib on hosted GNU/Linux. Building
 gRPC applications requires zlib development headers (`zlib1g-dev` on

@@ -74,7 +74,7 @@ class Printer:
         self.line("}" + suffix)
 
     def render(self):
-        return "\n".join(self.lines) + "\n"
+        return "\n".join(self.lines).rstrip("\n") + "\n"
 
 
 class Registry:

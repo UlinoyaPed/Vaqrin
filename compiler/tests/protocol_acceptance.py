@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 from queue import Queue
+import select
 import socket
 import ssl
 import subprocess
@@ -76,6 +77,31 @@ class ProtocolAcceptance(CompilerCase):
                      "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1",
                      "-keyout", key, "-out", cert)
         return cert, key
+
+    def test_greeter_example(self):
+        project = REPOSITORY / "examples/projects/grpc"
+        for role in ("server", "client"):
+            # Match the single-file entry used by Zed's run code task.
+            self.process(VAQC, "build", project / role / "main.vqr", "-o", role)
+        certificate, key = self.make_certificate()
+        env = dict(os.environ, VAQRIN_GRPC_CERT=str(certificate), VAQRIN_GRPC_KEY=str(key), VAQRIN_GRPC_PORT="0")
+        with subprocess.Popen([self.root / "server"], cwd=self.root, env=env,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE) as server:
+            try:
+                ready, _, _ = select.select([server.stdout], [], [], 10)
+                self.assertTrue(ready, "Greeter server did not report a port")
+                port = server.stdout.readline().strip()
+                self.assertTrue(port.isdigit(), server.stderr.read() if server.poll() is not None else port)
+                self.assertTrue(0 < int(port) <= 65535)
+                env["VAQRIN_GRPC_PORT"] = port.decode("ascii")
+                result = subprocess.run([self.root / "client"], cwd=self.root, env=env, capture_output=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, b"Hello, Vaqrin\n")
+                _, errors = server.communicate(timeout=10)
+                self.assertEqual(server.returncode, 0, errors)
+            finally:
+                if server.poll() is None:
+                    server.kill()
 
     def test_async_http_stream_and_connection_reuse(self):
         with socket.create_server(("127.0.0.1", 0)) as listener:
@@ -845,6 +871,11 @@ class ProtocolAcceptance(CompilerCase):
         self.process(*options, "--vaqrin_out=repeat", "typed.proto", "wire.proto")
         for subpath in ("pb_interop/wire_pb.vqr", "pb_demo_ddeep/typed_pb.vqr"):
             self.assertEqual((self.root / subpath).read_bytes(), (repeat / subpath).read_bytes())
+        greeter = REPOSITORY / "examples/projects/grpc"
+        self.process(sys.executable, "-m", "grpc_tools.protoc", f"-I{greeter}",
+                     f"--plugin=protoc-gen-vaqrin={plugin}", "--vaqrin_out=.", "greeter.proto")
+        binding = "pb_example/greeter_pb.vqr"
+        self.assertEqual((self.root / binding).read_bytes(), (greeter / binding).read_bytes())
         test = self.source("main.vqr", (FIXTURES / "typed.vqr").read_text(encoding="utf-8"))
         self.process(VAQC, test, "--package-path", self.root, "-o", "typed")
         self.process("./typed")

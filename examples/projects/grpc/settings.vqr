@@ -1,0 +1,24 @@
+import (env, io, parse)
+
+pub error SettingsError { MissingCertificate, MissingPrivateKey }
+
+pub func certificate() !string {
+    env.get("VAQRIN_GRPC_CERT")! ?? {
+        io.eprintln("Set VAQRIN_GRPC_CERT to the example certificate path.")!;
+        return SettingsError.MissingCertificate;
+    }
+}
+
+pub func privateKey() !string {
+    env.get("VAQRIN_GRPC_KEY")! ?? {
+        io.eprintln("Set VAQRIN_GRPC_KEY to the example private key path.")!;
+        return SettingsError.MissingPrivateKey;
+    }
+}
+
+pub func port() !u16 {
+    switch env.get("VAQRIN_GRPC_PORT")! {
+        some(value) => { return parse.parseUint<u16>(value); },
+        null => { return u16(50051); },
+    }
+}

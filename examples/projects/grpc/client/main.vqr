@@ -1,0 +1,31 @@
+package main
+import ("../settings.vqr" as settings, fmt, grpc, io, pb_example as generated, text)
+
+error GreeterError { RpcFailed, MissingReply }
+
+func main() !void {
+    var certificate = settings.certificate()!;
+    var root: str = certificate;
+    var dial = grpc.DialOptions();
+    dial.trustedRoots = some(root);
+    var endpoint = text.StringBuilder();
+    var port = fmt.formatUint(settings.port()!, 10)!;
+    endpoint.append("https://127.0.0.1:")!;
+    endpoint.append(port)!;
+    var address = endpoint.build()!;
+    var connection = grpc.dial(address, dial)!;
+    var client = generated.GreeterClient(&connection);
+    var request = generated.Msg_HelloRequest();
+    request.f_name = "Vaqrin";
+    var options = grpc.CallOptions();
+    var response = client.rpc_SayHello(&request, &options)!;
+    if !response.status.isOk() {
+        io.eprintln(response.status.message)!;
+        return GreeterError.RpcFailed;
+    }
+    switch response.message {
+        some(ref reply) => { io.println(reply.f_greeting)!; },
+        null => { return GreeterError.MissingReply; },
+    }
+    connection.close()
+}

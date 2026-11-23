@@ -10,23 +10,14 @@ import sys
 import threading
 
 if "debug_socket_path" not in globals():
-    from debug_hover import debug_socket_path, private_debug_directory
+    from debug_hover import MAX_FRAME_BYTES, debug_socket_path, private_debug_directory
+if "read_packet" not in globals():
+    from protocol import read_packet
 
 
 def packets(stream):
-    while header := stream.readline():
-        length = None
-        while header.strip():
-            key, value = header.split(b":", 1)
-            if key.lower() == b"content-length":
-                length = int(value)
-            header = stream.readline()
-        if length is None or not header:
-            return
-        data = stream.read(length)
-        if len(data) != length:
-            return
-        yield json.loads(data)
+    while (message := read_packet(stream)) is not None:
+        yield message
 
 
 def write_packet(stream, message):
@@ -45,6 +36,7 @@ class DebugSession:
         self.snapshot = None
         self.lines_start_at_one = True
         self.columns_start_at_one = True
+        self.client_error = False
 
     def send(self, message, reply):
         sequence = next(self.serial)
@@ -85,7 +77,7 @@ class DebugSession:
         for variable in body.get("variables", []):
             name = variable.get("name", "")
             value = variable.get("value", "")
-            if len(values) < 128 and name.isidentifier() and value and not value.startswith("<"):
+            if len(values) < 128 and len(name) <= 128 and name.isidentifier() and value and not value.startswith("<"):
                 if name in values:
                     values[name] = None
                 else:
@@ -111,9 +103,17 @@ class DebugSession:
                         self.send(message, reply)
         except BrokenPipeError:
             pass
+        except (ValueError, KeyError, TypeError, AttributeError) as error:
+            self.client_error = True
+            print(f"vaqrin dap: invalid client message ({type(error).__name__})", file=sys.stderr)
         finally:
             with self.lock:
-                self.dap.stdin.close()
+                try:
+                    self.dap.stdin.close()
+                except BrokenPipeError:
+                    pass
+                if self.client_error and self.dap.poll() is None:
+                    self.dap.terminate()
 
     def from_adapter(self):
         for message in packets(self.dap.stdout):
@@ -147,7 +147,7 @@ class DebugSession:
                     with self.lock:
                         data = json.dumps(self.snapshot, ensure_ascii=False).encode()
                     try:
-                        connection.sendall(data + b"\n")
+                        connection.sendall(data + b"\n" if len(data) < MAX_FRAME_BYTES else b"null\n")
                     except OSError:
                         continue
         except OSError:
@@ -178,12 +178,21 @@ def main():
                 session.from_adapter()
             except BrokenPipeError:
                 pass
+            except (ValueError, KeyError, TypeError, AttributeError) as error:
+                print(f"vaqrin dap: invalid adapter message ({type(error).__name__})", file=sys.stderr)
+                return 1
             finally:
                 if bound:
                     endpoint.unlink(missing_ok=True)
-                if dap.poll() is None:
+                try:
+                    dap.wait(timeout=2)
+                except subprocess.TimeoutExpired:
                     dap.terminate()
-    return dap.returncode
+                    try:
+                        dap.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        dap.kill()
+    return 1 if session.client_error else dap.returncode
 
 
 if __name__ == "__main__":

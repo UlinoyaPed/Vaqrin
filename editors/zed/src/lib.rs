@@ -44,6 +44,8 @@ impl zed::Extension for Vaqrin {
             concat!(
                 include_str!("debug_hover.py"),
                 "\n",
+                include_str!("protocol.py"),
+                "\n",
                 include_str!("server.py")
             )
             .into(),
@@ -102,7 +104,14 @@ impl zed::Extension for Vaqrin {
             args.extend([
                 "-I".into(),
                 "-c".into(),
-                concat!(include_str!("debug_hover.py"), "\n", include_str!("dap.py")).into(),
+                concat!(
+                    include_str!("debug_hover.py"),
+                    "\n",
+                    include_str!("protocol.py"),
+                    "\n",
+                    include_str!("dap.py")
+                )
+                .into(),
                 worktree.root_path(),
                 command,
                 "--no-lldbinit".into(),

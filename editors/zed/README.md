@@ -53,12 +53,13 @@ Zed 1.24.4 的同内容对照中，Zed 会向语言服务器发送 Git 忽略文
 
 - `run code` 使用现有编译器构建当前文件。若编译器和记录的依赖未变，直接运行缓存程序。
 - `build vaqc and run` 先用 Ninja 更新编译器，再按常规规则运行当前文件。
-- `rerun last successful executable` 直接运行该文件最近一次成功生成的程序，源码可能已经更改。
+- `rerun last successful executable` 验证并运行该文件最近一次成功生成的程序，源码可能已经更改。缓存产物或记录不可验证时，需要先运行一次以重建。
 
 阶段信息写入 stderr，看到 `---running …---` 后即可向程序输入。
 程序缓存位于 `build/host/run/`，运行时对象使用 `XDG_CACHE_HOME/vaqrin/runtime/`
 或 `~/.cache/vaqrin/runtime/`。常规运行从仓库源码读取标准库和运行时，模块搜索路径的
 变动会使相关缓存失效。
+运行缓存目录应由当前用户持有并禁止其他用户写入。可执行文件、记录和锁均使用普通文件。
 
 ## 调试
 

@@ -4,6 +4,11 @@
 #include <cstdlib>
 #include <limits>
 
+#ifndef _WIN32
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
 #include <llvm/ADT/SmallString.h>
 #include <llvm/ADT/StringExtras.h>
 #include <llvm/Support/FileSystem.h>
@@ -156,6 +161,38 @@ namespace {
 constexpr std::size_t checksumLength = 64;
 }
 
+bool trustedDirectory(const std::filesystem::path &path) {
+#ifdef _WIN32
+  std::error_code error;
+  return std::filesystem::is_directory(std::filesystem::symlink_status(path, error));
+#else
+  const auto user = geteuid();
+  for (const auto &part : path)
+    if (part == "..") return false;
+  auto directory = path.lexically_normal();
+  if (!directory.is_absolute()) return false;
+  for (bool leaf = true;; leaf = false, directory = directory.parent_path()) {
+    struct stat status {};
+    if (lstat(directory.c_str(), &status) != 0 || !S_ISDIR(status.st_mode) ||
+        (status.st_uid != user && (leaf || status.st_uid != 0)) ||
+        ((status.st_mode & (S_IWGRP | S_IWOTH)) && (leaf || !(status.st_mode & S_ISVTX))))
+      return false;
+    if (directory == directory.root_path()) return true;
+  }
+#endif
+}
+
+bool trustedFile(const std::filesystem::path &path) {
+#ifdef _WIN32
+  std::error_code error;
+  return std::filesystem::is_regular_file(std::filesystem::symlink_status(path, error));
+#else
+  struct stat status {};
+  return lstat(path.c_str(), &status) == 0 && S_ISREG(status.st_mode) && status.st_uid == geteuid() &&
+         !(status.st_mode & (S_IWGRP | S_IWOTH));
+#endif
+}
+
 std::optional<std::string> executableIdentity(const std::filesystem::path &executable) {
   llvm::sys::fs::file_status status;
   if (llvm::sys::fs::status(executable.string(), status)) return {};
@@ -166,7 +203,7 @@ std::optional<std::string> executableIdentity(const std::filesystem::path &execu
 llvm::StringRef payload(const llvm::MemoryBuffer &record) { return record.getBuffer().drop_front(checksumLength); }
 
 std::unique_ptr<llvm::MemoryBuffer> read(const std::filesystem::path &entry, std::size_t maxBytes) {
-  if (entry.empty()) return {};
+  if (entry.empty() || !trustedDirectory(entry.parent_path()) || !trustedFile(entry)) return {};
   std::error_code error;
   const auto size = std::filesystem::file_size(entry, error);
   if (error || size <= checksumLength || size - checksumLength > maxBytes) return {};
@@ -182,7 +219,7 @@ void write(const std::filesystem::path &entry, llvm::StringRef bytes, std::size_
   auto directory = entry.parent_path();
   std::error_code error;
   std::filesystem::create_directories(directory, error);
-  if (error) return;
+  if (error || !trustedDirectory(directory)) return;
   llvm::SmallString<256> temporary;
   int fd;
   if (llvm::sys::fs::createUniqueFile((directory / ".artifact-%%%%%%").string(), fd, temporary)) return;

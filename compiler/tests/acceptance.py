@@ -46,6 +46,64 @@ class CompilerCase(unittest.TestCase):
 
 
 class Acceptance(CompilerCase):
+    def test_dependency_manifest_preserves_other_links_and_build_outputs(self):
+        source = self.source("main.vqr", "func main() i32 { 0 }\n")
+        original = self.source("original.json", '{"existing":true}\n')
+        manifest = self.root / "dependencies.json"
+        os.link(original, manifest)
+        self.process(VAQC, "check", "--dependencies", manifest, source)
+        self.assertEqual(original.read_text(encoding="utf-8"), '{"existing":true}\n')
+        self.assertIn(str(source), json.loads(manifest.read_bytes())["files"])
+
+        unchanged = manifest.read_bytes()
+        result = self.process(VAQC, "build", "--dependencies", manifest, source,
+                              "-o", manifest, good=False)
+        self.assertIn(b"--dependencies must name a separate .json file", result.stderr)
+        self.assertEqual(manifest.read_bytes(), unchanged)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux runtime cache")
+    def test_runtime_cache_requires_a_protected_directory(self):
+        source = self.source("main.vqr", 'import (io)\nfunc main() !void { io.print("safe")!; }\n')
+        cache = self.root / "cache"
+        runtime = cache / "vaqrin/runtime"
+        runtime.mkdir(parents=True)
+        with patch.dict(os.environ, XDG_CACHE_HOME=str(cache)):
+            runtime.chmod(0o777)
+            first = self.process(VAQC, "build", "--timings", source, "-o", "program")
+            self.assertIn(b"io_posix.cpp uncached", first.stderr)
+            self.assertEqual(list(runtime.iterdir()), [])
+            runtime.chmod(0o700)
+            second = self.process(VAQC, "build", "--timings", source, "-o", "program")
+            self.assertIn(b"io_posix.cpp cache miss", second.stderr)
+            third = self.process(VAQC, "build", "--timings", source, "-o", "program")
+            self.assertIn(b"io_posix.cpp cache hit", third.stderr)
+            self.assertEqual(self.process("./program").stdout, b"safe")
+
+    @unittest.skipUnless(os.name == "posix", "Zed run task uses POSIX file locking")
+    def test_zed_rerun_verifies_successful_artifacts(self):
+        runner = self.root / ".zed/run.py"
+        runner.parent.mkdir()
+        shutil.copyfile(REPOSITORY / ".zed/run.py", runner)
+        build = self.root / "build/host"
+        build.mkdir(parents=True)
+        (build / "vaqc").symlink_to(VAQC)
+        source = self.source("main.vqr", "func main() i32 { 0 }\n")
+        arguments = (sys.executable, runner)
+        self.assertIn(b"building main.vqr", self.process(*arguments, "run", source).stderr)
+        self.assertIn(b"skipping compilation", self.process(*arguments, "run", source).stderr)
+        source.write_text("func main() i32 { 17 }\n", encoding="utf-8")
+        self.assertIn(b"reusing last successful", self.process(*arguments, "rerun", source).stderr)
+
+        program, = (build / "run").glob("*/program")
+        previous = program.with_name("previous")
+        program.rename(previous)
+        program.symlink_to(previous)
+        rejected = self.process(*arguments, "rerun", source, good=False)
+        self.assertIn(b"no verified successful build", rejected.stderr)
+        updated = self.process(*arguments, "run", source, good=False)
+        self.assertEqual(updated.returncode, 17, updated.stderr)
+        self.assertFalse(program.is_symlink())
+
     def test_shipped_packages_load_together(self):
         packages = sorted({source.parent.name for source in (REPOSITORY / "stdlib").glob("*/*.vqr")})
         program = self.source("packages.vqr", "import (" + ", ".join(packages) + ")\nfunc f() void {}")

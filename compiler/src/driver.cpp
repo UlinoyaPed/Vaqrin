@@ -30,6 +30,7 @@
 #include <llvm/Transforms/Utils/LowerMemIntrinsics.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdlib>
 #include <deque>
@@ -269,7 +270,7 @@ void compileRuntime(const std::string &driver, std::vector<std::string> args, co
                             : llvm::sys::findProgramByName(driver);
   auto identity = tool ? fileDigest(*tool) : std::nullopt;
   std::error_code error;
-  if (!identity || (fs::create_directories(cache, error), error)) {
+  if (!identity || (fs::create_directories(cache, error), error) || !artifact::trustedDirectory(cache)) {
     args.insert(args.end(), {"-c", source.string(), "-o", object.string()});
     execute(driver, args);
     report("uncached");
@@ -302,13 +303,16 @@ void compileRuntime(const std::string &driver, std::vector<std::string> args, co
   auto entry = cache / llvm::toHex(hash.final(), true);
   const auto cachedObject = entry / "runtime.o";
   const auto cachedDigest = entry / "sha256";
-  if (auto stored = fileDigest(cachedObject)) {
+  if (artifact::trustedDirectory(entry) && artifact::trustedFile(cachedObject) && artifact::trustedFile(cachedDigest)) {
     std::ifstream expected(cachedDigest);
-    std::string checksum;
-    if (expected >> checksum && checksum == *stored &&
+    std::array<char, 65> checksum{};
+    if (expected.read(checksum.data(), checksum.size()) && checksum.back() == '\n' &&
         fs::copy_file(cachedObject, object, fs::copy_options::overwrite_existing, error)) {
-      report("cache hit");
-      return;
+      if (auto stored = fileDigest(object); stored && *stored == std::string_view(checksum.data(), 64)) {
+        report("cache hit");
+        return;
+      }
+      fs::remove(object, error);
     }
   }
 
@@ -329,10 +333,12 @@ void compileRuntime(const std::string &driver, std::vector<std::string> args, co
     out.close();
     if (out) {
       // Rename individual files into a shared entry. Readers validate the checksum
-      // before reuse, including during a concurrent publication.
+      // of the staged copy, including during a concurrent publication.
       fs::create_directories(entry, error);
-      fs::rename(stage / "runtime.o", cachedObject, error);
-      if (!error) fs::rename(stage / "sha256", cachedDigest, error);
+      if (!error && artifact::trustedDirectory(entry)) {
+        fs::rename(stage / "runtime.o", cachedObject, error);
+        if (!error) fs::rename(stage / "sha256", cachedDigest, error);
+      }
     }
   }
   fs::remove_all(stage, error);
@@ -603,9 +609,44 @@ void writeStaticLibrary(const fs::path &output, const llvm::Triple &target,
     fail({}, llvm::toString(std::move(error)), "E302");
 }
 
+fs::path buildOutput(const Request &r, const Inputs &inputs, const llvm::Triple &target) {
+  return fs::absolute(r.output.empty() ? defaultOutput(r, inputs.rootName, target) : r.output);
+}
+
+fs::path dependencyDestination(const Request &r, const Inputs &inputs, const llvm::Triple &target) {
+  if (r.dependencies.empty()) return {};
+  const auto destination = fs::absolute(r.dependencies);
+  const auto resolved = fs::weakly_canonical(destination);
+  if (destination.extension() != ".json" || inputs.dependencyFiles().contains(resolved) ||
+      (!r.options.check && fs::weakly_canonical(buildOutput(r, inputs, target)) == resolved))
+    fail({}, "--dependencies must name a separate .json file", "E302");
+  if (!fs::is_directory(destination.parent_path()))
+    fail({}, "dependency manifest directory does not exist", "E302");
+  return destination;
+}
+
+void writeDependencies(const fs::path &destination, const Inputs &inputs) {
+  llvm::json::Array files, directories;
+  for (const auto &path : inputs.dependencyFiles()) files.push_back(path.string());
+  for (const auto &path : inputs.dependencyDirectories()) directories.push_back(path.string());
+  llvm::json::Object manifest{{"files", std::move(files)}, {"directories", std::move(directories)}};
+  auto temporary = llvm::sys::fs::TempFile::create((destination.parent_path() / ".vaqc-deps-%%%%%%").string());
+  if (!temporary) fail({}, llvm::toString(temporary.takeError()), "E302");
+  llvm::raw_fd_ostream output(temporary->FD, false);
+  output << llvm::json::Value(std::move(manifest)) << '\n';
+  output.flush();
+  if (output.has_error()) {
+    output.clear_error();
+    llvm::consumeError(temporary->discard());
+    fail({}, "cannot write dependency manifest", "E302");
+  }
+  if (auto error = temporary->keep(destination.string()))
+    fail({}, llvm::toString(std::move(error)), "E302");
+}
+
 void produce(Request &r, llvm::Module &module, llvm::TargetMachine &machine, const Inputs &inputs) {
   auto &target = machine.getTargetTriple();
-  auto output = fs::absolute(r.output.empty() ? defaultOutput(r, inputs.rootName, target) : r.output);
+  auto output = buildOutput(r, inputs, target);
   if (!fs::is_directory(output.parent_path())) fail({}, "output directory does not exist", "E302");
   for (const auto &s : inputs.files)
     if (fs::weakly_canonical(s.span.source->path) == fs::weakly_canonical(output))
@@ -914,30 +955,14 @@ int main(int argc, char **argv) {
         std::cerr << "vaqc: compile." << labels[i] << ' '
                   << std::chrono::duration<double, std::milli>(compileTimings.durations[i]).count() << " ms\n";
     }
+    const auto dependencies = dependencyDestination(request, *inputs, machine->getTargetTriple());
     if (!request.options.check) {
       optimizeBuild(module, *machine, request, executable, cachedContext);
       stage("optimize");
       produce(request, *module, *machine, *inputs);
       stage("emit and link");
     }
-    if (!request.dependencies.empty()) {
-      llvm::json::Array files, directories;
-      for (const auto &path : inputs->dependencyFiles()) files.push_back(path.string());
-      for (const auto &path : inputs->dependencyDirectories()) directories.push_back(path.string());
-      llvm::json::Object manifest{{"files", std::move(files)}, {"directories", std::move(directories)}};
-      const auto destination = fs::weakly_canonical(request.dependencies);
-      if (inputs->dependencyFiles().contains(destination) ||
-          (!request.output.empty() && fs::weakly_canonical(request.output) == destination) ||
-          destination.extension() != ".json")
-        fail({}, "--dependencies must name a separate .json file", "E302");
-      std::ofstream output(destination);
-      if (!output) fail({}, "cannot open dependency manifest", "E302");
-      std::string body;
-      llvm::raw_string_ostream stream(body);
-      stream << llvm::json::Value(std::move(manifest));
-      output << body << '\n';
-      if (!output) fail({}, "cannot write dependency manifest", "E302");
-    }
+    if (!dependencies.empty()) writeDependencies(dependencies, *inputs);
     if (request.editorHints) printEditorHints(hints);
     if (request.editorSymbols || request.workspaceSymbols) printEditorSymbols(hints);
     return 0;

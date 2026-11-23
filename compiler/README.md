@@ -41,6 +41,9 @@ build/host/vaqc build -O2 -g examples/hello.vqr -o build/hello
 对未保存的缓冲区，可以用 `vaqc check --syntax-only --diagnostics=json -` 从标准输入检查语法。
 诊断中的路径显示为 `<stdin>`。
 
+`--dependencies` 使用单独的 `.json` 路径，并在清单写完后原子替换文件。POSIX 上，编译器
+仅从当前用户持有且防止其他用户写入的缓存加载语法和编译产物。不可验证的缓存会重新生成对应产物。
+
 文件头可以省略 `package`。写出 `package demo` 或 `import (io)` 时，行尾省略分号。可执行文件从指定的源文件选取 `main`。目录模式优先采用 `--entry`，其次采用 `package.toml` 的 `[build].entry`，最后递归查找唯一的候选入口。多个显式输入各自保留文件级 `main`，可以用 `--entry` 选择其中之一。
 
 同目录匿名文件可以直接引用唯一的辅助声明，也可用 `helpers.name` 限定。跨目录使用 `import ("lib/helpers.vqr" as h)` 导入目标的公开声明。有名包通过逻辑包名导入，额外搜索根由 `--package-path DIR` 指定。标准包也支持 `std/` 前缀。参见[标准包说明](../stdlib/README.md)。

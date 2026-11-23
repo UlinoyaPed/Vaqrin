@@ -3,7 +3,9 @@
 import json
 import os
 import queue
+import runpy
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -14,6 +16,20 @@ from acceptance import CompilerCase, REPOSITORY, VAQC
 
 
 class DebugAcceptance(CompilerCase):
+    @unittest.skipUnless(os.name == "posix", "local Unix debug bridge")
+    def test_debug_bridge_bounds_incoming_messages(self):
+        result = self.process(sys.executable, "-I", "-c", editor_script("dap.py"), self.root,
+                              sys.executable, "-c", "import sys; sys.stdin.buffer.read()",
+                              input=b"Content-Length: 33554433\r\n\r\n", good=False)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn(b"invalid client message", result.stderr)
+
+        read_frame = runpy.run_path(str(REPOSITORY / "editors/zed/src/debug_hover.py"))["read_frame"]
+        reader, writer = socket.socketpair()
+        with reader, writer:
+            writer.sendall(b'{"path":"/main.vqr","line":0,"column":0,"values":[]}\n')
+            self.assertIsNone(read_frame(reader, time.monotonic() + 1))
+
     def build_target(self):
         source = self.source("counter.vqr", """import (bufio, io)
 class Counter {
@@ -208,7 +224,8 @@ func other() i32 {
 
 def editor_script(name):
     directory = REPOSITORY / "editors/zed/src"
-    return "\n".join((directory / filename).read_text(encoding="utf-8") for filename in ("debug_hover.py", name))
+    return "\n".join((directory / filename).read_text(encoding="utf-8")
+                     for filename in ("debug_hover.py", "protocol.py", name))
 
 
 if __name__ == "__main__":

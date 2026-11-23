@@ -10,6 +10,8 @@
 namespace vqr {
 
 namespace artifact {
+bool trustedDirectory(const std::filesystem::path &path);
+bool trustedFile(const std::filesystem::path &path);
 std::optional<std::string> executableIdentity(const std::filesystem::path &executable);
 std::unique_ptr<llvm::MemoryBuffer> read(const std::filesystem::path &entry, std::size_t limit);
 llvm::StringRef payload(const llvm::MemoryBuffer &record);

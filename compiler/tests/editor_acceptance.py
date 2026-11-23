@@ -10,6 +10,22 @@ from acceptance import CompilerCase, REPOSITORY, VAQC
 
 
 class EditorAcceptance(CompilerCase):
+    def test_lsp_rejects_invalid_protocol_frames(self):
+        server = REPOSITORY / "editors/zed/src/server.py"
+        for frame in (
+            b"Content-Length: -1\r\n\r\n",
+            b"Content-Length: 33554433\r\n\r\n",
+            b"Content-Length: 2\r\nContent-Length: 2\r\n\r\n{}",
+            b"Content-Length: 4\r\n\r\nnull",
+            b"Content-Length: 20\r\n\r\n{}",
+            b"Header: " + b"x" * 8192 + b"\r\n",
+        ):
+            with self.subTest(frame=frame[:40]):
+                result = self.process(sys.executable, server, self.root, input=frame, good=False)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn(b"vaqrin lsp:", result.stderr)
+                self.assertNotIn(b"Traceback", result.stderr)
+
     def test_standard_library_sources_parse(self):
         packages = REPOSITORY / "stdlib"
         for directory in sorted(path for path in packages.iterdir() if path.is_dir()):

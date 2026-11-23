@@ -18,6 +18,8 @@ from dataclasses import dataclass, replace
 
 if "debug_hover_frames" not in globals():
     from debug_hover import debug_hover_frames
+if "read_packet" not in globals():
+    from protocol import read_packet
 
 KEYWORDS = """package import as pub var const comptime func class interface enum error type public
 private static operator embed self extern export unsafe return break continue if else switch
@@ -84,16 +86,6 @@ def file_path(uri):
     parts = urlsplit(uri)
     if parts.scheme == "file" and parts.netloc in ("", "localhost"):
         return Path(url2pathname(parts.path)).resolve()
-
-
-def read_message():
-    headers = {}
-    while line := sys.stdin.buffer.readline():
-        if not line.strip():
-            size = int(headers[b"content-length"])
-            return json.loads(sys.stdin.buffer.read(size))
-        key, value = line.split(b":", 1)
-        headers[key.lower()] = value.strip()
 
 
 @dataclass
@@ -1412,24 +1404,30 @@ def main():
     root = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
     server = Server(root)
     try:
-        while request := read_message():
+        while (request := read_packet(sys.stdin.buffer)) is not None:
             method = request.get("method")
             if method is None:
                 continue
             if method == "exit":
                 return 0 if server.stopped else 1
             try:
-                params = request.get("params") or {}
+                params = request.get("params")
+                if params is not None and not isinstance(params, dict):
+                    raise ValueError("LSP params must be an object")
+                params = params or {}
                 if method == "textDocument/inlayHint" and "id" in request:
                     server.request_inlays(request["id"], params)
                     continue
                 value = server.handle(method, params)
                 if "id" in request:
                     server.send(id=request["id"], result=value)
-            except (NotImplementedError, OSError, KeyError, TypeError, ValueError) as error:
+            except (NotImplementedError, OSError, KeyError, TypeError, ValueError, AttributeError) as error:
                 if "id" in request:
                     code = -32601 if isinstance(error, NotImplementedError) else -32602
                     server.send(id=request["id"], error={"code": code, "message": str(error)})
+    except ValueError as error:
+        print(f"vaqrin lsp: {error}", file=sys.stderr)
+        return 1
     finally:
         server.stop()
 

@@ -11,7 +11,7 @@ func main() !void {
         _ => panic("unexpected TOML value kind"),
     };
 
-    var output = toml.stringify(raw document)!;
+    var output = toml.stringify(document)!;
     io.println(output)!;
 
     var duplicate = toml.parse("value = 1\nvalue = 2");

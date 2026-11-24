@@ -74,8 +74,8 @@ pub class TimeZone {
     var transitions: coll.Vec<Transition>;
     var offsets: coll.Vec<i32>;
     var recurring: ?RecurringZone;
-    func init(name: string, initial: i32, transitions: coll.Vec<Transition>,
-              offsets: coll.Vec<i32>, recurring: ?RecurringZone)
+    func init(name: string, initial: i32, transitions: move coll.Vec<Transition>,
+              offsets: move coll.Vec<i32>, recurring: ?RecurringZone)
         : identifier(move(name)), initialOffset(initial), transitions(move(transitions)),
           offsets(move(offsets)), recurring(recurring) {}
     pub static func utc() Self {
@@ -206,9 +206,9 @@ pub class ZonedDateTime {
     #copy: disabled
     var instant: UtcDateTime;
     var location: TimeZone;
-    func init(utc: UtcDateTime, zone: TimeZone) : instant(utc), location(move(zone)) {}
-    pub static func fromUtc(utc: UtcDateTime, zone: TimeZone) Self { ZonedDateTime(utc, move(zone)) }
-    pub static func fromLocal(local: LocalDateTime, zone: TimeZone, policy: LocalTimePolicy) !Self {
+    func init(utc: UtcDateTime, zone: move TimeZone) : instant(utc), location(move(zone)) {}
+    pub static func fromUtc(utc: UtcDateTime, zone: move TimeZone) Self { ZonedDateTime(utc, move(zone)) }
+    pub static func fromLocal(local: LocalDateTime, zone: move TimeZone, policy: LocalTimePolicy) !Self {
         var utc = zone.resolve(local, policy)!;
         ZonedDateTime(utc, move(zone))
     }
@@ -216,7 +216,7 @@ pub class ZonedDateTime {
     pub const func local() !LocalDateTime { toLocal(instant, raw location) }
     pub const func zoneName() str { location.name() }
     pub const func offset() Duration { location.offsetAt(instant) }
-    pub const func withZone(zone: TimeZone) Self { ZonedDateTime(instant, move(zone)) }
+    pub const func withZone(zone: move TimeZone) Self { ZonedDateTime(instant, move(zone)) }
     pub const func add(value: Duration) !Self { ZonedDateTime(instant.add(value)!, location.clone()!) }
 }
 

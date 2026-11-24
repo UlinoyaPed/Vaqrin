@@ -29,18 +29,18 @@ pub class CondVar {
     func init() : sequence(0) {}
     pub static func new() Self { CondVar() }
 
-    pub const func wait<T>(guard: MutexGuard<T>) !MutexGuard<T> {
+    pub const func wait<T>(guard: move MutexGuard<T>) !MutexGuard<T> {
         var address = raw sequence;
         var version = __vqr_atomic_load(address, atomic.Order.Relaxed);
         var awaitSignal = [address, version]() void => { __vqr_sync_wait(address, version); };
         unsafe { MutexGuard<T>.unlockWhile(move(guard), awaitSignal) }
     }
 
-    pub const func waitTimeout<T>(guard: MutexGuard<T>, timeout: time.Duration) !(MutexGuard<T>, bool) {
+    pub const func waitTimeout<T>(guard: move MutexGuard<T>, timeout: time.Duration) !(MutexGuard<T>, bool) {
         waitUntilDeadline<T>(move(guard), time.Deadline.after(timeout)!)
     }
 
-    pub const func waitUntilDeadline<T>(guard: MutexGuard<T>, deadline: time.Deadline) !(MutexGuard<T>, bool) {
+    pub const func waitUntilDeadline<T>(guard: move MutexGuard<T>, deadline: time.Deadline) !(MutexGuard<T>, bool) {
         if deadline.expired()! { return (move(guard), true); }
         var address = raw sequence;
         var version = __vqr_atomic_load(address, atomic.Order.Relaxed);
@@ -57,7 +57,7 @@ pub class CondVar {
     }
 }
 
-pub func waitUntil<T, F>(condition: *const CondVar, guard: MutexGuard<T>, pred: F) !MutexGuard<T> {
+pub func waitUntil<T, F>(condition: *const CondVar, guard: move MutexGuard<T>, pred: F) !MutexGuard<T> {
     while !pred(guard.get()) { guard = condition.wait<T>(move(guard))!; }
     move(guard)
 }

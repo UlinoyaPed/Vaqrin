@@ -21,7 +21,7 @@ pub class AsyncHandler {
     var group: task.TaskGroup;
     var closed: bool;
     var droppedRecords: u64;
-    func init(sender: channel.Sender<Delivery>, worker: task.Task<void>, group: task.TaskGroup)
+    func init(sender: channel.Sender<Delivery>, worker: move task.Task<void>, group: move task.TaskGroup)
         : sender(move(sender)), worker(move(worker)), group(move(group)), closed(false), droppedRecords(0) {}
     // The handler is owned by the worker for the lifetime of this queue.
     pub static func new<H: Handler + Movable + Sendable>(inner: H, capacity: usize) !Self {

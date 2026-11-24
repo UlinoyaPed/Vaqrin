@@ -107,7 +107,7 @@ pub class Cow<T: Copyable + Movable> {
         __vqr_optional_pointer(raw owned).unwrap()
     }
 
-    pub static func intoOwned(value: Self) T {
+    pub static func intoOwned(value: move Self) T {
         switch value.borrowed {
             some(source) => *source,
             null => {

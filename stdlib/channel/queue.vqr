@@ -38,8 +38,9 @@ class Queue<T: Movable> {
         head = 0;
     }
 
-    pub func push(value: T) void {
-        slots[index(used)] = some(move(value));
+    // The caller has checked capacity and owns the populated pending slot.
+    pub func push(pending: mut ?T) void {
+        slots[index(used)] = some(opt.take<T>(pending).unwrap());
         used++;
     }
 

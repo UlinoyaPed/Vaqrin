@@ -47,6 +47,22 @@ func main() !void {
     receive(raw connection, raw broadcast, 12)!;
     finish(raw connection, raw broadcast)!;
 
+    // Buffer events from the other live stream while receiving replies.
+    var first = connection.start("/interop.Stream/Broadcast", raw options)!;
+    send(raw connection, raw first, 20)!;
+    connection.finishSend(raw first)!;
+    var second = connection.start("/interop.Stream/Broadcast", raw options)!;
+    send(raw connection, raw second, 40)!;
+    connection.finishSend(raw second)!;
+    receive(raw connection, raw second, 40)!;
+    receive(raw connection, raw first, 20)!;
+    receive(raw connection, raw second, 41)!;
+    receive(raw connection, raw first, 21)!;
+    receive(raw connection, raw second, 42)!;
+    finish(raw connection, raw second)!;
+    receive(raw connection, raw first, 22)!;
+    finish(raw connection, raw first)!;
+
     var sum = connection.start("/interop.Stream/Sum", raw options)!;
     send(raw connection, raw sum, 2)!;
     send(raw connection, raw sum, 3)!;

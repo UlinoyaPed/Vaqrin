@@ -20,6 +20,8 @@
 | `json` 所有权转移 | `JsonArray.push/insert/replace`、`JsonObject.insert`、`pointerSet` 与 DOM 反序列化构造显式消费 `Value`。具名值需写 `move(value)`；构造所得临时值可直接交付。编码和查询仍借用输入。 | [json.vqr](../../stdlib/json/json.vqr)、[serde.vqr](../../stdlib/json/serde.vqr) |
 | `io` / `bytes` 所有权提取 | `MemoryWriter.intoBytes(move(writer))` 和 `Buffer.intoVec(move(buffer))` 消费原拥有者并转交底层字节，不复制内容；具名原对象移动后须重新初始化才能使用。 | [memory.vqr](../../stdlib/io/memory.vqr)、[buffer.vqr](../../stdlib/bytes/buffer.vqr) |
 | `log` / `errors` 所有权转移 | `Record.fromOwned` 消费属性向量；添加原因、入队和报告耗尽迭代器显式消费传入的报告或向量。方法 `first.join(move(second))` 借用并克隆前者，双参函数 `errors.join(move(first), move(second))` 仍消费两者。同步渲染顺序和异步/Writer 约定不变。 | [log.vqr](../../stdlib/log/log.vqr)、[errors.vqr](../../stdlib/errors/errors.vqr) |
+| `toml` 表与序列化 | `Document.getRef/valueRefAt` 返回由表本体约束的 `?ref Value`；序列化通过 `in Document` 与受检查的数组/表元素及局部构建器访问。遗留游标明确使用 `valuePtrAt`，不改变其生命周期约定。该改动不为原有 `str`/切片输入附加任何来源证明。 | [toml.vqr](../../stdlib/toml/toml.vqr) |
+| `toml` 扫描和字符串解码 | 语句扫描、引号跳过和字符串解码直接可变借用本地游标、缓冲区；数组、内联表和标量解析共享只读选项。嵌套表写入的现有原始游标和输入视图契约不变。 | [toml.vqr](../../stdlib/toml/toml.vqr) |
 
 自定义分配器必须比句柄的所有副本、从中派生的容器和尚未释放的块活得更久。该契约是调用者的显式保证，不是编译器验证的引用生命周期。Box 的定制分配形式 `new(allocator) T(...)` 也要求显式 `unsafe`，若来源是原始指针，必须先显式解引用。编译器仍不追踪 Box 中的定制分配器地址，调用者必须保证分配器及后备存储一直有效，直到最后一个使用该分配器的 Box 或其拆分后的释放上下文完成释放。默认 `new T(...)` 不需 `unsafe`。
 

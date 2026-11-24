@@ -8,7 +8,7 @@ class DeferredEvents {
     var events: coll.Vec<http2.Event>;
     var buffered: usize;
     pub func init() : events(coll.Vec<http2.Event>()), buffered(0) {}
-    pub func queueEvent(event: http2.Event) !void {
+    pub func queueEvent(event: move http2.Event) !void {
         var size = event.payload().len();
         if events.len() >= 1024 || size > 4 * 1024 * 1024 - buffered {
             return http2.Http2Error.ResourceLimit;

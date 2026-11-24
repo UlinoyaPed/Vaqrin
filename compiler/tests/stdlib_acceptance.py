@@ -1524,6 +1524,98 @@ class StandardLibraryAcceptance(CompilerCase):
         self.assertIn("when = 1979-05-27T07:32:00Z", lines)
         self.assertEqual(lines[-2:], ["true", "true"])
 
+    def test_toml_scanner_preserves_quoted_separators_and_following_statements(self):
+        self.hosted(r"""
+            import (toml)
+            func main() !void {
+                var data = "# comment\r\ntext = \"a#b=c\\u0023\" # trailer\r\nitems = [\"a,b\", \"x=y\", 'hash#']\r\nanswer = 42\r\n";
+                var table = toml.parse(data)!;
+                var text: ref toml.Value = table.getRef("text").unwrap();
+                switch text {
+                    toml.Value.String(ref value) => { io.println(value)!; },
+                    _ => panic("quoted text was not a string"),
+                }
+                var list: ref toml.Value = table.getRef("items").unwrap();
+                switch list {
+                    toml.Value.Array(ref values) => { io.println(values.len())!; },
+                    _ => panic("quoted commas split the array incorrectly"),
+                }
+                var answer: ref toml.Value = table.getRef("answer").unwrap();
+                switch answer {
+                    toml.Value.Integer(value) => { io.println(value)!; },
+                    _ => panic("scanner did not advance to the next statement"),
+                }
+                var invalid = toml.parse("text = \"\\uD800\"") catch (reason) {
+                    io.println(reason == toml.TomlError.InvalidString)!;
+                    return;
+                };
+                panic("surrogate was accepted");
+            }
+        """, "a#b=c#\n3\n42\ntrue\n")
+
+    def test_toml_serializer_reads_checked_document_elements(self):
+        self.hosted(r"""
+            import (coll, toml)
+            func main() !void {
+                var document = toml.Document();
+                var title: string = "alpha\nquote: \"";
+                document.insertUnique("title", toml.Value.String(move(title)))!;
+
+                var inline = toml.Document();
+                inline.insertUnique("escaped key", toml.Value.Bool(true))!;
+                var array = coll.Vec<toml.Value>();
+                array.push(toml.Value.Table(move(inline)))!;
+                array.push(toml.Value.Integer(-2))!;
+                document.insertUnique("items", toml.Value.Array(move(array)))!;
+
+                var child = toml.Document();
+                child.insertUnique("port", toml.Value.Integer(7))!;
+                document.insertUnique("server group", toml.Value.Table(move(child)))!;
+
+                {
+                    var first: ref toml.Value = document.getRef("title").unwrap();
+                    switch first {
+                        toml.Value.String(ref name) => { if name.byteLen() != 14 { panic("wrong string length"); } },
+                        _ => panic("wrong table entry"),
+                    }
+                    var indexed: ref toml.Value = document.valueRefAt(2).unwrap();
+                    switch indexed {
+                        toml.Value.Table(ref childView) => {
+                            var port: ref toml.Value = childView.getRef("port").unwrap();
+                            switch port {
+                                toml.Value.Integer(value) => { if value != 7 { panic("wrong port"); } },
+                                _ => panic("wrong port kind"),
+                            }
+                        },
+                        _ => panic("wrong child table kind"),
+                    }
+                }
+                var rendered = toml.stringify(document)!;
+                if rendered != "title = \"alpha\\nquote: \\\"\"\nitems = [{\"escaped key\" = true}, -2]\n\n[\"server group\"]\nport = 7\n" {
+                    panic("serializer did not preserve exact TOML bytes");
+                }
+            }
+        """, "")
+
+        for case, statement, expected in (
+            ("raw", "var rendered = toml.stringify(raw table)!;", b"no accessible overload"),
+            ("owner", """
+                var selected: ref toml.Value = table.valueRefAt(0).unwrap();
+                table.insertUnique("other", toml.Value.Bool(false))!;
+                switch selected { _ => {} }
+            """, b"access conflicts with active borrow"),
+        ):
+            with self.subTest(case=case):
+                source = self.source(case + "/main.vqr", """
+                    package main
+                    import (toml)
+                    func main() !void {
+                        var table = toml.Document();
+                        table.insertUnique("item", toml.Value.Integer(1))!;
+                """ + statement + "}")
+                result = self.process(VAQC, "check", source, good=False)
+                self.assertIn(expected, result.stderr)
+
     def test_toml_dom_mutation_takes_value_ownership(self):
         self.hosted("""
             import (serde, toml)

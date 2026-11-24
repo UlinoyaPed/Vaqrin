@@ -1,5 +1,5 @@
 package mem
-import (atomic)
+import (atomic, meta)
 
 pub error SharedError { NotUnique }
 
@@ -7,9 +7,16 @@ class SharedState<T: Movable> {
     pub var strong: atomic.Atomic<usize>;
     pub var weak: atomic.Atomic<usize>;
     pub var payload: MaybeUninit<T>;
-    pub func init(value: T) : strong(atomic.Atomic<usize>(1)), weak(atomic.Atomic<usize>(1)),
-                         payload(MaybeUninit<T>.uninit()) {
-        unsafe { payload.write(move(value)); }
+    comptime if meta.isCopyable<T>() {
+        pub func init(value: T) : strong(atomic.Atomic<usize>(1)), weak(atomic.Atomic<usize>(1)),
+                                 payload(MaybeUninit<T>.uninit()) {
+            unsafe { payload.write(move(value)); }
+        }
+    } else {
+        pub func init(value: move T) : strong(atomic.Atomic<usize>(1)), weak(atomic.Atomic<usize>(1)),
+                                      payload(MaybeUninit<T>.uninit()) {
+            unsafe { payload.write(move(value)); }
+        }
     }
 }
 
@@ -47,9 +54,18 @@ pub class Shared<T: Movable> {
     #copy: enable
     var owner: ?*SharedState<T>;
     func init(state: *SharedState<T>) : owner(some(state)) {}
-    pub static func new(value: T) !Self {
-        var block = (new SharedState<T>(move(value)))!;
-        Shared<T>(Box.intoRaw(move(block)))
+    // Only the public construction boundary copies a named Copyable payload.
+    // Setup transfers that acquired value exactly once into shared storage.
+    comptime if meta.isCopyable<T>() {
+        pub static func new(value: T) !Self {
+            var block = (new SharedState<T>(move(value)))!;
+            Shared<T>(Box.intoRaw(move(block)))
+        }
+    } else {
+        pub static func new(value: move T) !Self {
+            var block = (new SharedState<T>(move(value)))!;
+            Shared<T>(Box.intoRaw(move(block)))
+        }
     }
 
     pub unsafe static func fromRetained(state: *SharedState<T>) Self { Shared<T>(state) }

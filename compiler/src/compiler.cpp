@@ -110,7 +110,7 @@ Type *Program::pointer(Type *t, bool readOnly) {
 
 Type *Program::reference(Type *t, bool readOnly, ParameterMode mode) {
   auto key = std::string(mode == ParameterMode::In ? "in " : mode == ParameterMode::Mut ? "mut "
-                         : readOnly ? "&const " : "&") + t->name;
+                         : readOnly ? "ref " : "ref mut ") + t->name;
   if (auto i = canonical.find(key); i != canonical.end()) return i->second;
   auto *ref = add(Kind::Reference, pointer(t, readOnly)->ir, key, {t});
   ref->readOnly = readOnly;

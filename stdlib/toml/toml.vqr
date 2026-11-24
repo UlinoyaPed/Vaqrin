@@ -85,7 +85,7 @@ pub class Document {
     }
 
     pub func insertUnique(key: string, value: move Value) !void {
-        if get(key) != null { return TomlError.DuplicateKey; }
+        if getRef(key) != null { return TomlError.DuplicateKey; }
         entries.push(Entry(move(key), move(value)))!
     }
 
@@ -101,10 +101,25 @@ pub class Document {
 
     pub const func keyAt(index: usize) ?str {
         if index >= entries.len() { return null; }
-        some(entries.getPtr(index).unwrap().key)
+        some(entries[index].key)
     }
 
-    pub const func valueAt(index: usize) ?*const Value {
+    pub const func getRef(key: str) ?ref Value from self {
+        for index in usize(0)..entries.len() {
+            var entry = entries.get(index).unwrap();
+            if entry.key == key { return some(ref entry.value); }
+        }
+        null
+    }
+
+    pub const func valueRefAt(index: usize) ?ref Value from self {
+        if index >= entries.len() { return null; }
+        var entry = entries.get(index).unwrap();
+        some(ref entry.value)
+    }
+
+    // The legacy traversal cursor still works with explicit raw addresses.
+    pub const func valuePtrAt(index: usize) ?*const Value {
         if index >= entries.len() { return null; }
         some(raw entries.getPtr(index).unwrap().value)
     }
@@ -114,7 +129,47 @@ pub class Document {
         var keys = parseKeyPath(path)!;
         setDotted(self, keys.asConstSlice(), move(value), true)
     }
-    pub const func stringify() !string { stringifyDocument(self) }
+    pub const func stringify() !string {
+        var builder = text.StringBuilder();
+        writeDocument(builder, "", 0, 64)!;
+        builder.build()
+    }
+
+    const func writeDocument(builder: mut text.StringBuilder,
+                       prefix: str, depth: usize, maxDepth: usize) !void {
+        if depth > maxDepth { return TomlError.DepthLimit; }
+        for index in usize(0)..len() {
+            var value: ref Value = valueRefAt(index).unwrap();
+            switch value {
+                Value.Table(_) => {},
+                _ => {
+                    appendKey(builder, keyAt(index).unwrap())!;
+                    appendRaw(builder, " = ")!;
+                    writeValue(value, builder, depth, maxDepth)!;
+                    appendRaw(builder, "\n")!;
+                },
+            }
+        }
+        for index in usize(0)..len() {
+            var value: ref Value = valueRefAt(index).unwrap();
+            switch value {
+                Value.Table(ref table) => {
+                    var pathBuilder = text.StringBuilder();
+                    if prefix.byteLen() != 0 {
+                        appendRaw(pathBuilder, prefix)!;
+                        appendRaw(pathBuilder, ".")!;
+                    }
+                    appendKey(pathBuilder, keyAt(index).unwrap())!;
+                    var path = pathBuilder.build()!;
+                    appendRaw(builder, "\n[")!;
+                    appendRaw(builder, path)!;
+                    appendRaw(builder, "]\n")!;
+                    table.writeDocument(builder, path, depth + 1, maxDepth)!;
+                },
+                _ => {},
+            }
+        }
+    }
 }
 
 func trim(value: str) str {
@@ -137,57 +192,57 @@ class QuoteState {
     pub func init() : mark(0), multiline(false) {}
     pub const func open() bool { mark != 0 }
 
-    pub func skip(data: []const u8, cursor: *usize) bool {
-        var index = *cursor;
+    pub func skip(data: []const u8, cursor: mut usize) bool {
+        var index = cursor;
         var byte = data[index];
         if mark == 0 {
             if byte != 34 && byte != 39 { return false; }
             mark = byte;
             multiline = tripleQuote(data, index, byte);
-            *cursor += if multiline { usize(3) } else { usize(1) };
+            cursor += if multiline { usize(3) } else { usize(1) };
             return true;
         }
         if mark == 34 && byte == 92 && index + 1 < data.len() {
-            *cursor += 2;
+            cursor += 2;
         } else if byte == mark && (!multiline || tripleQuote(data, index, mark)) {
-            *cursor += if multiline { usize(3) } else { usize(1) };
+            cursor += if multiline { usize(3) } else { usize(1) };
             if multiline {
-                while *cursor < data.len() && data[*cursor] == mark { *cursor += 1; }
+                while cursor < data.len() && data[cursor] == mark { cursor += 1; }
             }
             mark = 0;
         } else {
-            *cursor += 1;
+            cursor += 1;
         }
         true
     }
 }
 
 // Collect one assignment or header, discarding comments outside strings.
-func nextStatement(data: []const u8, position: *usize, output: *coll.Vec<u8>) !void {
+func nextStatement(data: []const u8, position: mut usize, output: mut coll.Vec<u8>) !void {
     output.clear();
     var quote = QuoteState();
     var square: usize = 0;
     var curly: usize = 0;
-    while *position < data.len() {
-        var start = *position;
+    while position < data.len() {
+        var start = position;
         if quote.skip(data, position) {
-            for byte in data[start..*position] { output.push(byte)!; }
+            for byte in data[start..position] { output.push(byte)!; }
             continue;
         }
-        var byte = data[*position];
-        *position += 1;
-        if byte == 13 && (*position == data.len() || data[*position] != 10) {
+        var byte = data[position];
+        position += 1;
+        if byte == 13 && (position == data.len() || data[position] != 10) {
             return TomlError.InvalidSyntax;
         }
         if byte == 35 {
-            while *position < data.len() && data[*position] != 10 {
-                var comment = data[*position];
+            while position < data.len() && data[position] != 10 {
+                var comment = data[position];
                 if comment < 32 && comment != 9 &&
-                   !(comment == 13 && *position + 1 < data.len() && data[*position + 1] == 10) {
+                   !(comment == 13 && position + 1 < data.len() && data[position + 1] == 10) {
                     return TomlError.InvalidSyntax;
                 }
                 if comment == 127 { return TomlError.InvalidSyntax; };
-                *position += 1;
+                position += 1;
             }
             continue;
         }
@@ -224,7 +279,7 @@ func hexValue(byte: u8) ?u32 {
     null
 }
 
-func appendScalar(output: *coll.Vec<u8>, scalar: u32) !void {
+func appendScalar(output: mut coll.Vec<u8>, scalar: u32) !void {
     if scalar > 0x10ffff || (0xd800 <= scalar && scalar <= 0xdfff) {
         return TomlError.InvalidString;
     }
@@ -252,13 +307,13 @@ func stringStart(data: []const u8, multiline: bool) usize {
     3
 }
 
-func appendStringByte(data: []const u8, position: *usize, stop: usize,
-                      multiline: bool, mark: u8, out: *coll.Vec<u8>) !void {
-    var index = *position;
+func appendStringByte(data: []const u8, position: mut usize, stop: usize,
+                      multiline: bool, mark: u8, out: mut coll.Vec<u8>) !void {
+    var index = position;
     var byte = data[index];
     if byte == 13 && multiline && index + 1 < stop && data[index + 1] == 10 {
         out.push(10)!;
-        *position += 2;
+        position += 2;
         return;
     }
     if byte == mark && (!multiline || (stop - index >= 3 && tripleQuote(data, index, mark))) {
@@ -268,7 +323,7 @@ func appendStringByte(data: []const u8, position: *usize, stop: usize,
         return TomlError.InvalidString;
     }
     out.push(byte)!;
-    *position += 1;
+    position += 1;
 }
 
 func parseBasicString(value: str, allowMultiline: bool) !string {
@@ -281,7 +336,7 @@ func parseBasicString(value: str, allowMultiline: bool) !string {
     var index = stringStart(data, multiline);
     while index < stop {
         if data[index] != 92 {
-            appendStringByte(data, raw index, stop, multiline, 34, raw output)!;
+            appendStringByte(data, index, stop, multiline, 34, output)!;
             continue;
         }
         index++;
@@ -317,7 +372,7 @@ func parseBasicString(value: str, allowMultiline: bool) !string {
                     scalar = (scalar << 4) | digit;
                 }
                 index += digits;
-                appendScalar(raw output, scalar)!;
+                appendScalar(output, scalar)!;
             },
             _ => return TomlError.InvalidString,
         }
@@ -333,7 +388,7 @@ func parseLiteralString(value: str, allowMultiline: bool) !string {
     var stop = data.len() - (if multiline { usize(3) } else { usize(1) });
     var output = coll.Vec<u8>();
     var index = stringStart(data, multiline);
-    while index < stop { appendStringByte(data, raw index, stop, multiline, 39, raw output)!; }
+    while index < stop { appendStringByte(data, index, stop, multiline, 39, output)!; }
     text.fromBytes(output.asConstSlice()) catch { return TomlError.InvalidString; }
 }
 
@@ -346,7 +401,7 @@ func splitTopLevel(value: str, delimiter: u8) !coll.Vec<string> {
     var square: usize = 0;
     var curly: usize = 0;
     while index < data.len() {
-        if quote.skip(data, raw index) { continue; }
+        if quote.skip(data, index) { continue; }
         var byte = data[index];
         if byte == 91 { square++; }
         else if byte == 93 {
@@ -374,7 +429,7 @@ func findTopLevel(value: str, delimiter: u8) ?usize {
     var square: usize = 0;
     var curly: usize = 0;
     while index < data.len() {
-        if quote.skip(data, raw index) { continue; }
+        if quote.skip(data, index) { continue; }
         var byte = data[index];
         if byte == 91 { square++; }
         else if byte == 93 && square != 0 { square--; }
@@ -522,22 +577,22 @@ func declareTable(document: *Document, path: []const string, array: bool) !*Docu
     }
 }
 
-func parseDigitRun(data: []const u8, position: *usize, radix: u8) !usize {
+func parseDigitRun(data: []const u8, position: mut usize, radix: u8) !usize {
     var count: usize = 0;
     var previousDigit = false;
-    while *position < data.len() {
-        var byte = data[*position];
+    while position < data.len() {
+        var byte = data[position];
         if isDigitFor(byte, radix) {
             count++;
             previousDigit = true;
-            *position += 1;
+            position += 1;
         } else if byte == 95 {
-            if !previousDigit || *position + 1 >= data.len() ||
-               !isDigitFor(data[*position + 1], radix) {
+            if !previousDigit || position + 1 >= data.len() ||
+               !isDigitFor(data[position + 1], radix) {
                 return TomlError.InvalidNumber;
             }
             previousDigit = false;
-            *position += 1;
+            position += 1;
         } else {
             break;
         }
@@ -546,7 +601,7 @@ func parseDigitRun(data: []const u8, position: *usize, radix: u8) !usize {
     count
 }
 
-func cleanInteger(value: str, radix: *u8) !string {
+func cleanInteger(value: str, radix: mut u8) !string {
     var data = value.asBytes();
     var position: usize = 0;
     var sign: u8 = 0;
@@ -557,17 +612,17 @@ func cleanInteger(value: str, radix: *u8) !string {
     }
     if position >= data.len() { return TomlError.InvalidNumber; }
     if sign == 0 && data.len() >= 2 && data[0] == 48 {
-        if data[1] == 120 { *radix = 16; position = 2; }
-        else if data[1] == 111 { *radix = 8; position = 2; }
-        else if data[1] == 98 { *radix = 2; position = 2; }
+        if data[1] == 120 { radix = 16; position = 2; }
+        else if data[1] == 111 { radix = 8; position = 2; }
+        else if data[1] == 98 { radix = 2; position = 2; }
     }
     if position >= data.len() { return TomlError.InvalidNumber; }
     var digits = coll.Vec<u8>();
     if sign != 0 { digits.push(sign)!; }
     var digitStart = position;
-    var digitCount = parseDigitRun(data, raw position, *radix)!;
+    var digitCount = parseDigitRun(data, position, radix)!;
     if position != data.len() { return TomlError.InvalidNumber; }
-    if *radix == 10 && data[digitStart] == 48 && digitCount > 1 {
+    if radix == 10 && data[digitStart] == 48 && digitCount > 1 {
         return TomlError.InvalidNumber;
     }
     for index in digitStart..data.len() {
@@ -585,14 +640,14 @@ func validateFloat(value: str) !void {
     if data[position] == 43 || data[position] == 45 { position++; }
     if position >= data.len() { return TomlError.InvalidNumber; }
     var start = position;
-    var integerDigits = parseDigitRun(data, raw position, 10)!;
+    var integerDigits = parseDigitRun(data, position, 10)!;
     if integerDigits > 1 && data[start] == 48 { return TomlError.InvalidNumber; }
     var hasFraction = false;
     var hasExponent = false;
     if position < data.len() && data[position] == 46 {
         hasFraction = true;
         position++;
-        parseDigitRun(data, raw position, 10)!;
+        parseDigitRun(data, position, 10)!;
     }
     if position < data.len() && (data[position] == 101 || data[position] == 69) {
         hasExponent = true;
@@ -600,7 +655,7 @@ func validateFloat(value: str) !void {
         if position < data.len() && (data[position] == 43 || data[position] == 45) {
             position++;
         }
-        parseDigitRun(data, raw position, 10)!;
+        parseDigitRun(data, position, 10)!;
     }
     if !hasFraction && !hasExponent { return TomlError.InvalidNumber; }
     if position != data.len() { return TomlError.InvalidNumber; }
@@ -683,7 +738,7 @@ func validateDateTime(value: str) !void {
     }
 }
 
-func parseArray(value: str, depth: usize, options: *const TomlOptions) !Value {
+func parseArray(value: str, depth: usize, options: in TomlOptions) !Value {
     var data = value.asBytes();
     if data.len() < 2 || data[0] != 91 || data[data.len() - 1] != 93 {
         return TomlError.InvalidSyntax;
@@ -693,7 +748,7 @@ func parseArray(value: str, depth: usize, options: *const TomlOptions) !Value {
     if inside.byteLen() == 0 { return Value.Array(move(output)); }
     var parts = splitTopLevel(inside, 44)!;
     for index in usize(0)..parts.len() {
-        var part = trim(*parts.getPtr(index).unwrap());
+        var part = trim(parts[index]);
         if part.byteLen() == 0 {
             if index == parts.len() - 1 { continue; }
             return TomlError.InvalidSyntax;
@@ -705,7 +760,7 @@ func parseArray(value: str, depth: usize, options: *const TomlOptions) !Value {
     Value.Array(move(output))
 }
 
-func parseInlineTable(value: str, depth: usize, options: *const TomlOptions) !Value {
+func parseInlineTable(value: str, depth: usize, options: in TomlOptions) !Value {
     var data = value.asBytes();
     if data.len() < 2 || data[0] != 123 || data[data.len() - 1] != 125 {
         return TomlError.InvalidSyntax;
@@ -725,7 +780,7 @@ func parseInlineTable(value: str, depth: usize, options: *const TomlOptions) !Va
     Value.Table(move(document))
 }
 
-func parseValue(value: str, depth: usize, options: *const TomlOptions) !Value {
+func parseValue(value: str, depth: usize, options: in TomlOptions) !Value {
     if depth > options.maxDepth { return TomlError.DepthLimit; }
     var source = trim(value);
     var data = source.asBytes();
@@ -757,7 +812,7 @@ func parseValue(value: str, depth: usize, options: *const TomlOptions) !Value {
         return Value.Float(text.fromBytes(data)!);
     }
     var radix: u8 = 10;
-    var clean = cleanInteger(source, raw radix)!;
+    var clean = cleanInteger(source, radix)!;
     var integer = numberParser.parseInt<i64>(clean, radix) catch { return TomlError.InvalidNumber; };
     Value.Integer(integer)
 }
@@ -766,7 +821,7 @@ func countEntries(document: *const Document, depth: usize, maxDepth: usize) !usi
     if depth > maxDepth { return TomlError.DepthLimit; }
     var count = document.len();
     for index in usize(0)..document.len() {
-        switch *document.valueAt(index).unwrap() {
+        switch *document.valuePtrAt(index).unwrap() {
             Value.Table(ref table) => {
                 var nested = countEntries(table.toRaw(), depth + 1, maxDepth)!;
                 if nested > ~usize(0) - count { return TomlError.SizeLimit; }
@@ -800,7 +855,7 @@ pub func parseWithOptions(value: str, options: TomlOptions) !Document {
     var statement = coll.Vec<u8>();
     var position: usize = 0;
     while position < source.len() {
-        nextStatement(source, raw position, raw statement)!;
+        nextStatement(source, position, statement)!;
         var line = trim(unsafe { __vqr_text_borrow_utf8(statement.asConstSlice()) });
         if line.byteLen() == 0 { continue; }
         var data = line.asBytes();
@@ -822,7 +877,7 @@ pub func parseWithOptions(value: str, options: TomlOptions) !Document {
         var rhs = trim(unsafe { __vqr_text_borrow_utf8(data[equal + 1..data.len()]) });
         var keys = parseKeyPath(keyText)!;
         if keys.len() == 0 || keys.len() > options.maxDepth - sectionDepth { return TomlError.DepthLimit; }
-        var item = parseValue(rhs, sectionDepth, raw options)!;
+        var item = parseValue(rhs, sectionDepth, options)!;
         setDotted(section, keys.asConstSlice(), move(item), true)!;
     }
     if countEntries(raw document, 0, options.maxDepth)! > options.maxEntries { return TomlError.SizeLimit; }
@@ -841,15 +896,15 @@ pub func parseReader(reader: *io.Reader, limit: usize) !Document {
     parseWithOptions(source, options)
 }
 
-func appendByte(builder: *text.StringBuilder, byte: u8) !void {
+func appendByte(builder: mut text.StringBuilder, byte: u8) !void {
     var data: [1]u8 = [1]u8{byte};
     var piece = text.fromBytes(data[:])!;
     builder.append(piece)
 }
 
-func appendRaw(builder: *text.StringBuilder, value: str) !void { builder.append(value) }
+func appendRaw(builder: mut text.StringBuilder, value: str) !void { builder.append(value) }
 
-func appendQuoted(builder: *text.StringBuilder, value: str) !void {
+func appendQuoted(builder: mut text.StringBuilder, value: str) !void {
     appendRaw(builder, "\"")!;
     var data = value.asBytes();
     var start: usize = 0;
@@ -897,7 +952,7 @@ func bareKey(value: str) bool {
     true
 }
 
-func appendKey(builder: *text.StringBuilder, value: str) !void {
+func appendKey(builder: mut text.StringBuilder, value: str) !void {
     if bareKey(value) { appendRaw(builder, value) }
     else { appendQuoted(builder, value) }
 }
@@ -918,20 +973,20 @@ func integerText(value: i64) !string {
     text.fromBytes(output.asConstSlice())
 }
 
-func writeValue(value: *const Value, builder: *text.StringBuilder, depth: usize, maxDepth: usize) !void {
+func writeValue(value: in Value, builder: mut text.StringBuilder, depth: usize, maxDepth: usize) !void {
     if depth > maxDepth { return TomlError.DepthLimit; }
-    switch *value {
-        Value.String(item) => appendQuoted(builder, item),
+    switch value {
+        Value.String(ref item) => appendQuoted(builder, item),
         Value.Integer(item) => {
             var raw = integerText(item)!;
             appendRaw(builder, raw)
         },
-        Value.Float(item) => {
+        Value.Float(ref item) => {
             validateFloat(item)!;
             appendRaw(builder, item)
         },
         Value.Bool(item) => appendRaw(builder, if item { "true" } else { "false" }),
-        Value.DateTime(item) => {
+        Value.DateTime(ref item) => {
             validateDateTime(item)!;
             appendRaw(builder, item)
         },
@@ -939,7 +994,7 @@ func writeValue(value: *const Value, builder: *text.StringBuilder, depth: usize,
             appendRaw(builder, "[")!;
             for index in usize(0)..items.len() {
                 if index != 0 { appendRaw(builder, ", ")!; }
-                writeValue(items.getPtr(index).unwrap(), builder, depth + 1, maxDepth)!;
+                writeValue(items.get(index).unwrap(), builder, depth + 1, maxDepth)!;
             }
             appendRaw(builder, "]")
         },
@@ -949,53 +1004,11 @@ func writeValue(value: *const Value, builder: *text.StringBuilder, depth: usize,
                 if index != 0 { appendRaw(builder, ", ")!; }
                 appendKey(builder, table.keyAt(index).unwrap())!;
                 appendRaw(builder, " = ")!;
-                writeValue(table.valueAt(index).unwrap(), builder, depth + 1, maxDepth)!;
+                writeValue(table.valueRefAt(index).unwrap(), builder, depth + 1, maxDepth)!;
             }
             appendRaw(builder, "}")
         },
     }
 }
 
-func writeDocument(document: *const Document, builder: *text.StringBuilder,
-                   prefix: str, depth: usize, maxDepth: usize) !void {
-    if depth > maxDepth { return TomlError.DepthLimit; }
-    for index in usize(0)..document.len() {
-        var value = document.valueAt(index).unwrap();
-        switch *value {
-            Value.Table(_) => {},
-            _ => {
-                appendKey(builder, document.keyAt(index).unwrap())!;
-                appendRaw(builder, " = ")!;
-                writeValue(value, builder, depth, maxDepth)!;
-                appendRaw(builder, "\n")!;
-            },
-        }
-    }
-    for index in usize(0)..document.len() {
-        var value = document.valueAt(index).unwrap();
-        switch *value {
-            Value.Table(ref table) => {
-                var pathBuilder = text.StringBuilder();
-                if prefix.byteLen() != 0 {
-                    appendRaw(raw pathBuilder, prefix)!;
-                    appendRaw(raw pathBuilder, ".")!;
-                }
-                appendKey(raw pathBuilder, document.keyAt(index).unwrap())!;
-                var path = pathBuilder.build()!;
-                appendRaw(builder, "\n[")!;
-                appendRaw(builder, path)!;
-                appendRaw(builder, "]\n")!;
-                writeDocument(table.toRaw(), builder, path, depth + 1, maxDepth)!;
-            },
-            _ => {},
-        }
-    }
-}
-
-pub func stringify(document: *const Document) !string { stringifyDocument(document) }
-
-func stringifyDocument(document: *const Document) !string {
-    var builder = text.StringBuilder();
-    writeDocument(document, raw builder, "", 0, 64)!;
-    builder.build()
-}
+pub func stringify(document: in Document) !string { document.stringify() }

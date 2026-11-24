@@ -176,11 +176,13 @@ class Ticket<T: Movable + Sendable> {
                 node.choice.failure = some(ChannelError.OutOfMemory);
                 return true;
             };
-            box.queue.push(takeOffered<T>(raw node));
+            var pending = some(takeOffered<T>(raw node));
+            box.queue.push(pending);
         } else {
             if box.offer != Offer.Empty { return false; }
             if box.readyReceiver() {
-                box.deliver(takeOffered<T>(raw node), Offer.Committed, null);
+                var pending = some(takeOffered<T>(raw node));
+                box.deliver(pending, Offer.Committed, null);
             } else {
                 var receiver = box.findChoice(false, some(node.choice)) ?? { return false; };
                 receiver.value = some(takeOffered<T>(raw node));

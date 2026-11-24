@@ -107,6 +107,8 @@ LinkedList 使用双向节点和独立 Box 所有权表，节点地址在插入�
 
 `channel` 的接收端排空关闭的缓冲区后返回成功的外层 `null`。零容量通道只在发送与接收配对时交付。`sendPreserving` 在关闭或内存不足时交还值，`sendTimeout` 以 `Cancelled(value)` 交还超时值，`recvTimeout` 以 `ChannelError.Timeout` 报告超时。轻量任务通过调度器挂起，可由关闭、取消和单调时钟截止唤醒。原生线程通过 futex 等待。`drain` 只迭代本次可立即取得的消息。
 
+`Sender<T>` 的 `send`、`trySend`、`sendPreserving`、`sendTimeout` 对 Copyable 的消息按值复制一次；不可复制的具名消息用 `move(value)`，新建的临时消息可直接发送。拒绝时，保留消息的接口交还的是这次发送取得的副本或所有者。自由函数 `channel.send`、`channel.trySend` 只接收 Copyable 消息；不可复制的消息使用对应的 Sender 方法。
+
 `new(allocator) T(...)` 借用一个实现 `mem.Allocator` 的可变位置。分配器及其缓冲区必须比所有借用它的 Box 活得更久。拆出自定义分配的 Box 时使用 `Box.intoRawParts`，恢复时传回原释放上下文。由于同一个 `^T` 类型可保存借用的分配器，当前线程能力检查保守地拒绝跨线程移交或共享 Box。
 
 `Shared<T>` 的复制增加强引用计数，`Weak<T>` 仅延长计数块的寿命。最后一个强引用释放载荷，最后一个弱引用释放计数块。`getMut` 要求唯一强引用且没有显式弱引用，`tryUnwrap` 消费强引用，并在其唯一时移出载荷。只有可安全共享的 T 才允许将这两类拥有者跨线程移交。

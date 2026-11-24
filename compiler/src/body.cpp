@@ -170,6 +170,11 @@ Borrow Body::joinBorrow(Borrow left, Borrow right, Type *type, Span span) {
 }
 
 void Body::checkAccess(ValueAt v, bool write, Span span) {
+  // A reference-bearing tuple's payload loans protect the referents, not
+  // the bytes of the tuple slot itself. A whole read also touches that slot.
+  if (v.local >= 0 && v.type->kind == Kind::Tuple && p.hasReference(v.type) &&
+      !locals[v.local].reference && v.address == locals[v.local].slot && v.origin.root != v.local)
+    checkRootAccess(v.local, {v.local}, write, span);
   bool ownSlot =
       v.origin.raw && v.local >= 0 && !locals[v.local].reference && v.address == locals[v.local].slot;
   int root = !ownSlot && v.origin.root >= 0 ? v.origin.root : v.local;
@@ -367,7 +372,19 @@ ValueAt Body::borrow(ValueAt v, Type *t, Span span, bool materialize) {
       fail(span, "a scoped closure environment can only be borrowed from its whole local binding", "E230");
     checkAccess(v, false, span);
     v.origin = {v.local};
+  } else if (target->kind == Kind::Tuple && p.hasReference(target) && v.local >= 0 &&
+             !locals[v.local].reference && locals[v.local].slot == v.address) {
+    if (!t->readOnly)
+      fail(span, "borrow individual scalar slots instead of mutably borrowing a reference-bearing tuple", "E230");
+    // The local keeps the payload's referents live. Borrowing the entire
+    // tuple additionally has to protect its physical slot.
+    checkAccess(v, false, span);
+    v.origin = {v.local};
   }
+  if (v.local >= 0 && locals[v.local].type->kind == Kind::Tuple &&
+      p.hasReference(locals[v.local].type) && v.address != locals[v.local].slot &&
+      !p.hasReference(v.type) && (v.origin.root != v.local || v.origin.fields.empty()))
+    fail(span, "cannot prove the storage of this reference-bearing tuple projection", "E230");
   if (!v.address) {
     if (t->parameterMode == ParameterMode::In && p.hasReference(v.type))
       fail(span, "bind the reference-bearing aggregate before borrowing it", "E230");
@@ -1207,7 +1224,13 @@ ValueAt Body::payload(ValueAt source, unsigned i, Type *t) {
     else
       address = ir.CreateStructGEP(source.type->ir, source.address, i);
     auto origin = source.origin;
-    if (source.type->kind == Kind::Class && t->kind == Kind::Pointer)
+    const bool scalar = t->kind == Kind::Int || t->kind == Kind::Float ||
+                        t->kind == Kind::Bool || t->kind == Kind::Char;
+    if (source.type->kind == Kind::Tuple && p.hasReference(source.type) && scalar && !origin.captures &&
+        source.local >= 0 && !locals[source.local].refCapture &&
+        source.address == locals[source.local].slot) {
+      origin = {source.local, -1, false, {}, {i}};
+    } else if (source.type->kind == Kind::Class && t->kind == Kind::Pointer)
       origin = {};
     else if ((source.type->kind == Kind::Class || source.type->kind == Kind::Tuple) &&
              !p.hasReference(source.type) && !origin.alternatives && !origin.raw)

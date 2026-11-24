@@ -33,7 +33,7 @@ pub class TomlDomSerializer {
     }
     pub func writeNumber(value: str) !void {
         var options = TomlOptions();
-        var parsed = parseValue(value, 0, raw options)!;
+        var parsed = parseValue(value, 0, options)!;
         switch move(parsed) {
             Value.Integer(value) => appendValue(Value.Integer(value)),
             Value.Float(value) => appendValue(Value.Float(move(value))),
@@ -202,7 +202,7 @@ pub class TomlDomDeserializer {
         var table = asTable(frame.parent).unwrap();
         if frame.index >= table.len() { current = null; return null; }
         var key = table.keyAt(frame.index).unwrap();
-        current = table.valueAt(frame.index);
+        current = table.valuePtrAt(frame.index);
         frame.index++;
         some(text.fromBytes(key.asBytes())!)
     }
@@ -246,7 +246,7 @@ pub func encode<T>(value: *const T, codec: *serde.Codec<T>) !string {
     serde.encode<T>(value, raw serializer, codec)!;
     var root = serializer.takeValue()!;
     switch move(root) {
-        Value.Table(document) => stringify(raw document),
+        Value.Table(document) => stringify(document),
         _ => TomlError.TypeMismatch,
     }
 }

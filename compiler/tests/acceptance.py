@@ -3133,6 +3133,46 @@ class Acceptance(CompilerCase):
                 result = self.process(VAQC, "check", path, good=False)
                 self.assertIn(b"E230", result.stderr, result.stderr.decode())
 
+    def test_local_reference_tuple_scalar_slot_provenance(self):
+        self.hosted("""
+            func main() !void {
+                var owner = 40;
+                {
+                    var pair = (ref owner, 1, 2);
+                    {
+                        ref mut count = pair.1;
+                        pair.2++;
+                        count++;
+                        io.println(*pair.0 + pair.2 + count)!;
+                    }
+                    var copied = pair;
+                    io.println(copied.1 + copied.2)!;
+                }
+                owner++;
+                io.println(owner)!;
+            }
+        """, "45\n5\n41\n")
+        cases = {
+            "short_lived_tuple_slot": ("var number = 1; var escaped = { "
+                                      "var pair = (ref number, 2); ref pair.1 };",
+                                      "reference would outlive its owner"),
+            "whole_tuple_read": ("var number = 1; var pair = (ref number, 2); "
+                                 "ref mut count = pair.1; var copied = pair;",
+                                 "active borrow of 'pair'"),
+            "whole_tuple_move": ("var number = 1; var pair = (ref number, 2); "
+                                 "ref count = pair.1; var relocated = move(pair);",
+                                 "active borrow of 'pair'"),
+            "whole_tuple_loan": ("var number = 1; var pair = (ref number, 2); "
+                                 "ref whole = pair; pair.1++;",
+                                 "active borrow of 'pair'"),
+            "referent_loan": ("var number = 1; var pair = (ref number, 2); number++;",
+                              "active borrow of 'number'"),
+        }
+        for name, (body, diagnostic) in cases.items():
+            with self.subTest(name=name):
+                source = self.source(name + "/main.vqr", "func f() void { " + body + " }")
+                self.assertIn(diagnostic.encode(), self.process(VAQC, "check", source, good=False).stderr)
+
     def test_readonly_reference_arrays_index_and_iterate(self):
         self.hosted(r"""
             func twice(number: in i32) [2]ref i32 {
@@ -3621,6 +3661,21 @@ class Acceptance(CompilerCase):
         result = self.process(VAQC, "check", invalid, good=False)
         self.assertIn(b"error[E202]: no accessible overload matches", result.stderr)
         self.assertIn(b"candidate compare(a: in, b: in)", result.stderr)
+
+    def test_v020_reference_type_names_use_canonical_source_spelling(self):
+        self.hosted("""
+            import (meta)
+            const shared = meta.typeName<ref i32>();
+            const exclusive = meta.typeName<ref mut i32>();
+            const maybe = meta.typeName<?ref i32>();
+            const rawReadonly = meta.typeName<*const i32>();
+            func main() !void {
+                io.println(shared)!;
+                io.println(exclusive)!;
+                io.println(maybe)!;
+                io.println(rawReadonly)!;
+            }
+        """, "ref i32\nref mut i32\n?ref i32\n*const i32\n")
 
     def test_layout_ordering_and_vec_contracts(self):
         self.hosted("""
@@ -5039,6 +5094,69 @@ class Acceptance(CompilerCase):
         self.process("cc", client, "ownership.o", "-Wl,--wrap=pthread_create", "-pthread", "-o", "ownership")
         self.process("./ownership")
 
+    def test_mutex_payload_and_timed_guard_transfer_are_explicit(self):
+        self.hosted("""
+            import (sync, time)
+            class Counted {
+                #copy: enable
+                pub var id: i32;
+                pub const func copy() Self {
+                    io.println(100 + id) catch {};
+                    Counted{id: id}
+                }
+                func deinit() void { io.println(200 + id) catch {}; }
+            }
+            class Owned {
+                #copy: disabled
+                pub var id: i32;
+                func deinit() void { io.println(id) catch {}; }
+            }
+            func main() !void {
+                {
+                    var source = Counted{id: 1};
+                    var lock = sync.Mutex<Counted>.new(source);
+                    if source.id != 1 { panic("mutex consumed a copy source"); }
+                    var signal = sync.CondVar.new();
+                    {
+                        var acquired = lock.lock()!;
+                        held, timedOut := signal.waitTimeout(move(acquired), time.Duration.fromMillis(5))!;
+                        if !timedOut || lock.tryLock() != null || unsafe { (*held.get()).id } != 1 {
+                            panic("timed wait did not return exactly one locked guard");
+                        }
+                    }
+                    {
+                        var again = lock.tryLock();
+                        if again == null { panic("the returned guard did not release the mutex"); }
+                    }
+                    var result = sync.Mutex<Counted>.intoInner(move(lock));
+                    io.println(result.id)!;
+                }
+                {
+                    var source = Owned{id: 2};
+                    var lock = sync.Mutex<Owned>.new(move(source));
+                    var result = sync.Mutex<Owned>.intoInner(move(lock));
+                    if result.id != 2 { panic("mutex lost the transferred owner"); }
+                }
+            }
+        """, "101\n1\n201\n201\n2\n", "-O2")
+        for name, statement in (
+            ("new", "var other = sync.Mutex<Owned>.new(owner);"),
+            ("wait", "var again = signal.waitTimeout(guard, time.Duration.fromMillis(1))!;"),
+            ("into_inner", "var extracted = sync.Mutex<i32>.intoInner(lock);"),
+        ):
+            with self.subTest(operation=name):
+                entry = self.source(name + "/main.vqr", """
+                    import (sync, time)
+                    class Owned { #copy: disabled; pub var id: i32; }
+                    func f() !void {
+                        var owner = Owned{id: 2};
+                        var lock = sync.Mutex<i32>.new(3);
+                        var guard = lock.lock()!;
+                        var signal = sync.CondVar.new();
+                """ + statement + "\n}")
+                diagnostic = self.process(VAQC, "check", entry, good=False).stderr
+                self.assertIn(b"move parameter requires move(object) or an owning temporary", diagnostic)
+
     def test_mutex_guards_and_once(self):
         self.hosted('''
             import (cell, core, meta, sync)
@@ -5182,6 +5300,120 @@ class Acceptance(CompilerCase):
             }
         ''', "true\n23\n")
 
+    def test_shared_creation_copies_once_and_reclaims_failed_allocation(self):
+        source = self.source("shared.vqr", """
+            import (mem, result)
+            extern "C" func fail_next() void;
+            extern "C" func copied() void;
+            extern "C" func dropped(id: c_int) void;
+
+            class Counted {
+                #copy: enable
+                pub var id: c_int;
+                pub const func copy() Self {
+                    unsafe { copied(); }
+                    Counted{id: id}
+                }
+                func deinit() void { unsafe { dropped(id); } }
+            }
+
+            class Owned {
+                #copy: disabled
+                pub var id: c_int;
+                func deinit() void { unsafe { dropped(id); } }
+            }
+
+            func run() !i32 {
+                var scalar: u32 = 42;
+                {
+                    var share = mem.Shared<u32>.new(scalar)!;
+                    var copy = share;
+                    var weak = copy.downgrade();
+                    var upgraded = weak.upgrade().unwrap();
+                    if unsafe { *upgraded.asPtr() } != scalar || share.strongCount() != 3 {
+                        return 1;
+                    }
+                }
+                var seed = Counted{id: 1};
+                {
+                    var shared = mem.Shared<Counted>.new(seed)!;
+                    if unsafe { (*shared.asPtr()).id } != 1 || seed.id != 1 || shared.strongCount() != 1 {
+                        return 2;
+                    }
+                }
+                {
+                    var resource = Owned{id: 2};
+                    var shared = mem.Shared<Owned>.new(move(resource))!;
+                    var weak = shared.downgrade();
+                    var extracted = mem.Shared<Owned>.tryUnwrap(move(shared))!;
+                    if extracted.id != 2 || weak.upgrade() != null { return 3; }
+                }
+                unsafe { fail_next(); }
+                var rejectedCopy = mem.Shared<Counted>.new(seed);
+                if result.errorOf(raw rejectedCopy).unwrap() != mem.AllocationError.OutOfMemory ||
+                   seed.id != 1 { return 4; }
+
+                var resource = Owned{id: 3};
+                unsafe { fail_next(); }
+                var rejectedMove = mem.Shared<Owned>.new(move(resource));
+                if result.errorOf(raw rejectedMove).unwrap() != mem.AllocationError.OutOfMemory {
+                    return 5;
+                }
+                0
+            }
+            export "C" func exercise() c_int { run() catch 6 }
+        """)
+        consumer = self.source("shared.c", """
+            #include <stddef.h>
+            void *__real_malloc(size_t);
+            void *__real_aligned_alloc(size_t, size_t);
+            void __real_free(void *);
+            extern int exercise(void);
+            static int fail, rejections, copies, drops[4], live, allocs;
+            void fail_next(void) { fail = 1; }
+            void copied(void) { ++copies; }
+            void dropped(int id) { ++drops[id]; }
+            static int reject(void) {
+                if (!fail) return 0;
+                fail = 0;
+                ++rejections;
+                return 1;
+            }
+            static void *track(void *address) {
+                if (address) { ++live; ++allocs; }
+                return address;
+            }
+            void *__wrap_malloc(size_t size) {
+                return reject() ? NULL : track(__real_malloc(size));
+            }
+            void *__wrap_aligned_alloc(size_t align, size_t size) {
+                return reject() ? NULL : track(__real_aligned_alloc(align, size));
+            }
+            void __wrap_free(void *address) {
+                if (address) --live;
+                __real_free(address);
+            }
+            int main(void) {
+                int status = exercise();
+                if (status) return status;
+                return allocs == 3 && live == 0 && rejections == 2 && copies == 2 &&
+                       drops[1] == 3 && drops[2] == 1 && drops[3] == 1 ? 0 : 7;
+            }
+        """)
+        self.process(VAQC, source, "--emit=obj", "-O2", "-o", "shared.o")
+        self.process("cc", consumer, "shared.o", "-Wl,--wrap=malloc,--wrap=aligned_alloc,--wrap=free",
+                     "-o", "shared")
+        self.process("./shared")
+        missing_move = self.source("no_move/main.vqr", """
+            import (atomic, mem)
+            func f() !void {
+                var state = atomic.Atomic<u8>(0);
+                var shared = mem.Shared<atomic.Atomic<u8>>.new(state)!;
+            }
+        """)
+        diagnostic = self.process(VAQC, "check", missing_move, good=False).stderr
+        self.assertIn(b"move parameter requires move(object) or an owning temporary", diagnostic)
+
     def test_shared_weak_ownership_and_native_transfer(self):
         self.hosted('''
             import (cell, core, mem, meta, sync, thread)
@@ -5310,6 +5542,101 @@ class Acceptance(CompilerCase):
         ''', '-1\n-501000000\ntrue\n1501\n2251500000\ntrue\ntrue\n9223372036854775807\n0\ntrue\n'
              '1969\n12\n31\n60\ntrue\ntrue\n-400\ntrue\n28\n3\n3\n23\n59\n59\n-1\n0\n0\n999999999\n'
              'true\ntrue\ntrue\ntrue\ntrue\n1000000\n')
+
+    def test_channel_send_modes_copy_once_and_preserve_refused_owners(self):
+        self.hosted("""
+            import (channel, time)
+            class Counted {
+                #copy: enable
+                pub var id: i32;
+                pub const func copy() Self {
+                    io.println(100 + id) catch {};
+                    Counted{id: id}
+                }
+                func deinit() void { io.println(200 + id) catch {}; }
+            }
+            class Owned {
+                #copy: disabled
+                pub var id: i32;
+                func deinit() void { io.println(id) catch {}; }
+            }
+            func main() !void {
+                {
+                    tx, rx := channel.bounded<Counted>(1)!;
+                    var value = Counted{id: 1};
+                    tx.send(value)!;
+                    switch tx.trySend(value) {
+                        channel.TrySendResult.Full(item) => {
+                            if item.id != 1 { panic("trySend returned the wrong copy"); }
+                        },
+                        _ => panic("channel should be full"),
+                    }
+                    switch tx.sendTimeout(value, time.Duration.zero()) {
+                        channel.SendResult.Cancelled(item) => {
+                            if item.id != 1 { panic("sendTimeout returned the wrong copy"); }
+                        },
+                        _ => panic("full channel should time out"),
+                    }
+                    {
+                        var item = rx.recv()!.unwrap();
+                        io.println(item.id)!;
+                    }
+                    tx.close();
+                    switch tx.sendPreserving(value) {
+                        channel.SendResult.Closed(item) => {
+                            if item.id != 1 { panic("closed lane lost its copy"); }
+                        },
+                        _ => panic("closed channel should refuse a preserving send"),
+                    }
+                    tx.send(value) catch (reason) {
+                        if reason != channel.ChannelError.Closed { return reason; }
+                        io.println(9)!;
+                    };
+                    if value.id != 1 { panic("send consumed the original Copyable value"); }
+                }
+                {
+                    tx, rx := channel.bounded<Owned>(1)!;
+                    var owned = Owned{id: 2};
+                    tx.send(move(owned))!;
+                    switch tx.trySend(Owned{id: 3}) {
+                        channel.TrySendResult.Full(item) => {
+                            if item.id != 3 { panic("trySend did not return its original owner"); }
+                        },
+                        _ => panic("channel should be full"),
+                    }
+                    var late = Owned{id: 4};
+                    switch tx.sendTimeout(move(late), time.Duration.zero()) {
+                        channel.SendResult.Cancelled(item) => {
+                            if item.id != 4 { panic("timeout did not return its original owner"); }
+                        },
+                        _ => panic("full channel should time out"),
+                    }
+                    {
+                        var item = rx.recv()!.unwrap();
+                        if item.id != 2 { panic("channel lost its buffered owner"); }
+                    }
+                    tx.close();
+                    switch tx.sendPreserving(Owned{id: 5}) {
+                        channel.SendResult.Closed(item) => {
+                            if item.id != 5 { panic("closed channel returned another owner"); }
+                        },
+                        _ => panic("closed channel should refuse a preserving send"),
+                    }
+                }
+            }
+        """, "101\n101\n201\n101\n201\n1\n201\n101\n201\n101\n201\n9\n201\n3\n4\n2\n5\n", "-O2")
+        for operation in ("send(item)!", "trySend(item)", "sendPreserving(item)",
+                          "sendTimeout(item, time.Duration.zero())"):
+            with self.subTest(operation=operation):
+                entry = self.source(operation.split("(")[0] + "/main.vqr", """
+                    import (channel, time)
+                    class Owned { #copy: disabled; pub var id: i32; }
+                    func f() !void {
+                        tx, rx := channel.bounded<Owned>(1)!;
+                        var item = Owned{id: 2};
+                """ + "tx." + operation + ";\n}")
+                diagnostic = self.process(VAQC, "check", entry, good=False).stderr
+                self.assertIn(b"move parameter requires move(object) or an owning temporary", diagnostic)
 
     def test_channel_buffered_ownership_close_and_optional_values(self):
         self.hosted('''
@@ -5489,13 +5816,19 @@ class Acceptance(CompilerCase):
                     channel.SendResult.OutOfMemory(item) => move(item),
                     _ => { return 1; },
                 };
-                switch rx.tryRecv() { channel.TryRecv.Empty => {}, _ => { return 2; }, }
+                unsafe { fail_next(); }
+                var fromTrySend = switch tx.trySend(Probe{marker: 31}) {
+                    channel.TrySendResult.OutOfMemory(item) => move(item),
+                    _ => { return 2; },
+                };
+                switch rx.tryRecv() { channel.TryRecv.Empty => {}, _ => { return 3; }, }
                 tx.send(move(recovered))!;
-                var received = rx.recv()!;
-                var value = move(received).unwrap();
-                if value.marker == 29 { 0 } else { 3 }
+                tx.send(move(fromTrySend))!;
+                var first = rx.recv()!.unwrap();
+                var second = rx.recv()!.unwrap();
+                if first.marker == 29 && second.marker == 31 { 0 } else { 4 }
             }
-            export "C" func exercise() c_int { run() catch 4 }
+            export "C" func exercise() c_int { run() catch 5 }
         ''')
         client = self.source("allocation.c", '''
             #include <stddef.h>

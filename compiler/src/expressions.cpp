@@ -1353,6 +1353,14 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
   bool temporaryBorrow = receiver && receiver->temporaryBorrow;
   std::vector<int> deferredLoans;
   enter();
+  if (defer && receiver) {
+    // An argument could replace a Box (or another owning receiver) after
+    // evaluating its address. Reserve the receiver before evaluating arguments,
+    // and give the loan the defer scope only after registration succeeds.
+    auto loan = borrow(*receiver, p.reference(receiver->type, d.readOnly), n->span, false);
+    validateDeferredBorrow(loan, n->span, defer->scope);
+    deferredLoans.push_back(pinBorrow(loan, n->span, scopes.size() - 1));
+  }
   for (unsigned i = 1; i < n->children.size(); ++i) {
     if (d.params[i - 1].comptime) continue;
     auto *t = best->parameters[i - 1 + offset];
@@ -1383,13 +1391,8 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
     }
   }
   if (receiver) {
-    checkAccess(*receiver, !d.readOnly, n->span);
+    if (!defer) checkAccess(*receiver, !d.readOnly, n->span);
     if (!d.readOnly) invalidateOwnedAddresses(*receiver);
-    if (defer) {
-      auto loan = borrow(*receiver, p.reference(receiver->type, d.readOnly), n->span, false);
-      validateDeferredBorrow(loan, n->span, defer->scope);
-      pinBorrow(loan, n->span, defer->scope);
-    }
   }
   for (auto i : transfers)
     setAlive(i, false);

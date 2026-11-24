@@ -164,13 +164,14 @@ void Body::recordBorrow(int id, ValueAt v, Span span) {
   if (p.hasReference(v.type) || locals[id].reference || carriesBorrow(v.type)) locals[id].origin = v.origin;
 }
 
-void Body::pinBorrow(ValueAt value, Span span, std::size_t scope) {
+int Body::pinBorrow(ValueAt value, Span span, std::size_t scope) {
   // The loan needs a lexical slot in the checker, but no copy in native storage.
   const auto local = static_cast<int>(locals.size());
   locals.push_back({" <borrow loan>", value.type, nullptr, nullptr, nullptr, false, scope, false});
   scopes[scope].push_back(local);
   initialized.push_back(true);
   recordBorrow(local, value, span);
+  return local;
 }
 
 void Body::holdBorrow(Borrow &combined, ValueAt value, Value *stored, Span span) {

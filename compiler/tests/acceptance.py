@@ -247,6 +247,7 @@ class Acceptance(CompilerCase):
             class Probe {
                 pub func init() {}
                 pub const func report() void {}
+                pub const func withArg(value: i32) void {}
                 func deinit() void {}
             }
             func record(x: i32) void {}
@@ -264,12 +265,16 @@ class Acceptance(CompilerCase):
             "exclusive": ("var x = 1; defer mutate(x); record(x);", "active borrow"),
             "moved": ("var x = Probe(); defer borrowProbe(x); var y = move(x);", "active borrow"),
             "method_receiver": ("var x = Probe(); defer x.report(); var y = move(x);", "active borrow"),
+            "receiver_argument_replaces_owner": (
+                "var box = new Probe()!; defer (*box).withArg({ box = new Probe()!; 0 });",
+                "active borrow",
+            ),
             "unhandled_error": ("defer fallible();", "defer requires a runtime void call"),
             "non_void": ("defer value();", "defer requires a runtime void call"),
         }
         for name, (body, message) in cases.items():
             with self.subTest(case=name):
-                source = self.source(name + ".vqr", prefix + "func main() void { " + body + " }")
+                source = self.source(name + ".vqr", prefix + "func main() !void { " + body + " }")
                 self.assertIn(message.encode(), self.process(VAQC, "check", source, good=False).stderr)
 
     def test_v020_borrow_projections(self):

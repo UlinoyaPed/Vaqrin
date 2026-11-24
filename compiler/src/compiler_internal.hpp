@@ -291,7 +291,7 @@ private:
   ValueAt member(const Ast &n);
   ValueAt index(const Ast &n);
   Value *arrayStorage(ValueAt array, Span span, std::size_t scope);
-  void pinBorrow(ValueAt value, Span span, std::size_t scope);
+  int pinBorrow(ValueAt value, Span span, std::size_t scope);
   ValueAt unary(const Ast &n, Type *expected);
   ValueAt binary(const Ast &n, Type *expected);
   ValueAt compareText(const Ast &node, ValueAt left);

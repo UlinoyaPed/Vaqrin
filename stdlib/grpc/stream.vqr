@@ -113,7 +113,7 @@ pub class ServerStream {
             };
         }
     }
-    pub func finish(result: Status) !void {
+    pub func finish(result: move Status) !void {
         if cancelled { return; }
         socket.setTimeout(timeout)!;
         if acknowledged {

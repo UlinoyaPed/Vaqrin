@@ -89,7 +89,7 @@ pub class GreeterClient {
 }
 
 pub interface GreeterService {
-    func rpc_SayHello(request: Msg_HelloRequest, context: *const grpc.UnaryRequest) !grpc.TypedResponse<Msg_HelloReply>;
+    func rpc_SayHello(request: move Msg_HelloRequest, context: *const grpc.UnaryRequest) !grpc.TypedResponse<Msg_HelloReply>;
 }
 
 class Adapter_Greeter_SayHello {
@@ -117,7 +117,7 @@ pub class GreeterServer {
 }
 
 pub interface ConcurrentService_Greeter {
-    const func rpc_SayHello(request: Msg_HelloRequest, context: *const grpc.UnaryRequest) !grpc.TypedResponse<Msg_HelloReply>;
+    const func rpc_SayHello(request: move Msg_HelloRequest, context: *const grpc.UnaryRequest) !grpc.TypedResponse<Msg_HelloReply>;
 }
 
 class ConcurrentAdapter_Greeter_SayHello<H: ConcurrentService_Greeter + Shareable> {

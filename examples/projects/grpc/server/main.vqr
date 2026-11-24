@@ -3,14 +3,14 @@ import (settings, grpc, io, net, pb_example as generated, text, tls)
 
 class Greeter {
     #implements: generated.GreeterService
-    pub func rpc_SayHello(request: generated.Msg_HelloRequest,
+    pub func rpc_SayHello(request: move generated.Msg_HelloRequest,
         context: *const grpc.UnaryRequest) !grpc.TypedResponse<generated.Msg_HelloReply> {
         var builder = text.StringBuilder();
         builder.append("Hello, ")!;
         builder.append(request.f_name)!;
         var reply = generated.Msg_HelloReply();
         reply.f_greeting = builder.build()!;
-        grpc.typedResponse<generated.Msg_HelloReply>(move(reply))
+        grpc.typedResponseOwned<generated.Msg_HelloReply>(move(reply))
     }
 }
 

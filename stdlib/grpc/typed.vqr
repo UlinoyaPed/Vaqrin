@@ -9,16 +9,21 @@ pub class TypedResponse<T> {
     pub var message: ?T;
 }
 
-pub func typedResponse<T>(message: T) TypedResponse<T> {
+pub func typedResponse<T: Copyable + Movable>(message: T) TypedResponse<T> {
     TypedResponse<T>{initial: Metadata(), trailing: Metadata(),
         status: status(StatusCode.Ok, ""), message: some(move(message))}
 }
 
-pub func typedError<T>(value: Status) TypedResponse<T> {
+pub func typedResponseOwned<T: Movable>(message: move T) TypedResponse<T> {
+    TypedResponse<T>{initial: Metadata(), trailing: Metadata(),
+        status: status(StatusCode.Ok, ""), message: some(move(message))}
+}
+
+pub func typedError<T>(value: move Status) TypedResponse<T> {
     TypedResponse<T>{initial: Metadata(), trailing: Metadata(), status: move(value), message: null}
 }
 
-pub func decodeResponse<T>(value: UnaryResponse, codec: *protobuf.Codec<T>,
+pub func decodeResponse<T>(value: move UnaryResponse, codec: *protobuf.Codec<T>,
                            limits: protobuf.DecodeLimits) !TypedResponse<T> {
     var message: ?T = null;
     switch value.body {
@@ -30,7 +35,7 @@ pub func decodeResponse<T>(value: UnaryResponse, codec: *protobuf.Codec<T>,
         status: core.Exchange<Status>.replace(value.status, status(StatusCode.Unknown, "")), message: move(message)}
 }
 
-pub func encodeResponse<T>(value: TypedResponse<T>, codec: *protobuf.Codec<T>, maxBytes: usize) !UnaryResponse {
+pub func encodeResponse<T>(value: move TypedResponse<T>, codec: *protobuf.Codec<T>, maxBytes: usize) !UnaryResponse {
     var data: ?coll.Vec<u8> = null;
     switch value.message {
         some(ref message) => { data = some(protobuf.encode<T>(message.toRaw(), codec, maxBytes)!); },

@@ -39,10 +39,10 @@ func inputs() !void {
 
 class Handler {
     #implements: types.EchoService
-    pub func rpc_Double(request: types.Msg_Input, context: *const grpc.UnaryRequest) !grpc.TypedResponse<interop.Msg_Child> {
+    pub func rpc_Double(request: move types.Msg_Input, context: *const grpc.UnaryRequest) !grpc.TypedResponse<interop.Msg_Child> {
         var result = interop.Msg_Child();
         result.f_left = (request.f_count ?? 0) * 2;
-        grpc.typedResponse<interop.Msg_Child>(move(result))
+        grpc.typedResponseOwned<interop.Msg_Child>(move(result))
     }
     pub func rpc_Broadcast(stream: *types.Stream_Echo_Broadcast) !grpc.Status {
         var request = stream.recv()! ?? { return TestError.Unexpected; };

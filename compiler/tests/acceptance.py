@@ -4037,6 +4037,39 @@ class Acceptance(CompilerCase):
             }
         """, "5\n5\ntrue\n5\ntrue\n12\n")
 
+    def test_v020_grpc_typed_response_selects_payload_ownership(self):
+        self.hosted("""
+            import (coll, grpc)
+            func main() !void {
+                var scalar = 21;
+                var copied = grpc.typedResponse(scalar);
+                io.println(scalar)!;
+                io.println(copied.message.unwrap())!;
+
+                var bytes = coll.Vec<i32>();
+                bytes.push(37)!;
+                var owned = grpc.typedResponseOwned(move(bytes));
+                switch owned.message {
+                    some(ref numbers) => { io.println(numbers[0])!; },
+                    null => panic("response lost its owned payload"),
+                }
+
+                var errorStatus = grpc.status(grpc.StatusCode.Aborted, "not sent");
+                var failure = grpc.typedError<i32>(move(errorStatus));
+                io.println(failure.status.code == grpc.StatusCode.Aborted)!;
+                io.println(failure.message == null)!;
+            }
+        """, "21\n21\n37\ntrue\ntrue\n")
+        bad = self.source("invalid/main.vqr", """
+            import (coll, grpc)
+            func main() void {
+                var payload = coll.Vec<i32>();
+                var response = grpc.typedResponseOwned(payload);
+            }
+        """)
+        diagnostic = self.process(VAQC, "check", bad, good=False).stderr
+        self.assertIn(b"move parameter requires move(object) or an owning temporary", diagnostic)
+
     def test_v020_ordering_helpers_borrow_operands(self):
         self.hosted("""
             import (cmp)

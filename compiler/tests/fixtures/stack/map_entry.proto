@@ -1,0 +1,6 @@
+syntax = "proto3";
+package mapentry;
+
+message Payload {
+  map<string, string> labels = 1;
+}

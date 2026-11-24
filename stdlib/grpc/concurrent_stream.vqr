@@ -40,7 +40,7 @@ pub class ConcurrentServerStream {
     pub var initial: Metadata;
     pub var trailing: Metadata;
 
-    pub func init(requests: channel.Sender<StreamCommand>, replies: channel.Receiver<StreamReply>,
+    pub func init(requests: channel.Sender<StreamCommand>, replies: move channel.Receiver<StreamReply>,
               descriptor: i32, head: move HeaderInfo, options: ServeOptions)
         : requests(move(requests)), replies(move(replies)), descriptor(descriptor),
           limit(options.maxMessageBytes),
@@ -93,13 +93,13 @@ pub class ConcurrentServerStream {
         finished = true;
     }
 
-    func send(operation: StreamOperation) !void {
+    func send(operation: move StreamOperation) !void {
         switch transact(move(operation))! {
             StreamResult.Sent => {},
             _ => { return RpcError.Protocol; },
         }
     }
-    func transact(operation: StreamOperation) !StreamResult {
+    func transact(operation: move StreamOperation) !StreamResult {
         checkDeadline()!;
         requests.send(StreamCommand(move(operation))) catch (reason) {
             if reason == channel.ChannelError.OutOfMemory { return RpcError.ResourceExhausted; }
@@ -147,9 +147,9 @@ class PendingStream {
     var headersSent: bool;
     pub var replyable: bool;
 
-    pub func init(id: i32, deadline: ?time.Deadline, job: task.Task<void>,
-                  requests: channel.Receiver<StreamCommand>, replies: channel.Sender<StreamReply>,
-                  decoder: MessageReader)
+    pub func init(id: i32, deadline: ?time.Deadline, job: move task.Task<void>,
+                  requests: move channel.Receiver<StreamCommand>, replies: channel.Sender<StreamReply>,
+                  decoder: move MessageReader)
         : id(id), deadline(deadline), job(move(job)), requests(move(requests)), replies(move(replies)),
           decoder(move(decoder)), credited(0), reading(false), outbound(null), sentBytes(0),
           ended(false), headersSent(false), replyable(true) {}
@@ -272,7 +272,7 @@ class PendingStream {
         }
     }
 
-    func reply(result: StreamResult) !void {
+    func reply(result: move StreamResult) !void {
         // Only the worker can request a reply, and it waits for each before sending another command.
         switch replies.trySend(StreamReply(move(result))) {
             channel.TrySendResult.Sent => {},

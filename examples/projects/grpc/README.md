@@ -2,6 +2,8 @@
 
 服务端通过 TLS 在回环地址提供一个 `SayHello` 方法。客户端发送名字 `Vaqrin` 并打印问候语。
 示例在 GNU/Linux 上使用 OpenSSL 3、nghttp2 和 zlib 的开发文件。
+生成的普通和并发服务接口都使用 `request: move Msg_HelloRequest`：适配器把解码后的消息交给
+处理函数所有，客户端编码时仍然借用消息。
 
 ## 构建和运行
 

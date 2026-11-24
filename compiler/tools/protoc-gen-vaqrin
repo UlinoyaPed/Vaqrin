@@ -336,7 +336,7 @@ class Generator:
                 continue
             element = self.message_type(field.type_name)
             items = f"f_{field.name}"
-            p.start(f"pub func put_{field.name}(entry: {element}) !void")
+            p.start(f"pub func put_{field.name}(entry: move {element}) !void")
             p.start(f"for index in usize(0)..{items}.len()")
             p.start(f"if {items}.getPtr(index).unwrap().f_key == entry.f_key")
             p.line(f"{items}[index] = move(entry);")
@@ -412,7 +412,7 @@ class Generator:
             if method.client_streaming or method.server_streaming:
                 p.line(f"{declaration} rpc_{method.name}(stream: *{stream_prefix}_{name}_{escape(method.name)}) !grpc.Status;")
             else:
-                p.line(f"{declaration} rpc_{method.name}(request: {self.message_type(method.input_type)}, context: *const grpc.UnaryRequest) !grpc.TypedResponse<{self.message_type(method.output_type)}>;")
+                p.line(f"{declaration} rpc_{method.name}(request: move {self.message_type(method.input_type)}, context: *const grpc.UnaryRequest) !grpc.TypedResponse<{self.message_type(method.output_type)}>;")
         p.end()
         p.line()
         for method in service.method:

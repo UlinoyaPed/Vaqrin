@@ -3,11 +3,11 @@ import (grpc, io, mem, net, pb_demo_ddeep as types, pb_interop as interop, task)
 
 class Handler {
     #implements: types.ConcurrentService_Echo
-    pub const func rpc_Double(request: types.Msg_Input, context: *const grpc.UnaryRequest)
+    pub const func rpc_Double(request: move types.Msg_Input, context: *const grpc.UnaryRequest)
         !grpc.TypedResponse<interop.Msg_Child> {
         var result = interop.Msg_Child();
         result.f_left = (request.f_count ?? 0) * 2;
-        grpc.typedResponse<interop.Msg_Child>(move(result))
+        grpc.typedResponseOwned<interop.Msg_Child>(move(result))
     }
 
     pub const func rpc_Broadcast(stream: *types.ConcurrentStream_Echo_Broadcast) !grpc.Status {

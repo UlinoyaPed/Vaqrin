@@ -91,7 +91,7 @@ pub class Server {
         var route: *const ConcurrentStreamingHandler = handler;
         registerRoute(path, RouteHandler.ConcurrentStreaming(route))
     }
-    pub func serveTls(socket: tls.TlsStream, options: ServeOptions) !void {
+    pub func serveTls(socket: move tls.TlsStream, options: ServeOptions) !void {
         var settings = http2.Settings();
         settings.maxStreams = options.maxConcurrentStreams;
         var session = http2.openTls(http2.Role.Server, raw socket, settings)!;
@@ -99,7 +99,7 @@ pub class Server {
         stream.setTimeout(options.timeout)!;
         serve(raw stream, raw session, options, false, null)
     }
-    pub func serveH2c(socket: net.TcpStream, options: ServeOptions) !void {
+    pub func serveH2c(socket: move net.TcpStream, options: ServeOptions) !void {
         var settings = http2.Settings();
         settings.maxStreams = options.maxConcurrentStreams;
         var session = http2.Connection.open(http2.Role.Server, settings)!;
@@ -107,10 +107,10 @@ pub class Server {
         stream.setTimeout(options.timeout)!;
         serve(raw stream, raw session, options, false, null)
     }
-    pub func serveConcurrentH2c(socket: net.AsyncTcpStream, options: ServeOptions) !void {
+    pub func serveConcurrentH2c(socket: move net.AsyncTcpStream, options: ServeOptions) !void {
         serveConcurrentH2c(move(socket), options, null)
     }
-    pub func serveConcurrentH2c(socket: net.AsyncTcpStream, options: ServeOptions, stop: ?*const Shutdown) !void {
+    pub func serveConcurrentH2c(socket: move net.AsyncTcpStream, options: ServeOptions, stop: ?*const Shutdown) !void {
         var settings = http2.Settings();
         settings.maxStreams = options.maxConcurrentStreams;
         var session = http2.Connection.open(http2.Role.Server, settings)!;

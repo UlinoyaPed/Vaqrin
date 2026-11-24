@@ -408,6 +408,34 @@ class StandardLibraryAcceptance(CompilerCase):
             }
         """, "true\n" * 23)
 
+    def test_float_rounding_copyable_value_forwarders(self):
+        self.hosted("""
+            import (math)
+            type Single = f32;
+            type Double = f64;
+            func exercise<T: Copyable>(x: T) !void {
+                io.println(math.floor(x) == T(-3))!;
+                io.println(math.ceil<T>(x) == T(-2))!;
+                io.println(math.trunc(x) == T(-2))!;
+                io.println(math.round(x) == T(-3))!;
+                io.println(math.roundEven(x) == T(-2))!;
+                io.println(math.fract(x) == T(-0.5) && x == T(-2.5))!;
+            }
+            func main() !void {
+                exercise<Single>(-2.5f32)!;
+                exercise<Double>(-2.5f64)!;
+            }
+        """, "true\n" * 12)
+
+        # Copyability is necessary but doesn't admit a non-floating operand.
+        invalid = self.source("round_integer.vqr", """
+            package main
+            import (math)
+            func main() void { math.floor<i32>(-7); }
+        """)
+        diagnostic = self.process(VAQC, "check", invalid, good=False).stderr
+        self.assertIn(b"invalid explicit conversion", diagnostic)
+
     def test_complex_log_and_exp_preserve_representable_components(self):
         self.hosted(r"""
             import (math)

@@ -113,19 +113,19 @@ pub func nan<T>() T {
 pub func abs<T>(x: T) T { absValue(x) }
 pub func copysign<T>(x: T, y: T) T { copysignValue(x, y) }
 
-pub func floor<T>(x: T) T {
+pub func floor<T: Copyable>(x: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.floorf(toF32<T>(x)) }) }
     else { fromF64<T>(unsafe { ffi.floor(toF64<T>(x)) }) }
 }
-pub func ceil<T>(x: T) T {
+pub func ceil<T: Copyable>(x: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.ceilf(toF32<T>(x)) }) }
     else { fromF64<T>(unsafe { ffi.ceil(toF64<T>(x)) }) }
 }
-pub func trunc<T>(x: T) T {
+pub func trunc<T: Copyable>(x: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.truncf(toF32<T>(x)) }) }
     else { fromF64<T>(unsafe { ffi.trunc(toF64<T>(x)) }) }
 }
-pub func round<T>(x: T) T {
+pub func round<T: Copyable>(x: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.roundf(toF32<T>(x)) }) }
     else { fromF64<T>(unsafe { ffi.round(toF64<T>(x)) }) }
 }
@@ -158,12 +158,12 @@ func roundEven64(x: f64) f64 {
     }
     if signbit64(x) { -result } else { result }
 }
-pub func roundEven<T>(x: T) T {
+pub func roundEven<T: Copyable>(x: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(roundEven32(toF32<T>(x))) }
     else { fromF64<T>(roundEven64(toF64<T>(x))) }
 }
 
-pub func fract<T>(x: T) T { x - trunc(x) }
+pub func fract<T: Copyable>(x: T) T { x - trunc(x) }
 pub func modf<T>(x: T) (T, T) {
     if meta.bitWidth<T>() == 32 {
         var integer: f32 = 0.0;

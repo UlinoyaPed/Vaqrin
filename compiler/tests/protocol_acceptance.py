@@ -103,6 +103,31 @@ class ProtocolAcceptance(CompilerCase):
                 if server.poll() is None:
                     server.kill()
 
+    def test_generated_unary_service_requires_request_transfer(self):
+        project = REPOSITORY / "examples/projects/grpc"
+        explicit = "service.rpc_SayHello(move(request), context)!"
+        for service in ("*generated.GreeterService", "*const generated.ConcurrentService_Greeter"):
+            for call, following, diagnostic in (
+                (explicit, "", None),
+                ("service.rpc_SayHello(generated.Msg_HelloRequest(), context)!", "", None),
+                ("service.rpc_SayHello(request, context)!", "",
+                 b"move parameter requires move(object) or an owning temporary"),
+                (explicit, "request.f_name;", b"not initialized"),
+            ):
+                with self.subTest(service=service, call=call, following=following):
+                    source = self.source("unary_transfer.vqr", f"""
+                        import (grpc, pb_example as generated)
+                        func invoke(service: {service}, context: *const grpc.UnaryRequest) !void {{
+                            var request = generated.Msg_HelloRequest();
+                            var reply = {call};
+                            {following}
+                        }}
+                    """)
+                    result = self.process(VAQC, "check", source, "--package-path", project,
+                                          good=diagnostic is None)
+                    if diagnostic:
+                        self.assertIn(diagnostic, result.stderr)
+
     def test_http_connection_and_body_transfer_owners(self):
         source = self.source("http_move.vqr", r"""
             import (bytes, coll, http, io, net)
@@ -964,6 +989,55 @@ class ProtocolAcceptance(CompilerCase):
             finally:
                 if server.poll() is None:
                     server.kill()
+
+    def test_generated_map_setter_transfers_entry_into_map(self):
+        plugin = VAQC.parent / "protoc-gen-vaqrin"
+        if not plugin.is_file():
+            plugin = REPOSITORY / "compiler/tools/protoc-gen-vaqrin"
+        self.process(sys.executable, "-m", "grpc_tools.protoc",
+                     f"-I{FIXTURES}", f"--plugin=protoc-gen-vaqrin={plugin}",
+                     "--vaqrin_out=.", "map_entry.proto")
+        source = self.source("map_entry.vqr", """
+            import (io, pb_mapentry as wire)
+
+            func main() !void {
+                var values = wire.Msg_Payload();
+                var first = wire.Msg_Payload_nLabelsEntry();
+                first.f_key = "name";
+                first.f_value = "before";
+                values.put_labels(move(first))!;
+                io.println(values.f_labels.len() == 1)!;
+                io.println(values.f_labels[0].f_value == "before")!;
+
+                var next = wire.Msg_Payload_nLabelsEntry();
+                next.f_key = "name";
+                next.f_value = "after";
+                values.put_labels(move(next))!;
+                io.println(values.f_labels.len() == 1)!;
+                io.println(values.f_labels[0].f_value == "after")!;
+
+                values.put_labels(wire.Msg_Payload_nLabelsEntry())!;
+                io.println(values.f_labels.len() == 2)!;
+            }
+        """)
+        self.process(VAQC, source, "-o", "map-entry")
+        self.assertEqual(self.process("./map-entry").stdout, b"true\n" * 5)
+
+        for body, diagnostic in (
+            ("values.put_labels(entry)!;", b"move parameter requires move(object) or an owning temporary"),
+            ("values.put_labels(move(entry))!; entry.f_key;", b"not initialized"),
+        ):
+            with self.subTest(body=body):
+                invalid = self.source("invalid_map_entry.vqr", f"""
+                    import (pb_mapentry as wire)
+                    func invalid() !void {{
+                        var values = wire.Msg_Payload();
+                        var entry = wire.Msg_Payload_nLabelsEntry();
+                        {body}
+                    }}
+                """)
+                result = self.process(VAQC, "check", invalid, good=False)
+                self.assertIn(diagnostic, result.stderr)
 
     def test_protoc_vaqrin_plugin(self):
         self.process(sys.executable, "-m", "grpc_tools.protoc",

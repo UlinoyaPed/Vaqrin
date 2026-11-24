@@ -210,7 +210,7 @@ pub class ClientConn {
             if event.kind == http2.EventKind.Data { connection.consumeConnection(event.payload().len())!; }
             if event.stream == call.stream { return move(event); }
             if findCall(event.stream) != null {
-                deferred.defer(move(event)) catch (reason) {
+                deferred.queueEvent(move(event)) catch (reason) {
                     terminated = true;
                     return reason;
                 };

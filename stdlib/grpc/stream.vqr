@@ -8,7 +8,7 @@ class DeferredEvents {
     var events: coll.Vec<http2.Event>;
     var buffered: usize;
     pub func init() : events(coll.Vec<http2.Event>()), buffered(0) {}
-    pub func defer(event: http2.Event) !void {
+    pub func queueEvent(event: http2.Event) !void {
         var size = event.payload().len();
         if events.len() >= 1024 || size > 4 * 1024 * 1024 - buffered {
             return http2.Http2Error.ResourceLimit;
@@ -147,7 +147,7 @@ pub class ServerStream {
             if incoming.stream == id { return move(incoming); }
             var stopped = incoming.kind == http2.EventKind.GoAway &&
                 (incoming.code != 0 || incoming.stream < id);
-            deferred.defer(move(incoming))!;
+            deferred.queueEvent(move(incoming))!;
             if stopped { return RpcError.ConnectionClosed; }
         }
     }

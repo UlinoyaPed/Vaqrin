@@ -2666,7 +2666,7 @@ class Acceptance(CompilerCase):
 
         source = self.source("ref-types.vqr", """
             func read(value: ref i32) i32 { value }
-            func bump(value: ref mut i32) void { value++; }
+            func bump(value: mut i32) void { value++; }
             func main() i32 {
                 number := 4;
                 {
@@ -2767,7 +2767,7 @@ class Acceptance(CompilerCase):
     def test_borrowing_and_control_flow(self):
         self.hosted("""
             enum Event { Link(*i32), Num(i32) }
-            func inc(x: ref mut i32) void { x++; }
+            func inc(x: mut i32) void { x++; }
             func pair(x: i32, p: *i32) (i32, *i32) { return (x, p); }
             class C { pub var n: i32; pub const func value() !i32 { n } }
             func abort() never { panic("stop") }
@@ -2776,19 +2776,19 @@ class Acceptance(CompilerCase):
                 a := 1; b := 8; p := raw a;
                 {
                     ref mut x = a;
-                    f := (target: ref mut i32) void => { target++; };
+                    f := (target: mut i32) void => { target++; };
                     p = raw b; f(x); inc(x);
                 }
-                { var slot: ref mut *i32 = raw p; slot = raw a; }
+                { ref mut slot = p; slot = raw a; }
                 n, address := pair(4, p);
-                *address += n;
+                unsafe { *address += n; }
                 event := Event.Link(raw a);
                 switch event {
-                    Event.Link(pointer) => { (*pointer)++; },
+                    Event.Link(pointer) => { unsafe { (*pointer)++; } },
                     Event.Num(ref mut v) => { v++; },
                 }
-                for pointer in [_]*i32{raw a, raw b} { (*pointer)++; }
-                { var readOnly: ref i32 = raw a; io.println(readOnly)!; }
+                for pointer in [_]*i32{raw a, raw b} { unsafe { (*pointer)++; } }
+                { var readOnly: ref i32 = ref a; io.println(readOnly)!; }
                 io.println(b)!;
                 c := C{n: 9}; maybe := some(c);
                 var nested: ?!i32 = maybe?.value();
@@ -2820,7 +2820,7 @@ class Acceptance(CompilerCase):
             func peel(value: core.NestedOptional<i32>) ?i32 { (value?)? }
             func outside(value: core.OptionalResult<i32>) core.OptionalResult<i32> { some(value?) }
             func field(value: ?Item) ?i32 { (value?).id }
-            func owned(value: ?^Probe) ?i32 {
+            func owned(value: move ?^Probe) ?i32 {
                 var outer = Probe(90);
                 var inner = move(value)?;
                 (*inner).id
@@ -2892,7 +2892,7 @@ class Acceptance(CompilerCase):
             ("func f(v: ?i32) i32 { v? }", "requires an Optional return channel"),
             ("func f(v: ?i32) !i32 { v? }", "LookupError.NotFound"),
             ("type Maybe = ?i32; type StackedError = !!Maybe; func f(v: ?i32) StackedError { v? }", "requires '?U' or '!?U'"),
-            ("func f(v: ?^i32) ?^i32 { v? }", "move(value)?"),
+            ("func f(v: move ?^i32) ?^i32 { v? }", "move(value)?"),
             ("comptime const n = some(2)?;", "error[E220]"),
             ("func read(x: in i32) ?ref i32 { x } "
              "func leak() ?i32 { var view = read(5)?; view }", "temporary"),
@@ -2997,7 +2997,7 @@ class Acceptance(CompilerCase):
                 pub var owner: ref Owner;
                 pub var tag: i32;
             }
-            func consume(value: Owner) i32 { value.number }
+            func consume(value: move Owner) i32 { value.number }
             func inspect(view: View, tag: i32) i32 { view.tag + tag }
         """
         cases = {
@@ -3040,6 +3040,147 @@ class Acceptance(CompilerCase):
                 result = self.process(VAQC, "check", source, good=False)
                 diagnostic = b"assignment requires a writable location" if name == "rebind" else b"E230"
                 self.assertIn(diagnostic, result.stderr, result.stderr.decode())
+
+    def test_scoped_mut_callable_reborrows_the_environment_without_consuming_it(self):
+        self.hosted("""
+            class Asset {
+                #copy: disabled
+                pub var id: i32;
+                func deinit() void { io.println(id) catch {}; }
+            }
+            func apply<F>(callback: mut F, n: i32) i32 { callback(n) }
+            func forward<F>(callback: mut F, n: i32) i32 {
+                var direct = apply(callback, n);
+                var indirect: func(mut F, i32) i32 = (f: mut F, m: i32) i32 => apply(f, m);
+                var viaPointer = indirect(callback, n);
+                var extra = 0;
+                var lambda = [extra](f: mut F, m: i32) i32 => f(m) + extra;
+                direct + viaPointer + lambda(callback, n)
+            }
+            func main() !void {
+                var value = 1;
+                var readOnly = 10;
+                {
+                    ref mut written = value;
+                    ref observed = readOnly;
+                    var held = Asset{id: 71};
+                    var initial = [ref mut written, ref observed, move(held)](n: i32) i32 => {
+                        if held.id != 71 { panic("borrowed the wrong environment"); }
+                        written += n;
+                        written + observed
+                    };
+                    var callback = move(initial);
+                    io.println(forward(callback, readOnly - 8))!;
+                    io.println(callback(1))!;
+                }
+                io.println(value)!;
+                io.println(readOnly)!;
+            }
+        """, "45\n18\n71\n8\n10\n", "-O2")
+
+    def test_scoped_mut_callable_prohibits_storage_aliasing_and_escape(self):
+        callSetup = """
+            func use<F>(callback: mut F) void { callback(); }
+            func read<F>(callback: mut F, n: i32) void {}
+            func two<F>(first: mut F, second: mut F) void {}
+            func erase<F>(callback: F) void {}
+        """
+        scopes = {
+            "duplicate": ("", "two(callback, callback);", "active borrow"),
+            "later_call": ("", "read(callback, { callback(); 0 });", "active borrow"),
+            "unbound_environment": ("", "use({ callback });", "name its whole local environment"),
+            "deferred_argument": ("", "defer use(callback);", "cannot be saved for a deferred call"),
+            "deferred_block_argument": (
+                "", "defer { use(callback); }", "cannot be borrowed through a deferred block"),
+            "deferred_indirect_argument": (
+                """
+                func outer<F>(f: mut F) void {
+                    var apply: func(mut F) void = (callback: mut F) void => { callback(); };
+                    defer apply(f);
+                }
+                """, "outer(callback);", "cannot be saved for a deferred call"),
+            "deferred_direct": (
+                "func outer<F>(f: mut F) void { defer f(); }",
+                "outer(callback);", "cannot be invoked through defer"),
+            "deferred_block": (
+                "func outer<F>(f: mut F) void { defer { f(); } }",
+                "outer(callback);", "only be invoked or reborrowed"),
+            "copy": (
+                "func outer<F>(f: mut F) void { var value = f; }",
+                "outer(callback);", "only be invoked or reborrowed"),
+            "forward_as_value": (
+                "func outer<F>(f: mut F) void { erase(f); }",
+                "outer(callback);", "only be invoked or reborrowed"),
+            "move": (
+                "func outer<F>(f: mut F) void { move(f)(); }",
+                "outer(callback);", "only be invoked or reborrowed"),
+            "raw": (
+                "func outer<F>(f: mut F) void { var ptr = unsafe { raw f }; }",
+                "outer(callback);", "only be invoked or reborrowed"),
+            "capture": (
+                "func outer<F>(f: mut F) void { var escape = [ref f]() void => { f(); }; }",
+                "outer(callback);", "cannot be captured"),
+            "return": (
+                "func outer<F>(f: mut F) F from f { f }",
+                "outer(callback);", "reference result requires a valid borrow source"),
+            "reference_value": (
+                "func outer<F>(f: mut F) void { var alias: ref mut F = ref mut f; }",
+                "outer(callback);", "indirect storage of a reference-bearing type"),
+        }
+        for name, (support, statement, expected) in scopes.items():
+            with self.subTest(case=name):
+                code = callSetup + support + """
+                    func main() void {
+                        var state = 0;
+                        var callback = [ref mut state]() void => { state++; };
+                """ + statement + "\n}"
+                source = self.source(name + "/main.vqr", code)
+                diagnostic = self.process(VAQC, "check", source, good=False).stderr
+                self.assertIn(expected.encode(), diagnostic)
+        for name, source_code, expected in (
+            ("immutable", """
+                func use<F>(f: mut F) i32 { f() }
+                func main() i32 {
+                    var value = 1;
+                    const callback = [ref value]() i32 => value;
+                    use(callback)
+                }
+            """, "cannot borrow a read-only object mutably"),
+            ("later_copy", """
+                func use<F>(f: mut F, n: i32) i32 { f() + n }
+                func main() i32 {
+                    var value = 1;
+                    var callback = [ref value]() i32 => value;
+                    use(callback, { var alias = callback; alias() })
+                }
+            """, "active borrow"),
+            ("consuming", """
+                class Owner { #copy: disabled; pub var label: i32; }
+                func use<F>(f: mut F) i32 { f() }
+                func main() i32 {
+                    var value = 1;
+                    var owned = Owner{label: 2};
+                    var callback = [ref value, move(owned)]() i32 => {
+                        var taken = move(owned);
+                        taken.label + value
+                    };
+                    use(callback)
+                }
+            """, "closure must be consumed with move"),
+            ("foreign", """
+                type Foreign<F> = extern "C" func(mut F) void;
+                func use<F>(f: mut F) void { var foreign: ?Foreign<F> = null; }
+                func main() void {
+                    var value = 1;
+                    var callback = [ref mut value]() void => { value++; };
+                    use(callback);
+                }
+            """, "references and interface views cannot use the C ABI"),
+        ):
+            with self.subTest(case=name):
+                source = self.source(name + "/main.vqr", source_code)
+                diagnostic = self.process(VAQC, "check", source, good=False).stderr
+                self.assertIn(expected.encode(), diagnostic)
 
     def test_scoped_closure_captures_pin_referents(self):
         self.hosted(r"""
@@ -3443,7 +3584,7 @@ class Acceptance(CompilerCase):
             }
         """, "101\n1\n2\n3\n")
         for code, diagnostic in [
-            ("func f(r: ref mut i32) void {} func g() void { var n = 0; f(n); }", "no accessible overload"),
+            ("func f(r: mut i32) void {} func g() void { var n = 0; var r: ref i32 = ref n; f(r); }", "no accessible overload"),
             ("func f(r: ref i32) void {} func g() void { var n = 0; f(raw n); }", "no accessible overload"),
             ("func f(r: ref i32) void { var p: ref mut i32 = r; }", "read-only"),
             ("func f() void { var n = 0; var p: ref mut i32 = raw n; var q: ref mut i32 = raw n; }", "active borrow"),
@@ -3460,7 +3601,7 @@ class Acceptance(CompilerCase):
             ("func f(r: in &i32) void {}", "write the data type"),
             ("func f(r: ref mut ref mut i32) void {}", "indirect storage"),
             ("func f(r: i32) void {} func f(r: in i32) void {}", "duplicate overload"),
-            ("func f(a, b: ref mut i32) void {} func g() void { var n = 0; var r: ref mut i32 = raw n; f(r, r); }",
+            ("func f(a, b: mut i32) void {} func g() void { var n = 0; ref mut r = n; f(r, r); }",
              "active borrow"),
             ("func f(obj: ?i32) void { switch obj { some(&x) => {}, null => {}, } }",
              "legacy indirect pattern"),

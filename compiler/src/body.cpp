@@ -45,7 +45,8 @@ int Body::bind(std::string name, Type *t, bool writable, Value *initial, Span sp
   Type *referenceType = nullptr;
   if (reference) {
     if (!initial) fail(span, "reference binding requires an initialized reference");
-    referenceType = p.reference(t->parts[0], t->readOnly);
+    // Retain the call-only mode; never expose it as an ordinary reference.
+    referenceType = scopedCallableInput(t) ? t : p.reference(t->parts[0], t->readOnly);
     writable = !t->readOnly;
     t = t->parts[0];
   }
@@ -170,9 +171,10 @@ Borrow Body::joinBorrow(Borrow left, Borrow right, Type *type, Span span) {
 }
 
 void Body::checkAccess(ValueAt v, bool write, Span span) {
-  // A reference-bearing tuple's payload loans protect the referents, not
-  // the bytes of the tuple slot itself. A whole read also touches that slot.
-  if (v.local >= 0 && v.type->kind == Kind::Tuple && p.hasReference(v.type) &&
+  // Payload loans protect referents, not a tuple or closure's own bytes.
+  // Whole local reads must also respect an active loan on its own slot.
+  if (v.local >= 0 && (v.type->kind == Kind::Tuple || v.type->kind == Kind::Closure) &&
+      p.hasReference(v.type) &&
       !locals[v.local].reference && v.address == locals[v.local].slot && v.origin.root != v.local)
     checkRootAccess(v.local, {v.local}, write, span);
   bool ownSlot =
@@ -303,6 +305,8 @@ void Body::mergeValueBorrow(Borrow &combined, bool &payload, ValueAt value, Span
 
 ValueAt Body::referenceName(int id, Span span) {
   const auto &local = locals[id];
+  if (scopedCallableInput(local.reference))
+    fail(span, "a scoped callable parameter cannot be used as a reference value", "E230");
   if (!initialized[id]) fail(span, "reference is not initialized", "E230");
   auto origin = local.origin;
   origin.via = id;
@@ -368,10 +372,12 @@ ValueAt Body::borrow(ValueAt v, Type *t, Span span, bool materialize) {
   if (v.origin.captures && !containsScopedClosure(containsScopedClosure, target))
     fail(span, "cannot borrow a projection through a scoped closure carrier", "E230");
   if (containsScopedClosure(containsScopedClosure, target)) {
-    if (v.local < 0 || locals[v.local].reference || locals[v.local].slot != v.address)
+    const bool forwarding = scopedCallableInput(t) && v.local >= 0 && locals[v.local].reference == t;
+    if (v.local < 0 || (locals[v.local].reference && !forwarding) || locals[v.local].slot != v.address ||
+        (scopedCallableInput(t) && !forwarding && locals[v.local].refCapture))
       fail(span, "a scoped closure environment can only be borrowed from its whole local binding", "E230");
     checkAccess(v, false, span);
-    v.origin = {v.local};
+    if (!forwarding) v.origin = {v.local};
   } else if (target->kind == Kind::Tuple && p.hasReference(target) && v.local >= 0 &&
              !locals[v.local].reference && locals[v.local].slot == v.address) {
     if (!t->readOnly)
@@ -420,6 +426,16 @@ ValueAt Body::borrow(ValueAt v, Type *t, Span span, bool materialize) {
 }
 
 ValueAt Body::argument(const Ast &n, Type *t, bool transfersOwnership) {
+  if (scopedCallableInput(t)) {
+    if (deferredCleanup)
+      fail(n->span, "a scoped callable cannot be borrowed through a deferred block", "E230");
+    if (n->kind != NodeKind::Name || findLocal(n->text) < 0)
+      fail(n->span, "a scoped callable argument must name its whole local environment", "E230");
+    auto callable = name(n, true);
+    if (callable.type != t->parts[0])
+      fail(n->span, "a scoped callable argument must match the borrowed environment type", "E201");
+    return borrow(callable, t, n->span, false);
+  }
   if (transfersOwnership) {
     auto v = expression(n, t);
     if (v.type != p.neverTy && v.borrowed)

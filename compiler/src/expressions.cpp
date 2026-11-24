@@ -21,6 +21,8 @@ LambdaAnnotations lambdaAnnotations(const Ast &n, Type *expected, Resolve resolv
     const auto &param = n->parameters[i];
     auto *t = param.type ? resolve(param.type) : expected ? expected->parts[i] : nullptr;
     if (!t) fail(param.span, "lambda parameter requires a type or a function type context");
+    if (param.type && scopedCallableInput(t) && parameterMode(param.type) != ParameterMode::Mut)
+      fail(param.span, "a scoped callable loan requires an explicit 'mut' parameter", "E230");
     if (expected && t != expected->parts[i])
       fail(param.span, "lambda parameter does not match its context", "E201");
     signature.parameters.push_back(t);
@@ -50,7 +52,9 @@ Type *standaloneLambdaType(Program &p, const Ast &n, Resolve resolve) {
 Type *Body::referenceHint(const Ast &n) {
   if (n->kind == NodeKind::Name) {
     auto id = findLocal(n->text);
-    if (id >= 0 && locals[id].reference) return locals[id].reference;
+    // Do not let inference smuggle a call-only loan into a Value binder.
+    if (id >= 0 && locals[id].reference && !scopedCallableInput(locals[id].reference))
+      return locals[id].reference;
   }
   return hint(n);
 }
@@ -245,12 +249,14 @@ Type *Body::branchHint(const Ast &n) {
   return t;
 }
 
-ValueAt Body::name(const Ast &n) {
+ValueAt Body::name(const Ast &n, bool useScopedCallable) {
   int i = findLocal(n->text);
   if (i >= 0) {
     if (n->text == "self" && constructing && constructed.size() < owner->fields.size())
       fail(n->span, "self cannot escape before every field is initialized", "E230");
     const auto &l = locals[i];
+    if (scopedCallableInput(l.reference) && (!useScopedCallable || deferredCleanup))
+      fail(n->span, "a scoped callable parameter may only be invoked or reborrowed for an immediate call", "E230");
     indexSymbol(n->span, l.declaration);
     auto origin = l.origin;
     if (l.reference || p.hasReference(l.type)) origin.via = i;
@@ -1483,6 +1489,8 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
   for (unsigned i = 1; i < n->children.size(); ++i) {
     if (d.params[i - 1].comptime) continue;
     auto *t = best->parameters[i - 1 + offset];
+    if (defer && scopedCallableInput(t))
+      fail(n->children[i]->span, "a scoped callable parameter cannot be saved for a deferred call", "E230");
     auto value = argument(n->children[i], t, parameterMode(d.params[i - 1].type) == ParameterMode::Move);
     temporaryBorrow |= value.temporaryBorrow;
     if (!live()) {
@@ -1681,6 +1689,8 @@ ValueAt Body::lambda(const Ast &n, Type *expected) {
       if (i < 0) fail(item->span, "capture requires a local binding");
       if (!names.insert(original->text).second) fail(item->span, "duplicate lambda capture");
       auto &local = locals[i];
+      if (scopedCallableInput(local.reference))
+        fail(item->span, "a scoped callable parameter cannot be captured", "E230");
       indexSymbol(original->span, local.declaration);
       const bool reference = item->kind == NodeKind::Unary;
       if (reference && item->text != "ref" && item->text != "ref mut")
@@ -2248,7 +2258,11 @@ ValueAt Body::call(const Ast &n, Type *expected, DeferRegistration *defer) {
     merge({initial, initialized}, initial.size());
     return {optional, phi, nullptr, false, -1, false, result.temporaryBorrow, result.origin};
   }
-  auto target = expression(callee);
+  const int calleeLocal = callee->kind == NodeKind::Name ? findLocal(callee->text) : -1;
+  const bool scopedParameter = calleeLocal >= 0 && scopedCallableInput(locals[calleeLocal].reference);
+  if (defer && scopedParameter)
+    fail(callee->span, "a scoped callable parameter cannot be invoked through defer", "E230");
+  auto target = scopedParameter ? name(callee, true) : expression(callee);
   if (!live()) return neverValue();
   if (target.type->kind == Kind::Box)
     fail(callee->span, "calling a boxed function requires explicit dereference", "E230");
@@ -2313,6 +2327,8 @@ ValueAt Body::call(const Ast &n, Type *expected, DeferRegistration *defer) {
   bool temporaryBorrow = target.temporaryBorrow;
   for (std::size_t i = 0; i + 1 < parts.size(); ++i) {
     bool moves = std::ranges::find(target.type->moveParameters, i) != target.type->moveParameters.end();
+    if (defer && scopedCallableInput(parts[i]))
+      fail(n->children[i + 1]->span, "a scoped callable parameter cannot be saved for a deferred call", "E230");
     auto v = argument(n->children[i + 1], parts[i], moves);
     if (!live()) {
       leave();

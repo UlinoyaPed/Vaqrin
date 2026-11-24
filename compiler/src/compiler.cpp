@@ -127,7 +127,7 @@ bool Program::hasReference(Type *t) {
 }
 
 static bool returnBorrowSource(Type *t) {
-  return t->kind == Kind::Reference &&
+  return t->kind == Kind::Reference && !scopedCallableInput(t) &&
          (t->parameterMode == ParameterMode::In || t->parameterMode == ParameterMode::Mut);
 }
 
@@ -468,8 +468,12 @@ Type *Program::type(const Ast &n, const File &file, const Types &generics, const
     std::vector<Type *> parts;
     std::vector<unsigned> moveParameters;
     for (const auto &a : n->children) {
-      if (parameterMode(a) == ParameterMode::Move) moveParameters.push_back(parts.size());
-      parts.push_back(type(a, file, generics, values));
+      auto mode = parameterMode(a);
+      if (mode == ParameterMode::Move) moveParameters.push_back(parts.size());
+      auto *part = type(a, file, generics, values);
+      if (scopedCallableInput(part) && mode != ParameterMode::Mut)
+        fail(a->span, "a scoped callable loan requires an explicit 'mut' parameter", "E230");
+      parts.push_back(part);
     }
     if (n->type) {
       parts.push_back(type(n->type, file, generics, values));
@@ -502,6 +506,10 @@ Type *Program::type(const Ast &n, const File &file, const Types &generics, const
         fail(n->span, "move parameter requires an owning, movable, non-Copyable type", "E230");
       return inner;
     }
+    // Mutating a scoped callable may only borrow its entire environment
+    // for immediate invocation/reborrowing. It is not a storable reference.
+    if (mode == ParameterMode::Mut && inner->kind == Kind::Closure && inner->scopedBorrow)
+      return reference(inner, false, mode);
     // A call-scoped read-only borrow of a copyable reference aggregate
     // preserves its existing provenance; pointers and exclusive borrows do not.
     if (n->text != "?" && n->text != "!" && hasReference(inner) &&
@@ -1236,9 +1244,12 @@ std::vector<Type *> Program::parameters(Definition d, const Types &types, Type *
   std::vector<Type *> params;
   if (owner && !d.decl->associated) params.push_back(pointer(owner, d.decl->readOnly));
   for (const auto &param : d.decl->params) {
-    if ((param.comptime || d.decl->external || d.decl->exported) && parameterMode(param.type) != ParameterMode::Value)
+    auto mode = parameterMode(param.type);
+    if ((param.comptime || d.decl->external || d.decl->exported) && mode != ParameterMode::Value)
       fail(param.span, "parameter modes require a native runtime parameter", "E230");
     auto *t = type(param.type, *d.file, types, values);
+    if (scopedCallableInput(t) && mode != ParameterMode::Mut)
+      fail(param.span, "a scoped callable loan requires an explicit 'mut' parameter", "E230");
     ensureSized(t, param.span);
     params.push_back(t);
   }

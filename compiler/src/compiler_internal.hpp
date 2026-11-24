@@ -114,6 +114,13 @@ struct Type {
   std::vector<unsigned> moveParameters;
 };
 
+// Unlike an ordinary mutable reference, a scoped callable parameter is
+// an immediate invocation capability for its whole closure environment.
+inline bool scopedCallableInput(const Type *type) {
+  return type && type->kind == Kind::Reference && type->parameterMode == ParameterMode::Mut &&
+         type->parts[0]->kind == Kind::Closure && type->parts[0]->scopedBorrow;
+}
+
 struct CapturedLoan {
   int root;
   int via;
@@ -309,7 +316,7 @@ private:
   void statement(const Ast &n);
   void statementContents(const Ast &n, std::size_t bindingScope);
   ValueAt sequence(const Ast &n, Type *expected, bool scoped);
-  ValueAt name(const Ast &n);
+  ValueAt name(const Ast &n, bool useScopedCallable = false);
   ValueAt numeric(const Ast &n, Type *expected);
   ValueAt member(const Ast &n);
   ValueAt index(const Ast &n);

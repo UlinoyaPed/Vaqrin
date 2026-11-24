@@ -11,7 +11,13 @@ pub func isNone<T>(value: *const ?T) bool { !isSome(value) }
 pub func isOk<T>(value: *const !T) bool { __vqr_result_ok(value) }
 pub func isErr<T>(value: *const !T) bool { !isOk(value) }
 
-pub func unwrapOr<T: Movable>(value: ?T, fallback: func() T) T {
+// Copy the optional payload when present; invoke fallback only on absence.
+pub func unwrapOr<T: Copyable + Movable>(value: ?T, fallback: func() T) T {
+    move(value) ?? fallback()
+}
+
+// Transfer the non-Copyable optional payload without evaluating fallback when present.
+pub func unwrapOrOwned<T: Movable>(value: move ?T, fallback: func() T) T {
     move(value) ?? fallback()
 }
 

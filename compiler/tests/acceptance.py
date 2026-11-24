@@ -2005,6 +2005,75 @@ class Acceptance(CompilerCase):
             }
         ''', "9\n0\n1\n2\n3\n2\n4\n6\n2\n1\n3\n5\n1\n2\n3\n10\ntrue\nfalse\n9\n3\ntrue\ntrue\ntrue\ntrue\ntrue\n7\n4\n")
 
+    def test_core_unwrap_or_copy_and_owned_fallback(self):
+        setup = """
+            import (core)
+            class Owner {
+                #copy: disabled
+                pub var id: i32;
+                pub func init(id: i32) : id(id) {}
+                func deinit() void { io.println(id) catch {}; }
+            }
+            func ownerFallback() Owner { Owner(71) }
+            func neverOwnerFallback() Owner { panic("unexpected fallback") }
+        """
+        self.hosted(setup + """
+            class Counted {
+                #copy: enable
+                pub var id: i32;
+                pub func init(id: i32) : id(id) {}
+                pub const func copy() Self {
+                    io.println(50) catch {};
+                    Counted(id)
+                }
+            }
+            func forbidden() Counted { panic("unexpected copy fallback") }
+            func seven() i32 { 7 }
+            func main() !void {
+                var copy: ?Counted = some(Counted(11));
+                var got = core.unwrapOr(copy, forbidden);
+                io.println(got.id)!;
+                var original = move(copy).unwrap();
+                if original.id != 11 { panic("copy path consumed the caller"); }
+                var missing: ?i32 = null;
+                var scalarFallback: func() i32 = seven;
+                io.println(core.unwrapOr(missing, scalarFallback))!;
+
+                {
+                    var owned: ?Owner = some(Owner(61));
+                    var first = core.unwrapOrOwned(move(owned), neverOwnerFallback);
+                    if first.id != 61 { panic("lost original owner"); }
+                }
+                {
+                    var empty: ?Owner = null;
+                    var makeOwner: func() Owner = ownerFallback;
+                    var second = core.unwrapOrOwned(move(empty), makeOwner);
+                    if second.id != 71 { panic("wrong fallback owner"); }
+                }
+                {
+                    var temporary = core.unwrapOrOwned<Owner>(some(Owner(81)), neverOwnerFallback);
+                    if temporary.id != 81 { panic("did not accept fresh owner"); }
+                }
+            }
+        """, "50\n11\n7\n61\n71\n81\n", "-O2")
+        for label, statement, diagnostic in (
+            ("unchecked", "core.unwrapOr(owned, ownerFallback);", b"no accessible overload"),
+            ("missing_move", "core.unwrapOrOwned(owned, ownerFallback);",
+             b"move parameter requires move(object) or an owning temporary"),
+            ("copy_in_move", "core.unwrapOrOwned(move(copied), seven);",
+             b"move parameter requires an owning, movable, non-Copyable type"),
+            ("use_after_transfer", "core.unwrapOrOwned(move(owned), ownerFallback); owned.unwrap();",
+             b"not initialized"),
+        ):
+            with self.subTest(label=label):
+                source = self.source(label + ".vqr", "import (io)\n" + setup + """
+                    func seven() i32 { 7 }
+                    func main() void {
+                        var owned: ?Owner = some(Owner(63));
+                        var copied: ?i32 = some(31);
+                """ + statement + "\n}")
+                self.assertIn(diagnostic, self.process(VAQC, "check", source, good=False).stderr)
+
     def test_optional_payloads_and_collection_aliases(self):
         self.hosted('''
             import (std/opt, coll, std/coll as seq, iter, core)
@@ -5213,6 +5282,34 @@ class Acceptance(CompilerCase):
                 io.println(core.isErr(raw invalidBool))!;
             }
         """, "-6\n-5\n5\n-6\n6\n2\n4\ntrue\n255\n17\ntrue\ntrue\n20013\ntrue\ntrue\ntrue\ntrue\n")
+
+    def test_checked_cast_copies_its_source_and_keeps_float_ingress(self):
+        self.hosted("""
+            import (convert, math)
+            type Single = f32;
+            type Double = f64;
+            type Narrow = i24;
+            func castFrom<U: Copyable, T>(value: U) !T {
+                convert.checkedCast<T, U>(value)!.unwrap()
+            }
+            func main() !void {
+                var negative: Narrow = -7;
+                var positive: u64 = 9;
+                var single: Single = -8.5f32;
+                var double: Double = 9.25f64;
+                io.println(castFrom<Narrow, Single>(negative)! == -7.0f32)!;
+                io.println(convert.checkedCast<f64>(positive)!.unwrap() == 9.0f64)!;
+                io.println(castFrom<Single, Double>(single)! == -8.5f64)!;
+                io.println(castFrom<Double, Single>(double)! == 9.25f32)!;
+                io.println(math.signbit(negative) && !math.signbit(positive))!;
+                io.println(math.isFinite(-8i32) && math.signbit(single) && math.isFinite(double))!;
+                var letter = '中';
+                var flag = true;
+                io.println(castFrom<char, char>(letter)! == letter && convert.fromChar(letter) == 20013)!;
+                io.println(castFrom<bool, bool>(flag)! && flag && convert.toBool(1)!)!;
+                io.println(negative == -7 && positive == 9 && single == -8.5f32 && double == 9.25f64)!;
+            }
+        """, "true\n" * 9)
 
     def test_byte_slices_patterns_and_buffer(self):
         self.hosted("""

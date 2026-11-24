@@ -79,7 +79,13 @@ pub func compareBytes(a: []const u8, b: []const u8) cmp.Ordering {
 pub func swap<T: Movable>(a: *T, b: *T) void { core.swap(a, b); }
 pub unsafe func dropInPlace<T>(ptr: *T) void { unsafe { __vqr_slot_drop<T>(ptr); } }
 pub unsafe func take<T: Movable>(ptr: *T) T { unsafe { __vqr_slot_take<T>(ptr) } }
-pub unsafe func write<T: Movable>(ptr: *T, value: T) void {
+// Placement initialization, not assignment. For either write, ptr must point
+// to live, aligned, exclusively accessible storage for T with no live T in it.
+pub unsafe func write<T: Copyable + Movable>(ptr: *T, value: T) void {
+    unsafe { __vqr_slot_write<T>(ptr, move(value)); }
+}
+
+pub unsafe func writeOwned<T: Movable>(ptr: *T, value: move T) void {
     unsafe { __vqr_slot_write<T>(ptr, move(value)); }
 }
 

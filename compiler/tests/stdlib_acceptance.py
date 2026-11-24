@@ -244,6 +244,89 @@ class StandardLibraryAcceptance(CompilerCase):
             }
         """, "true\n" * 8)
 
+    def test_placement_write_copies_or_transfers_exactly_once(self):
+        types = """
+            import (mem)
+            class Owner {
+                #copy: disabled
+                var dropped: *i32;
+                pub var id: i32;
+                pub func init(dropped: *i32, id: i32) : dropped(dropped), id(id) {}
+                func deinit() void { unsafe { (*dropped)++; } }
+            }
+        """
+        self.hosted(types + """
+            class Counted {
+                #copy: enable
+                var copies: *i32;
+                var dropped: *i32;
+                pub var id: i32;
+                pub func init(copies: *i32, dropped: *i32, id: i32)
+                    : copies(copies), dropped(dropped), id(id) {}
+                pub const func copy() Self {
+                    unsafe { (*copies)++; }
+                    Counted(copies, dropped, id)
+                }
+                func deinit() void { unsafe { (*dropped)++; } }
+            }
+            func main() !void {
+                var allocator = mem.GlobalAllocator();
+                var backing = unsafe { mem.AllocatorRef.fromRaw(raw allocator) };
+                var copies = 0;
+                var dropped = 0;
+                {
+                    var pool = mem.Pool<Counted>(backing);
+                    var slot = pool.acquire()!.unwrap();
+                    var original = Counted(raw copies, raw dropped, 11);
+                    unsafe { mem.write(slot, original); }
+                    if copies != 1 || dropped != 0 || original.id != 11 ||
+                       unsafe { (*slot).id } != 11 { panic("placement write did not preserve exactly one copy"); }
+                    unsafe {
+                        mem.dropInPlace(slot);
+                        pool.release(slot);
+                    }
+                    if dropped != 1 || pool.live() != 0 { panic("slot copy leaked or dropped twice"); }
+                }
+                if dropped != 2 { panic("caller copy was not retained"); }
+                {
+                    var pool = mem.Pool<Owner>(backing);
+                    var slot = pool.acquire()!.unwrap();
+                    var owner = Owner(raw dropped, 21);
+                    unsafe { mem.writeOwned(slot, move(owner)); }
+                    var readBack = unsafe { mem.take(slot) };
+                    if readBack.id != 21 || dropped != 2 { panic("placed owner moved or dropped incorrectly"); }
+
+                    // take left the acquired slot empty, so it may be initialized again.
+                    unsafe {
+                        mem.writeOwned(slot, Owner(raw dropped, 31));
+                        if (*slot).id != 31 { panic("temporary was not placed"); }
+                        mem.dropInPlace(slot);
+                        pool.release(slot);
+                    }
+                    if dropped != 3 || pool.live() != 0 { panic("owner temporary was not dropped exactly once"); }
+                }
+                if dropped != 4 { panic("moved or taken owner leaked or dropped twice"); }
+            }
+        """, "", "-O2")
+        for name, call, diagnostic in (
+            ("copy_owner", "unsafe { mem.write(slot, value); }", b"no accessible overload"),
+            ("missing_move", "unsafe { mem.writeOwned(slot, value); }", b"move parameter requires move(object)"),
+            ("move_copy", "unsafe { mem.writeOwned(scalar, move(number)); }",
+             b"move parameter requires an owning, movable, non-Copyable type"),
+            ("safe_copy", "mem.write(scalar, number);", b"requires an unsafe block"),
+            ("safe_move", "mem.writeOwned(slot, move(value));", b"requires an unsafe block"),
+            ("second_use", "unsafe { mem.writeOwned(slot, move(value)); } var second = value.id;",
+             b"not initialized"),
+        ):
+            with self.subTest(name=name):
+                source = self.source(name + "/main.vqr", types + """
+                    func place(slot: *Owner, scalar: *i32) void {
+                        var dropped = 0;
+                        var number = 9;
+                        var value = Owner(raw dropped, 41);
+                """ + call + "\n}")
+                self.assertIn(diagnostic, self.process(VAQC, "check", source, good=False).stderr)
+
     def test_os_random_and_siphash(self):
         self.hosted(r"""
             import (hash, mem, random, bytes, coll)
@@ -605,6 +688,55 @@ class StandardLibraryAcceptance(CompilerCase):
             }
         ''')
         self.assertEqual(self.run_program(program), "true\ntrue\n")
+
+    def test_uniform_float_samples_both_precisions(self):
+        self.hosted("""
+            import (convert, math, random, result)
+            class FixedRng {
+                #implements: random.Rng
+                pub var word: u64;
+                pub var calls: usize;
+                pub func init(value: u64) : word(value), calls(0) {}
+                pub func nextU64() u64 { calls++; word }
+                pub func fill(dst: []u8) void { panic("unexpected byte sampling"); }
+            }
+            func main() !void {
+                var half = FixedRng(0x8000000000000000u64);
+                var n32 = random.UniformFloat<f32>.new(-2.0f32, 6.0f32)!;
+                var n64 = random.UniformFloat<f64>.new(-2.0, 6.0)!;
+                io.println(n32.sample(raw half)! == 2.0f32 && n64.sample(raw half)! == 2.0)!;
+                io.println(random.rangeFloat(raw half, 10.0f32, 14.0f32)! == 12.0f32 &&
+                           random.rangeFloat(raw half, 10.0f64, 14.0f64)! == 12.0)!;
+                io.println(half.calls == 4)!;
+
+                var highest = FixedRng(0xffffffffffffffffu64);
+                var unit32 = random.UniformFloat<f32>.new(0.0f32, 1.0f32)!;
+                var unit64 = random.UniformFloat<f64>.new(0.0, 1.0)!;
+                io.println(unit32.sample(raw highest)! == convert.bitCast<f32>(0x3f7fffffu32))!;
+                io.println(unit64.sample(raw highest)! == convert.bitCast<f64>(0x3fefffffffffffffu64))!;
+                var adjacent32 = random.UniformFloat<f32>.new(1.0f32, convert.bitCast<f32>(0x3f800001u32))!;
+                var adjacent64 = random.UniformFloat<f64>.new(1.0, convert.bitCast<f64>(0x3ff0000000000001u64))!;
+                io.println(adjacent32.sample(raw highest)! == 1.0f32 && adjacent64.sample(raw highest)! == 1.0)!;
+
+                var lowest = FixedRng(0);
+                io.println(n32.sample(raw lowest)! == -2.0f32 && n64.sample(raw lowest)! == -2.0)!;
+                var point32 = random.UniformFloat<f32>.new(3.5f32, 3.5f32)!;
+                var point64 = random.UniformFloat<f64>.new(3.5, 3.5)!;
+                io.println(point32.sample(raw lowest)! == 3.5f32 && point64.sample(raw lowest)! == 3.5)!;
+                var reversed32 = random.UniformFloat<f32>.new(1.0f32, 0.0f32);
+                var reversed64 = random.UniformFloat<f64>.new(1.0, 0.0);
+                var infinite32 = random.UniformFloat<f32>.new(0.0f32, math.inf<f32>());
+                var infinite64 = random.UniformFloat<f64>.new(0.0, math.inf<f64>());
+                var nan32 = random.rangeFloat(raw lowest, math.nan<f32>(), 1.0f32);
+                var nan64 = random.rangeFloat(raw lowest, math.nan<f64>(), 1.0f64);
+                io.println(result.errorOf(raw reversed32).unwrap() == random.RandomError.EmptyRange &&
+                           result.errorOf(raw reversed64).unwrap() == random.RandomError.EmptyRange)!;
+                io.println(result.errorOf(raw infinite32).unwrap() == random.RandomError.EmptyRange &&
+                           result.errorOf(raw infinite64).unwrap() == random.RandomError.EmptyRange)!;
+                io.println(result.errorOf(raw nan32).unwrap() == random.RandomError.EmptyRange &&
+                           result.errorOf(raw nan64).unwrap() == random.RandomError.EmptyRange && lowest.calls == 2)!;
+            }
+        """, "true\n" * 11)
 
     def test_rng_and_siphash_preserve_fixed_width_bit_patterns(self):
         seed = ", ".join(map(str, range(32)))
@@ -1580,6 +1712,66 @@ class StandardLibraryAcceptance(CompilerCase):
                 panic("surrogate was accepted");
             }
         """, "a#b=c#\n3\n42\ntrue\n")
+
+    def test_toml_post_parse_limits_walk_checked_tables_in_source_order(self):
+        self.hosted(r"""
+            import (toml, result)
+
+            func limited(input: str, depth: usize, entries: usize) !toml.Document {
+                var options = toml.TomlOptions();
+                options.maxDepth = depth;
+                options.maxEntries = entries;
+                toml.parseWithOptions(input, options)
+            }
+
+            func tableId(value: in toml.Value) i64 {
+                switch value {
+                    toml.Value.Table(ref table) => {
+                        var id: ref toml.Value = table.getRef("id").unwrap();
+                        switch id {
+                            toml.Value.Integer(number) => number,
+                            _ => panic("expected an integer id"),
+                        }
+                    },
+                    _ => panic("expected a table"),
+                }
+            }
+
+            func main() !void {
+                var input = "root = { child = { leaf = 1 } }\n[[items]]\nid = 2\n[[items]]\nid = 3\n";
+                var document = limited(input, 2, 6)!;
+                if document.keyAt(0).unwrap() != "root" || document.keyAt(1).unwrap() != "items" {
+                    panic("top-level order changed");
+                }
+                var items: ref toml.Value = document.getRef("items").unwrap();
+                switch items {
+                    toml.Value.Array(ref array) => {
+                        if array.len() != 2 || tableId(array.get(0).unwrap()) != 2 ||
+                            tableId(array.get(1).unwrap()) != 3 {
+                            panic("array of tables order changed");
+                        }
+                    },
+                    _ => panic("expected an array of tables"),
+                }
+                var belowEntryLimit = limited(input, 2, 5);
+                if result.errorOf(raw belowEntryLimit).unwrap() != toml.TomlError.SizeLimit {
+                    panic("expected the post-parse entry limit");
+                }
+
+                // The dotted inline key constructs nested tables without
+                // invoking parseValue at each intermediate table depth.
+                var dotted = "outer = { a.b.c = 1 }\n";
+                limited(dotted, 3, 4)!;
+                var belowDepthLimit = limited(dotted, 2, 4);
+                if result.errorOf(raw belowDepthLimit).unwrap() != toml.TomlError.DepthLimit {
+                    panic("expected the post-parse depth limit");
+                }
+                var both = limited(dotted, 2, 0);
+                if result.errorOf(raw both).unwrap() != toml.TomlError.DepthLimit {
+                    panic("depth check must still precede the aggregate entry check");
+                }
+            }
+        """, "")
 
     def test_toml_serializer_reads_checked_document_elements(self):
         self.hosted(r"""

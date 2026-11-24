@@ -296,9 +296,9 @@ pub func rangeFloat<R: Rng>(rng: *R, low: f64, high: f64) !f64 {
 pub func rangeFloat<R: Rng>(rng: *R, low: f32, high: f32) !f32 {
     if !math.isFinite(low) || !math.isFinite(high) || low > high { return RandomError.EmptyRange; }
     if low == high { return low; }
-    var unit = f32(rng.nextU64() >> 40) * 5.9604644775390625e-8;
-    var result = if (low <= 0.0 && high >= 0.0) {
-        low * (1.0 - unit) + high * unit
+    var unit = f32(rng.nextU64() >> 40) * 5.9604644775390625e-8f32;
+    var result = if (low <= 0.0f32 && high >= 0.0f32) {
+        low * (1.0f32 - unit) + high * unit
     } else {
         low + (high - low) * unit
     };

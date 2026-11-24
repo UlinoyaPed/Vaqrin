@@ -817,21 +817,23 @@ func parseValue(value: str, depth: usize, options: in TomlOptions) !Value {
     Value.Integer(integer)
 }
 
-func countEntries(document: *const Document, depth: usize, maxDepth: usize) !usize {
+func countEntries(document: in Document, depth: usize, maxDepth: usize) !usize {
     if depth > maxDepth { return TomlError.DepthLimit; }
     var count = document.len();
     for index in usize(0)..document.len() {
-        switch *document.valuePtrAt(index).unwrap() {
+        var value: ref Value = document.valueRefAt(index).unwrap();
+        switch value {
             Value.Table(ref table) => {
-                var nested = countEntries(table.toRaw(), depth + 1, maxDepth)!;
+                var nested = countEntries(table, depth + 1, maxDepth)!;
                 if nested > ~usize(0) - count { return TomlError.SizeLimit; }
                 count += nested;
             },
             Value.Array(ref array) => {
-                for item in array.iterRef() {
-                    switch *item {
+                for itemIndex in usize(0)..array.len() {
+                    var item: ref Value = array.get(itemIndex).unwrap();
+                    switch item {
                         Value.Table(ref table) => {
-                            var nested = countEntries(table.toRaw(), depth + 1, maxDepth)!;
+                            var nested = countEntries(table, depth + 1, maxDepth)!;
                             if nested > ~usize(0) - count { return TomlError.SizeLimit; }
                             count += nested;
                         },
@@ -880,7 +882,7 @@ pub func parseWithOptions(value: str, options: TomlOptions) !Document {
         var item = parseValue(rhs, sectionDepth, options)!;
         setDotted(section, keys.asConstSlice(), move(item), true)!;
     }
-    if countEntries(raw document, 0, options.maxDepth)! > options.maxEntries { return TomlError.SizeLimit; }
+    if countEntries(document, 0, options.maxDepth)! > options.maxEntries { return TomlError.SizeLimit; }
     move(document)
 }
 

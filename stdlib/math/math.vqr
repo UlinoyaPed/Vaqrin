@@ -4,8 +4,8 @@ import (cmp, convert, math_ffi as ffi, meta)
 pub enum FpClass { Nan, Infinite, Zero, Subnormal, Normal }
 pub error MathError { Domain, Pole, InvalidInterval, Overflow, DivisionByZero }
 
-func toF32<T>(value: T) f32 { (convert.checkedCast<f32, T>(value) catch { panic("floating-point conversion failed"); }).unwrap() }
-func toF64<T>(value: T) f64 { (convert.checkedCast<f64, T>(value) catch { panic("floating-point conversion failed"); }).unwrap() }
+func toF32<T: Copyable>(value: T) f32 { (convert.checkedCast<f32, T>(value) catch { panic("floating-point conversion failed"); }).unwrap() }
+func toF64<T: Copyable>(value: T) f64 { (convert.checkedCast<f64, T>(value) catch { panic("floating-point conversion failed"); }).unwrap() }
 func fromF32<T>(value: f32) T { (convert.checkedCast<T, f32>(value) catch { panic("floating-point conversion failed"); }).unwrap() }
 func fromF64<T>(value: f64) T { (convert.checkedCast<T, f64>(value) catch { panic("floating-point conversion failed"); }).unwrap() }
 

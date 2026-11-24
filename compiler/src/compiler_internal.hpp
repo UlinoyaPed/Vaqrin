@@ -178,6 +178,7 @@ struct Local {
   Borrow origin{};
   Span declaration{};
   bool noBorrowPayload = false;
+  std::optional<std::size_t> deferredCall = std::nullopt;
 };
 struct Loop {
   BasicBlock *leave, *next;
@@ -218,7 +219,20 @@ private:
   Type *closure = nullptr;
   unsigned unsafeDepth = 0;
   unsigned explicitBorrowDepth = 0;
+  struct DeferredCall {
+    FunctionType *signature;
+    AttributeList attributes;
+    CallingConv::ID convention;
+    Span span;
+    Value *callee;
+    std::vector<std::pair<llvm::Type *, AllocaInst *>> arguments;
+  };
+  struct DeferRegistration {
+    std::size_t scope;
+    bool completed = false;
+  };
   std::vector<Local> locals;
+  std::vector<DeferredCall> deferredCalls;
   std::multiset<int> patternBorrows;
   std::vector<std::vector<int>> scopes;
   std::size_t temporaryScope = 0;
@@ -231,7 +245,9 @@ private:
 
   bool live() const { return !ir.GetInsertBlock()->getTerminator(); }
   BasicBlock *block(std::string_view name);
+  AllocaInst *rawSlot(llvm::Type *t, std::string_view name);
   AllocaInst *slot(Type *t, std::string_view name);
+  AllocaInst *cleanupOrder();
   int bind(std::string name, Type *t, bool writable, Value *initial, Span span,
            std::optional<std::size_t> scope = {});
   bool carriesBorrow(Type *t);
@@ -246,6 +262,10 @@ private:
   void clean(std::size_t depth);
   void drop(Type *t, Value *address);
   void dropLocal(int index);
+  void emitCleanup(int index);
+  void registerDefer(CallInst *call, Span span, DeferRegistration &registration);
+  void validateDeferredBorrow(ValueAt value, Span span, std::size_t scope);
+  void retainDeferredLoan(int index, std::size_t scope);
   void requireInit(ValueAt v, Span span);
   void checkAccess(ValueAt v, bool write, Span span);
   void checkRootAccess(int root, Borrow origin, bool write, Span span);
@@ -280,7 +300,7 @@ private:
   ValueAt conditional(const Ast &n, Type *expected);
   ValueAt fallback(const Ast &n, Type *expected);
   ValueAt loop(const Ast &n);
-  ValueAt call(const Ast &n, Type *expected);
+  ValueAt call(const Ast &n, Type *expected, DeferRegistration *defer = nullptr);
   ValueAt atomicIntrinsic(std::string_view op, const Ast &n, const std::vector<Ast> &types);
   ValueAt bitIntrinsic(std::string_view op, const Ast &n, const std::vector<Ast> &types);
   ValueAt threadIntrinsic(std::string_view op, const Ast &n, const std::vector<Ast> &types);
@@ -290,7 +310,7 @@ private:
   ValueAt builtin(std::string_view key, const Ast &n, const std::vector<Ast> &types, Type *expected);
   ValueAt invoke(const Ast &n, const std::vector<Definition> &defs, const std::vector<Ast> &typeArgs,
                  std::optional<ValueAt> receiver = std::nullopt, Type *classType = nullptr,
-                 bool delegation = false);
+                 bool delegation = false, DeferRegistration *defer = nullptr);
   ValueAt construct(const Ast &n, Type *t, const std::vector<Definition> &defs = {});
   ValueAt allocate(const Ast &n);
   ValueAt lambda(const Ast &n, Type *expected);

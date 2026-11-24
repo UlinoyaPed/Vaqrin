@@ -13,9 +13,21 @@ BasicBlock *Body::block(std::string_view name) {
   return BasicBlock::Create(p.context, StringRef(name), fn);
 }
 
-AllocaInst *Body::slot(Type *t, std::string_view name) {
+AllocaInst *Body::rawSlot(llvm::Type *t, std::string_view name) {
   IRBuilder<> entry(&fn->getEntryBlock(), fn->getEntryBlock().getFirstInsertionPt());
-  return entry.CreateAlloca(p.storage(t), nullptr, StringRef(name));
+  return entry.CreateAlloca(t, nullptr, StringRef(name));
+}
+
+AllocaInst *Body::slot(Type *t, std::string_view name) {
+  return rawSlot(p.storage(t), name);
+}
+
+AllocaInst *Body::cleanupOrder() {
+  auto *order = rawSlot(ir.getInt32Ty(), "drop.order");
+  IRBuilder<> entry(order->getParent(), std::next(order->getIterator()));
+  entry.CreateStore(ir.getInt32(0), order);
+  ir.CreateStore(ir.getInt32(0), order);
+  return order;
 }
 
 int Body::findLocal(std::string_view name) const {
@@ -43,12 +55,7 @@ int Body::bind(std::string name, Type *t, bool writable, Value *initial, Span sp
     fail(span, "duplicate local '" + name + "'");
   int i = static_cast<int>(locals.size());
   auto *address = reference ? initial : slot(t, name);
-  auto *order = !reference && p.drops(t) ? slot(p.integer(32, false), "drop.order") : nullptr;
-  if (order) {
-    IRBuilder<> entry(order->getParent(), std::next(order->getIterator()));
-    entry.CreateStore(ir.getInt32(0), order);
-    ir.CreateStore(ir.getInt32(0), order);
-  }
+  auto *order = !reference && p.drops(t) ? cleanupOrder() : nullptr;
   locals.push_back({std::move(name), t, address, order, nullptr, reference, scope, writable});
   locals.back().reference = referenceType;
   scopes[scope].push_back(i);
@@ -577,9 +584,72 @@ void Body::dropLocal(int i) {
   ir.SetInsertPoint(run);
   registerDrop(i, false);
   if (l.captureFlag) ir.CreateStore(ir.getFalse(), l.captureFlag);
-  drop(l.type, l.slot);
+  emitCleanup(i);
   ir.CreateBr(end);
   ir.SetInsertPoint(end);
+}
+
+void Body::emitCleanup(int i) {
+  const auto &local = locals[i];
+  if (!local.deferredCall) {
+    drop(local.type, local.slot);
+    return;
+  }
+
+  const auto &action = deferredCalls[*local.deferredCall];
+  auto previousLocation = ir.getCurrentDebugLocation();
+  setDebug(action.span);
+  std::vector<Value *> arguments;
+  for (auto [type, address] : action.arguments)
+    arguments.push_back(ir.CreateLoad(type, address));
+  auto *callee = action.callee;
+  if (auto *address = dyn_cast<AllocaInst>(callee))
+    callee = ir.CreateLoad(address->getAllocatedType(), address);
+  auto *called = ir.CreateCall(action.signature, callee, arguments);
+  called->setCallingConv(action.convention);
+  called->setAttributes(action.attributes);
+  ir.SetCurrentDebugLocation(previousLocation);
+}
+
+void Body::registerDefer(CallInst *call, Span span, DeferRegistration &registration) {
+  auto capture = [&](Value *value, std::string_view name) {
+    auto *saved = rawSlot(value->getType(), name);
+    ir.CreateStore(value, saved);
+    return saved;
+  };
+  auto *callee = call->getCalledOperand();
+  if (!isa<Function>(callee)) callee = capture(callee, "defer.callee");
+  DeferredCall action{call->getFunctionType(), call->getAttributes(), call->getCallingConv(), span, callee, {}};
+  for (auto &argument : call->args())
+    action.arguments.emplace_back(argument->getType(), capture(argument.get(), "defer.argument"));
+  call->eraseFromParent();
+
+  auto id = static_cast<int>(locals.size());
+  locals.push_back({" <deferred call>", p.voidTy, nullptr, cleanupOrder(), nullptr, false, registration.scope, false});
+  locals.back().deferredCall = deferredCalls.size();
+  deferredCalls.push_back(std::move(action));
+  scopes[registration.scope].push_back(id);
+  initialized.push_back(false);
+  setAlive(id, true);
+  registration.completed = true;
+}
+
+void Body::validateDeferredBorrow(ValueAt value, Span span, std::size_t scope) {
+  if (!carriesBorrow(value.type)) return;
+  rejectTemporaryBorrow(value, span);
+  if (!p.hasReference(value.type))
+    fail(span, "deferred calls require an owned value or a tracked safe reference", "E230");
+  if (!value.hasBorrowPayload()) return;
+  auto expired = [&](int root) { return root < 0 || locals[root].scope > scope; };
+  if (value.origin.raw || expired(value.origin.root) ||
+      (value.origin.alternatives && std::ranges::any_of(*value.origin.alternatives, expired)))
+    fail(span, "deferred borrow must have an owner that outlives the deferred call", "E230");
+}
+
+void Body::retainDeferredLoan(int i, std::size_t scope) {
+  std::erase(scopes[locals[i].scope], i);
+  locals[i].scope = scope;
+  scopes[scope].push_back(i);
 }
 
 void Body::clean(std::size_t depth) {
@@ -610,7 +680,7 @@ void Body::clean(std::size_t depth) {
       ir.SetInsertPoint(next);
       const auto &local = locals[managed[i]];
       ir.CreateStore(ir.getInt32(0), local.order);
-      drop(local.type, local.slot);
+      emitCleanup(managed[i]);
       ir.CreateBr(choose);
     }
     ir.SetInsertPoint(done);
@@ -1238,6 +1308,14 @@ void Body::statement(const Ast &n) {
 }
 
 void Body::statementContents(const Ast &n, std::size_t bindingScope) {
+  if (n->kind == NodeKind::Defer) {
+    if (evaluating) fail(n->span, "defer is unavailable at compile time", "E220");
+    DeferRegistration registration{bindingScope};
+    auto value = call(n->children.front(), nullptr, &registration);
+    if (!registration.completed && value.type != p.neverTy)
+      fail(n->span, "defer currently requires an ordinary void function or method call", "E290");
+    return;
+  }
   if (n->kind == NodeKind::Binding) {
     auto *t = n->type ? parseType(n->type) : nullptr;
     bool writable = n->text != "const" && n->text != "comptime";

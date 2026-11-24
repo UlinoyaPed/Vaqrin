@@ -23,7 +23,7 @@ if "read_packet" not in globals():
 
 KEYWORDS = """package import as pub var const comptime func class interface enum error type
 static operator embed self extern export unsafe return break continue if else switch
-select for in move new catch true false null ref""".split()
+select for in move new catch defer true false null ref""".split()
 CONTEXTUAL_KEYWORDS = ("from", "let", "mut", "raw", "while")
 TYPES = """bool char str string void never ErrorId Self isize usize c_int c_char
 i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f16 f32 f64""".split()

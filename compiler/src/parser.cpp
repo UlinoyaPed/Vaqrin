@@ -608,9 +608,18 @@ Ast Parser::block() {
   auto block = make(NodeKind::Block, t.span);
   auto previous = std::exchange(armExpression, false);
   while (!eat("}")) {
-    auto n = statement();
+    Ast n;
+    if (at("defer")) {
+      auto start = take();
+      if (at("{")) fail(current().span, "deferred blocks are not yet supported; defer a void call", "E290");
+      auto call = expression();
+      if (call->kind != NodeKind::Call) fail(call->span, "defer requires a call", "E110");
+      n = make(NodeKind::Defer, start.span, "", {call});
+    } else
+      n = statement();
     bool semicolon = eat(";");
-    if (n->kind == NodeKind::Binding || n->kind == NodeKind::Assign || n->kind == NodeKind::Return ||
+    if (n->kind == NodeKind::Binding || n->kind == NodeKind::Assign || n->kind == NodeKind::Defer ||
+        n->kind == NodeKind::Return ||
         n->kind == NodeKind::Break || n->kind == NodeKind::Continue) {
       if (!semicolon && !at("}")) fail(current().span, "expected ';' after statement", "E110");
       if (!semicolon && n->kind != NodeKind::Break && n->kind != NodeKind::Continue &&

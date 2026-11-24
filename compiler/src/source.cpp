@@ -102,7 +102,7 @@ constexpr std::string_view keywords[] = {
     "class",    "interface", "enum", "error",  "type",   "public", "private",  "static",
     "operator", "embed",     "self", "extern", "export", "unsafe", "return",   "break",
     "continue", "if",        "else", "switch", "select", "for",    "in",       "move",
-    "new",      "catch",     "true", "false",  "null",   "_"};
+    "new",      "catch",     "defer", "true", "false",  "null",   "_"};
 constexpr std::string_view punctuation[] = {
     "<<%=", "<<|=", "<<=", ">>=", "+%=", "-%=", "*%=", "+|=", "-|=", "*|=", "<<%", "<<|", "..=", "=>",
     ":=",   "?.",   "??",  "<<",  ">>",  "..",  "<=",  ">=",  "==",  "!=",  "&&",  "||",  "+=",  "-=",

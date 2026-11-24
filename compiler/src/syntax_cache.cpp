@@ -105,7 +105,7 @@ template <bool Reading> class Archive {
     if (++depth > maxDepth) throw InvalidCache{};
     if constexpr (Reading) value = std::make_shared<Node>();
     auto &node = *value;
-    kind(node.kind, NodeKind::TypeFunction);
+    kind(node.kind, NodeKind::Defer);
     fields(node.span, node.text, node.children, node.names, node.parameters, node.type, node.tail, node.bindingSpans);
     --depth;
   }

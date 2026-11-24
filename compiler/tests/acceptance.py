@@ -156,6 +156,122 @@ class Acceptance(CompilerCase):
             }
         ''', "1\n2\n3\n3\n5\n6\n")
 
+    def test_v020_deferred_calls_capture_and_unwind(self):
+        program = """
+            class Probe {
+                var id: i32;
+                pub func init(id: i32) : id(id) {}
+                pub const func report() void { record(id); }
+                func deinit() void { record(id + 100); }
+            }
+            error Stop { Failure }
+            func record(value: i32) void { io.println(value) catch {}; }
+            func other(value: i32) void { record(value + 1000); }
+            func pair(left: i32, right: i32) void { record(left); record(right); }
+            func observe(value: i32) i32 { record(value); value }
+            func readBorrow(value: in i32) void { record(value); }
+            func consume(box: move ^i32) void { record(box.intoInner()); }
+            func failArgument() !i32 { Stop.Failure }
+            func pendingFailure() !void {
+                defer record(30);
+                defer record(failArgument()!);
+            }
+            func laterFailure() !void {
+                defer record(33);
+                var failed = failArgument()!;
+            }
+            func destroy(probe: move ^Probe, value: i32) void { record(value); }
+            func failedAfterMove() !void {
+                defer record(37);
+                var owned = new Probe(38)!;
+                defer destroy(move(owned), failArgument()!);
+            }
+            func optionalFailure() ?i32 {
+                defer record(35);
+                var missing: ?i32 = null;
+                missing?
+            }
+            func returnCase() i32 {
+                var first = Probe(1);
+                var value = 2;
+                defer record(observe(value));
+                value = 3;
+                var second = Probe(4);
+                defer record(5);
+                return observe(6);
+            }
+            func main() !void {
+                record(returnCase());
+                {
+                    var target: func(i32) void = record;
+                    defer target(7);
+                    target = other;
+                    var probe = Probe(8);
+                    defer probe.report();
+                    var box = new i32(9)!;
+                    defer consume(move(box));
+                    record(10);
+                }
+                var source = 11;
+                { defer readBorrow(source); }
+                source = 12;
+                record(source);
+                {
+                    defer pair(observe(13), observe(14));
+                    record(15);
+                }
+                pendingFailure() catch { record(31); };
+                laterFailure() catch { record(34); };
+                if optionalFailure() == null { record(36); }
+                failedAfterMove() catch { record(39); };
+                outer: for n in 0..4 {
+                    defer record(n + 40);
+                    for m in 0..1 {
+                        defer record(45);
+                        if n == 0 { continue outer; }
+                        if n == 2 { break outer; }
+                    }
+                    record(49);
+                }
+            }
+        """
+        expected = ("2\n6\n5\n104\n2\n101\n6\n10\n9\n8\n108\n7\n11\n12\n"
+                    "13\n14\n15\n13\n14\n30\n31\n33\n34\n35\n36\n138\n37\n39\n"
+                    "45\n40\n45\n49\n41\n45\n42\n")
+        for optimization in ("-O0", "-O2"):
+            with self.subTest(optimization=optimization):
+                self.hosted(program, expected, optimization)
+
+    def test_v020_deferred_call_diagnostics(self):
+        prefix = """
+            class Probe {
+                pub func init() {}
+                pub const func report() void {}
+                func deinit() void {}
+            }
+            func record(x: i32) void {}
+            func read(x: in i32) void {}
+            func borrowProbe(x: in Probe) void {}
+            func mutate(x: mut i32) void {}
+            func fallible() !void {}
+            func value() i32 { 1 }
+        """
+        cases = {
+            "non_call": ("defer 1;", "defer requires a call"),
+            "missing_semicolon": ("defer record(1)", "expected ';'"),
+            "temporary": ("defer read(1);", "borrow from a temporary"),
+            "overwritten": ("var x = 1; defer read(x); x = 2;", "active borrow"),
+            "exclusive": ("var x = 1; defer mutate(x); record(x);", "active borrow"),
+            "moved": ("var x = Probe(); defer borrowProbe(x); var y = move(x);", "active borrow"),
+            "method_receiver": ("var x = Probe(); defer x.report(); var y = move(x);", "active borrow"),
+            "unhandled_error": ("defer fallible();", "defer requires a runtime void call"),
+            "non_void": ("defer value();", "defer requires a runtime void call"),
+        }
+        for name, (body, message) in cases.items():
+            with self.subTest(case=name):
+                source = self.source(name + ".vqr", prefix + "func main() void { " + body + " }")
+                self.assertIn(message.encode(), self.process(VAQC, "check", source, good=False).stderr)
+
     def test_v020_borrow_projections(self):
         prelude = '''
             class Pair {

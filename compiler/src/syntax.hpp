@@ -54,7 +54,8 @@ enum class NodeKind {
   TypeArray,
   TypeTuple,
   TypePrefix,
-  TypeFunction
+  TypeFunction,
+  Defer
 };
 
 struct Node;

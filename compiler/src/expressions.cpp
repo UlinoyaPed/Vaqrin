@@ -1032,7 +1032,7 @@ ValueAt Body::builtin(std::string_view key, const Ast &n, const std::vector<Ast>
 }
 
 ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const std::vector<Ast> &args,
-                     std::optional<ValueAt> receiver, Type *classType, bool delegation) {
+                     std::optional<ValueAt> receiver, Type *classType, bool delegation, DeferRegistration *defer) {
   struct Candidate {
     Definition definition;
     Types substitutions;
@@ -1295,6 +1295,8 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
   if (delegation && entry && entry->lowering) fail(n->span, "cyclic constructor delegation");
   Type *returnType = entry ? entry->result :
       p.type(d.type, *best->definition.file, best->substitutions, best->constants);
+  if (defer && (returnType != p.voidTy || d.comptime))
+    fail(n->span, "defer requires a runtime void call; handle errors within the deferred function", "E231");
   int borrowFrom = p.borrowParameter(best->definition, best->parameters, returnType, receiver.has_value());
   Borrow returnOrigin{};
   bool returnTemporary = false;
@@ -1349,6 +1351,7 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
   }
   std::vector<int> transfers;
   bool temporaryBorrow = receiver && receiver->temporaryBorrow;
+  std::vector<int> deferredLoans;
   enter();
   for (unsigned i = 1; i < n->children.size(); ++i) {
     if (d.params[i - 1].comptime) continue;
@@ -1359,6 +1362,7 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
       leave();
       return neverValue();
     }
+    if (defer) validateDeferredBorrow(value, n->children[i]->span, defer->scope);
     auto *raw = read(value, n->span);
     if (borrowFrom == static_cast<int>(i - 1 + offset)) {
       returnOrigin = value.origin;
@@ -1370,6 +1374,7 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
       if (write) invalidateOwnedAddresses(value);
       auto loan = bind(" <loan " + std::to_string(i) + ">", t, false, raw, n->span);
       locals[loan].origin = value.origin;
+      if (defer && value.hasBorrowPayload()) deferredLoans.push_back(loan);
     }
     values.push_back(raw);
     if (p.drops(t)) {
@@ -1380,6 +1385,11 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
   if (receiver) {
     checkAccess(*receiver, !d.readOnly, n->span);
     if (!d.readOnly) invalidateOwnedAddresses(*receiver);
+    if (defer) {
+      auto loan = borrow(*receiver, p.reference(receiver->type, d.readOnly), n->span, false);
+      validateDeferredBorrow(loan, n->span, defer->scope);
+      pinBorrow(loan, n->span, defer->scope);
+    }
   }
   for (auto i : transfers)
     setAlive(i, false);
@@ -1404,6 +1414,12 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
   } else {
     called = ir.CreateCall(entry->ir, values);
     called->setAttributes(entry->ir->getAttributes());
+  }
+  if (defer) {
+    for (auto i : deferredLoans) retainDeferredLoan(i, defer->scope);
+    registerDefer(called, n->span, *defer);
+    leave();
+    return voidValue();
   }
   if (returnType == p.neverTy) ir.CreateUnreachable();
   leave();
@@ -1778,7 +1794,7 @@ ValueAt Body::allocate(const Ast &n) {
   return {resultType, phi};
 }
 
-ValueAt Body::call(const Ast &n, Type *expected) {
+ValueAt Body::call(const Ast &n, Type *expected, DeferRegistration *defer) {
   auto callee = n->children[0];
   std::vector<Ast> types;
   if (callee->kind == NodeKind::Generic) {
@@ -1799,7 +1815,7 @@ ValueAt Body::call(const Ast &n, Type *expected) {
         auto v = name(self);
         return invoke(n, ms, types,
                       ValueAt{owner, nullptr, read(v, n->span), !v.type->readOnly, -1, true, false, v.origin},
-                      owner);
+                      owner, false, defer);
       }
     }
     auto ds = p.resolve(file, key, n->span);
@@ -1807,9 +1823,11 @@ ValueAt Body::call(const Ast &n, Type *expected) {
       auto *d = ds.front().decl;
       if (d->kind == DeclKind::Function) {
         if (ds.front().file->standard && ds.front().file->package == "io" && d->name == "println" &&
-            types.empty())
+            types.empty()) {
+          if (defer) fail(n->span, "defer requires a void call; wrap the I/O and handle its result", "E231");
           return builtin("io.println", n, types, expected);
-        return invoke(n, ds, types);
+        }
+        return invoke(n, ds, types, std::nullopt, nullptr, false, defer);
       }
       if (d->kind == DeclKind::Class || d->kind == DeclKind::Alias) {
         auto *t = p.named(key, file, n->span, generics, types, visibleConstants(), callee->span);
@@ -1821,7 +1839,10 @@ ValueAt Body::call(const Ast &n, Type *expected) {
     const std::set<std::string_view> intrinsics{"some",       "ok",         "bitCast",      "ptrFromInt",
                                                 "ptrCast",    "constCast",  "volatileLoad", "volatileStore",
                                                 "truncToInt", "roundToInt", "panic"};
-    if (dot == key.npos && intrinsics.contains(key)) return builtin(key, n, types, expected);
+    if (dot == key.npos && intrinsics.contains(key)) {
+      if (defer) fail(n->span, "intrinsics cannot be deferred directly", "E290");
+      return builtin(key, n, types, expected);
+    }
     if (dot == key.npos && key.starts_with("__vqr_")) {
       if (!file.standard) fail(n->span, "intrinsic is private to the Vaqrin standard library");
       if (key == "__vqr_println") return builtin("io.println", n, types, expected);
@@ -1884,7 +1905,7 @@ ValueAt Body::call(const Ast &n, Type *expected) {
       auto *type = generics.at(basePath);
       p.ensureSized(type, n->span);
       if (type->kind == Kind::Class)
-        return invoke(n, p.methods(type, callee->text, true), types, std::nullopt, type);
+        return invoke(n, p.methods(type, callee->text, true), types, std::nullopt, type, false, defer);
     }
     auto ds = basePath.empty() || findLocal(basePath.substr(0, basePath.find('.'))) >= 0
                   ? std::vector<Definition>{}
@@ -1895,7 +1916,7 @@ ValueAt Body::call(const Ast &n, Type *expected) {
       if (target != base) args.assign(base->children.begin() + 1, base->children.end());
       auto *t = p.named(basePath, file, n->span, generics, args, visibleConstants(), target->span);
       p.ensureSized(t, n->span);
-      if (t->kind == Kind::Class) return invoke(n, p.methods(t, callee->text, true), types, std::nullopt, t);
+      if (t->kind == Kind::Class) return invoke(n, p.methods(t, callee->text, true), types, std::nullopt, t, false, defer);
       if (t->kind != Kind::Enum) fail(n->span, "associated functions require a class or enum type");
       if (callee->text == "fromInt" && n->children.size() == 2 &&
           std::ranges::all_of(t->variants, [](const auto &v) { return v.fields.empty(); })) {
@@ -1956,6 +1977,7 @@ ValueAt Body::call(const Ast &n, Type *expected) {
     if (!live()) return neverValue();
     auto member = callee->text;
     bool guarded = !callee->names.empty();
+    if (defer && guarded) fail(n->span, "optional method calls cannot be deferred directly", "E290");
     BasicBlock *none = nullptr, *end = nullptr;
     std::vector<bool> initial;
     if (guarded) {
@@ -2033,11 +2055,11 @@ ValueAt Body::call(const Ast &n, Type *expected) {
         auto local = bind(" <receiver " + std::to_string(locals.size()) + ">", v.type, true,
                           read(v, n->span), n->span, temporaryScope);
         auto r = invoke(n, p.methods(v.type, member, false), types,
-                        ValueAt{v.type, nullptr, locals[local].slot, true, local, true, true}, v.type);
+                        ValueAt{v.type, nullptr, locals[local].slot, true, local, true, true}, v.type, false, defer);
         r.temporaryBorrow = carriesBorrow(r.type);
         return r;
       }
-      return invoke(n, p.methods(v.type, member, false), types, v, v.type);
+      return invoke(n, p.methods(v.type, member, false), types, v, v.type, false, defer);
     };
     auto result = invokeMember();
     if (!guarded) return result;
@@ -2067,6 +2089,10 @@ ValueAt Body::call(const Ast &n, Type *expected) {
   Value *address = closureCall ? target.type->callEntry : read(target, n->span);
   auto &parts = closureCall ? target.type->callable : target.type->parts;
   if (parts.size() != n->children.size()) fail(n->span, "wrong argument count");
+  if (defer && parts.back() != p.voidTy)
+    fail(n->span, "defer requires a runtime void call; handle errors within the deferred function", "E231");
+  if (defer && (closureCall || target.type->cAbi))
+    fail(n->span, "deferred indirect calls currently require a non-capturing Vaqrin function value", "E290");
   std::vector<Value *> values;
   std::vector<llvm::Type *> irTypes;
   enter();
@@ -2085,7 +2111,7 @@ ValueAt Body::call(const Ast &n, Type *expected) {
     values.push_back(env);
     irTypes.push_back(env->getType());
   }
-  std::vector<int> drops;
+  std::vector<int> drops, deferredLoans;
   Borrow returnOrigin{};
   bool returnTemporary = false;
   bool temporaryBorrow = target.temporaryBorrow;
@@ -2096,6 +2122,7 @@ ValueAt Body::call(const Ast &n, Type *expected) {
       leave();
       return neverValue();
     }
+    if (defer) validateDeferredBorrow(v, n->children[i + 1]->span, defer->scope);
     auto *value = read(v, n->span);
     temporaryBorrow |= v.temporaryBorrow;
     if (target.type->count == i + 1) {
@@ -2108,6 +2135,7 @@ ValueAt Body::call(const Ast &n, Type *expected) {
       if (write) invalidateOwnedAddresses(v);
       auto loan = bind(" <loan " + std::to_string(i) + ">", parts[i], false, value, n->span);
       locals[loan].origin = v.origin;
+      if (defer && v.hasBorrowPayload()) deferredLoans.push_back(loan);
     }
     if (p.drops(v.type))
       drops.push_back(bind(" <argument " + std::to_string(i) + ">", v.type, true, value, n->span));
@@ -2133,6 +2161,12 @@ ValueAt Body::call(const Ast &n, Type *expected) {
     for (unsigned i = 0; i + 1 < parts.size(); ++i)
       if (parts[i]->kind == Kind::Int && parts[i]->bits < 32)
         f->addParamAttr(i, parts[i]->sign ? llvm::Attribute::SExt : llvm::Attribute::ZExt);
+  }
+  if (defer) {
+    for (auto i : deferredLoans) retainDeferredLoan(i, defer->scope);
+    registerDefer(f, n->span, *defer);
+    leave();
+    return voidValue();
   }
   leave();
   if (ret == p.neverTy) {

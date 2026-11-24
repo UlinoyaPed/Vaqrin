@@ -39,3 +39,6 @@
 ((source_file (identifier) @_ref . (identifier) @keyword)
  (#eq? @_ref "ref")
  (#eq? @keyword "mut"))
+
+((identifier) @keyword
+ (#eq? @keyword "defer"))

@@ -3,6 +3,8 @@ import (core, coll, fmt, io, mem, parse, text)
 
 class ReadBudget {
     pub var remaining: usize;
+
+    pub func init(remaining: usize) : remaining(remaining) {}
     pub func consume() !void {
         if remaining == 0 { return HttpError.HeaderLimit; }
         remaining--;
@@ -80,6 +82,9 @@ class Framing {
     pub var length: ?usize;
     pub var chunked: bool;
     pub var host: bool;
+
+    pub func init(length: ?usize, chunked, host: bool)
+        : length(length), chunked(chunked), host(host) {}
 }
 
 func digits(value: str, radix: u8) !usize {
@@ -93,7 +98,7 @@ func digits(value: str, radix: u8) !usize {
 }
 
 func inspect(fields: *const HeaderMap) !Framing {
-    var out = Framing{length: null, chunked: false, host: false};
+    var out = Framing(null, false, false);
     for field in fields.items() {
         if sameName(field.0, "Content-Length") {
             if out.length != null { return HttpError.InvalidFraming; }
@@ -124,7 +129,7 @@ pub func parseRequest(reader: *io.Reader, limits: HttpLimits) !Request {
 
 // Keep the input alive while consuming the body.
 pub func parseRequestStream(reader: *io.Reader, limits: HttpLimits) !(Request, BodyReader) {
-    var budget = ReadBudget{remaining: limits.maxHeaderBytes};
+    var budget = ReadBudget(limits.maxHeaderBytes);
     var line = readLine(reader, limits.maxLineBytes, raw budget)!;
     var data = line.asBytes();
     var first = byteAt(data, 32);
@@ -174,7 +179,7 @@ pub func parseResponseStream(reader: *io.Reader, method: Method, limits: HttpLim
 }
 
 func parseResponseHead(reader: *io.Reader, method: Method, limits: HttpLimits) !(Response, BodyReader, bool) {
-    var budget = ReadBudget{remaining: limits.maxHeaderBytes};
+    var budget = ReadBudget(limits.maxHeaderBytes);
     var line = readLine(reader, limits.maxLineBytes, raw budget)!;
     var data = line.asBytes();
     if data.len() < 13 || data[8] != 32 || data[12] != 32 { return HttpError.InvalidStartLine; }

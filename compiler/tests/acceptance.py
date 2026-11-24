@@ -308,6 +308,43 @@ class Acceptance(CompilerCase):
             }
         """, "26\n6\n5\n11\n15\n16\n")
 
+    def test_v020_mixed_capture_permissions_follow_projections(self):
+        self.hosted("""
+            class Record {
+                pub var shared: i32;
+                pub var exclusive: i32;
+                pub var spare: i32;
+                pub func init() : shared(2), exclusive(4), spare(6) {}
+            }
+            func main() !void {
+                var record = Record();
+                var a = 10;
+                var d = new i32(20)!;
+                {
+                    ref b = record.shared;
+                    ref mut c = record.exclusive;
+                    var callback = [a, ref b, ref mut c, move(d)]() i32 => {
+                        c += b;
+                        a + c + *d
+                    };
+                    var anotherReader = [ref b]() i32 => b;
+                    io.println(record.shared + anotherReader())!;
+                    record.spare++;
+                    io.println(callback())!;
+                    var transferred = move(callback);
+                    io.println(transferred())!;
+                }
+                io.println(record.exclusive + record.spare)!;
+                var x = 2;
+                var y = 6;
+                {
+                    var callback = [ref mut x, ref mut y]() void => { x++; y *= 2; };
+                    callback();
+                }
+                io.println(x + y)!;
+            }
+        """, "4\n36\n38\n15\n15\n")
+
     def test_v020_explicit_capture_rejections(self):
         cases = {
             "legacy": ("var n = 0; var f = [&n]() i32 => n;",
@@ -337,8 +374,19 @@ class Acceptance(CompilerCase):
                                     b"capture requires a place without untracked or nested borrows"),
             "copy_owner": ("var owner = new i32(4)!; var f = [owner]() i32 => *owner;",
                            b"copy capture requires a Copyable value"),
-            "multiple_exclusive": ("var a = 1; var b = 2; var f = [ref mut a, ref mut b]() i32 => a + b;",
-                                   b"cannot yet capture additional borrows"),
+            "same_place_mixed": ("var n = 0; ref part = n; var f = [ref part, ref mut n]() i32 => part + n;",
+                                 b"access conflicts with active borrow"),
+            "exclusive_alias_blocked": ("var n = 0; ref mut part = n; var x = 1; "
+                                         "var f = [ref x, ref mut part]() i32 => x + part; part++;",
+                                         b"access conflicts with active borrow"),
+            "second_origin_escapes": ("var outer = 1; var f = { var inner = 1; "
+                                      "[ref outer, ref mut inner]() i32 => outer + inner };",
+                                      b"reference would outlive its owner"),
+            "owned_raw_bypass": ("var n = 0; var p = raw n; var f = [ref n, p]() i32 => n + *p;",
+                                 b"owned captures in a scoped closure cannot carry untracked borrows"),
+            "carrier_projection_escapes": ("var n = 0; var f = [ref n]() i32 => n; "
+                                           "var alias = { var inner = (f, 1); ref inner.1 };",
+                                           b"cannot borrow a projection through a scoped closure carrier"),
         }
         for name, (body, diagnostic) in cases.items():
             with self.subTest(name=name):
@@ -2310,6 +2358,41 @@ class Acceptance(CompilerCase):
             }
         """, "9\n")
 
+    def test_v020_empty_class_construction_uses_call_syntax(self):
+        self.hosted("""
+            class Marker {}
+            class Explicit {
+                var id: i32;
+                pub func init(a, b: i32) : id(a * 10 + b) {}
+                pub const func value() i32 { id }
+            }
+            func next(counter: mut i32) i32 { counter++; counter }
+            func construct(marker: in Marker) i32 {
+                counter := 0;
+                var value = Explicit(next(counter), next(counter));
+                value.value()
+            }
+            func main() !void {
+                var empty = Marker();
+                io.println(construct(empty))!;
+                var emptyArray = [0]Marker{};
+                var tuple = (emptyArray.len(), 42);
+                io.println(tuple.1)!;
+            }
+        """, "12\n42\n")
+
+        for declaration, call, diagnostic in (
+            ("class Empty {}", "Empty{}", "empty brace construction uses T()"),
+            ("class Empty {}", "Empty(1)", "class has no matching constructor"),
+            ("class Hidden { func init() {} }", "Hidden()", "no accessible overload"),
+            ("class Fielded { pub var id: i32 = 7; }", "Fielded{}", "empty brace construction uses T()"),
+            ("class Fielded { pub var id: i32 = 7; }", "Fielded()", "class has no matching constructor"),
+        ):
+            with self.subTest(call=call):
+                source = self.source("construct.vqr", f"{declaration} func f() void {{ var item = {call}; }}")
+                result = self.process(VAQC, "check", source, good=False)
+                self.assertIn(diagnostic.encode(), result.stderr, result.stderr.decode())
+
     def test_v020_local_reference_bindings_are_explicit(self):
         for binding in (
             "var &loan = raw number;",
@@ -2783,12 +2866,12 @@ class Acceptance(CompilerCase):
                 var number = 10;
                 var loan: ref mut i32 = raw number;
                 var callback = [ref loan]() i32 => loan;
+                loan++;
             }""",
             "mixed_capture": """func bad() void {
                 var number = 10;
-                var regular = 7;
                 var loan: ref i32 = raw number;
-                var callback = [ref loan, ref mut regular]() i32 => loan + regular;
+                var callback = [ref loan, ref mut number]() i32 => loan + number;
             }""",
         }
         view = "class View { #borrowed: scoped; pub var item: ref i32; }\n"
@@ -3674,7 +3757,7 @@ class Acceptance(CompilerCase):
             import (types as source)
             func wrap<T>(value: T) T { value }
             func check<T>(value: T) T {
-                var instance = source.Passthrough{};
+                var instance = source.Passthrough();
                 wrap(instance.call<T>(value) - source.identity<T>(T(1)))
             }
             func main() !void {
@@ -3709,8 +3792,8 @@ class Acceptance(CompilerCase):
                 io.println(value.number())!;
             }
             func main() !void {
-                var direct = Identity{};
-                var embedded = Forward{inner: Identity{}};
+                var direct = Identity();
+                var embedded = Forward{inner: Identity()};
                 use(raw direct)!;
                 use(raw embedded)!;
             }
@@ -3734,7 +3817,7 @@ class Acceptance(CompilerCase):
                 #implements: Runner
                 pub const func run<U: Copyable>(callback: func(MODE ^i32, U) i32, value: U) i32 { 0 }
             }
-            func main() void { var implementation = Implementation{}; }
+            func main() void { var implementation = Implementation(); }
         """
         self.process(VAQC, "check", self.source("matching.vqr", source.replace("MODE", "move")))
         failure = self.process(

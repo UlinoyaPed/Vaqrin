@@ -78,7 +78,7 @@ class StandardLibraryAcceptance(CompilerCase):
 
             func main() !void {
                 var data = Point{x: -42, y: 1.25};
-                var codec = serde.DerivedCodec<Point>{};
+                var codec = serde.DerivedCodec<Point>();
                 var encoded = cbor.marshal<Point>(raw data, raw codec)!;
                 var wire = [16]u8{162, 97, 120, 56, 41, 97, 121, 251, 63, 244, 0, 0, 0, 0, 0, 0};
                 io.println(bytes.equal(encoded.asConstSlice(), wire[:]))!;
@@ -121,7 +121,7 @@ class StandardLibraryAcceptance(CompilerCase):
             }
 
             func main() !void {
-                var adapter = codec.DerivedCodec<Record<u16>>{};
+                var adapter = codec.DerivedCodec<Record<u16>>();
                 var value = Record<u16>{entry: Entry{id: -9223372036854775810i128, name: "hello"},
                                         data: 32, maybe: null};
                 var serialized = json.marshal<Record<u16>>(raw value, raw adapter)!;
@@ -172,6 +172,18 @@ class StandardLibraryAcceptance(CompilerCase):
         """, '{"level":"INFO","message":"first","attrs":{"value":7}}\ntrue\n')
 
     @unittest.skipUnless(os.path.isfile("/usr/share/zoneinfo/America/New_York"), "requires host IANA time zones")
+    def test_native_monotonic_clock_and_sleep(self):
+        self.hosted("""
+            import (cmp, time)
+            func main() !void {
+                var start = time.monotonicNow()!;
+                var delay = time.Duration.fromMillis(1);
+                time.sleep(delay)!;
+                var elapsed = start.elapsed()!;
+                io.println(elapsed.compare(delay) != cmp.Ordering.Less)!;
+            }
+        """, "true\n")
+
     def test_time_zone_calendar_and_posix_future_rules(self):
         self.hosted(r"""
             import (core, time)
@@ -346,7 +358,7 @@ class StandardLibraryAcceptance(CompilerCase):
                 var first = parse.parseInt<S>("-42")!;
                 var second = parse.parseUint<U>("42")!;
                 var pair = Pair<S, U>{signed: first, unsigned: second};
-                var codec = serde.DerivedCodec<Pair<S, U>>{};
+                var codec = serde.DerivedCodec<Pair<S, U>>();
                 var wire = json.marshal<Pair<S, U>>(raw pair, raw codec)!;
                 var decoded = json.unmarshal<Pair<S, U>>(wire, raw codec)!;
                 var values = coll.Vec<U>();
@@ -1081,7 +1093,7 @@ class StandardLibraryAcceptance(CompilerCase):
                 var digits = fmt.formatUint(port, 10)!;
                 io.print(digits)!;
                 io.print("\n")!;
-                var handler = Echo{};
+                var handler = Echo();
                 server.serveOne(raw handler)
             }
         """)

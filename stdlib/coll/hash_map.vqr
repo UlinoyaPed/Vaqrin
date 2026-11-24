@@ -1,5 +1,5 @@
 package coll
-import (core, mem, hash as hashing)
+import (core, mem, meta, hash as hashing)
 
 pub enum InsertResult<K: Movable, V: Movable> {
     Inserted,
@@ -35,14 +35,28 @@ class HashBucket<K: Movable, V: Movable> {
         state == BucketState.Occupied && hashCode == hash && equals(key.asConstPtr(), needle)
     }
 
-    pub func write(hash: usize, newKey: K, newValue: V) void {
-        if state == BucketState.Occupied { panic("writing an occupied hash bucket"); }
-        unsafe {
-            key.write(move(newKey));
-            value.write(move(newValue));
+    comptime if meta.isCopyable<(K, V)>() {
+        pub func write(hash: usize, entry: (K, V)) void {
+            if state == BucketState.Occupied { panic("writing an occupied hash bucket"); }
+            newKey, newValue := move(entry);
+            unsafe {
+                __vqr_slot_write<K>(key.asPtr(), move(newKey));
+                __vqr_slot_write<V>(value.asPtr(), move(newValue));
+            }
+            hashCode = hash;
+            state = BucketState.Occupied;
         }
-        hashCode = hash;
-        state = BucketState.Occupied;
+    } else {
+        pub func write(hash: usize, entry: move (K, V)) void {
+            if state == BucketState.Occupied { panic("writing an occupied hash bucket"); }
+            newKey, newValue := move(entry);
+            unsafe {
+                __vqr_slot_write<K>(key.asPtr(), move(newKey));
+                __vqr_slot_write<V>(value.asPtr(), move(newValue));
+            }
+            hashCode = hash;
+            state = BucketState.Occupied;
+        }
     }
 
     pub func take() (K, V) {
@@ -318,16 +332,22 @@ pub class HashMap<K: Movable, V: Movable> {
         firstTombstone.unwrap()
     }
 
-    func insertKnownHash(hash: usize, key: K, value: V) *V {
-        insertAt(insertionIndex(hash), hash, move(key), move(value))
-    }
-
-    func insertAt(index: usize, hash: usize, key: K, value: V) *V {
-        var bucket = buckets.getMutPtr(index).unwrap();
-        if bucket.isTombstone() { tombstones--; }
-        bucket.write(hash, move(key), move(value));
-        length++;
-        bucket.valueMut()
+    comptime if meta.isCopyable<(K, V)>() {
+        func insertAt(index: usize, hash: usize, entry: (K, V)) *V {
+            var bucket = buckets.getMutPtr(index).unwrap();
+            if bucket.isTombstone() { tombstones--; }
+            bucket.write(hash, move(entry));
+            length++;
+            bucket.valueMut()
+        }
+    } else {
+        func insertAt(index: usize, hash: usize, entry: move (K, V)) *V {
+            var bucket = buckets.getMutPtr(index).unwrap();
+            if bucket.isTombstone() { tombstones--; }
+            bucket.write(hash, move(entry));
+            length++;
+            bucket.valueMut()
+        }
     }
 
     func rehash(newCapacity: usize) !void {
@@ -350,8 +370,7 @@ pub class HashMap<K: Movable, V: Movable> {
             if bucket.isOccupied() {
                 var hash = bucket.storedHash();
                 var pair = bucket.take();
-                key, value := move(pair);
-                insertKnownHash(hash, move(key), move(value));
+                insertAt(insertionIndex(hash), hash, move(pair));
             }
         }
         if length != previousLength { panic("hash table rehash lost an entry"); }
@@ -386,31 +405,102 @@ pub class HashMap<K: Movable, V: Movable> {
         reserve(length + extra)
     }
 
-    pub func insertPreserving(key: K, value: V) InsertResult<K, V> {
-        var hash = hashKey(raw key);
-        switch findIndex(raw key, hash) {
-            some(index) => {
-                var bucket = buckets.getMutPtr(index).unwrap();
-                var previous = bucket.take();
-                oldKey, oldValue := move(previous);
-                bucket.write(hash, move(key), move(value));
-                InsertResult<K, V>.Replaced(move(oldValue))
-            },
+    // Probing and possible allocation take place while the incoming key is
+    // only borrowed. A failure leaves both arguments in their owned tuple.
+    func insertionPlan(key: in K) !(usize, usize, bool) {
+        var address = key.toRaw();
+        var hash = hashKey(address);
+        switch findIndex(address, hash) {
+            some(index) => (index, hash, true),
             null => {
-                ensureRoomForOne() catch (reason) {
-                    return InsertResult<K, V>.Failed(reason, move(key), move(value));
-                };
-                insertKnownHash(hash, move(key), move(value));
-                InsertResult<K, V>.Inserted()
+                ensureRoomForOne()!;
+                (insertionIndex(hash), hash, false)
             },
         }
     }
 
-    pub func insert(key: K, value: V) core.ResultOptional<V> {
-        switch insertPreserving(move(key), move(value)) {
-            InsertResult.Inserted => null,
-            InsertResult.Replaced(previous) => some(move(previous)),
-            InsertResult.Failed(reason, _, _) => return reason,
+    comptime if meta.isCopyable<(K, V)>() {
+        func insertPair(entry: (K, V)) InsertResult<K, V> {
+            var plan = insertionPlan(entry.0) catch (reason) {
+                key, value := move(entry);
+                return InsertResult<K, V>.Failed(reason, move(key), move(value));
+            };
+            if plan.2 {
+                var bucket = buckets.getMutPtr(plan.0).unwrap();
+                var previous = bucket.take();
+                oldKey, oldValue := move(previous);
+                bucket.write(plan.1, move(entry));
+                return InsertResult<K, V>.Replaced(move(oldValue));
+            }
+            insertAt(plan.0, plan.1, move(entry));
+            InsertResult<K, V>.Inserted()
+        }
+
+        func insertValuePair(entry: (K, V)) core.ResultOptional<V> {
+            switch insertPair(move(entry)) {
+                InsertResult.Inserted => null,
+                InsertResult.Replaced(previous) => some(move(previous)),
+                InsertResult.Failed(reason, _, _) => return reason,
+            }
+        }
+    } else {
+        func insertPair(entry: move (K, V)) InsertResult<K, V> {
+            var plan = insertionPlan(entry.0) catch (reason) {
+                key, value := move(entry);
+                return InsertResult<K, V>.Failed(reason, move(key), move(value));
+            };
+            if plan.2 {
+                var bucket = buckets.getMutPtr(plan.0).unwrap();
+                var previous = bucket.take();
+                oldKey, oldValue := move(previous);
+                bucket.write(plan.1, move(entry));
+                return InsertResult<K, V>.Replaced(move(oldValue));
+            }
+            insertAt(plan.0, plan.1, move(entry));
+            InsertResult<K, V>.Inserted()
+        }
+
+        func insertValuePair(entry: move (K, V)) core.ResultOptional<V> {
+            switch insertPair(move(entry)) {
+                InsertResult.Inserted => null,
+                InsertResult.Replaced(previous) => some(move(previous)),
+                InsertResult.Failed(reason, _, _) => return reason,
+            }
+        }
+    }
+
+    // Exactly one public signature is present for each key/value specialization.
+    comptime if meta.isCopyable<K>() {
+        comptime if meta.isCopyable<V>() {
+            pub func insertPreserving(key: K, value: V) InsertResult<K, V> {
+                insertPair((move(key), move(value)))
+            }
+            pub func insert(key: K, value: V) core.ResultOptional<V> {
+                insertValuePair((move(key), move(value)))
+            }
+        } else {
+            pub func insertPreserving(key: K, value: move V) InsertResult<K, V> {
+                insertPair((move(key), move(value)))
+            }
+            pub func insert(key: K, value: move V) core.ResultOptional<V> {
+                insertValuePair((move(key), move(value)))
+            }
+        }
+    } else {
+        comptime if meta.isCopyable<V>() {
+            pub func insertPreserving(key: move K, value: V) InsertResult<K, V> {
+                insertPair((move(key), move(value)))
+            }
+            pub func insert(key: move K, value: V) core.ResultOptional<V> {
+                insertValuePair((move(key), move(value)))
+            }
+        } else {
+            pub func insertPreserving(key: move K, value: move V) InsertResult<K, V> {
+                insertPair((move(key), move(value)))
+            }
+            pub func insert(key: move K, value: move V) core.ResultOptional<V> {
+                insertValuePair((move(key), move(value)))
+            }
         }
     }
 
@@ -449,7 +539,7 @@ pub class HashMap<K: Movable, V: Movable> {
             some(index) => buckets.getMutPtr(index).unwrap().valueMut(),
             null => {
                 var index = if ensureRoomForOne()! { insertionIndex(hash) } else { location.1.unwrap() };
-                insertAt(index, hash, move(key), move(initial))
+                insertAt(index, hash, (move(key), move(initial)))
             },
         }
     }

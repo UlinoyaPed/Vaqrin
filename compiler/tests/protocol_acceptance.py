@@ -249,7 +249,7 @@ class ProtocolAcceptance(CompilerCase):
             func main() !void {
                 var server = http.AsyncServer.bind(net.parseSocketAddr("127.0.0.1:0")!)!;
                 io.println(server.localAddr()!.port())!;
-                var handler = Upload{};
+                var handler = Upload();
                 server.serveOneStreaming(raw handler, null)!;
             }
         """)
@@ -302,7 +302,7 @@ class ProtocolAcceptance(CompilerCase):
                     var config = tls.TlsConfig();
                     var acceptor = tls.TlsAcceptor.fromPem(CERT, KEY, move(config))!;
                     var server = move(listener);
-                    var handler = Echo{};
+                    var handler = Echo();
                     var deadline = some(time.Deadline.after(time.Duration.fromSeconds(4))!);
                     server.serveOneTls(raw handler, raw acceptor, deadline)
                 };

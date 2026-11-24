@@ -8,11 +8,14 @@ pub class FrameHeader {
     pub var kind: u8;
     pub var flags: u8;
     pub var stream: i32;
+
+    pub func init(length: u32, kind, flags: u8, stream: i32)
+        : length(length), kind(kind), flags(flags), stream(stream) {}
     pub static func parse(wire: []const u8) !Self {
         if wire.len() < 9 { return Http2Error.Protocol; }
         var count = (u32(wire[0]) << 16) | (u32(wire[1]) << 8) | u32(wire[2]);
         var stream = binary.readU32(wire[5..9], binary.Endian.Big)! & 0x7fffffffu32;
-        FrameHeader{length: count, kind: wire[3], flags: wire[4], stream: i32(stream)!}
+        FrameHeader(count, wire[3], wire[4], i32(stream)!)
     }
 }
 

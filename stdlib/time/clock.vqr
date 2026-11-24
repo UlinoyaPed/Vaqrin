@@ -5,12 +5,16 @@ class Timespec {
     #repr: C
     pub var seconds: i64;
     pub var nanoseconds: i64;
+
+    pub func init(seconds, nanoseconds: i64) : seconds(seconds), nanoseconds(nanoseconds) {}
 }
 
 class WindowsFileTime {
     #repr: C
     pub var low: u32;
     pub var high: u32;
+
+    pub func init(low, high: u32) : low(low), high(high) {}
 }
 
 const monotonicClock: i32 = 1;
@@ -46,15 +50,15 @@ class WindowsClock {
             } else {
                 i64(i128(remainder) * i128(nanosPerSecond) / i128(frequency))!
             };
-            return Timespec{seconds: seconds, nanoseconds: nanos};
+            return Timespec(seconds, nanos);
         }
         const ticksPerSecond: u64 = 10000000;
         const secondsFrom1601To1970: i64 = 11644473600;
-        var fileTime = WindowsFileTime{low: 0, high: 0};
+        var fileTime = WindowsFileTime(0, 0);
         unsafe { GetSystemTimePreciseAsFileTime(raw fileTime); }
         var ticks = (u64(fileTime.high) << 32) | u64(fileTime.low);
-        Timespec{seconds: i64(ticks / ticksPerSecond)! - secondsFrom1601To1970,
-                 nanoseconds: i64(ticks % ticksPerSecond)! * 100}
+        Timespec(i64(ticks / ticksPerSecond)! - secondsFrom1601To1970,
+                 i64(ticks % ticksPerSecond)! * 100)
     }
 
     pub static func waitUntil(seconds: i64, nanoseconds: i32) !void {
@@ -92,7 +96,7 @@ class NativeClock {
             if unsafe { __vqr_io_clock_now(clock, raw seconds, raw nanoseconds) } != 0 {
                 return TimeError.ClockUnavailable;
             }
-            Timespec{seconds: seconds, nanoseconds: nanoseconds}
+            Timespec(seconds, nanoseconds)
         }
         pub static func waitUntil(seconds: i64, nanoseconds: i32) !void {
             if unsafe { __vqr_io_clock_sleep_until(seconds, nanoseconds) } != 0 {
@@ -101,13 +105,13 @@ class NativeClock {
         }
       } else {
         pub static func read(clock: i32) !Timespec {
-            var value = Timespec{seconds: 0, nanoseconds: 0};
+            var value = Timespec(0, 0);
             if unsafe { clock_gettime(clock, raw value) } != 0 { return TimeError.ClockUnavailable; }
             value
         }
         pub static func waitUntil(seconds: i64, nanoseconds: i32) !void {
-            var absolute = Timespec{seconds: seconds, nanoseconds: i64(nanoseconds)};
-            var leftover = Timespec{seconds: 0, nanoseconds: 0};
+            var absolute = Timespec(seconds, i64(nanoseconds));
+            var leftover = Timespec(0, 0);
             for {
                 var status = unsafe { clock_nanosleep(monotonicClock, absoluteSleep, raw absolute, raw leftover) };
                 if status == 0 { return; }

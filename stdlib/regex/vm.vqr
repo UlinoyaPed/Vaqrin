@@ -5,12 +5,18 @@ pub class Thread {
     pub var state: i32;
     pub var startByte: usize;
     pub var history: i32;
+
+    pub func init(state: i32, startByte: usize, history: i32)
+        : state(state), startByte(startByte), history(history) {}
 }
 
 pub class CaptureHistory {
     pub var previous: i32;
     pub var slot: usize;
     pub var offset: usize;
+
+    pub func init(previous: i32, slot, offset: usize)
+        : previous(previous), slot(slot), offset(offset) {}
 }
 
 pub class SearchResult {
@@ -54,7 +60,7 @@ func assertEnd(regex: *const Regex, input: str, position: usize) bool {
 func appendHistory(history: *coll.Vec<CaptureHistory>, previous: i32,
                    slot: usize, offset: usize) !i32 {
     if history.len() >= 4 * 1024 * 1024 { return RegexError.StepLimitExceeded; }
-    history.push(CaptureHistory{previous: previous, slot: slot, offset: offset})!;
+    history.push(CaptureHistory(previous, slot, offset))!;
     i32(history.len() - 1)!
 }
 
@@ -292,7 +298,7 @@ func runNfa(regex: *const Regex, input: str, start: usize, captureOutput: bool) 
         for thread in current.asSlice() { seeds.push(thread)!; }
 
         if candidate == null {
-            seeds.push(Thread{state: regex.entryState(), startByte: position, history: -1})!;
+            seeds.push(Thread(regex.entryState(), position, -1))!;
         }
 
         active.clear();
@@ -337,9 +343,7 @@ func runNfa(regex: *const Regex, input: str, start: usize, captureOutput: bool) 
             var state = regex.stateAt(usize(thread.state)!);
             if accepts(regex, state, cp) {
                 if state.out < 0 { return RegexError.InvalidCapture; }
-                nextSeeds.push(Thread{
-                    state: state.out, startByte: thread.startByte, history: thread.history
-                })!;
+                nextSeeds.push(Thread(state.out, thread.startByte, thread.history))!;
                 if budget == 0 { return RegexError.StepLimitExceeded; }
                 budget--;
             }

@@ -7,7 +7,7 @@ func require(ok: bool) !void { if !ok { return TestError.Unexpected; } }
 
 func inputs() !void {
     var original = fs.readFile("generated-input.bin", 4096)!;
-    var codec = types.Codec_Input{};
+    var codec = types.Codec_Input();
     var input = protobuf.decode<types.Msg_Input>(original.asConstSlice(), raw codec, protobuf.DecodeLimits())!;
     require(input.f_count.unwrap() == 0)!;
     require(input.f_numbers.len() == 3 && input.f_numbers[0] == -1 && input.f_numbers[2] == 40)!;
@@ -82,7 +82,7 @@ func server() !void {
     var port = fmt.formatUint(listener.localAddr()!.port(), 10)!;
     io.print(port)!;
     io.print("\n")!;
-    var handler = Handler{};
+    var handler = Handler();
     var adapter = types.EchoServer(raw handler);
     var host = grpc.Server();
     adapter.register(raw host)!;

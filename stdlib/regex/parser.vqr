@@ -11,16 +11,25 @@ pub class AstNode {
     pub var minimum: usize;
     pub var maximum: usize;
     pub var greedy: bool;
+
+    pub func init(kind: NodeKind, value: u32, left, right: i32,
+                  minimum, maximum: usize, greedy: bool)
+        : kind(kind), value(value), left(left), right(right),
+          minimum(minimum), maximum(maximum), greedy(greedy) {}
 }
 
 pub class Escaped {
     pub var scalar: u32;
     pub var builtinMask: u8;
+
+    pub func init(scalar: u32, builtinMask: u8) : scalar(scalar), builtinMask(builtinMask) {}
 }
 
 pub class CaptureName {
     pub var name: string;
     pub var index: usize;
+
+    pub func init(name: string, index: usize) : name(move(name)), index(index) {}
 }
 
 pub class ParsedPattern {
@@ -30,16 +39,26 @@ pub class ParsedPattern {
     pub var ranges: coll.Vec<CharRange>;
     pub var captureCount: usize;
     pub var captureNames: coll.Vec<CaptureName>;
+
+    pub func init(root: i32, nodes: move coll.Vec<AstNode>, classes: move coll.Vec<CharacterClass>,
+                  ranges: move coll.Vec<CharRange>, captureCount: usize,
+                  captureNames: move coll.Vec<CaptureName>)
+        : root(root), nodes(move(nodes)), classes(move(classes)),
+          ranges(move(ranges)), captureCount(captureCount), captureNames(move(captureNames)) {}
 }
 
 pub class Patch {
     pub var state: usize;
     pub var alternate: bool;
+
+    pub func init(state: usize, alternate: bool) : state(state), alternate(alternate) {}
 }
 
 pub class Fragment {
     pub var start: i32;
     pub var outs: coll.Vec<Patch>;
+
+    pub func init(start: i32, outs: move coll.Vec<Patch>) : start(start), outs(move(outs)) {}
 }
 
 pub class RegexParser {
@@ -60,14 +79,14 @@ pub class RegexParser {
         if nodeLimit == 0 { return RegexError.TooManyStates; }
         var root = parseExpression(0)!;
         if position != source.byteLen() { return RegexError.UnexpectedToken; }
-        ParsedPattern{
-            root: root,
-            nodes: core.replace<coll.Vec<AstNode>>(raw nodes, coll.Vec<AstNode>()),
-            classes: core.replace<coll.Vec<CharacterClass>>(raw classes, coll.Vec<CharacterClass>()),
-            ranges: core.replace<coll.Vec<CharRange>>(raw ranges, coll.Vec<CharRange>()),
-            captureCount: captureCount,
-            captureNames: core.replace<coll.Vec<CaptureName>>(raw captureNames, coll.Vec<CaptureName>())
-        }
+        ParsedPattern(
+            root,
+            core.replace<coll.Vec<AstNode>>(raw nodes, coll.Vec<AstNode>()),
+            core.replace<coll.Vec<CharacterClass>>(raw classes, coll.Vec<CharacterClass>()),
+            core.replace<coll.Vec<CharRange>>(raw ranges, coll.Vec<CharRange>()),
+            captureCount,
+            core.replace<coll.Vec<CaptureName>>(raw captureNames, coll.Vec<CaptureName>())
+        )
     }
 
     const func atEnd() bool { position >= source.byteLen() }
@@ -90,10 +109,7 @@ pub class RegexParser {
     func addNode(kind: NodeKind, value: u32, left: i32, right: i32,
                  minimum: usize, maximum: usize, greedy: bool) !i32 {
         if nodes.len() >= nodeLimit { return RegexError.TooManyStates; }
-        nodes.push(AstNode{
-            kind: kind, value: value, left: left, right: right,
-            minimum: minimum, maximum: maximum, greedy: greedy
-        })!;
+        nodes.push(AstNode(kind, value, left, right, minimum, maximum, greedy))!;
         i32(nodes.len() - 1)!
     }
 
@@ -228,7 +244,7 @@ pub class RegexParser {
                 if captureCount > 32 { return RegexError.CaptureLimit; }
                 groupIndex = captureCount;
                 switch move(name) {
-                    some(label) => captureNames.push(CaptureName{name: move(label), index: groupIndex})!,
+                    some(label) => captureNames.push(CaptureName(move(label), groupIndex))!,
                     null => {},
                 }
             }
@@ -261,10 +277,7 @@ pub class RegexParser {
 
     func addBuiltinClass(mask: u8, negated: bool) !i32 {
         var classId = classes.len();
-        classes.push(CharacterClass{
-            firstRange: ranges.len(), rangeCount: 0,
-            builtinMask: mask, negated: negated
-        })!;
+        classes.push(CharacterClass(ranges.len(), 0, mask, negated))!;
         simpleNode(NodeKind.Class, u32(classId)!)
     }
 
@@ -297,27 +310,22 @@ pub class RegexParser {
                 if right.builtinMask != 0 { return RegexError.InvalidRange; }
                 if right.scalar < left.scalar { return RegexError.InvalidRange; }
                 if ranges.len() >= nodeLimit { return RegexError.TooManyStates; }
-                ranges.push(CharRange{first: left.scalar, last: right.scalar})!;
+                ranges.push(CharRange(left.scalar, right.scalar))!;
             } else {
                 if ranges.len() >= nodeLimit { return RegexError.TooManyStates; }
-                ranges.push(CharRange{first: left.scalar, last: left.scalar})!;
+                ranges.push(CharRange(left.scalar, left.scalar))!;
             }
         }
         if itemCount == 0 { return RegexError.UnclosedClass; }
         var classId = classes.len();
-        classes.push(CharacterClass{
-            firstRange: firstRange,
-            rangeCount: ranges.len() - firstRange,
-            builtinMask: builtinMask,
-            negated: negated
-        })!;
+        classes.push(CharacterClass(firstRange, ranges.len() - firstRange, builtinMask, negated))!;
         simpleNode(NodeKind.Class, u32(classId)!)
     }
 
     func parseClassAtom() !Escaped {
         if atEnd() { return RegexError.UnclosedClass; }
         if consumeByte(92) { return parseEscape(); }
-        Escaped{scalar: readScalar()!, builtinMask: 0}
+        Escaped(readScalar()!, 0)
     }
 
     const func hexDigit(byte: u8) !u32 {
@@ -360,29 +368,29 @@ pub class RegexParser {
         if atEnd() { return RegexError.UnexpectedEnd; }
         var byte = currentByte();
         position++;
-        if byte == 100 { return Escaped{scalar: 0, builtinMask: 1}; } // d
-        if byte == 68 { return Escaped{scalar: 0, builtinMask: 2}; } // D
-        if byte == 115 { return Escaped{scalar: 0, builtinMask: 4}; } // s
-        if byte == 83 { return Escaped{scalar: 0, builtinMask: 8}; } // S
-        if byte == 119 { return Escaped{scalar: 0, builtinMask: 16}; } // w
-        if byte == 87 { return Escaped{scalar: 0, builtinMask: 32}; } // W
-        if byte == 110 { return Escaped{scalar: 10, builtinMask: 0}; }
-        if byte == 114 { return Escaped{scalar: 13, builtinMask: 0}; }
-        if byte == 116 { return Escaped{scalar: 9, builtinMask: 0}; }
-        if byte == 102 { return Escaped{scalar: 12, builtinMask: 0}; }
-        if byte == 118 { return Escaped{scalar: 11, builtinMask: 0}; }
-        if byte == 48 { return Escaped{scalar: 0, builtinMask: 0}; }
-        if byte == 120 { return Escaped{scalar: parseHexFixed(2)!, builtinMask: 0}; }
-        if byte == 117 { return Escaped{scalar: parseUnicodeEscape()!, builtinMask: 0}; }
+        if byte == 100 { return Escaped(0, 1); } // d
+        if byte == 68 { return Escaped(0, 2); } // D
+        if byte == 115 { return Escaped(0, 4); } // s
+        if byte == 83 { return Escaped(0, 8); } // S
+        if byte == 119 { return Escaped(0, 16); } // w
+        if byte == 87 { return Escaped(0, 32); } // W
+        if byte == 110 { return Escaped(10, 0); }
+        if byte == 114 { return Escaped(13, 0); }
+        if byte == 116 { return Escaped(9, 0); }
+        if byte == 102 { return Escaped(12, 0); }
+        if byte == 118 { return Escaped(11, 0); }
+        if byte == 48 { return Escaped(0, 0); }
+        if byte == 120 { return Escaped(parseHexFixed(2)!, 0); }
+        if byte == 117 { return Escaped(parseUnicodeEscape()!, 0); }
         if byte == 112 || byte == 80 || byte == 98 || byte == 66 ||
            byte == 107 || (49 <= byte && byte <= 57) {
             return RegexError.UnsupportedConstruct;
         }
         if byte >= 0x80 {
             position--;
-            return Escaped{scalar: readScalar()!, builtinMask: 0};
+            return Escaped(readScalar()!, 0);
         }
-        Escaped{scalar: u32(byte), builtinMask: 0}
+        Escaped(u32(byte), 0)
     }
 }
 
@@ -408,7 +416,7 @@ pub class NfaCompiler {
 
     pub func compile(pattern: str) !Regex {
         var fragment = compileNode(root, 0)!;
-        var matchState = emit(State{op: Op.Match, value: 0, out: -1, alternate: -1})!;
+        var matchState = emit(State(Op.Match, 0, -1, -1))!;
         patchAll(raw fragment.outs, matchState);
         var ownedPattern = text.fromBytes(pattern.asBytes())!;
         Regex(core.replace<coll.Vec<State>>(raw states, coll.Vec<State>()),
@@ -427,7 +435,7 @@ pub class NfaCompiler {
 
     func singlePatch(state: i32, alternate: bool) !coll.Vec<Patch> {
         var result = coll.Vec<Patch>();
-        result.push(Patch{state: usize(state)!, alternate: alternate})!;
+        result.push(Patch(usize(state)!, alternate))!;
         move(result)
     }
 
@@ -445,38 +453,38 @@ pub class NfaCompiler {
     func concatenate(left: Fragment, right: Fragment) !Fragment {
         patchAll(raw left.outs, right.start);
         var owned = move(right);
-        Fragment{start: left.start, outs: core.replace<coll.Vec<Patch>>(raw owned.outs, coll.Vec<Patch>())}
+        Fragment(left.start, core.replace<coll.Vec<Patch>>(raw owned.outs, coll.Vec<Patch>()))
     }
 
     func emptyFragment() !Fragment {
-        var jump = emit(State{op: Op.Jump, value: 0, out: -1, alternate: -1})!;
-        Fragment{start: jump, outs: singlePatch(jump, false)!}
+        var jump = emit(State(Op.Jump, 0, -1, -1))!;
+        Fragment(jump, singlePatch(jump, false)!)
     }
 
     func simpleFragment(op: Op, value: u32) !Fragment {
-        var state = emit(State{op: op, value: value, out: -1, alternate: -1})!;
-        Fragment{start: state, outs: singlePatch(state, false)!}
+        var state = emit(State(op, value, -1, -1))!;
+        Fragment(state, singlePatch(state, false)!)
     }
 
     func compileStar(child: i32, greedy: bool, depth: usize) !Fragment {
         var body = compileNode(child, depth + 1)!;
-        var split = emit(State{op: Op.Split, value: 0, out: -1, alternate: -1})!;
+        var split = emit(State(Op.Split, 0, -1, -1))!;
         var exitAlternate = greedy;
         if greedy { states[usize(split)!].out = body.start; }
         else { states[usize(split)!].alternate = body.start; }
         patchAll(raw body.outs, split);
-        Fragment{start: split, outs: singlePatch(split, exitAlternate)!}
+        Fragment(split, singlePatch(split, exitAlternate)!)
     }
 
     func compileOptional(child: i32, greedy: bool, depth: usize) !Fragment {
         var body = compileNode(child, depth + 1)!;
-        var split = emit(State{op: Op.Split, value: 0, out: -1, alternate: -1})!;
+        var split = emit(State(Op.Split, 0, -1, -1))!;
         var exitAlternate = greedy;
         if greedy { states[usize(split)!].out = body.start; }
         else { states[usize(split)!].alternate = body.start; }
         var outs = singlePatch(split, exitAlternate)!;
         appendPatches(raw outs, raw body.outs)!;
-        Fragment{start: split, outs: move(outs)}
+        Fragment(split, move(outs))
     }
 
     func compileRepeat(node: AstNode, depth: usize) !Fragment {
@@ -517,19 +525,19 @@ pub class NfaCompiler {
             NodeKind.Alternate => {
                 var left = compileNode(node.left, depth + 1)!;
                 var right = compileNode(node.right, depth + 1)!;
-                var split = emit(State{op: Op.Split, value: 0, out: left.start, alternate: right.start})!;
+                var split = emit(State(Op.Split, 0, left.start, right.start))!;
                 var outs = core.replace<coll.Vec<Patch>>(raw left.outs, coll.Vec<Patch>());
                 appendPatches(raw outs, raw right.outs)!;
-                return Fragment{start: split, outs: move(outs)};
+                return Fragment(split, move(outs));
             },
             NodeKind.Repeat => return compileRepeat(node, depth + 1),
             NodeKind.Group => {
-                var begin = emit(State{op: Op.Save, value: node.value * 2, out: -1, alternate: -1})!;
+                var begin = emit(State(Op.Save, node.value * 2, -1, -1))!;
                 var body = compileNode(node.left, depth + 1)!;
-                var finish = emit(State{op: Op.Save, value: node.value * 2 + 1, out: -1, alternate: -1})!;
+                var finish = emit(State(Op.Save, node.value * 2 + 1, -1, -1))!;
                 states[usize(begin)!].out = body.start;
                 patchAll(raw body.outs, finish);
-                return Fragment{start: begin, outs: singlePatch(finish, false)!};
+                return Fragment(begin, singlePatch(finish, false)!);
             }
         }
     }

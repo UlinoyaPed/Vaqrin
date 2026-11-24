@@ -86,6 +86,8 @@ pub func isWouldBlock(reason: ErrorId) bool {
 pub class FileIdentity {
     pub var device: u64;
     pub var inode: u64;
+
+    pub func init(device, inode: u64) : device(device), inode(inode) {}
     pub const func matches(other: FileIdentity) bool {
         device == other.device && inode == other.inode
     }
@@ -242,7 +244,7 @@ pub class HostFile {
         if unsafe { __vqr_io_file_metadata(descriptor, raw size, raw mode, raw modified, raw kind, raw device, raw inode, raw errorCode) } != 0 {
             return systemError(errorCode);
         }
-        HostMetadata(size, mode, modified, kind, some(FileIdentity{device: device, inode: inode}))
+        HostMetadata(size, mode, modified, kind, some(FileIdentity(device, inode)))
     }
 
     pub func setMode(mode: u32) !void {
@@ -386,7 +388,7 @@ pub func hostStat(path: []const u8, follow: bool) !HostMetadata {
     if unsafe { __vqr_io_stat(raw name[0], if follow { 1 } else { 0 }, raw size, raw mode, raw modified, raw kind, raw device, raw inode, raw errorCode) } != 0 {
         return systemError(errorCode);
     }
-    HostMetadata(size, mode, modified, kind, some(FileIdentity{device: device, inode: inode}))
+    HostMetadata(size, mode, modified, kind, some(FileIdentity(device, inode)))
 }
 
 pub func hostSymlink(target: []const u8, path: []const u8) !void {

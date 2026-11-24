@@ -42,10 +42,12 @@ pub class Vec<T: Movable> {
     }
 
     // Copies each element; this method is available when T is Copyable.
-    pub static func fromSlice(values: []const T) !Self {
-        var out = Vec<T>.withCapacity(values.len())!;
-        for item in values { out.push(move(item))!; }
-        move(out)
+    comptime if meta.isCopyable<T>() {
+        pub static func fromSlice(values: []const T) !Self {
+            var out = Vec<T>.withCapacity(values.len())!;
+            for item in values { out.push(move(item))!; }
+            move(out)
+        }
     }
 
     pub static func fromIter<I: Movable>(values: I) !Self {
@@ -190,7 +192,9 @@ pub class Vec<T: Movable> {
         unsafe { some(__vqr_slot_take<T>(data.unwrap().offset(length))) }
     }
 
-    pub func insert(index: usize, value: T) !void {
+    // Move the suffix only after the capacity check succeeds. The caller
+    // initializes the resulting vacant slot before changing length.
+    func prepareInsertion(index: usize) !*T {
         if index > length { return CapacityError.IndexOutOfBounds; }
         ensureRoomForOne()!;
         unsafe {
@@ -198,27 +202,40 @@ pub class Vec<T: Movable> {
             for position := length; position > index; position-- {
                 __vqr_slot_write<T>(base.offset(position), __vqr_slot_take<T>(base.offset(position - 1)));
             }
-            __vqr_slot_write<T>(base.offset(index), move(value));
+            base.offset(index)
         }
-        length++;
     }
 
-    pub func insertPreserving(index: usize, value: T) PushResult<T> {
-        if index > length {
-            return PushResult<T>.Failed(CapacityError.IndexOutOfBounds, move(value));
+    comptime if meta.isCopyable<T>() {
+        pub func insert(index: usize, value: T) !void {
+            var vacant = prepareInsertion(index)!;
+            unsafe { __vqr_slot_write<T>(vacant, move(value)); }
+            length++;
         }
-        ensureRoomForOne() catch (reason) {
-            return PushResult<T>.Failed(reason, move(value));
-        };
-        unsafe {
-            var base = data.unwrap();
-            for position := length; position > index; position-- {
-                __vqr_slot_write<T>(base.offset(position), __vqr_slot_take<T>(base.offset(position - 1)));
-            }
-            __vqr_slot_write<T>(base.offset(index), move(value));
+
+        pub func insertPreserving(index: usize, value: T) PushResult<T> {
+            var vacant = prepareInsertion(index) catch (reason) {
+                return PushResult<T>.Failed(reason, move(value));
+            };
+            unsafe { __vqr_slot_write<T>(vacant, move(value)); }
+            length++;
+            PushResult<T>.Stored()
         }
-        length++;
-        PushResult<T>.Stored()
+    } else {
+        pub func insert(index: usize, value: move T) !void {
+            var vacant = prepareInsertion(index)!;
+            unsafe { __vqr_slot_write<T>(vacant, move(value)); }
+            length++;
+        }
+
+        pub func insertPreserving(index: usize, value: move T) PushResult<T> {
+            var vacant = prepareInsertion(index) catch (reason) {
+                return PushResult<T>.Failed(reason, move(value));
+            };
+            unsafe { __vqr_slot_write<T>(vacant, move(value)); }
+            length++;
+            PushResult<T>.Stored()
+        }
     }
 
     pub func remove(index: usize) ?T {
@@ -240,20 +257,43 @@ pub class Vec<T: Movable> {
         pop()
     }
 
-    pub func replace(index: usize, value: T) ?T {
-        if index >= length { return null; }
-        unsafe {
-            var slot = data.unwrap().offset(index);
-            var previous = __vqr_slot_take<T>(slot);
-            __vqr_slot_write<T>(slot, move(value));
-            some(move(previous))
+    comptime if meta.isCopyable<T>() {
+        pub func replace(index: usize, value: T) ?T {
+            if index >= length { return null; }
+            unsafe {
+                var slot = data.unwrap().offset(index);
+                var previous = __vqr_slot_take<T>(slot);
+                __vqr_slot_write<T>(slot, move(value));
+                some(move(previous))
+            }
         }
-    }
 
-    pub func replacePreserving(index: usize, value: T) ReplaceResult<T> {
-        if index >= length { return ReplaceResult<T>.InvalidIndex(move(value)); }
-        var previous = replace(index, move(value)).unwrap();
-        ReplaceResult<T>.Replaced(move(previous))
+        pub func replacePreserving(index: usize, value: T) ReplaceResult<T> {
+            if index >= length { return ReplaceResult<T>.InvalidIndex(move(value)); }
+            // Transfer the existing parameter copy directly to the slot.
+            unsafe {
+                var slot = data.unwrap().offset(index);
+                var previous = __vqr_slot_take<T>(slot);
+                __vqr_slot_write<T>(slot, move(value));
+                ReplaceResult<T>.Replaced(move(previous))
+            }
+        }
+    } else {
+        pub func replace(index: usize, value: move T) ?T {
+            if index >= length { return null; }
+            unsafe {
+                var slot = data.unwrap().offset(index);
+                var previous = __vqr_slot_take<T>(slot);
+                __vqr_slot_write<T>(slot, move(value));
+                some(move(previous))
+            }
+        }
+
+        pub func replacePreserving(index: usize, value: move T) ReplaceResult<T> {
+            if index >= length { return ReplaceResult<T>.InvalidIndex(move(value)); }
+            var previous = replace(index, move(value)).unwrap();
+            ReplaceResult<T>.Replaced(move(previous))
+        }
     }
 
     pub func retain<F: Movable>(predicate: F) void {
@@ -315,7 +355,7 @@ pub class Vec<T: Movable> {
 
     // Reserve before moving any elements. The removed interval owns its slots
     // independently of this vector and can be consumed in either direction.
-    pub func spliceOwned(start: usize, end: usize, replacement: Self) !IntoVecIter<T> {
+    pub func spliceOwned(start: usize, end: usize, replacement: move Self) !IntoVecIter<T> {
         if start > end || end > length { return CapacityError.IndexOutOfBounds; }
         var removed = end - start;
         var incoming = replacement.len();
@@ -364,21 +404,22 @@ pub class Vec<T: Movable> {
         IntoVecIter<T>(move(result))
     }
 
-    pub func splice(start: usize, end: usize, replacement: []const T) !void {
-        if start > end || end > length { return CapacityError.IndexOutOfBounds; }
-        var removed = spliceOwned(start, end, Vec<T>.fromSlice(replacement)!)!;
-    }
-
     pub func drain(start: usize, end: usize) !IntoVecIter<T> { spliceOwned(start, end, Vec<T>()) }
 
-    // Requires T: Copyable. Copying is explicit at this API boundary.
-    pub const func clone() !Self {
-        var result = switch allocator {
-            null => Vec<T>.withCapacity(length)!,
-            some(owner) => Vec<T>.withCapacityAndAllocator(length, owner)!,
-        };
-        for item in iterRef() { result.push(*item)!; }
-        move(result)
+    comptime if meta.isCopyable<T>() {
+        pub func splice(start: usize, end: usize, replacement: []const T) !void {
+            if start > end || end > length { return CapacityError.IndexOutOfBounds; }
+            var removed = spliceOwned(start, end, Vec<T>.fromSlice(replacement)!)!;
+        }
+
+        pub const func clone() !Self {
+            var result = switch allocator {
+                null => Vec<T>.withCapacity(length)!,
+                some(owner) => Vec<T>.withCapacityAndAllocator(length, owner)!,
+            };
+            for item in iterRef() { result.push(*item)!; }
+            move(result)
+        }
     }
 
     pub const func iter() iterator.SliceIter<T> { iterator.SliceIter<T>(asSlice()) }
@@ -388,7 +429,7 @@ pub class Vec<T: Movable> {
         iterator.rev<iterator.SliceIterRef<T>, *const T>(iterRef())
     }
 
-    pub static func intoIter(value: Self) IntoVecIter<T> { IntoVecIter<T>(move(value)) }
+    pub static func intoIter(value: move Self) IntoVecIter<T> { IntoVecIter<T>(move(value)) }
 
     pub const func asConstSlice() []const T { asSlice() }
     pub func asPtr() ?*T { if length == 0 { null } else { data } }
@@ -456,7 +497,7 @@ pub class Vec<T: Movable> {
 pub class IntoVecIter<T: Movable> {
     var source: Vec<T>;
     var front: usize;
-    pub func init(values: Vec<T>) : source(move(values)), front(0) {}
+    pub func init(values: move Vec<T>) : source(move(values)), front(0) {}
     pub func next() ?T {
         if remaining() == 0 { return null; }
         var slot = source.getMutPtr(front).unwrap();
@@ -480,7 +521,7 @@ class IteratorSnapshot<T: Copyable + Movable> {
     var entries: Vec<T>;
     var front: usize;
     var back: usize;
-    pub func init(entries: Vec<T>, count: usize) : entries(move(entries)), front(0), back(count) {}
+    pub func init(entries: move Vec<T>, count: usize) : entries(move(entries)), front(0), back(count) {}
     pub func take(reverse: bool) ?T {
         if front == back { return null; }
         if reverse {

@@ -12,7 +12,7 @@ class Echo {
 
 func serve() !void {
     var server = grpc.Server();
-    var handler = Echo{};
+    var handler = Echo();
     server.register("/interop.Raw/Echo", raw handler)!;
     var listener = net.listenTcp(net.parseSocketAddr("127.0.0.1:0")!)!;
     io.println(listener.localAddr()!.port())!;

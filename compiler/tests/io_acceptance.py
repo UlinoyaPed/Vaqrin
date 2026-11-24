@@ -51,7 +51,7 @@ class IoAcceptance(CompilerCase):
         self.assertEqual(result.stdout, b"use\n2\n1\n3\ncaught\n")
         source = self.source("escape.vqr", '''
             class Owner { pub const func view() str { "view" } }
-            func f() str { Owner{}.view() }
+            func f() str { Owner().view() }
         ''')
         self.assertIn(b"borrow from a temporary", self.process(VAQC, "check", source, good=False).stderr)
 

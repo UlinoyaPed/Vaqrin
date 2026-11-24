@@ -11,7 +11,7 @@ pub class MapIter<I: Movable, T: Movable, U: Movable, F: Movable> {
             some(item) => some(transform(move(item))),
         }
     }
-    pub const func sizeHint() SizeHint { SizeHint{lower: 0, upper: null} }
+    pub const func sizeHint() SizeHint { SizeHint(0, null) }
 }
 
 pub class FilterIter<I: Movable, T: Movable, F: Movable> {
@@ -28,7 +28,7 @@ pub class FilterIter<I: Movable, T: Movable, F: Movable> {
             }
         }
     }
-    pub const func sizeHint() SizeHint { SizeHint{lower: 0, upper: null} }
+    pub const func sizeHint() SizeHint { SizeHint(0, null) }
 }
 
 pub class FilterMapIter<I: Movable, T: Movable, U: Movable, F: Movable> {
@@ -48,7 +48,7 @@ pub class FilterMapIter<I: Movable, T: Movable, U: Movable, F: Movable> {
             }
         }
     }
-    pub const func sizeHint() SizeHint { SizeHint{lower: 0, upper: null} }
+    pub const func sizeHint() SizeHint { SizeHint(0, null) }
 }
 
 pub class TryMapIter<I: Movable, T: Movable, U: Movable, F: Movable> {

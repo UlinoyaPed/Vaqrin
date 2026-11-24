@@ -8,6 +8,7 @@ class Rectangle {
     #implements: Area
     pub var width: i32;
     pub var height: i32;
+    pub func init(width, height: i32) : width(width), height(height) {}
     pub const func measure() i32 { width * height }
 }
 
@@ -28,7 +29,7 @@ func printArea(shape: *const Area) !void {
 }
 
 func main() !void {
-    var rectangle = Rectangle{width: 3, height: 7};
+    var rectangle = Rectangle(3, 7);
     printArea(raw rectangle)!;
     io.println(areaOf(Shape.Square(4)))!;
     io.println(areaOf(Shape.Rectangle(2, 5)))!;

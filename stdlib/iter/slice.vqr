@@ -3,6 +3,8 @@ package iter
 pub class SizeHint {
     pub var lower: usize;
     pub var upper: ?usize;
+
+    pub func init(lower: usize, upper: ?usize) : lower(lower), upper(upper) {}
 }
 
 pub class SliceIter<T: Copyable + Movable> {
@@ -27,7 +29,7 @@ pub class SliceIter<T: Copyable + Movable> {
     pub const func remaining() usize { back - front }
     pub const func sizeHint() SizeHint {
         var n = remaining();
-        SizeHint{lower: n, upper: some(n)}
+        SizeHint(n, some(n))
     }
 }
 

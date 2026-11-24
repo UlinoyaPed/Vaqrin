@@ -1,5 +1,7 @@
 #include "compiler_internal.hpp"
 
+#include <tuple>
+
 namespace vqr::detail {
 
 Body::Body(Program &p, const File &f, Function *fn, Type *result, Types generics, bool constant, Type *owner)
@@ -74,8 +76,20 @@ bool Borrow::protects(int owner) const {
   return root == owner || (alternatives && std::ranges::binary_search(*alternatives, owner));
 }
 
+static Borrow capturePath(const CapturedLoan &capture) {
+  return {capture.root, capture.via, false, {}, capture.fields};
+}
+
 bool Borrow::overlaps(int owner, const Borrow &access) const {
   if (!protects(owner)) return false;
+  if (captures)
+    return std::ranges::any_of(*captures, [&](const CapturedLoan &loan) {
+      return capturePath(loan).overlaps(owner, access);
+    });
+  if (access.captures)
+    return std::ranges::any_of(*access.captures, [&](const CapturedLoan &reference) {
+      return reference.root == owner && overlaps(owner, capturePath(reference));
+    });
   if (alternatives || access.alternatives || raw || access.raw) return true;
   const auto [loanField, accessField] = std::ranges::mismatch(fields, access.fields);
   return loanField == fields.end() || accessField == access.fields.end();
@@ -85,14 +99,58 @@ bool Borrow::operator==(const Borrow &other) const {
   if (root != other.root || via != other.via || raw != other.raw || fields != other.fields ||
       checkedView != other.checkedView)
     return false;
-  return alternatives == other.alternatives ||
-         (alternatives && other.alternatives && *alternatives == *other.alternatives);
+  return (alternatives == other.alternatives ||
+          (alternatives && other.alternatives && *alternatives == *other.alternatives)) &&
+         (captures == other.captures ||
+          (captures && other.captures && *captures == *other.captures));
+}
+
+static void appendCapturePaths(std::vector<CapturedLoan> &loans, const Borrow &source, bool exclusive) {
+  if (source.captures) {
+    loans.insert(loans.end(), source.captures->begin(), source.captures->end());
+  } else {
+    loans.push_back({source.root, source.via, source.alternatives ? std::vector<unsigned>{} : source.fields, exclusive});
+    if (source.alternatives)
+      for (auto alternative : *source.alternatives)
+        loans.push_back({alternative, source.via, {}, exclusive});
+  }
+}
+
+Borrow Body::captureBorrow(std::vector<CapturedLoan> loans, int carrier) {
+  if (loans.empty()) return {};
+  std::ranges::sort(loans, [](const CapturedLoan &left, const CapturedLoan &right) {
+    return std::tie(left.root, left.via, left.fields, left.exclusive) <
+           std::tie(right.root, right.via, right.fields, right.exclusive);
+  });
+  auto equal = std::ranges::unique(loans);
+  loans.erase(equal.begin(), equal.end());
+  std::vector<int> roots;
+  for (const auto &loan : loans)
+    roots.push_back(loan.root);
+  std::ranges::sort(roots);
+  auto tail = std::ranges::unique(roots);
+  roots.erase(tail.begin(), tail.end());
+  Borrow result{roots.front(), carrier};
+  if (roots.size() > 1) {
+    roots.erase(roots.begin());
+    result.alternatives = std::make_shared<const std::vector<int>>(std::move(roots));
+  }
+  result.captures = std::make_shared<const std::vector<CapturedLoan>>(std::move(loans));
+  return result;
 }
 
 Borrow Body::joinBorrow(Borrow left, Borrow right, Type *type, Span span) {
   if (left == right) return left;
   if (left.root < 0 || right.root < 0 || left.raw || right.raw || !p.copyable(type))
     fail(span, "reference alternatives must have compatible read-only borrow sources", "E230");
+  if (left.captures || right.captures) {
+    std::vector<CapturedLoan> loans;
+    appendCapturePaths(loans, left, false);
+    appendCapturePaths(loans, right, false);
+    if (std::ranges::any_of(loans, &CapturedLoan::exclusive))
+      fail(span, "cannot merge alternatives carrying exclusive closure captures", "E230");
+    return captureBorrow(std::move(loans), left.via == right.via ? left.via : -1);
+  }
   std::vector<int> roots;
   for (const auto &source : {left, right}) {
     roots.push_back(source.root);
@@ -118,6 +176,13 @@ void Body::checkAccess(ValueAt v, bool write, Span span) {
       v.origin.raw && v.local >= 0 && !locals[v.local].reference && v.address == locals[v.local].slot;
   int root = !ownSlot && v.origin.root >= 0 ? v.origin.root : v.local;
   if (root < 0) return;
+  if (!ownSlot && v.origin.captures) {
+    // Moving/retaining a carrier never upgrades a shared captured referent
+    // to a write. Its own local slot is checked separately on writes.
+    for (const auto &capture : *v.origin.captures)
+      checkRootAccess(capture.root, capturePath(capture), write && capture.exclusive, span, v.origin.via);
+    return;
+  }
   checkRootAccess(root, v.origin, write, span);
   if (!ownSlot && v.origin.alternatives)
     for (int alternative : *v.origin.alternatives)
@@ -138,7 +203,7 @@ bool Body::hasReceiverReservation(const ValueAt &v) const {
   return false;
 }
 
-void Body::checkRootAccess(int root, Borrow origin, bool write, Span span) {
+void Body::checkRootAccess(int root, Borrow origin, bool write, Span span, int carrier) {
   const auto scope = locals[root].scope;
   const bool inScope = scope < scopes.size() && std::ranges::find(scopes[scope], root) != scopes[scope].end();
   if (!initialized[root] || !inScope) {
@@ -154,11 +219,18 @@ void Body::checkRootAccess(int root, Borrow origin, bool write, Span span) {
       if (id == root || !initialized[id] || !loan.origin.overlaps(root, origin) || loan.origin.raw ||
           (!loan.reference && !p.hasReference(loan.type) && !loan.origin.checkedView))
         continue;
-      int via = origin.via;
-      while (via >= 0 && via != id)
-        via = locals[via].origin.via;
-      if (via == id) continue;
-      if (write || (loan.reference ? !loan.reference->readOnly : !p.copyable(loan.type)))
+      auto through = [&](int via) {
+        while (via >= 0 && via != id)
+          via = locals[via].origin.via;
+        return via == id;
+      };
+      if (through(origin.via) || through(carrier)) continue;
+      const bool exclusive = loan.origin.captures
+          ? std::ranges::any_of(*loan.origin.captures, [&](const CapturedLoan &capture) {
+              return capture.exclusive && capturePath(capture).overlaps(root, origin);
+            })
+          : loan.reference ? !loan.reference->readOnly : !p.copyable(loan.type);
+      if (write || exclusive)
         fail(span, "access conflicts with active borrow of '" + locals[root].name + "'", "E230");
     }
 }
@@ -203,6 +275,13 @@ void Body::holdBorrow(Borrow &combined, ValueAt value, Value *stored, Span span)
   auto loan = bind(" <value borrow " + std::to_string(locals.size()) + ">", value.type, false, stored, span);
   recordBorrow(loan, value, span);
   combined = combined.root < 0 ? value.origin : joinBorrow(combined, value.origin, value.type, span);
+}
+
+void Body::holdCaptureBorrow(std::vector<CapturedLoan> &loans, ValueAt value, Span span) {
+  if (value.origin.root < 0 || value.origin.raw)
+    fail(span, "borrowed capture requires a tracked owner", "E230");
+  pinBorrow(value, span, scopes.size() - 1);
+  appendCapturePaths(loans, value.origin, value.type->kind == Kind::Reference && !value.type->readOnly);
 }
 
 void Body::mergeValueBorrow(Borrow &combined, bool &payload, ValueAt value, Span span) {
@@ -283,6 +362,8 @@ ValueAt Body::borrow(ValueAt v, Type *t, Span span, bool materialize) {
         type->kind != Kind::Optional && type->kind != Kind::Result) return false;
     return std::ranges::any_of(type->parts, [&](auto *part) { return self(self, part); });
   };
+  if (v.origin.captures && !containsScopedClosure(containsScopedClosure, target))
+    fail(span, "cannot borrow a projection through a scoped closure carrier", "E230");
   if (containsScopedClosure(containsScopedClosure, target)) {
     if (v.local < 0 || locals[v.local].reference || locals[v.local].slot != v.address)
       fail(span, "a scoped closure environment can only be borrowed from its whole local binding", "E230");

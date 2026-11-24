@@ -17,6 +17,9 @@ pub class IoProgress {
     pub var processed: usize;
     pub var status: ReadStatus;
     pub var reason: ?ErrorId;
+
+    pub func init(processed: usize, status: ReadStatus, reason: ?ErrorId)
+        : processed(processed), status(status), reason(reason) {}
     pub const func check() !void {
         if status == ReadStatus.Eof { return IoError.UnexpectedEof; }
         if status == ReadStatus.WouldBlock { return IoError.WouldBlock; }
@@ -50,18 +53,18 @@ func stopped(processed: usize, reason: ErrorId) IoProgress {
     else if isInterrupted(reason) { status = ReadStatus.Interrupted; }
     else if reason == IoError.Cancelled { status = ReadStatus.Cancelled; }
     else if reason == IoError.DeadlineExceeded { status = ReadStatus.DeadlineExceeded; }
-    IoProgress{processed: processed, status: status, reason: some(reason)}
+    IoProgress(processed, status, some(reason))
 }
 
 func complete(processed: usize) IoProgress {
-    IoProgress{processed: processed, status: ReadStatus.Bytes, reason: null}
+    IoProgress(processed, ReadStatus.Bytes, null)
 }
 
 pub func readExactProgress(reader: *Reader, dst: []u8) !IoProgress {
     var offset: usize = 0;
     while offset < dst.len() {
         var count = read(reader, dst[offset..dst.len()]) catch (reason) { return stopped(offset, reason); };
-        if count == 0 { return IoProgress{processed: offset, status: ReadStatus.Eof, reason: null}; }
+        if count == 0 { return IoProgress(offset, ReadStatus.Eof, null); }
         offset += count;
     }
     complete(offset)

@@ -40,21 +40,21 @@ class ValueCodec<T> {
                 } else {
                     comptime if valueKind<T>() == 5 {
                         pub static func encode(value: *const T, serializer: *Serializer) !void {
-                            var codec = FloatCodec<T>{};
+                            var codec = FloatCodec<T>();
                             codec.encode(value, serializer)
                         }
                         pub static func decode(deserializer: *Deserializer) !T {
-                            var codec = FloatCodec<T>{};
+                            var codec = FloatCodec<T>();
                             codec.decode(deserializer)
                         }
                     } else {
                         comptime if valueKind<T>() == 6 {
                             pub static func encode(value: *const T, serializer: *Serializer) !void {
-                                var codec = CharCodec{};
+                                var codec = CharCodec();
                                 codec.encode(value, serializer)
                             }
                             pub static func decode(deserializer: *Deserializer) !T {
-                                var codec = CharCodec{};
+                                var codec = CharCodec();
                                 codec.decode(deserializer)
                             }
                         } else {

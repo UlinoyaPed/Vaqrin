@@ -53,8 +53,8 @@ class StopHandler {
 
 func main() !void {
     var server = grpc.Server();
-    var handler = Handler{};
-    var echo = Echo{};
+    var handler = Handler();
+    var echo = Echo();
     var stop = mem.Shared<grpc.Shutdown>.new(grpc.Shutdown.open()!)!;
     var stopHandler = StopHandler(stop.clone());
     var options = grpc.ServeOptions();

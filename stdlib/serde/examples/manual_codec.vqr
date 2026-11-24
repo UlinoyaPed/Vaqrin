@@ -43,7 +43,7 @@ class UserCodec {
 
 func main() !void {
     var user = User{name: "Ada", age: 37};
-    var codec = UserCodec{};
+    var codec = UserCodec();
 
     var jsonText = json.marshal<User>(raw user, raw codec)!;
     io.println(jsonText)!;

@@ -114,6 +114,15 @@ struct Type {
   std::vector<unsigned> moveParameters;
 };
 
+struct CapturedLoan {
+  int root;
+  int via;
+  std::vector<unsigned> fields;
+  bool exclusive;
+
+  bool operator==(const CapturedLoan &) const = default;
+};
+
 struct Borrow {
   int root = -1;
   int via = -1;
@@ -122,6 +131,9 @@ struct Borrow {
   std::shared_ptr<const std::vector<int>> alternatives{};
   std::vector<unsigned> fields{};
   bool checkedView = false;
+  // Closure payloads preserve the authority, projection and mode of each
+  // capture. The root/alternatives summary still serves escape checks.
+  std::shared_ptr<const std::vector<CapturedLoan>> captures{};
 
   bool protects(int owner) const;
   bool overlaps(int owner, const Borrow &access) const;
@@ -277,7 +289,7 @@ private:
   void requireInit(ValueAt v, Span span);
   void checkAccess(ValueAt v, bool write, Span span);
   bool hasReceiverReservation(const ValueAt &v) const;
-  void checkRootAccess(int root, Borrow origin, bool write, Span span);
+  void checkRootAccess(int root, Borrow origin, bool write, Span span, int carrier = -1);
   Borrow joinBorrow(Borrow left, Borrow right, Type *type, Span span);
   void invalidateOwnedAddresses(ValueAt owner);
   ValueAt dereference(ValueAt v, Span span);
@@ -288,6 +300,8 @@ private:
   Type *referenceHint(const Ast &n);
   void recordBorrow(int local, ValueAt v, Span span);
   void holdBorrow(Borrow &combined, ValueAt value, Value *stored, Span span);
+  void holdCaptureBorrow(std::vector<CapturedLoan> &loans, ValueAt value, Span span);
+  Borrow captureBorrow(std::vector<CapturedLoan> loans, int carrier = -1);
   void mergeValueBorrow(Borrow &combined, bool &payload, ValueAt value, Span span);
   void setAlive(int local, bool alive);
   void registerDrop(int local, bool alive);

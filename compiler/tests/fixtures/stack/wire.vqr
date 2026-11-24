@@ -48,7 +48,7 @@ func emit() !void {
     writer.writeString(15, "互操作")!;
     writer.writeBytes(16, "vaqrin".asBytes())!;
     var child = Child{left: 5, right: 7};
-    var codec = ChildCodec{};
+    var codec = ChildCodec();
     var nested = protobuf.encode<Child>(raw child, raw codec, 128)!;
     writer.writeBytes(17, nested.asConstSlice())!;
     var packed = protobuf.PackedWriter(20);
@@ -68,7 +68,7 @@ func emit() !void {
 func consume() !void {
     var input = fs.readFile("python.bin", 4096)!;
     var reader = protobuf.Reader.open(input.asConstSlice(), protobuf.DecodeLimits())!;
-    var codec = ChildCodec{};
+    var codec = ChildCodec();
     var child = codec.newValue()!;
     var values = coll.Vec<i32>();
     var unknown = protobuf.Writer(64);

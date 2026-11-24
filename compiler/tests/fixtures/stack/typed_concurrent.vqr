@@ -34,7 +34,7 @@ class Handler {
 }
 
 func main() !void {
-    var service = mem.Shared<Handler>.new(Handler{})!;
+    var service = mem.Shared<Handler>.new(Handler())!;
     var adapter = types.ConcurrentServer_Echo<Handler>(move(service));
     var server = grpc.Server();
     unsafe { adapter.register(raw server)!; }

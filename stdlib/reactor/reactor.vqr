@@ -6,13 +6,17 @@ pub error ReactorError { InvalidInterest, UnknownWatch, WatchLimit, InvalidTimeo
 pub class Interest {
     pub var readable: bool;
     pub var writable: bool;
-    pub static func read() Interest { Interest{readable: true, writable: false} }
-    pub static func write() Interest { Interest{readable: false, writable: true} }
-    pub static func both() Interest { Interest{readable: true, writable: true} }
+
+    pub func init(readable, writable: bool) : readable(readable), writable(writable) {}
+    pub static func read() Interest { Interest(true, false) }
+    pub static func write() Interest { Interest(false, true) }
+    pub static func both() Interest { Interest(true, true) }
 }
 
 pub class WatchId {
     pub var value: u64;
+
+    pub func init(value: u64) : value(value) {}
 }
 
 pub class Event {
@@ -21,11 +25,16 @@ pub class Event {
     pub var writable: bool;
     pub var hangup: bool;
     pub var failed: bool;
+
+    pub func init(watch: WatchId, readable, writable, hangup, failed: bool)
+        : watch(watch), readable(readable), writable(writable), hangup(hangup), failed(failed) {}
 }
 
 class Watch {
     pub var identity: u64;
     pub var descriptor: i32;
+
+    pub func init(identity: u64, descriptor: i32) : identity(identity), descriptor(descriptor) {}
 }
 
 extern "C" func __vqr_io_reactor_open(reason: *i32) i32;
@@ -72,14 +81,14 @@ pub class Reactor {
         var reason: i32 = 0;
         var watched = unsafe { __vqr_io_reactor_add(epoll, descriptor, generation, mask, raw reason) };
         if watched < 0 { return io.systemError(reason); }
-        watches.push(Watch{identity: generation, descriptor: watched}) catch (failure) {
+        watches.push(Watch(generation, watched)) catch (failure) {
             unsafe {
                 __vqr_io_reactor_remove(epoll, watched);
                 __vqr_io_reactor_close(watched);
             }
             return failure;
         };
-        WatchId{value: generation}
+        WatchId(generation)
     }
     pub func update(watch: WatchId, interest: Interest) !void {
         if epoll < 0 { return io.IoError.Closed; }
@@ -115,10 +124,10 @@ pub class Reactor {
             var ready = unsafe { __vqr_io_reactor_wait(epoll, millis, raw identity, raw flags, raw reason) };
             if ready < 0 && !io.isInterrupted(io.systemError(reason)) { return io.systemError(reason); }
             if ready > 0 {
-                var watch = WatchId{value: identity};
+                var watch = WatchId(identity);
                 if locate(watch) != null {
-                    return some(Event{watch: watch, readable: (flags & 1) != 0,
-                        writable: (flags & 2) != 0, hangup: (flags & 4) != 0, failed: (flags & 8) != 0});
+                    return some(Event(watch, (flags & 1) != 0, (flags & 2) != 0,
+                                      (flags & 4) != 0, (flags & 8) != 0));
                 }
             }
             if deadline != null && deadline.unwrap().expired()! { return null; }

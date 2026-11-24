@@ -267,7 +267,7 @@ class GreeterImpl {
 }
 func sample(value: i32) !i32 {
     var number = 3;
-    var instance = GreeterImpl{};
+    var instance = GreeterImpl();
     var fromCall = instance.greet();
     var parsed = reader.parseInt<i32>("7")!;
     number + value + fromCall + parsed

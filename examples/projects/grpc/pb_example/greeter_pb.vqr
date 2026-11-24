@@ -12,6 +12,7 @@ pub class Msg_HelloRequest {
 
 pub class Codec_HelloRequest {
     #implements: protobuf.Codec<Msg_HelloRequest>
+    pub func init() {}
     pub func newValue() !Msg_HelloRequest { Msg_HelloRequest() }
     pub func encode(value: *const Msg_HelloRequest, writer: *protobuf.Writer) !void {
         if !(value.f_name.byteLen() == 0) {
@@ -48,6 +49,7 @@ pub class Msg_HelloReply {
 
 pub class Codec_HelloReply {
     #implements: protobuf.Codec<Msg_HelloReply>
+    pub func init() {}
     pub func newValue() !Msg_HelloReply { Msg_HelloReply() }
     pub func encode(value: *const Msg_HelloReply, writer: *protobuf.Writer) !void {
         if !(value.f_greeting.byteLen() == 0) {
@@ -78,8 +80,8 @@ pub class GreeterClient {
     var connection: *grpc.ClientConn;
     pub func init(connection: *grpc.ClientConn) : connection(connection) {}
     pub func rpc_SayHello(input: *const Msg_HelloRequest, options: *const grpc.CallOptions) !grpc.TypedResponse<Msg_HelloReply> {
-        var encoder = Codec_HelloRequest{};
-        var decoder = Codec_HelloReply{};
+        var encoder = Codec_HelloRequest();
+        var decoder = Codec_HelloReply();
         var body = protobuf.encode<Msg_HelloRequest>(input, raw encoder, connection.maxMessageBytes())!;
         var result = connection.unary("/example.Greeter/SayHello", body.asConstSlice(), options)!;
         grpc.decodeResponse<Msg_HelloReply>(move(result), raw decoder, protobuf.DecodeLimits())
@@ -95,8 +97,8 @@ class Adapter_Greeter_SayHello {
     var service: *GreeterService;
     pub func init(service: *GreeterService) : service(service) {}
     pub func call(request: grpc.UnaryRequest) !grpc.UnaryResponse {
-        var decoder = Codec_HelloRequest{};
-        var encoder = Codec_HelloReply{};
+        var decoder = Codec_HelloRequest();
+        var encoder = Codec_HelloReply();
         var typed = protobuf.decode<Msg_HelloRequest>(request.body.asConstSlice(), raw decoder, protobuf.DecodeLimits()) catch {
             return grpc.reply(grpc.status(grpc.StatusCode.InvalidArgument, ""));
         };
@@ -123,8 +125,8 @@ class ConcurrentAdapter_Greeter_SayHello<H: ConcurrentService_Greeter + Shareabl
     var service: mem.Shared<H>;
     pub func init(service: mem.Shared<H>) : service(move(service)) {}
     pub const func call(request: grpc.UnaryRequest) !grpc.UnaryResponse {
-        var decoder = Codec_HelloRequest{};
-        var encoder = Codec_HelloReply{};
+        var decoder = Codec_HelloRequest();
+        var encoder = Codec_HelloReply();
         var typed = protobuf.decode<Msg_HelloRequest>(request.body.asConstSlice(), raw decoder, protobuf.DecodeLimits()) catch {
             return grpc.reply(grpc.status(grpc.StatusCode.InvalidArgument, ""));
         };

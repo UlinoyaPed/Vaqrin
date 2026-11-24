@@ -96,6 +96,105 @@ class ContainerAcceptance(CompilerCase):
         """)
         self.assertEqual(output, ["true"] * 5)
 
+    def test_map_insert_selects_independent_key_and_value_modes(self):
+        declarations = r"""
+            class Owned {
+                #copy: disabled
+                pub var id: i32;
+                pub var lifetime: i32;
+                pub func init(key: i32, lifetime: i32) : id(key), lifetime(lifetime) {}
+                func deinit() void { io.println(lifetime) catch {}; }
+            }
+            func hashOwned(key: *const Owned, seed: u32) usize {
+                hash.hashI32(raw key.id, seed)
+            }
+            func equalOwned(a: *const Owned, b: *const Owned) bool { a.id == b.id }
+        """
+        output = self.run_container(declarations + r"""
+            func main() !void {
+                var first = coll.i32Map<i32>();
+                var key = 1;
+                var number = 17;
+                first.insert(key, number)!;
+                if first.insert(key, number + 1)!.unwrap() != 17 || key != 1 || number != 17 {
+                    panic("Copyable key/value were not copied");
+                }
+
+                var second = coll.i32Map<Owned>();
+                var incoming = Owned(2, 21);
+                second.insert(key, move(incoming))!;
+                var previous = second.insert(key, Owned(2, 22))!.unwrap();
+                if previous.lifetime != 21 || second.get(key).unwrap().lifetime != 22 { panic("wrong value"); }
+
+                var third = coll.HashMap<Owned, i32>.withHasher(hashOwned, equalOwned);
+                var namedKey = Owned(3, 31);
+                third.insert(move(namedKey), number)!;
+                switch third.insertPreserving(Owned(3, 32), number + 1) {
+                    coll.InsertResult.Replaced(old) => { if old != 17 { panic("wrong copied value"); } },
+                    _ => panic("move-key overwrite failed"),
+                }
+
+                var fourth = coll.HashMap<Owned, Owned>.withHasher(hashOwned, equalOwned);
+                var ownedKey = Owned(4, 41);
+                var ownedValue = Owned(5, 51);
+                switch fourth.insertPreserving(move(ownedKey), move(ownedValue)) {
+                    coll.InsertResult.Inserted => {},
+                    _ => panic("move-key and move-value insert failed"),
+                }
+                var current = fourth.insert(Owned(4, 42), Owned(5, 52))!.unwrap();
+                if current.lifetime != 51 || fourth.len() != 1 { panic("wrong previous value"); }
+            }
+        """)
+        self.assertEqual(sorted(output), ["21", "22", "31", "32", "41", "42", "51", "52"])
+        for expression in (
+            "values.insert(1, value)!;",
+            "values.insertPreserving(1, value);",
+            "keys.insert(key, 1)!;",
+            "keys.insertPreserving(key, 1);",
+            "both.insert(move(key), value)!;",
+            "both.insertPreserving(key, move(value));",
+        ):
+            with self.subTest(expression=expression):
+                source = self.source("ownership.vqr", "import (coll, hash, io)\n" + declarations + """
+                    func main() !void {
+                        var values = coll.i32Map<Owned>();
+                        var keys = coll.HashMap<Owned, i32>.withHasher(hashOwned, equalOwned);
+                        var both = coll.HashMap<Owned, Owned>.withHasher(hashOwned, equalOwned);
+                        var key = Owned(3, 31);
+                        var value = Owned(4, 41);
+                """ + expression + "\n}")
+                diagnostic = self.process(VAQC, "check", source, good=False).stderr
+                self.assertIn(b"move parameter requires move(object)", diagnostic)
+
+    def test_map_copyable_arguments_are_copied_only_at_the_public_boundary(self):
+        result = self.run_container(r"""
+            class Counted {
+                #copy: enable
+                pub var id: i32;
+                pub func init(id: i32) : id(id) {}
+                pub const func copy() Counted {
+                    io.println(100 + id) catch {};
+                    Counted(id)
+                }
+                func deinit() void { io.println(id) catch {}; }
+            }
+            func keyHash(key: *const Counted, seed: u32) usize {
+                hash.hashI32(raw key.id, seed)
+            }
+            func keyEquals(a: *const Counted, b: *const Counted) bool { a.id == b.id }
+            func main() !void {
+                var key = Counted(1);
+                var value = Counted(2);
+                var table = coll.HashMap<Counted, Counted>.withHasher(keyHash, keyEquals);
+                switch table.insertPreserving(key, value) {
+                    coll.InsertResult.Inserted => {},
+                    _ => panic("fresh copied entry was not inserted"),
+                }
+                if key.id != 1 || value.id != 2 { panic("insertion consumed Copyable sources"); }
+            }
+        """)
+        self.assertEqual(sorted(map(int, result)), [1, 1, 2, 2, 101, 102])
+
     def test_consuming_vec_drops_each_slot_once(self):
         output = self.run_container(r"""
             class Owned {
@@ -156,6 +255,72 @@ class ContainerAcceptance(CompilerCase):
             """)
             diagnostic = self.process(VAQC, "check", entry, good=False).stderr
             self.assertIn(b"move parameter requires move(object)", diagnostic)
+
+    def test_vec_insert_replace_modes_preserve_ownership_and_error_payloads(self):
+        self.assertEqual(self.run_container(r"""
+            class Item {
+                #copy: disabled
+                pub var id: i32;
+                pub func init(value: i32) : id(value) {}
+                func deinit() void { io.println(id) catch {}; }
+            }
+            func main() !void {
+                var numbers = coll.Vec<i32>();
+                var number = 12;
+                numbers.insert(0, number)!;
+                switch numbers.insertPreserving(4, number) {
+                    coll.PushResult.Failed(reason, recovered) => {
+                        if reason != coll.CapacityError.IndexOutOfBounds || recovered != 12 { panic("bad insertion"); }
+                    },
+                    _ => panic("insert accepted invalid index"),
+                }
+                if numbers.replace(0, number + 1).unwrap() != 12 || number != 12 { panic("bad copy"); }
+                switch numbers.replacePreserving(0, number + 2) {
+                    coll.ReplaceResult.Replaced(previous) => { if previous != 13 { panic("bad replacement"); } },
+                    _ => panic("replace rejected valid index"),
+                }
+                var copy = numbers.clone()!;
+                if numbers.pop().unwrap() != 14 || copy.pop().unwrap() != 14 { panic("bad clone"); }
+
+                var items = coll.Vec<Item>();
+                var original = Item(21);
+                items.insert(0, move(original))!;
+                switch items.insertPreserving(4, Item(22)) {
+                    coll.PushResult.Failed(reason, item) => {
+                        if reason != coll.CapacityError.IndexOutOfBounds || item.id != 22 { panic("bad rejected payload"); }
+                    },
+                    _ => panic("insert accepted invalid index"),
+                }
+                var replacement = Item(23);
+                switch items.replacePreserving(0, move(replacement)) {
+                    coll.ReplaceResult.Replaced(previous) => { if previous.id != 21 { panic("wrong previous item"); } },
+                    _ => panic("replace rejected valid index"),
+                }
+                switch items.replacePreserving(8, Item(24)) {
+                    coll.ReplaceResult.InvalidIndex(item) => { if item.id != 24 { panic("wrong returned item"); } },
+                    _ => panic("replace accepted invalid index"),
+                }
+                var old = items.replace(0, Item(25)).unwrap();
+                if old.id != 23 || items.get(0).unwrap().id != 25 || items.len() != 1 { panic("bad stored item"); }
+            }
+        """), ["22", "21", "24", "23", "25"])
+        for operation in (
+            "items.insert(0, item)!;", "items.insertPreserving(0, item);",
+            "items.replace(0, item);", "items.replacePreserving(0, item);",
+            "items.spliceOwned(0, 0, replacement)!;",
+            "var iterator = coll.Vec<Item>.intoIter(replacement);",
+        ):
+            with self.subTest(operation=operation):
+                source = self.source("unmoved.vqr", """
+                    import (coll)
+                    class Item { #copy: disabled; pub var id: i32; }
+                    func main() !void {
+                        var items = coll.Vec<Item>();
+                        var item = Item{id: 22};
+                        var replacement = coll.Vec<Item>();
+                """ + operation + "\n}")
+                diagnostic = self.process(VAQC, "check", source, good=False).stderr
+                self.assertIn(b"move parameter requires move(object)", diagnostic)
 
     def test_stable_sort_ranges_and_map_projections(self):
         output = self.run_container(r"""
@@ -479,6 +644,8 @@ class ContainerAcceptance(CompilerCase):
                 }
             }
             class Probe { #copy: disabled; pub var id: i32; }
+            func hashProbe(key: *const Probe, seed: u32) usize { hash.hashI32(raw key.id, seed) }
+            func equalProbe(a: *const Probe, b: *const Probe) bool { a.id == b.id }
             func main() !void {
                 var allocator = Allocator();
                 {
@@ -489,6 +656,14 @@ class ContainerAcceptance(CompilerCase):
                         coll.PushResult.Failed(reason, item) => {
                             if reason != Injected.Exhausted || item.id != 8 || values.len() != 1 {
                                 panic("failed growth did not preserve state");
+                            }
+                        },
+                        _ => panic("allocation was expected to fail"),
+                    }
+                    switch values.insertPreserving(0, Probe{id: 18}) {
+                        coll.PushResult.Failed(reason, item) => {
+                            if reason != Injected.Exhausted || item.id != 18 || values.len() != 1 {
+                                panic("failed insertion did not preserve the initialized prefix");
                             }
                         },
                         _ => panic("allocation was expected to fail"),
@@ -546,6 +721,23 @@ class ContainerAcceptance(CompilerCase):
                     allocator.fail = false;
                 }
                 if allocator.live != 0 { panic("map allocation/free layouts differed"); }
+                {
+                    var map = coll.HashMap<Probe, Probe>.withAllocator(hashProbe, equalProbe, raw allocator);
+                    allocator.fail = true;
+                    var key = Probe{id: 71};
+                    var value = Probe{id: 81};
+                    switch map.insertPreserving(move(key), move(value)) {
+                        coll.InsertResult.Failed(reason, recoveredKey, recoveredValue) => {
+                            if reason != Injected.Exhausted || recoveredKey.id != 71 ||
+                               recoveredValue.id != 81 || map.len() != 0 {
+                                panic("map did not return both moved owners");
+                            }
+                        },
+                        _ => panic("map accepted owners without storage"),
+                    }
+                    allocator.fail = false;
+                }
+                if allocator.live != 0 { panic("failed move-key insertion leaked storage"); }
             }
         '''), [])
 

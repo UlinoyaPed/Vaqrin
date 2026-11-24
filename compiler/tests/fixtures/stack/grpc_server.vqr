@@ -52,9 +52,9 @@ func main() !void {
     io.print(digits)!;
     io.print("\n")!;
     var server = grpc.Server();
-    var handler = Twice{};
-    var missing = Missing{};
-    var wait = Sleep{};
+    var handler = Twice();
+    var missing = Missing();
+    var wait = Sleep();
     server.register("/interop.Echo/Double", raw handler)!;
     server.register("/interop.Echo/Missing", raw missing)!;
     server.register("/interop.Echo/Wait", raw wait)!;

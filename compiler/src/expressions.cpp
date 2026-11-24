@@ -1538,8 +1538,14 @@ ValueAt Body::construct(const Ast &n, Type *t, const std::vector<Definition> &de
     phi->addIncoming(bad.value, failure);
     return {out, phi};
   }
+  if (n->kind == NodeKind::Call && t->fields.empty() && n->children.size() == 1)
+    // With no declared init and no fields to initialize, T() is the empty
+    // initializer. Existing init overloads above keep their access checks.
+    return {t, Constant::getNullValue(t->ir)};
   if (n->kind != NodeKind::Fields)
-    fail(n->span, "class has no matching constructor; use a field initializer");
+    fail(n->span, "class has no matching constructor; declare an init taking these arguments");
+  if (n->names.empty())
+    fail(n->span, "empty brace construction uses T(), not T{}");
   if (!p.methods(t, "init", false).empty())
     fail(n->span, "class declares init and cannot use field construction");
   std::map<std::string, std::size_t> explicitValues;
@@ -1631,7 +1637,6 @@ ValueAt Body::lambda(const Ast &n, Type *expected) {
   std::vector<Capture> captures;
   std::vector<llvm::Type *> fields;
   std::set<std::string> names;
-  bool hasMutableCapture = false;
   if (hasCaptures) {
     for (const auto &item : n->children) {
       auto original = item->kind == NodeKind::Name ? item : item->children[0];
@@ -1649,10 +1654,7 @@ ValueAt Body::lambda(const Ast &n, Type *expected) {
       if (reference) {
         if (local.type->kind == Kind::Interface || referenceValue || carriesBorrow(local.type))
           fail(item->span, "capture requires a place without untracked or nested borrows", "E230");
-        if (local.reference && !local.reference->readOnly)
-          fail(item->span, "capturing through an existing exclusive borrow is not supported", "E230");
         safeAlias = p.reference(local.type, !mutableCapture);
-        hasMutableCapture |= mutableCapture;
       }
       const bool scoped = reference || (referenceValue && item->kind == NodeKind::Name);
       if ((local.reference && item->kind == NodeKind::Move) ||
@@ -1672,17 +1674,36 @@ ValueAt Body::lambda(const Ast &n, Type *expected) {
     t->captures = captures;
     t->scopedBorrow = std::ranges::any_of(captures, &Capture::scoped);
     if (t->scopedBorrow) {
-      // The existing origin union only records independent read-only loans.
-      // Do not collapse distinct exclusive origins into an untracked capture.
-      if (hasMutableCapture && std::ranges::count_if(captures, &Capture::scoped) > 1)
-        fail(n->span, "a closure with an exclusive capture cannot yet capture additional borrows", "E230");
-      for (const auto &capture : captures) {
-        if (capture.scoped) continue;
-        const auto kind = capture.type->kind;
-        if (capture.reference || (kind != Kind::Int && kind != Kind::Bool &&
-                                  kind != Kind::Char && kind != Kind::Float))
-          fail(n->span, "a scoped closure can only combine tracked borrows and scalar copies", "E230");
-      }
+      // Owned captures may coexist with loans, but untracked pointers and
+      // views cannot establish an independent lifetime just by being copied.
+      std::set<Type *> visited;
+      auto containsBorrow = [&](auto &&self, Type *type) -> bool {
+        if (p.hasReference(type) || type->kind == Kind::Pointer || type->kind == Kind::View ||
+            type->kind == Kind::Slice || type->kind == Kind::Interface ||
+            type->kind == Kind::RawStorage || type->kind == Kind::Allocation)
+          return true;
+        if (!visited.insert(type).second) return false;
+        auto part = [&](Type *component) { return self(self, component); };
+        if (type->kind == Kind::Closure)
+          return std::ranges::any_of(type->captures, [&](const Capture &capture) {
+            return capture.reference || part(capture.type);
+          });
+        if (type->kind == Kind::Class || type->kind == Kind::Enum) {
+          p.ensureSized(type, n->span);
+          if (type->kind == Kind::Class)
+            return std::ranges::any_of(type->fields, [&](const Field &field) { return part(field.type); });
+          return std::ranges::any_of(type->variants, [&](const Variant &variant) {
+            return std::ranges::any_of(variant.fields, part);
+          });
+        }
+        if (type->kind == Kind::Box || type->kind == Kind::Optional || type->kind == Kind::Result ||
+            type->kind == Kind::Array || type->kind == Kind::Tuple)
+          return std::ranges::any_of(type->parts, part);
+        return false;
+      };
+      for (const auto &capture : captures)
+        if (!capture.scoped && containsBorrow(containsBorrow, capture.type))
+          fail(n->span, "owned captures in a scoped closure cannot carry untracked borrows", "E230");
     }
   }
   for (const auto &param : n->parameters)
@@ -1741,7 +1762,7 @@ ValueAt Body::lambda(const Ast &n, Type *expected) {
   Value *environment = Constant::getNullValue(t->ir);
   enter();
   std::vector<int> transfers;
-  Borrow origin{};
+  std::vector<CapturedLoan> capturedLoans;
   for (unsigned i = 0; i < captures.size(); ++i) {
     const auto &capture = captures[i];
     const auto &item = n->children[i];
@@ -1754,9 +1775,7 @@ ValueAt Body::lambda(const Ast &n, Type *expected) {
     }
     rejectViewEscape(v, n->children[i]->span);
     auto *stored = read(v, n->span);
-    if (capture.scoped) {
-      holdBorrow(origin, v, stored, n->children[i]->span);
-    }
+    if (capture.scoped) holdCaptureBorrow(capturedLoans, v, item->span);
     if (p.drops(v.type))
       transfers.push_back(bind(" <capture " + std::to_string(i) + ">", v.type, true, stored, n->span));
     environment = ir.CreateInsertValue(environment, stored, captures[i].index);
@@ -1765,7 +1784,7 @@ ValueAt Body::lambda(const Ast &n, Type *expected) {
   for (int i : transfers)
     setAlive(i, false);
   leave();
-  return {t, environment, nullptr, false, -1, false, false, origin};
+  return {t, environment, nullptr, false, -1, false, false, captureBorrow(std::move(capturedLoans))};
 }
 
 ValueAt Body::allocate(const Ast &n) {

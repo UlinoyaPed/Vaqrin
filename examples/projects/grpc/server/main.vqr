@@ -21,7 +21,7 @@ func main() !void {
     config.requireProtocol = true;
     config.addProtocol("h2".asBytes())!;
     var acceptor = tls.TlsAcceptor.fromPem(certificate, key, move(config))!;
-    var service = Greeter{};
+    var service = Greeter();
     var adapter = generated.GreeterServer(raw service);
     var server = grpc.Server();
     adapter.register(raw server)!;

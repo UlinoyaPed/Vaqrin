@@ -14,11 +14,16 @@ pub class State {
     pub var value: u32;
     pub var out: i32;
     pub var alternate: i32;
+
+    pub func init(op: Op, value: u32, out, alternate: i32)
+        : op(op), value(value), out(out), alternate(alternate) {}
 }
 
 pub class CharRange {
     pub var first: u32;
     pub var last: u32;
+
+    pub func init(first, last: u32) : first(first), last(last) {}
 }
 
 pub class CharacterClass {
@@ -26,6 +31,9 @@ pub class CharacterClass {
     pub var rangeCount: usize;
     pub var builtinMask: u8;
     pub var negated: bool;
+
+    pub func init(firstRange, rangeCount: usize, builtinMask: u8, negated: bool)
+        : firstRange(firstRange), rangeCount(rangeCount), builtinMask(builtinMask), negated(negated) {}
 }
 
 pub class Match {

@@ -55,7 +55,7 @@ func main() !void {
     io.print(port)!;
     io.print("\n")!;
     var server = grpc.Server();
-    var handler = Handler{};
+    var handler = Handler();
     server.registerStreaming("/interop.Stream/Broadcast", raw handler)!;
     server.registerStreaming("/interop.Stream/Sum", raw handler)!;
     server.registerStreaming("/interop.Stream/Echo", raw handler)!;

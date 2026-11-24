@@ -254,6 +254,7 @@ class Acceptance(CompilerCase):
             func read(x: in i32) void {}
             func borrowProbe(x: in Probe) void {}
             func mutate(x: mut i32) void {}
+            func mixed(x: (ref i32, str)) void {}
             func fallible() !void {}
             func value() i32 { 1 }
         """
@@ -268,6 +269,10 @@ class Acceptance(CompilerCase):
             "receiver_argument_replaces_owner": (
                 "var box = new Probe()!; defer (*box).withArg({ box = new Probe()!; 0 });",
                 "active borrow",
+            ),
+            "mixed_aggregate": (
+                'var x = 1; var pair: (ref i32, str) = (ref x, "view"); defer mixed(pair);',
+                "untracked borrows",
             ),
             "unhandled_error": ("defer fallible();", "defer requires a runtime void call"),
             "non_void": ("defer value();", "defer requires a runtime void call"),

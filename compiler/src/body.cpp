@@ -636,10 +636,43 @@ void Body::registerDefer(CallInst *call, Span span, DeferRegistration &registrat
 }
 
 void Body::validateDeferredBorrow(ValueAt value, Span span, std::size_t scope) {
-  if (!carriesBorrow(value.type)) return;
+  // A tracked reference elsewhere in an aggregate does not prove that its
+  // raw addresses, string views or slices will remain valid until cleanup.
+  std::set<Type *> seen;
+  auto untracked = [&](auto &&self, Type *type) -> bool {
+    if (!seen.insert(type).second) return false;
+    auto component = [&](Type *part) { return self(self, part); };
+    switch (type->kind) {
+    case Kind::Pointer:
+    case Kind::View:
+    case Kind::Slice:
+      return true;
+    case Kind::Optional:
+    case Kind::Result:
+    case Kind::Array:
+    case Kind::Tuple:
+    case Kind::Box:
+      return std::ranges::any_of(type->parts, component);
+    case Kind::Class:
+      p.ensureSized(type, span);
+      return std::ranges::any_of(type->fields, [&](const auto &field) { return component(field.type); });
+    case Kind::Enum:
+      p.ensureSized(type, span);
+      return std::ranges::any_of(type->variants, [&](const auto &variant) {
+        return std::ranges::any_of(variant.fields, component);
+      });
+    case Kind::Closure:
+      return std::ranges::any_of(type->captures, [&](const auto &capture) {
+        return capture.reference || component(capture.type);
+      });
+    default:
+      return false;
+    }
+  };
+  if (untracked(untracked, value.type))
+    fail(span, "deferred calls cannot save pointers, views or other untracked borrows", "E230");
+  if (!p.hasReference(value.type)) return;
   rejectTemporaryBorrow(value, span);
-  if (!p.hasReference(value.type))
-    fail(span, "deferred calls require an owned value or a tracked safe reference", "E230");
   if (!value.hasBorrowPayload()) return;
   auto expired = [&](int root) { return root < 0 || locals[root].scope > scope; };
   if (value.origin.raw || expired(value.origin.root) ||

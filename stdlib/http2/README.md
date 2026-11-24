@@ -12,7 +12,7 @@ independent of application protocols.
 `Connection.open(Role.Client, Settings())` or `Role.Server` configures
 an HTTP/2 session. The caller passes its own `io.Reader`/Writer to `receive`
 and `flush` or supplies bytes via `ingest`. The caller can use
-`openTls(role, &transport, settings)` with a `tls.TlsStream`; it checks that
+`openTls(role, raw transport, settings)` with a `tls.TlsStream`; it checks that
 ALPN selected `h2`. Use `TlsConfig.requireProtocol` and offer only `h2` for
 a dedicated HTTP/2 endpoint. Opening the low-level connection on an
 unencrypted stream is explicit prior knowledge. TLS and cleartext never

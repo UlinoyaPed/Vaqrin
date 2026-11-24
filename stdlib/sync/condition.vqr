@@ -30,7 +30,7 @@ pub class CondVar {
     pub static func new() Self { CondVar() }
 
     pub const func wait<T>(guard: MutexGuard<T>) !MutexGuard<T> {
-        var address = &sequence;
+        var address = raw sequence;
         var version = __vqr_atomic_load(address, atomic.Order.Relaxed);
         var awaitSignal = [address, version]() void => { __vqr_sync_wait(address, version); };
         unsafe { MutexGuard<T>.unlockWhile(move(guard), awaitSignal) }
@@ -42,7 +42,7 @@ pub class CondVar {
 
     pub const func waitUntilDeadline<T>(guard: MutexGuard<T>, deadline: time.Deadline) !(MutexGuard<T>, bool) {
         if deadline.expired()! { return (move(guard), true); }
-        var address = &sequence;
+        var address = raw sequence;
         var version = __vqr_atomic_load(address, atomic.Order.Relaxed);
         var timedOut = false;
         var awaitSignal = [address, version, deadline, &timedOut]() void => {
@@ -55,14 +55,14 @@ pub class CondVar {
     pub const func notifyOne() void { notify(1); }
     pub const func notifyAll() void { notify(0x7fffffff); }
     const func notify(count: u32) void {
-        var address = unsafe { constCast<*u32>(&sequence) };
+        var address = unsafe { constCast<*u32>(raw sequence) };
         var previous = __vqr_atomic_add(address, 1u32, atomic.Order.Relaxed);
         __vqr_sync_wake(address, count);
     }
 }
 
 pub func waitUntil<T, F>(condition: *const CondVar, guard: MutexGuard<T>, pred: F) !MutexGuard<T> {
-    for !pred(guard.get()) { guard = condition.wait<T>(move(guard))!; }
+    while !pred(guard.get()) { guard = condition.wait<T>(move(guard))!; }
     move(guard)
 }
 
@@ -85,6 +85,6 @@ pub class Once {
 
     pub const func isDone() bool {
         var initialized = cell.get();
-        core.isSome<*const bool>(&initialized)
+        core.isSome<*const bool>(raw initialized)
     }
 }

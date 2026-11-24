@@ -3,7 +3,7 @@ import (core)
 
 pub func reverse<T: Movable>(values: []T) void {
     for i in usize(0)..(values.len() / 2) {
-        core.swap<T>(&values[i], &values[values.len() - i - 1]);
+        core.swap<T>(raw values[i], raw values[values.len() - i - 1]);
     }
 }
 
@@ -15,18 +15,18 @@ pub func rotate<T: Movable>(values: []T, middle: usize) void {
 
 func siftDown<T: Movable, F>(values: []T, start: usize, end: usize, less: *F) void {
     var root = start;
-    for root < end / 2 {
+    while root < end / 2 {
         var child = root * 2 + 1;
-        if child + 1 < end && (*less)(&values[child], &values[child + 1]) { child++; }
-        if !(*less)(&values[root], &values[child]) { return; }
-        core.swap<T>(&values[root], &values[child]);
+        if child + 1 < end && (*less)(raw values[child], raw values[child + 1]) { child++; }
+        if !(*less)(raw values[root], raw values[child]) { return; }
+        core.swap<T>(raw values[root], raw values[child]);
         root = child;
     }
 }
 
 func buildHeap<T: Movable, F>(values: []T, less: *F) void {
     var i = values.len() / 2;
-    for i > 0 {
+    while i > 0 {
         i--;
         siftDown<T, F>(values, i, values.len(), less);
     }
@@ -34,24 +34,24 @@ func buildHeap<T: Movable, F>(values: []T, less: *F) void {
 
 func drainHeap<T: Movable, F>(values: []T, less: *F) void {
     var end = values.len();
-    for end > 1 {
+    while end > 1 {
         end--;
-        core.swap<T>(&values[0], &values[end]);
+        core.swap<T>(raw values[0], raw values[end]);
         siftDown<T, F>(values, 0, end, less);
     }
 }
 
 pub func heapify<T: Movable, F: Movable>(values: []T, less: F) void {
-    buildHeap<T, F>(values, &less);
+    buildHeap<T, F>(values, raw less);
 }
 
 pub func pushHeap<T: Movable, F: Movable>(values: []T, less: F) void {
     if values.len() == 0 { return; }
     var child = values.len() - 1;
-    for child > 0 {
+    while child > 0 {
         var parent = (child - 1) / 2;
-        if !less(&values[parent], &values[child]) { return; }
-        core.swap<T>(&values[parent], &values[child]);
+        if !less(raw values[parent], raw values[child]) { return; }
+        core.swap<T>(raw values[parent], raw values[child]);
         child = parent;
     }
 }
@@ -59,17 +59,17 @@ pub func pushHeap<T: Movable, F: Movable>(values: []T, less: F) void {
 pub func popHeap<T: Movable, F: Movable>(values: []T, less: F) void {
     if values.len() < 2 { return; }
     var last = values.len() - 1;
-    core.swap<T>(&values[0], &values[last]);
-    siftDown<T, F>(values, 0, last, &less);
+    core.swap<T>(raw values[0], raw values[last]);
+    siftDown<T, F>(values, 0, last, raw less);
 }
 
 pub func sortHeap<T: Movable, F: Movable>(values: []T, less: F) void {
-    drainHeap<T, F>(values, &less);
+    drainHeap<T, F>(values, raw less);
 }
 
 pub func sortBy<T: Movable, F: Movable>(values: []T, less: F) void {
-    buildHeap<T, F>(values, &less);
-    drainHeap<T, F>(values, &less);
+    buildHeap<T, F>(values, raw less);
+    drainHeap<T, F>(values, raw less);
 }
 
 pub func sort<T: Movable>(values: []T) void {
@@ -81,9 +81,9 @@ pub func sort<T: Movable>(values: []T) void {
 // complementary lower/upper bounds to keep equal elements in input order.
 func mergeStable<T: Movable, F>(values: []T, middle: usize, less: *F) void {
     if middle == 0 || middle == values.len() { return; }
-    if !(*less)(&values[middle], &values[middle - 1]) { return; }
+    if !(*less)(raw values[middle], raw values[middle - 1]) { return; }
     if values.len() == 2 {
-        core.swap<T>(&values[0], &values[1]);
+        core.swap<T>(raw values[0], raw values[1]);
         return;
     }
     var left: usize;
@@ -92,9 +92,9 @@ func mergeStable<T: Movable, F>(values: []T, middle: usize, less: *F) void {
         left = middle / 2;
         var lo = middle;
         var hi = values.len();
-        for lo < hi {
+        while lo < hi {
             var mid = lo + (hi - lo) / 2;
-            if (*less)(&values[mid], &values[left]) { lo = mid + 1; }
+            if (*less)(raw values[mid], raw values[left]) { lo = mid + 1; }
             else { hi = mid; }
         }
         right = lo;
@@ -102,9 +102,9 @@ func mergeStable<T: Movable, F>(values: []T, middle: usize, less: *F) void {
         right = middle + (values.len() - middle) / 2;
         var lo: usize = 0;
         var hi = middle;
-        for lo < hi {
+        while lo < hi {
             var mid = lo + (hi - lo) / 2;
-            if (*less)(&values[right], &values[mid]) { hi = mid; }
+            if (*less)(raw values[right], raw values[mid]) { hi = mid; }
             else { lo = mid + 1; }
         }
         left = lo;
@@ -124,7 +124,7 @@ func sortStableRange<T: Movable, F>(values: []T, less: *F) void {
 }
 
 pub func stableSortBy<T: Movable, F: Movable>(values: []T, less: F) void {
-    sortStableRange<T, F>(values, &less);
+    sortStableRange<T, F>(values, raw less);
 }
 
 pub func stableSort<T: Movable>(values: []T) void {
@@ -134,7 +134,7 @@ pub func stableSort<T: Movable>(values: []T) void {
 
 pub func isHeapUntil<T, F: Movable>(values: []const T, less: F) usize {
     for i in usize(1)..values.len() {
-        if less(&values[(i - 1) / 2], &values[i]) { return i; }
+        if less(raw values[(i - 1) / 2], raw values[i]) { return i; }
     }
     values.len()
 }
@@ -145,7 +145,7 @@ pub func isHeap<T, F: Movable>(values: []const T, less: F) bool {
 
 pub func isSortedUntil<T, F: Movable>(values: []const T, less: F) usize {
     for i in usize(1)..values.len() {
-        if less(&values[i], &values[i - 1]) { return i; }
+        if less(raw values[i], raw values[i - 1]) { return i; }
     }
     values.len()
 }

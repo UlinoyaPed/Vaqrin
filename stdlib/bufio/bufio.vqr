@@ -28,7 +28,7 @@ pub class BufferedReader {
     comptime if __vqr_host_supports_io() {
         func readSource(dst: []u8) !usize {
             switch ownedSource {
-                some(ref mut reader) => { return io.read(&reader, dst); },
+                some(ref mut reader) => { return io.read(reader.toRaw(), dst); },
                 null => {},
             }
             io.read(source.unwrap(), dst)
@@ -49,7 +49,7 @@ pub class BufferedReader {
         var buffer = data.asSlice();
         if position != 0 {
             var unread = filled - position;
-            if unread != 0 { unsafe { __vqr_move_bytes(&buffer[0], &buffer[position], unread); } }
+            if unread != 0 { unsafe { __vqr_move_bytes(raw buffer[0], raw buffer[position], unread); } }
             filled = unread;
             position = 0;
         }
@@ -66,7 +66,7 @@ pub class BufferedReader {
         var count = if available < dst.len() { available } else { dst.len() };
         if count == 0 { lastByte = null; return 0; }
         var bytes = data.asConstSlice();
-        unsafe { __vqr_move_bytes(&dst[0], &bytes[position], count); }
+        unsafe { __vqr_move_bytes(raw dst[0], raw bytes[position], count); }
         position += count;
         lastByte = some(dst[count - 1]);
         count
@@ -90,7 +90,7 @@ pub class BufferedReader {
     pub func peek(count: usize) ![]const u8 {
         if !pending.isEmpty() { return BufferError.PendingRead; }
         if count > capacity { return BufferError.BufferFull; }
-        for filled - position < count && !eof {
+        while filled - position < count && !eof {
             var before = filled - position;
             fill()!;
             if filled - position == before { break; }
@@ -101,7 +101,7 @@ pub class BufferedReader {
     pub func discard(count: usize) !usize {
         if !pending.isEmpty() { return BufferError.PendingRead; }
         var skipped: usize = 0;
-        for skipped < count {
+        while skipped < count {
             if position == filled { fill()!; }
             var available = filled - position;
             if available == 0 { break; }
@@ -121,15 +121,15 @@ pub class BufferedReader {
             if position == filled { fill()!; }
             if position == filled {
                 if pending.isEmpty() { return null; }
-                return some(core.replace<coll.Vec<u8>>(&pending, coll.Vec<u8>()));
+                return some(core.replace<coll.Vec<u8>>(raw pending, coll.Vec<u8>()));
             }
             var buffer = data.asConstSlice();
-            for position < filled {
+            while position < filled {
                 var byte = buffer[position];
                 if byte == delimiter {
                     position++;
                     lastByte = some(byte);
-                    return some(core.replace<coll.Vec<u8>>(&pending, coll.Vec<u8>()));
+                    return some(core.replace<coll.Vec<u8>>(raw pending, coll.Vec<u8>()));
                 }
                 if pending.len() == maxBytes {
                     pending.clear();
@@ -190,14 +190,14 @@ pub class BufferedWriter {
         var pending = data.len() - committed;
         var bytes = data.asSlice();
         if pending != 0 {
-            unsafe { __vqr_move_bytes(&bytes[0], &bytes[committed], pending); }
+            unsafe { __vqr_move_bytes(raw bytes[0], raw bytes[committed], pending); }
         }
         data.truncate(pending);
     }
     pub func write(src: []const u8) !usize {
         if finished { return io.IoError.Closed; }
         var total: usize = 0;
-        for total < src.len() {
+        while total < src.len() {
             if data.len() == capacity {
                 flush() catch (reason) {
                     if total != 0 { return total; }
@@ -221,7 +221,7 @@ pub class BufferedWriter {
     pub func writeString(value: str) !void {
         var offset: usize = 0;
         var bytes = value.asBytes();
-        for offset < bytes.len() {
+        while offset < bytes.len() {
             var count = write(bytes[offset..bytes.len()])!;
             if count == 0 { return io.IoError.NoProgress; }
             offset += count;
@@ -322,7 +322,7 @@ pub class Scanner {
         }
     }
     func finishToken(end: u64) ByteToken {
-        var bytes = core.replace<coll.Vec<u8>>(&pending, coll.Vec<u8>());
+        var bytes = core.replace<coll.Vec<u8>>(raw pending, coll.Vec<u8>());
         ByteToken(move(bytes), tokenStart, end)
     }
     pub func next() !?Token {

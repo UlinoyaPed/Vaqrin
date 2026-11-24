@@ -18,7 +18,7 @@ pub func compareConstantTime(a: []const u8, b: []const u8) bool {
     var mask: u8 = 0;
     unsafe {
         for i in usize(0)..a.len() {
-            mask |= volatileLoad(&a[i]) ^ volatileLoad(&b[i]);
+            mask |= volatileLoad(raw a[i]) ^ volatileLoad(raw b[i]);
         }
     }
     mask == 0
@@ -57,7 +57,7 @@ pub func findSubslice(data: []const u8, pattern: []const u8) ?usize {
 
 pub func contains(data: []const u8, pattern: []const u8) bool {
     var position = findSubslice(data, pattern);
-    core.isSome(&position)
+    core.isSome(raw position)
 }
 
 pub func startsWith(data: []const u8, prefix: []const u8) bool {
@@ -70,18 +70,18 @@ pub func endsWith(data: []const u8, suffix: []const u8) bool {
 
 func isIn(byte: u8, set: []const u8) bool {
     var found = find(set, byte);
-    core.isSome(&found)
+    core.isSome(raw found)
 }
 
 pub func trimStart(data: []const u8, cutset: []const u8) []const u8 {
     var start: usize = 0;
-    for start < data.len() && isIn(data[start], cutset) { start++; }
+    while start < data.len() && isIn(data[start], cutset) { start++; }
     data[start..data.len()]
 }
 
 pub func trimEnd(data: []const u8, cutset: []const u8) []const u8 {
     var end = data.len();
-    for end > 0 && isIn(data[end - 1], cutset) { end--; }
+    while end > 0 && isIn(data[end - 1], cutset) { end--; }
     data[0..end]
 }
 
@@ -140,7 +140,7 @@ pub class BytePattern {
         if pattern.len() != 0 { prefixes.push(0)!; }
         var matched: usize = 0;
         for index in usize(1)..pattern.len() {
-            for matched > 0 && pattern[index] != pattern[matched] { matched = prefixes[matched - 1]; }
+            while matched > 0 && pattern[index] != pattern[matched] { matched = prefixes[matched - 1]; }
             if pattern[index] == pattern[matched] { matched++; }
             prefixes.push(matched)!;
         }
@@ -151,7 +151,7 @@ pub class BytePattern {
         if needle.isEmpty() { return 0; }
         var matched: usize = 0;
         for index in usize(0)..haystack.len() {
-            for matched > 0 && haystack[index] != needle[matched] { matched = prefixes[matched - 1]; }
+            while matched > 0 && haystack[index] != needle[matched] { matched = prefixes[matched - 1]; }
             if haystack[index] == needle[matched] { matched++; }
             if matched == needle.len() { return index + 1 - matched; }
         }

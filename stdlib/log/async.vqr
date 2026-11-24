@@ -36,7 +36,7 @@ pub class AsyncHandler {
                 switch move(item) {
                     Delivery.Write(record) => {
                         if handler.enabled(record.contents.level()) {
-                            handler.handle(&record.contents) catch (reason) {
+                            handler.handle(raw record.contents) catch (reason) {
                                 if failure == null { failure = some(reason); }
                             };
                         }

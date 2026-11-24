@@ -57,7 +57,7 @@ pub class Utf16Decoder {
                 null => { first = some(byte); },
                 some(initial) => {
                     var a = u32(initial); var b = u32(byte);
-                    var unit = if (little) a | (b << 8) else (a << 8) | b;
+                    var unit = if little { a | (b << 8) } else { (a << 8) | b };
                     accept(unit)!;
                     first = null;
                 },
@@ -66,8 +66,8 @@ pub class Utf16Decoder {
     }
 
     pub func finish() !string {
-        if core.isSome<u8>(&first) { return EncodingError.InvalidLength; }
-        if core.isSome<u32>(&high) { return EncodingError.InvalidUtf16; }
+        if core.isSome<u8>(raw first) { return EncodingError.InvalidLength; }
+        if core.isSome<u32>(raw high) { return EncodingError.InvalidUtf16; }
         var text = text.fromBytes(output.asConstSlice())!;
         finished = true;
         move(text)
@@ -78,12 +78,12 @@ pub class Utf16Decoder {
             null => {
                 if 0xd800 <= unit && unit <= 0xdbff { high = some(unit); }
                 else if 0xdc00 <= unit && unit <= 0xdfff { return EncodingError.InvalidUtf16; }
-                else { appendUtf8(unit, &output)!; }
+                else { appendUtf8(unit, raw output)!; }
             },
             some(lead) => {
                 if unit < 0xdc00 || unit > 0xdfff { return EncodingError.InvalidUtf16; }
                 var scalar = 0x10000 + ((lead - 0xd800) << 10) + (unit - 0xdc00);
-                appendUtf8(scalar, &output)!;
+                appendUtf8(scalar, raw output)!;
                 high = null;
             },
         };

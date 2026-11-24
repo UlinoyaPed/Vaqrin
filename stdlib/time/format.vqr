@@ -14,7 +14,7 @@ func formatCalendar(date: ?Date, clock: ?TimeOfDay, offset: ?i64, pattern: str) 
     var source = pattern.asBytes();
     var begin = usize(0);
     var index = usize(0);
-    for index < source.len() {
+    while index < source.len() {
         if source[index] != 37 { index++; continue; }
         var literal = text.fromBytes(source[begin..index])!;
         output.append(literal)!;
@@ -23,21 +23,21 @@ func formatCalendar(date: ?Date, clock: ?TimeOfDay, offset: ?i64, pattern: str) 
         var directive = source[index];
         switch directive {
             37 => { output.append("%")!; },
-            89 => { appendNumber(&output, i64((date ?? { return TimeError.InvalidFormat; }).year()), 4)!; },
-            109 => { appendNumber(&output, i64((date ?? { return TimeError.InvalidFormat; }).month()), 2)!; },
-            100 => { appendNumber(&output, i64((date ?? { return TimeError.InvalidFormat; }).day()), 2)!; },
-            106 => { appendNumber(&output, i64((date ?? { return TimeError.InvalidFormat; }).dayOfYear()), 3)!; },
-            72 => { appendNumber(&output, i64((clock ?? { return TimeError.InvalidFormat; }).hour()), 2)!; },
-            77 => { appendNumber(&output, i64((clock ?? { return TimeError.InvalidFormat; }).minute()), 2)!; },
-            83 => { appendNumber(&output, i64((clock ?? { return TimeError.InvalidFormat; }).second()), 2)!; },
-            102 => { appendNumber(&output, i64((clock ?? { return TimeError.InvalidFormat; }).nanosecond()), 9)!; },
+            89 => { appendNumber(raw output, i64((date ?? { return TimeError.InvalidFormat; }).year()), 4)!; },
+            109 => { appendNumber(raw output, i64((date ?? { return TimeError.InvalidFormat; }).month()), 2)!; },
+            100 => { appendNumber(raw output, i64((date ?? { return TimeError.InvalidFormat; }).day()), 2)!; },
+            106 => { appendNumber(raw output, i64((date ?? { return TimeError.InvalidFormat; }).dayOfYear()), 3)!; },
+            72 => { appendNumber(raw output, i64((clock ?? { return TimeError.InvalidFormat; }).hour()), 2)!; },
+            77 => { appendNumber(raw output, i64((clock ?? { return TimeError.InvalidFormat; }).minute()), 2)!; },
+            83 => { appendNumber(raw output, i64((clock ?? { return TimeError.InvalidFormat; }).second()), 2)!; },
+            102 => { appendNumber(raw output, i64((clock ?? { return TimeError.InvalidFormat; }).nanosecond()), 9)!; },
             122 => {
                 var zone = offset ?? { return TimeError.InvalidFormat; };
                 output.append(if zone < 0 { "-" } else { "+" })!;
                 if zone < 0 { zone = -zone; }
-                appendNumber(&output, zone / 3600, 2)!;
-                appendNumber(&output, (zone / 60) % 60, 2)!;
-                if zone % 60 != 0 { appendNumber(&output, zone % 60, 2)!; }
+                appendNumber(raw output, zone / 3600, 2)!;
+                appendNumber(raw output, (zone / 60) % 60, 2)!;
+                if zone % 60 != 0 { appendNumber(raw output, zone % 60, 2)!; }
             },
             _ => { return TimeError.InvalidFormat; },
         }

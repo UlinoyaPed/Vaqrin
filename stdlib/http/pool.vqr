@@ -36,10 +36,10 @@ pub class AsyncPool {
 
     pub func request(address: str, method: Method, body: Body) !Response {
         var target = parseUrl(address)!;
-        var path = pathTarget(&target)!;
+        var path = pathTarget(raw target)!;
         var request = Request.new(method, path)!;
         request.setBody(move(body));
-        send(address, &request)
+        send(address, raw request)
     }
 
     pub func get(address: str) !Response { request(address, Method.GET, Body()) }
@@ -65,10 +65,10 @@ pub class AsyncPool {
         var target = parseUrl(address)!;
         var secure = sameName(target.scheme(), "https");
         if !secure && !sameName(target.scheme(), "http") { return HttpError.UnsupportedScheme; }
-        var host = httpHost(&target)!;
-        var authority = hostHeader(&target, host)!;
+        var host = httpHost(raw target)!;
+        var authority = hostHeader(raw target, host)!;
         var index = usize(0);
-        for index < entries.len() {
+        while index < entries.len() {
             var idle = entries.at(index);
             if idle.expires.expired()! {
                 var expired = entries.remove(index);
@@ -76,7 +76,7 @@ pub class AsyncPool {
             }
             if idle.secure == secure && sameName(idle.authority, authority) {
                 var taken = entries.remove(index).unwrap();
-                var connection = core.replace<AsyncConnection>(&taken.connection,
+                var connection = core.replace<AsyncConnection>(raw taken.connection,
                     AsyncConnection(null, null, "", client.limits));
                 return (secure, move(authority), move(connection));
             }

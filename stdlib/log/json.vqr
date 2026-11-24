@@ -7,7 +7,7 @@ func encodeAttributes(values: []const Attr, depth: usize) !json.JsonObject {
     if depth >= 128 { return json.JsonError.DepthLimit; }
     var attributes = json.JsonObject();
     for i in usize(0)..values.len() {
-        var attr = &values[i];
+        var attr = raw values[i];
         var encoded = switch attr.kind() {
             AttrKind.String => keyword(attr.asString().unwrap())!,
             AttrKind.Int => {
@@ -50,7 +50,7 @@ pub class JsonHandler {
             null => {},
         };
         var value = json.Value.Object(move(object));
-        var line = json.stringify(&value)!;
+        var line = json.stringify(raw value)!;
         var encoded = coll.Vec<u8>.withCapacity(line.byteLen() + 1)!;
         for byte in line.asBytes() { encoded.push(byte)!; }
         encoded.push(10)!;
@@ -63,7 +63,7 @@ pub class JsonHandler {
         writer.flush()
     }
     func drain() !void {
-        io.writeAll(writer, pending.asConstSlice(), &position)!;
+        io.writeAll(writer, pending.asConstSlice(), raw position)!;
         pending.clear();
         position = 0;
     }

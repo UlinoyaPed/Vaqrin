@@ -28,7 +28,7 @@ pub class AsyncTcpStream {
         AsyncTcpStream(move(socket))
     }
     pub static func intoTcp(value: Self) TcpStream {
-        core.replace<TcpStream>(&value.stream, TcpStream(Socket(-1)))
+        core.replace<TcpStream>(raw value.stream, TcpStream(Socket(-1)))
     }
     pub const func systemDescriptor() !i32 { stream.systemDescriptor() }
     pub const func localAddr() !SocketAddr { stream.localAddr() }
@@ -108,7 +108,7 @@ class PendingResolution {
         task.waitDescriptor(event, reactor.Interest.read(), deadline)!;
         checkWait(deadline)!;
         var reason: i32 = 0;
-        var result = unsafe { __vqr_net_resolve_finish(handle, &reason) };
+        var result = unsafe { __vqr_net_resolve_finish(handle, raw reason) };
         var addresses = ResolverResults(result);
         if reason == -1 { return NetError.NameResolution; }
         checkStatus(reason)!;
@@ -121,7 +121,7 @@ pub func resolveAddrAsync(host: str, port: u16, deadline: ?time.Deadline) !coll.
     checkWait(deadline)!;
     var name = cString(host)!;
     var reason: i32 = 0;
-    var raw = unsafe { __vqr_net_resolve_start(&name[0], &reason) };
+    var raw = unsafe { __vqr_net_resolve_start(raw name[0], raw reason) };
     checkStatus(reason)!;
     var request = PendingResolution(raw);
     request.wait(port, deadline)

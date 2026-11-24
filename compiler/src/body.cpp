@@ -118,6 +118,20 @@ void Body::checkAccess(ValueAt v, bool write, Span span) {
       checkRootAccess(alternative, v.origin, write, span);
 }
 
+bool Body::hasReceiverReservation(const ValueAt &v) const {
+  auto overlaps = [&](const Borrow &loan) {
+    int root = v.origin.root >= 0 ? v.origin.root : v.local;
+    return (root >= 0 && loan.overlaps(root, v.origin)) ||
+           (v.origin.alternatives && std::ranges::any_of(*v.origin.alternatives, [&](int alternative) {
+              return loan.overlaps(alternative, v.origin);
+            }));
+  };
+  for (const auto &scope : scopes)
+    for (int id : scope)
+      if (initialized[id] && locals[id].receiverReservation && overlaps(locals[id].origin)) return true;
+  return false;
+}
+
 void Body::checkRootAccess(int root, Borrow origin, bool write, Span span) {
   const auto scope = locals[root].scope;
   const bool inScope = scope < scopes.size() && std::ranges::find(scopes[scope], root) != scopes[scope].end();
@@ -126,6 +140,8 @@ void Body::checkRootAccess(int root, Borrow origin, bool write, Span span) {
     if (!inScope) fail(span, "reference would outlive its owner", "E230");
     fail(span, "borrowed owner is no longer initialized", "E230");
   }
+  if (locals[root].deferOuter >= 0)
+    deferredCaptureWrites[locals[root].deferOuter] |= write;
   for (const auto &scope : scopes)
     for (int id : scope) {
       const auto &loan = locals[id];
@@ -249,7 +265,7 @@ ValueAt Body::borrow(ValueAt v, Type *t, Span span, bool materialize) {
   if (!t->readOnly && !v.writable) fail(span, "cannot borrow a read-only object mutably", "E230");
   if (v.origin.root < 0) v.origin.root = v.local;
   if (v.origin.root >= 0 && locals[v.origin.root].refCapture && !locals[v.origin.root].reference &&
-      !unsafeDepth)
+      locals[v.origin.root].deferOuter < 0 && !unsafeDepth)
     fail(span, "safe reference cannot be derived from an untracked closure capture", "E230");
   v.origin.raw = false;
   checkAccess(v, !t->readOnly, span);
@@ -635,6 +651,105 @@ void Body::registerDefer(CallInst *call, Span span, DeferRegistration &registrat
   registration.completed = true;
 }
 
+void Body::holdDeferCapture(int id, bool write, Span span, std::size_t scope) {
+  const auto &source = locals[id];
+  const bool self = source.name == "self" && owner && source.type->kind == Kind::Pointer;
+  if (self && constructing && constructed.size() < owner->fields.size())
+    fail(span, "deferred cleanup cannot capture partially initialized self", "E230");
+  ValueAt value{source.type, nullptr, source.slot, source.writable, id, true, false, source.origin,
+                source.noBorrowPayload};
+  requireInit(value, span);
+  if (!self && !source.reference) validateDeferredBorrow(value, span, scope);
+  if (source.reference) {
+    value.origin.via = id;
+    value.origin.raw = false;
+  } else {
+    // Capture the storage, not the current value. Keep the storage locked
+    // until cleanup, in addition to any underlying loans the local owns.
+    value.origin = {id};
+  }
+  ValueAt loan{p.reference(source.type, !write), source.slot, nullptr, false, -1, false,
+               false, value.origin};
+  validateDeferredBorrow(loan, span, scope);
+  pinBorrow(loan, span, scope);
+}
+
+void Body::registerDeferBlock(const Ast &syntax, Span span, DeferRegistration &registration) {
+  std::set<std::string_view> seen;
+  std::vector<int> captures, constants;
+  std::vector<llvm::Type *> parameters;
+  for (auto scope = scopes.rbegin(); scope != scopes.rend(); ++scope)
+    for (auto id : *scope) {
+      const auto &local = locals[id];
+      if (local.name.starts_with(' ') || !seen.insert(local.name).second) continue;
+      if (local.constant)
+        constants.push_back(id);
+      else if (local.slot) {
+        captures.push_back(id);
+        parameters.push_back(local.slot->getType());
+      }
+    }
+  auto name = "vqr.defer." + std::to_string(p.lambdaCount++);
+  auto *function = Function::Create(FunctionType::get(p.voidTy->ir, parameters, false),
+                                    GlobalValue::InternalLinkage, name, *p.module);
+  function->setDoesNotThrow();
+  Body cleanup(p, file, function, p.voidTy, generics, false, owner);
+  cleanup.functionName = functionName + " (defer)";
+  cleanup.deferredCleanup = true;
+  cleanup.unsafeDepth = unsafeDepth;
+  for (auto id : constants) {
+    const auto &original = locals[id];
+    cleanup.bindConstant(original.name, original.type, original.constant, original.declaration);
+  }
+  for (unsigned i = 0; i < captures.size(); ++i) {
+    auto outer = captures[i];
+    const auto &original = locals[outer];
+    auto local = static_cast<int>(cleanup.locals.size());
+    cleanup.locals.push_back({original.name, original.type, function->getArg(i), nullptr, nullptr, true,
+                              0, original.writable});
+    auto &captured = cleanup.locals.back();
+    captured.reference = original.reference;
+    captured.origin = {local};
+    captured.declaration = original.declaration;
+    captured.noBorrowPayload = original.noBorrowPayload;
+    captured.deferOuter = outer;
+    cleanup.initialized.push_back(initialized[outer]);
+    cleanup.scopes.front().push_back(local);
+  }
+  cleanup.statement(syntax);
+  if (cleanup.live()) cleanup.emitReturn(cleanup.voidValue(), syntax->span);
+
+  // Lexical names are resolved normally during lowering, including shadowing
+  // and implicit methods. Only actual uses reserve a loan or pass an address.
+  std::vector<Value *> arguments;
+  std::vector<unsigned> used;
+  parameters.clear();
+  for (unsigned i = 0; i < captures.size(); ++i) {
+    auto id = captures[i];
+    auto access = cleanup.deferredCaptureWrites.find(id);
+    if (access == cleanup.deferredCaptureWrites.end() && function->getArg(i)->use_empty()) continue;
+    auto *address = locals[id].slot;
+    holdDeferCapture(id, access != cleanup.deferredCaptureWrites.end() && access->second,
+                     span, registration.scope);
+    arguments.push_back(address);
+    parameters.push_back(address->getType());
+    used.push_back(i);
+  }
+  if (used.size() != captures.size()) {
+    auto *compact = Function::Create(FunctionType::get(p.voidTy->ir, parameters, false),
+                                     GlobalValue::InternalLinkage, name + ".captured", *p.module);
+    compact->setDoesNotThrow();
+    for (unsigned i = 0; i < used.size(); ++i)
+      function->getArg(used[i])->replaceAllUsesWith(compact->getArg(i));
+    compact->splice(compact->begin(), function);
+    function->eraseFromParent();
+    function = compact;
+  }
+  auto *call = ir.CreateCall(function, arguments);
+  call->setAttributes(function->getAttributes());
+  registerDefer(call, span, registration);
+}
+
 void Body::validateDeferredBorrow(ValueAt value, Span span, std::size_t scope) {
   // A tracked reference elsewhere in an aggregate does not prove that its
   // raw addresses, string views or slices will remain valid until cleanup.
@@ -680,10 +795,14 @@ void Body::validateDeferredBorrow(ValueAt value, Span span, std::size_t scope) {
     fail(span, "deferred borrow must have an owner that outlives the deferred call", "E230");
 }
 
-void Body::retainDeferredLoan(int i, std::size_t scope) {
+void Body::retainDeferredLocal(int i, std::size_t scope) {
+  // A fully evaluated owning capture transfers cleanup responsibility to
+  // the destination scope. Leave it in the old scope on registration failure.
+  registerDrop(i, false);
   std::erase(scopes[locals[i].scope], i);
   locals[i].scope = scope;
   scopes[scope].push_back(i);
+  registerDrop(i, true);
 }
 
 void Body::clean(std::size_t depth) {
@@ -1345,7 +1464,12 @@ void Body::statementContents(const Ast &n, std::size_t bindingScope) {
   if (n->kind == NodeKind::Defer) {
     if (evaluating) fail(n->span, "defer is unavailable at compile time", "E220");
     DeferRegistration registration{bindingScope};
-    auto value = call(n->children.front(), nullptr, &registration);
+    const auto &action = n->children.front();
+    if (action->kind == NodeKind::Block) {
+      registerDeferBlock(action, n->span, registration);
+      return;
+    }
+    auto value = call(action, nullptr, &registration);
     if (!registration.completed && value.type != p.neverTy)
       fail(n->span, "defer currently requires an ordinary void function or method call", "E290");
     return;
@@ -1356,27 +1480,23 @@ void Body::statementContents(const Ast &n, std::size_t bindingScope) {
     ValueAt v{t};
     if (!n->children.empty()) {
       const auto &init = n->children[0];
-      bool alias = n->names.size() == 1 && n->names[0].starts_with('&');
-      if ((t && t->kind == Kind::Reference) || alias) {
+      if (t && t->kind == Kind::Reference) {
         auto id = init->kind == NodeKind::Name ? findLocal(init->text) : -1;
         if (id >= 0 && locals[id].reference)
           v = referenceName(id, init->span);
-        else if (t && (init->kind == NodeKind::If || init->kind == NodeKind::Switch))
+        else if (init->kind == NodeKind::If || init->kind == NodeKind::Switch)
           v = expression(init, t);
         else
           v = expression(init);
         if (v.type == p.neverTy) return;
-        if (alias) {
-          if (v.type->kind != Kind::Pointer && v.type->kind != Kind::Box && v.type->kind != Kind::Reference)
-            fail(init->span, "reference binding requires a pointer, reference or Box", "E230");
-          t = p.reference(v.type->parts[0], v.type->kind == Kind::Box ? !v.writable : v.type->readOnly);
-        }
         v = borrow(v, t, init->span, false);
       } else {
         v = expression(init, t);
       }
       if (v.type == p.neverTy) return;
     }
+    if (deferredCleanup && v.type->kind == Kind::Result)
+      fail(n->span, "deferred cleanup must handle the error before binding the success value", "E231");
     p.ensureSized(v.type, n->span);
     if (n->names.size() == 1) {
       if (n->names[0] == "_") {
@@ -1402,20 +1522,6 @@ void Body::statementContents(const Ast &n, std::size_t bindingScope) {
       if (n->names[i] == "_") {
         if (!v.borrowed && p.drops(element.type)) drop(element.type, asPointer(element, n->span).value);
       } else {
-        if (n->names[i].starts_with('&')) {
-          auto *type = element.type;
-          if (type->kind != Kind::Pointer && type->kind != Kind::Reference && type->kind != Kind::Box)
-            fail(n->span, "reference binding requires a pointer, reference or Box", "E230");
-          if (type->kind == Kind::Box && !element.address) {
-            auto owner = bind(" <destructured box " + std::to_string(locals.size()) + ">", type, true,
-                              read(element, n->span), n->span, bindingScope);
-            element = {type, nullptr, locals[owner].slot, true, owner, true};
-          }
-          element = borrow(
-              element,
-              p.reference(type->parts[0], type->kind == Kind::Box ? !element.writable : type->readOnly),
-              n->span, false);
-        }
         rejectTemporaryBorrow(element, n->span);
         auto id = bind(n->names[i], element.type, writable, read(element, n->span), n->span, bindingScope);
         indexLocal(id, n->bindingSpans[i]);
@@ -1952,6 +2058,7 @@ ValueAt Body::expression(const Ast &n, Type *expected) {
     v = loop(n);
     break;
   case NodeKind::Return: {
+    if (deferredCleanup) fail(n->span, "deferred cleanup cannot return from the enclosing function", "E231");
     if (!result) fail(n->span, "return is unavailable in this constant initializer");
     auto out = n->children.empty() ? voidValue() : expression(n->children[0], result);
     if (live()) emitReturn(out, n->span);
@@ -1959,7 +2066,9 @@ ValueAt Body::expression(const Ast &n, Type *expected) {
   }
   case NodeKind::Break:
   case NodeKind::Continue: {
-    if (loops.empty()) fail(n->span, "loop control used outside a loop");
+    if (loops.empty())
+      fail(n->span, deferredCleanup ? "deferred cleanup cannot jump to an enclosing loop"
+                                    : "loop control used outside a loop");
     auto target = std::ranges::find_if(loops.rbegin(), loops.rend(),
                                       [&](const Loop &loop) { return n->text.empty() || loop.label == n->text; });
     if (target == loops.rend()) fail(n->span, "unknown loop label '" + n->text + "'", "E110");

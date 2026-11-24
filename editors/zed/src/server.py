@@ -152,7 +152,7 @@ def parameter_bindings(code):
 
 
 def unqualified_type(type_name):
-    return re.sub(r"^(?:(?:[!?*&^]\s*|(?:ref|const|in|mut|move)\s+))+", "", type_name).strip()
+    return re.sub(r"^(?:(?:[!?*^]\s*|(?:ref|const|in|mut|move)\s+))+", "", type_name).strip()
 
 
 def call_tokens(code, start=0):

@@ -29,7 +29,7 @@ class IoV2Acceptance(CompilerCase):
         if sys.platform == "linux":
             full_device = f'''
                     var disk = fs.copy("source", "/dev/full");
-                    io.println(result.errorOf(&disk).unwrap() == io.systemError({errno.ENOSPC}))!;
+                    io.println(result.errorOf(raw disk).unwrap() == io.systemError({errno.ENOSPC}))!;
             '''
         try:
             self.hosted(f"""
@@ -38,7 +38,7 @@ class IoV2Acceptance(CompilerCase):
                     var aliases = [3]str{{"source", "hard", "soft"}};
                     for alias in aliases[:] {{
                         var copy = fs.copy("source", alias);
-                        io.println(result.errorOf(&copy).unwrap() == fs.FsError.SameFile)!;
+                        io.println(result.errorOf(raw copy).unwrap() == fs.FsError.SameFile)!;
                         io.println(fs.sameFile("source", alias)!)!;
                     }}
                     io.println(fs.copy("source", "target")! == 14)!;
@@ -47,11 +47,11 @@ class IoV2Acceptance(CompilerCase):
                     io.println(!fs.tryExists("missing-link")!)!;
                     io.println(!fs.tryExists("source/absent")!)!;
                     var loop = fs.tryExists("loop-a");
-                    io.println(result.errorOf(&loop).unwrap() == io.systemError({errno.ELOOP}))!;
+                    io.println(result.errorOf(raw loop).unwrap() == io.systemError({errno.ELOOP}))!;
                     var denied = fs.tryExists("denied/file");
-                    io.println(result.errorOf(&denied).unwrap() == io.systemError({errno.EACCES}))!;
+                    io.println(result.errorOf(raw denied).unwrap() == io.systemError({errno.EACCES}))!;
                     var permission = fs.copy("source", "denied/rejected");
-                    io.println(result.errorOf(&permission).unwrap() == io.systemError({errno.EACCES}))!;
+                    io.println(result.errorOf(raw permission).unwrap() == io.systemError({errno.EACCES}))!;
                     {full_device}
                 }}
             """, "true\n" * (15 if full_device else 14))
@@ -95,44 +95,44 @@ class IoV2Acceptance(CompilerCase):
             func main() !void {
                 var writer = SplitWriter{sink: io.MemoryWriter(), calls: 0};
                 var body = http.Body.fromBytes("payload".asBytes())!;
-                var interrupted = body.writeTo(&writer);
-                io.println(result.errorOf(&interrupted).unwrap() == io.IoError.WouldBlock)!;
-                io.println(body.len() == 5 && body.writeTo(&writer)! == 5 && body.isComplete())!;
+                var interrupted = body.writeTo(raw writer);
+                io.println(result.errorOf(raw interrupted).unwrap() == io.IoError.WouldBlock)!;
+                io.println(body.len() == 5 && body.writeTo(raw writer)! == 5 && body.isComplete())!;
                 io.println(bytes.equal(writer.sink.asSlice(), "payload".asBytes()))!;
 
                 var input = SplitReader{source: io.MemoryReader(" payload rest".asBytes()), calls: 0};
-                var scanner = bufio.Scanner(&input)!;
+                var scanner = bufio.Scanner(raw input)!;
                 var partial = scanner.next();
-                io.println(result.errorOf(&partial).unwrap() == io.IoError.WouldBlock)!;
+                io.println(result.errorOf(raw partial).unwrap() == io.IoError.WouldBlock)!;
                 var token = scanner.next()!.unwrap();
                 io.println(token.text() == "payload" && token.start() == 1 && token.end() == 8)!;
                 io.println(scanner.next()!.unwrap().text() == "rest")!;
 
                 var lines = SplitReader{source: io.MemoryReader("payload\nsecond".asBytes()), calls: 0};
-                var buffered = bufio.BufferedReader(&lines, 4)!;
+                var buffered = bufio.BufferedReader(raw lines, 4)!;
                 var interruptedLine = buffered.readLine(7);
-                io.println(result.errorOf(&interruptedLine).unwrap() == io.IoError.WouldBlock)!;
+                io.println(result.errorOf(raw interruptedLine).unwrap() == io.IoError.WouldBlock)!;
                 io.println(buffered.readLine(7)!.unwrap() == "payload")!;
                 io.println(buffered.readLine(7)!.unwrap() == "second")!;
 
                 var first = io.MemoryWriter();
                 var second = SplitWriter{sink: io.MemoryWriter(), calls: 0};
-                var targets = [2]*io.Writer{&first, &second};
+                var targets = [2]*io.Writer{raw first, raw second};
                 var fanout = io.MultiWriter(targets[:]);
                 var payload = "payload".asBytes();
                 var interruptedWrite = fanout.write(payload);
-                io.println(result.errorOf(&interruptedWrite).unwrap() == io.IoError.WouldBlock)!;
+                io.println(result.errorOf(raw interruptedWrite).unwrap() == io.IoError.WouldBlock)!;
                 var wrong = fanout.write("changed".asBytes());
-                io.println(result.errorOf(&wrong).unwrap() == io.IoError.InvalidArgument)!;
+                io.println(result.errorOf(raw wrong).unwrap() == io.IoError.InvalidArgument)!;
                 io.println(fanout.write(payload)! == 7)!;
                 io.println(bytes.equal(first.asSlice(), payload) && bytes.equal(second.sink.asSlice(), payload))!;
 
                 var teeInput = io.MemoryReader(payload);
                 var mirror = SplitWriter{sink: io.MemoryWriter(), calls: 0};
-                var tee = io.tee(&teeInput, &mirror);
+                var tee = io.tee(raw teeInput, raw mirror);
                 var dst = [7]u8{0, 0, 0, 0, 0, 0, 0};
                 var interruptedRead = tee.read(dst[:]);
-                io.println(result.errorOf(&interruptedRead).unwrap() == io.IoError.WouldBlock)!;
+                io.println(result.errorOf(raw interruptedRead).unwrap() == io.IoError.WouldBlock)!;
                 io.println(tee.read(dst[0..1])! == 1 && tee.read(dst[1..7])! == 6)!;
                 io.println(bytes.equal(dst[:], payload) && bytes.equal(mirror.sink.asSlice(), payload))!;
             }
@@ -196,34 +196,34 @@ class IoV2Acceptance(CompilerCase):
                 var writer = FaultyWriter{sink: io.MemoryWriter(), calls: 0};
                 var data = "payload".asBytes();
                 var sent: usize = 0;
-                var first = io.writeAll(&writer, data, &sent);
-                io.println(sent == 2 && result.errorOf(&first).unwrap() == io.IoError.WouldBlock)!;
-                var second = io.writeAll(&writer, data, &sent);
-                io.println(sent == 2 && result.errorOf(&second).unwrap() == io.IoError.Interrupted)!;
-                var cancelled = io.writeAll(&writer, data, &sent);
-                io.println(sent == 2 && result.errorOf(&cancelled).unwrap() == io.IoError.Cancelled)!;
-                var timeout = io.writeAllProgress(&writer, data[sent..data.len()])!;
+                var first = io.writeAll(raw writer, data, raw sent);
+                io.println(sent == 2 && result.errorOf(raw first).unwrap() == io.IoError.WouldBlock)!;
+                var second = io.writeAll(raw writer, data, raw sent);
+                io.println(sent == 2 && result.errorOf(raw second).unwrap() == io.IoError.Interrupted)!;
+                var cancelled = io.writeAll(raw writer, data, raw sent);
+                io.println(sent == 2 && result.errorOf(raw cancelled).unwrap() == io.IoError.Cancelled)!;
+                var timeout = io.writeAllProgress(raw writer, data[sent..data.len()])!;
                 io.println(timeout.processed == 0 && timeout.status == io.ReadStatus.DeadlineExceeded)!;
-                var disk = io.writeAll(&writer, data, &sent);
-                io.println(sent == 2 && result.errorOf(&disk).unwrap() == io.systemError(28))!;
-                io.writeAll(&writer, data, &sent)!;
+                var disk = io.writeAll(raw writer, data, raw sent);
+                io.println(sent == 2 && result.errorOf(raw disk).unwrap() == io.systemError(28))!;
+                io.writeAll(raw writer, data, raw sent)!;
                 io.println(sent == 7 && bytes.equal(writer.sink.asSlice(), data))!;
 
                 var reader = FaultyReader{source: io.MemoryReader(data), calls: 0};
                 var dst = [7]u8{0, 0, 0, 0, 0, 0, 0};
-                var run = io.readExactProgress(&reader, dst[:])!;
+                var run = io.readExactProgress(raw reader, dst[:])!;
                 io.println(run.processed == 2 && run.status == io.ReadStatus.Cancelled)!;
                 var received = run.processed;
-                io.readExact(&reader, dst[:], &received)!;
+                io.readExact(raw reader, dst[:], raw received)!;
                 io.println(received == 7 && bytes.equal(dst[:], data))!;
-                var eof = io.readExactProgress(&reader, dst[:])!;
+                var eof = io.readExactProgress(raw reader, dst[:])!;
                 io.println(eof.processed == 0 && eof.status == io.ReadStatus.Eof)!;
 
                 var atLeast = FaultyReader{source: io.MemoryReader(data), calls: 0};
                 var offset: usize = 0;
-                var partial = io.readAtLeast(&atLeast, dst[:], 4, &offset);
-                io.println(offset == 2 && result.errorOf(&partial).unwrap() == io.IoError.Cancelled)!;
-                io.println(io.readAtLeast(&atLeast, dst[:], 4, &offset)! == 7 && offset == 7)!;
+                var partial = io.readAtLeast(raw atLeast, dst[:], 4, raw offset);
+                io.println(offset == 2 && result.errorOf(raw partial).unwrap() == io.IoError.Cancelled)!;
+                io.println(io.readAtLeast(raw atLeast, dst[:], 4, raw offset)! == 7 && offset == 7)!;
             }
         """, "true\n" * 11)
 
@@ -250,10 +250,10 @@ class IoV2Acceptance(CompilerCase):
                 var writer = Sink{output: io.MemoryWriter(), attempts: 0};
                 var scratch = [5]u8{0, 0, 0, 0, 0};
                 var cursor = io.CopyCursor();
-                var stopped = cursor.transfer(&reader, &writer, 9, scratch[:]);
-                io.println(result.errorOf(&stopped).unwrap() == io.IoError.Cancelled)!;
+                var stopped = cursor.transfer(raw reader, raw writer, 9, scratch[:]);
+                io.println(result.errorOf(raw stopped).unwrap() == io.IoError.Cancelled)!;
                 io.println(cursor.copied() == 2 && cursor.pending() == 3 && reader.remaining() == 4)!;
-                var total = cursor.transfer(&reader, &writer, 9, scratch[:])!;
+                var total = cursor.transfer(raw reader, raw writer, 9, scratch[:])!;
                 io.println(total == 9 && bytes.equal(writer.output.asSlice(), data))!;
             }
         """, "true\n" * 3)
@@ -281,20 +281,20 @@ class IoV2Acceptance(CompilerCase):
 
             func main() !void {
                 var target = Sink{memory: io.MemoryWriter(), writes: 0, flushes: 0};
-                var writer = bufio.BufferedWriter(&target, 8)!;
-                io.writeString(&writer, "payload")!;
+                var writer = bufio.BufferedWriter(raw target, 8)!;
+                io.writeString(raw writer, "payload")!;
                 var buffered = writer.finish();
-                io.println(writer.buffered() == 5 && result.errorOf(&buffered).unwrap() == io.IoError.WouldBlock)!;
+                io.println(writer.buffered() == 5 && result.errorOf(raw buffered).unwrap() == io.IoError.WouldBlock)!;
                 var failed = writer.finish();
-                io.println(writer.buffered() == 0 && result.errorOf(&failed).unwrap() == io.IoError.WriteFailed)!;
+                io.println(writer.buffered() == 0 && result.errorOf(raw failed).unwrap() == io.IoError.WriteFailed)!;
                 writer.finish()!;
                 writer.finish()!;
                 io.println(target.flushes == 2 && bytes.equal(target.memory.asSlice(), "payload".asBytes()))!;
                 var closed = writer.write("!".asBytes());
-                io.println(result.errorOf(&closed).unwrap() == io.IoError.Closed)!;
+                io.println(result.errorOf(raw closed).unwrap() == io.IoError.Closed)!;
                 var replacement = io.MemoryWriter();
-                writer.reset(&replacement)!;
-                io.writeString(&writer, "next")!;
+                writer.reset(raw replacement)!;
+                io.writeString(raw writer, "next")!;
                 writer.finish()!;
                 io.println(bytes.equal(replacement.asSlice(), "next".asBytes()))!;
             }
@@ -318,20 +318,20 @@ class IoV2Acceptance(CompilerCase):
                     io.println(event.watch.value == old.value && event.readable)!;
                     r.remove(old)!;
                     var missing = r.update(old, reactor.Interest.read());
-                    io.println(result.errorOf(&missing).unwrap() == reactor.ReactorError.UnknownWatch)!;
+                    io.println(result.errorOf(raw missing).unwrap() == reactor.ReactorError.UnknownWatch)!;
                     io.println(r.wait(some(time.Duration.fromMillis(10)))! == null)!;
                     var writer = r.register({next_write}, reactor.Interest.write())!;
                     var ready = r.wait(some(time.Duration.zero()))!.unwrap();
                     io.println(ready.watch.value == writer.value && ready.writable)!;
                     r.update(writer, reactor.Interest.read())!;
                     var byte: u8 = 65;
-                    io.println(unsafe {{ write({next_write}, &byte, 1) }} == 1)!;
+                    io.println(unsafe {{ write({next_write}, raw byte, 1) }} == 1)!;
                     var next = r.wait(some(time.Duration.fromMillis(50)))!.unwrap();
                     io.println(next.watch.value == replacement.value && next.readable)!;
                     r.close();
                     r.close();
                     var closed = r.wait(null);
-                    io.println(result.errorOf(&closed).unwrap() == io.IoError.Closed)!;
+                    io.println(result.errorOf(raw closed).unwrap() == io.IoError.Closed)!;
 
                     for iteration in 0..256 {{
                         var cleanup = reactor.Reactor.open()!;
@@ -391,7 +391,7 @@ class IoV2Acceptance(CompilerCase):
                     {
                         var output = child.stdout().unwrap();
                         var count: usize = 0;
-                        for count < dst.len() {
+                        while count < dst.len() {
                             var n = output.readAsync(dst[count..dst.len()], deadline)!;
                             if n == 0 { return false; }
                             count += n;
@@ -421,9 +421,9 @@ class IoV2Acceptance(CompilerCase):
                         socket, _ := listener.accept(some(deadline))!;
                         socket.setReadDeadline(some(deadline));
                         var data = [4]u8{0, 0, 0, 0};
-                        io.readExact(&socket, data[:])!;
+                        io.readExact(raw socket, data[:])!;
                         if bytes.equal(data[:], "ping".asBytes()) { count++; }
-                        io.writeString(&socket, "pong")!;
+                        io.writeString(raw socket, "pong")!;
                         socket.shutdownWrite()!;
                     }
                     count
@@ -436,16 +436,16 @@ class IoV2Acceptance(CompilerCase):
                         var socket = net.AsyncTcpStream.connect(address, some(deadline))!;
                         socket.setReadDeadline(some(deadline));
                         socket.setWriteDeadline(some(deadline));
-                        io.writeString(&socket, "ping")!;
+                        io.writeString(raw socket, "ping")!;
                         var result = [4]u8{0, 0, 0, 0};
-                        io.readExact(&socket, result[:])!;
+                        io.readExact(raw socket, result[:])!;
                         if !bytes.equal(result[:], "pong".asBytes()) { return false; }
                         socket.read(result[:])! == 0
                     };
                     calls.push(group.spawn<bool>(move(call))!)!;
                 }
                 var count: i32 = 0;
-                for calls.len() != 0 {
+                while calls.len() != 0 {
                     var current = calls.pop().unwrap();
                     if current.join()! { count++; }
                 }
@@ -455,7 +455,7 @@ class IoV2Acceptance(CompilerCase):
                 var timeout = [move(waiting)] () !bool => {
                     var deadline = time.Deadline.after(time.Duration.fromMillis(40))!;
                     var expired = waiting.accept(some(deadline));
-                    result.errorOf(&expired).unwrap() == io.IoError.DeadlineExceeded
+                    result.errorOf(raw expired).unwrap() == io.IoError.DeadlineExceeded
                 };
                 var timer = group.spawn<bool>(move(timeout))!;
                 io.println(timer.join()!)!;
@@ -463,7 +463,7 @@ class IoV2Acceptance(CompilerCase):
                 var outside = net.AsyncTcpListener.bind(net.parseSocketAddr("127.0.0.1:0")!)!;
                 var deadline = time.Deadline.after(time.Duration.fromMillis(10))!;
                 var expired = outside.accept(some(deadline));
-                io.println(result.errorOf(&expired).unwrap() == io.IoError.DeadlineExceeded)!;
+                io.println(result.errorOf(raw expired).unwrap() == io.IoError.DeadlineExceeded)!;
             }
         """, "true\n" * 3)
 
@@ -482,7 +482,7 @@ class IoV2Acceptance(CompilerCase):
                         peer, _ := listener.accept(some(deadline))!;
                         var marker = [1]u8{0};
                         peer.setReadDeadline(some(deadline));
-                        io.readExact(&peer, marker[:])!;
+                        io.readExact(raw peer, marker[:])!;
                         peers.push(move(peer))!;
                     }
                     io.println("ready")!;
@@ -495,19 +495,19 @@ class IoV2Acceptance(CompilerCase):
                 for index in 0..64 {
                     var wait = [address] () !bool => {
                         var socket = net.AsyncTcpStream.connect(address, null)!;
-                        io.writeString(&socket, "a")!;
+                        io.writeString(raw socket, "a")!;
                         var data = [1]u8{0};
                         var cancelled = socket.read(data[:]);
-                        result.errorOf(&cancelled).unwrap() == io.IoError.Cancelled
+                        result.errorOf(raw cancelled).unwrap() == io.IoError.Cancelled
                     };
                     clients.push(group.spawn<bool>(move(wait))!)!;
                 }
                 var input = io.stdin();
                 var signal = [1]u8{0};
-                io.readExact(&input, signal[:])!;
+                io.readExact(raw input, signal[:])!;
                 group.cancel();
                 var count: i32 = 0;
-                for clients.len() != 0 {
+                while clients.len() != 0 {
                     var client = clients.pop().unwrap();
                     if client.join()! { count++; }
                 }
@@ -571,7 +571,7 @@ class IoV2Acceptance(CompilerCase):
 
                 func temporaryFile() !path.Path {
                     var file = fs.TempFile.inDir(".")!;
-                    io.writeString(&file, "temp")!;
+                    io.writeString(raw file, "temp")!;
                     file.location()
                 }
 
@@ -589,12 +589,12 @@ class IoV2Acceptance(CompilerCase):
                     fs.atomicWrite("atomic", "new".asBytes())!;
                     fs.atomicWrite("external-link", "replacement".asBytes())!;
                     var failed = fs.atomicWrite("directory", "invalid".asBytes());
-                    io.println(result.errorOf(&failed).unwrap() == io.systemError(21))!;
+                    io.println(result.errorOf(raw failed).unwrap() == io.systemError(21))!;
 
                     var unreadable = fs.atomicWrite("unreadable/file", "invalid".asBytes());
-                    io.println(result.errorOf(&unreadable).unwrap() == io.systemError(13))!;
+                    io.println(result.errorOf(raw unreadable).unwrap() == io.systemError(13))!;
                     var slash = fs.atomicWrite("atomic/", "invalid".asBytes());
-                    io.println(result.errorOf(&slash).unwrap() == fs.FsError.InvalidPath)!;
+                    io.println(result.errorOf(raw slash).unwrap() == fs.FsError.InvalidPath)!;
                     var file = temporaryFile()!;
                     io.println(!fs.tryExists(file)!)!;
                     var dir = temporaryDirectory()!;
@@ -609,14 +609,14 @@ class IoV2Acceptance(CompilerCase):
                     io.println(link.asString() == "../external")!;
 
                     var visitor = Visitor{count: 0, links: 0, lowest: 0};
-                    fs.walkDir("tree", fs.WalkLimits(), &visitor)!;
+                    fs.walkDir("tree", fs.WalkLimits(), raw visitor)!;
                     io.println(visitor.count == 5 && visitor.links == 2 && visitor.lowest == 2)!;
                     var limits = fs.WalkLimits();
                     limits.maxEntries = 1;
-                    var over = fs.walkDir("tree", limits, &visitor);
-                    io.println(result.errorOf(&over).unwrap() == fs.FsError.WalkLimit)!;
-                    var noAccess = fs.walkDir("unreadable", fs.WalkLimits(), &visitor);
-                    io.println(result.errorOf(&noAccess).unwrap() == io.systemError(13))!;
+                    var over = fs.walkDir("tree", limits, raw visitor);
+                    io.println(result.errorOf(raw over).unwrap() == fs.FsError.WalkLimit)!;
+                    var noAccess = fs.walkDir("unreadable", fs.WalkLimits(), raw visitor);
+                    io.println(result.errorOf(raw noAccess).unwrap() == io.systemError(13))!;
                     fs.removeAll("tree/out/")!;
                     io.println(fs.tryExists("external/sentinel")!)!;
                     fs.removeAll("tree")!;
@@ -639,17 +639,17 @@ class IoV2Acceptance(CompilerCase):
 
             func main() !void {
                 var raw = io.MemoryReader("first\r\nsecond\nlast".asBytes());
-                var one = bufio.readLine(&raw, 6)!.unwrap();
+                var one = bufio.readLine(raw raw, 6)!.unwrap();
                 io.println(one == "first")!;
-                var two = bufio.readLine(&raw, 6)!.unwrap();
+                var two = bufio.readLine(raw raw, 6)!.unwrap();
                 io.println(two == "second")!;
                 var tail = [4]u8{0, 0, 0, 0};
-                io.readExact(&raw, tail[:])!;
+                io.readExact(raw raw, tail[:])!;
                 io.println(bytes.equal(tail[:], "last".asBytes()))!;
 
                 var source = io.MemoryReader("abc世界\r\n\nlast".asBytes());
-                var reader = bufio.BufferedReader(&source, 4)!;
-                var unicode = bufio.readLine(&reader, 10)!.unwrap();
+                var reader = bufio.BufferedReader(raw source, 4)!;
+                var unicode = bufio.readLine(raw reader, 10)!.unwrap();
                 var empty = reader.readLine(0)!.unwrap();
                 var line = reader.readLine(4)!.unwrap();
                 io.println(unicode == "abc世界" && empty == "" && line == "last")!;
@@ -657,13 +657,13 @@ class IoV2Acceptance(CompilerCase):
 
                 var wire = [6]u8{255, 0, 44, 44, 65, 66};
                 var input = io.MemoryReader(wire[:]);
-                var scanner = bufio.Scanner(&input)!;
+                var scanner = bufio.Scanner(raw input)!;
                 scanner.setSplitMode(bufio.SplitMode.Delimiter(44));
                 var first = scanner.nextBytes()!.unwrap();
                 io.println(first.start == 0 && first.end == 2 && bytes.equal(first.bytes(), wire[0..2]))!;
                 scanner.setMaxToken(1);
                 var tooLong = scanner.nextBytes();
-                io.println(result.errorOf(&tooLong).unwrap() == bufio.BufferError.TokenTooLong)!;
+                io.println(result.errorOf(raw tooLong).unwrap() == bufio.BufferError.TokenTooLong)!;
             }
         """, "true\n" * 7)
 

@@ -91,32 +91,32 @@ pub class TlsConfig {
     pub const func connect(socket: net.TcpStream, host: str) !TlsStream {
         var name = cString(host)!;
         var empty: u8 = 0;
-        open(move(socket), &name[0], &empty, &empty, false, null)
+        open(move(socket), raw name[0], raw empty, raw empty, false, null)
     }
     pub const func accept(socket: net.TcpStream, cert: str, key: str) !TlsStream {
         var certificate = cString(cert)!;
         var privateKey = cString(key)!;
         var empty: u8 = 0;
-        open(move(socket), &empty, &certificate[0], &privateKey[0], false, null)
+        open(move(socket), raw empty, raw certificate[0], raw privateKey[0], false, null)
     }
     pub const func connectAsync(socket: net.AsyncTcpStream, host: str, deadline: ?time.Deadline) !TlsStream {
         var name = cString(host)!;
         var empty: u8 = 0;
-        open(net.AsyncTcpStream.intoTcp(move(socket)), &name[0], &empty, &empty, true, deadline)
+        open(net.AsyncTcpStream.intoTcp(move(socket)), raw name[0], raw empty, raw empty, true, deadline)
     }
     pub const func acceptAsync(socket: net.AsyncTcpStream, cert: str, key: str,
                            deadline: ?time.Deadline) !TlsStream {
         var certificate = cString(cert)!;
         var privateKey = cString(key)!;
         var empty: u8 = 0;
-        open(net.AsyncTcpStream.intoTcp(move(socket)), &empty, &certificate[0], &privateKey[0], true, deadline)
+        open(net.AsyncTcpStream.intoTcp(move(socket)), raw empty, raw certificate[0], raw privateKey[0], true, deadline)
     }
     const func open(socket: net.TcpStream, host: *const u8,
                     cert: *const u8, key: *const u8, suspendable: bool, deadline: ?time.Deadline) !TlsStream {
         if requireProtocol && protocols.len() == 0 { return TlsError.InvalidProtocol; }
         var empty: u8 = 0;
-        var roots: *const u8 = if caFile.len() == 0 { &empty } else { &caFile[0] };
-        var offered: *const u8 = if protocols.len() == 0 { &empty } else { &protocols[0] };
+        var roots: *const u8 = if caFile.len() == 0 { raw empty } else { raw caFile[0] };
+        var offered: *const u8 = if protocols.len() == 0 { raw empty } else { raw protocols[0] };
         var size = u32(protocols.len())!;
         var version = if minimumVersion == Version.Tls12 { 12 } else { 13 };
         var required = if requireProtocol { 1 } else { 0 };
@@ -124,9 +124,9 @@ pub class TlsConfig {
         var status: i32 = 0;
         if suspendable { TlsReadiness.check(deadline)!; }
         var session = if suspendable {
-            unsafe { __vqr_tls_prepare(fd, host, roots, cert, key, offered, size, version, required, 1, &status) }
+            unsafe { __vqr_tls_prepare(fd, host, roots, cert, key, offered, size, version, required, 1, raw status) }
         } else {
-            unsafe { __vqr_tls_open(fd, host, roots, cert, key, offered, size, version, required, &status) }
+            unsafe { __vqr_tls_open(fd, host, roots, cert, key, offered, size, version, required, raw status) }
         };
         checkStatus(status)!;
         var stream = TlsStream(move(socket), NativeSession(session));
@@ -189,7 +189,7 @@ pub class TlsStream {
     pub const func negotiatedProtocol() !?coll.Vec<u8> {
         if session == 0 { return io.IoError.Closed; }
         var bytes = mem.zeroedBytes<255>();
-        var count = unsafe { __vqr_tls_alpn(session, &bytes[0]) };
+        var count = unsafe { __vqr_tls_alpn(session, raw bytes[0]) };
         if count == 0 { return null; }
         some(coll.Vec<u8>.fromSlice(bytes[0..count])!)
     }
@@ -200,7 +200,7 @@ pub class TlsStream {
         if !suspendable { return io.IoError.Unsupported; }
         if dst.len() == 0 { return (usize(0), null); }
         var status: i32 = 0;
-        var count = unsafe { __vqr_tls_read(session, &dst[0], dst.len(), &status) };
+        var count = unsafe { __vqr_tls_read(session, raw dst[0], dst.len(), raw status) };
         if status == wantRead { return (usize(0), some(reactor.Interest.read())); }
         if status == wantWrite { return (usize(0), some(reactor.Interest.write())); }
         checkStatus(status)!;
@@ -219,7 +219,7 @@ pub class TlsStream {
                 };
             }
             var status: i32 = 0;
-            var count = unsafe { __vqr_tls_read(session, &dst[0], dst.len(), &status) };
+            var count = unsafe { __vqr_tls_read(session, raw dst[0], dst.len(), raw status) };
             if status != wantRead && status != wantWrite {
                 checkStatus(status)!;
                 return count;
@@ -241,7 +241,7 @@ pub class TlsStream {
                 };
             }
             var status: i32 = 0;
-            var count = unsafe { __vqr_tls_write(session, &src[0], src.len(), &status) };
+            var count = unsafe { __vqr_tls_write(session, raw src[0], src.len(), raw status) };
             if status != wantRead && status != wantWrite {
                 checkStatus(status)!;
                 return count;

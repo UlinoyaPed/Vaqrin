@@ -55,7 +55,7 @@ pub class Reactor {
     func deinit() void { close(); }
     pub static func open() !Self {
         var reason: i32 = 0;
-        var fd = unsafe { __vqr_io_reactor_open(&reason) };
+        var fd = unsafe { __vqr_io_reactor_open(raw reason) };
         if fd < 0 { return io.systemError(reason); }
         Reactor(fd)
     }
@@ -70,7 +70,7 @@ pub class Reactor {
         var mask = encode(interest)!;
         generation++;
         var reason: i32 = 0;
-        var watched = unsafe { __vqr_io_reactor_add(epoll, descriptor, generation, mask, &reason) };
+        var watched = unsafe { __vqr_io_reactor_add(epoll, descriptor, generation, mask, raw reason) };
         if watched < 0 { return io.systemError(reason); }
         watches.push(Watch{identity: generation, descriptor: watched}) catch (failure) {
             unsafe {
@@ -112,7 +112,7 @@ pub class Reactor {
             var identity: u64 = 0;
             var flags: u32 = 0;
             var reason: i32 = 0;
-            var ready = unsafe { __vqr_io_reactor_wait(epoll, millis, &identity, &flags, &reason) };
+            var ready = unsafe { __vqr_io_reactor_wait(epoll, millis, raw identity, raw flags, raw reason) };
             if ready < 0 && !io.isInterrupted(io.systemError(reason)) { return io.systemError(reason); }
             if ready > 0 {
                 var watch = WatchId{value: identity};

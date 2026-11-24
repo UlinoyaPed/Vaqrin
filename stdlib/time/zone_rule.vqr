@@ -109,7 +109,7 @@ class RuleParser {
     func number(limit: i64) !i64 {
         if !asciiDigit(peek()) { return TimeError.InvalidZone; }
         var value = 0i64;
-        for asciiDigit(peek()) {
+        while asciiDigit(peek()) {
             value = value * 10 + i64(peek() - 48);
             if value > limit { return TimeError.InvalidZone; }
             index++;

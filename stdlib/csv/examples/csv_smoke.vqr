@@ -15,7 +15,7 @@ func main() !void {
     io.println(escaped)!;
 
     var memory = io.MemoryWriter();
-    var writer = csv.CsvWriter(&memory, options)!;
+    var writer = csv.CsvWriter(raw memory, options)!;
     var fields = [_]str{"alpha", "contains,comma", "line one\nline two"};
     writer.writeRecord(fields[:])!;
     writer.flush()!;

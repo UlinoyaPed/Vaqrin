@@ -113,8 +113,8 @@ pub class HeaderMap {
         var raw = value.asBytes();
         var first: usize = 0;
         var end = raw.len();
-        for first < end && (raw[first] == 32 || raw[first] == 9) { first++; }
-        for end > first && (raw[end - 1] == 32 || raw[end - 1] == 9) { end--; }
+        while first < end && (raw[first] == 32 || raw[first] == 9) { first++; }
+        while end > first && (raw[end - 1] == 32 || raw[end - 1] == 9) { end--; }
         var ownedValue = text.fromBytes(raw[first..end])!;
         entries.push((move(ownedName), move(ownedValue)))!
     }
@@ -147,7 +147,7 @@ pub class HeaderMap {
     pub func remove(name: str) bool {
         var found = false;
         var i: usize = 0;
-        for i < entries.len() {
+        while i < entries.len() {
             if sameName(entries[i].0, name) {
                 var removed = entries.remove(i);
                 found = true;
@@ -225,10 +225,10 @@ pub class Request {
     }
     pub const func method() Method { verb }
     pub const func target() str { targetValue }
-    pub func headers() *HeaderMap { &fields }
+    pub func headers() *HeaderMap { raw fields }
     pub const func header(name: str) ?str { fields.get(name) }
     pub const func bodyBytes() []const u8 { payload.bytes() }
-    pub func body() *Body { &payload }
+    pub func body() *Body { raw payload }
     pub func setBody(body: Body) void { payload = move(body); }
 }
 
@@ -240,10 +240,10 @@ pub class Response {
     pub func init(status: StatusCode) : code(status), fields(HeaderMap()), payload(Body()) {}
     pub static func new(status: u16) !Self { Response(StatusCode.new(status)!) }
     pub const func status() StatusCode { code }
-    pub func headers() *HeaderMap { &fields }
+    pub func headers() *HeaderMap { raw fields }
     pub const func header(name: str) ?str { fields.get(name) }
     pub const func bodyBytes() []const u8 { payload.bytes() }
-    pub func body() *Body { &payload }
+    pub func body() *Body { raw payload }
     pub func setBody(body: Body) void { payload = move(body); }
     pub func close() !void { payload.close() }
 }

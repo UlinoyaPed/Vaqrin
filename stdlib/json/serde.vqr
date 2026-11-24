@@ -48,7 +48,7 @@ pub class JsonDomSerializer {
         if frames.isEmpty() { return JsonSerdeError.InvalidState; }
         var frame = frames.pop().unwrap();
         if frame.objectMode { return JsonSerdeError.InvalidState; }
-        appendValue(Value.Array(core.replace<JsonArray>(&frame.array, JsonArray())))
+        appendValue(Value.Array(core.replace<JsonArray>(raw frame.array, JsonArray())))
     }
     pub func beginMap(length: ?usize) !void { frames.push(JsonWriteFrame(true))!; }
     pub func writeKey(value: str) !void {
@@ -61,11 +61,11 @@ pub class JsonDomSerializer {
         if frames.isEmpty() { return JsonSerdeError.InvalidState; }
         var frame = frames.pop().unwrap();
         if !frame.objectMode || frame.pendingKey != null { return JsonSerdeError.InvalidState; }
-        appendValue(Value.Object(core.replace<JsonObject>(&frame.object, JsonObject())))
+        appendValue(Value.Object(core.replace<JsonObject>(raw frame.object, JsonObject())))
     }
     pub func takeValue() !Value {
         if !frames.isEmpty() { return JsonSerdeError.InvalidState; }
-        core.replace<?Value>(&root, null) ?? { return JsonSerdeError.MissingRoot; }
+        core.replace<?Value>(raw root, null) ?? { return JsonSerdeError.MissingRoot; }
     }
     func appendValue(value: Value) !void {
         if frames.isEmpty() {
@@ -75,7 +75,7 @@ pub class JsonDomSerializer {
         }
         var frame = frames.getMutPtr(frames.len() - 1).unwrap();
         if frame.objectMode {
-            var key = opt.take<string>(&frame.pendingKey) ?? { return JsonSerdeError.InvalidState; };
+            var key = opt.take<string>(raw frame.pendingKey) ?? { return JsonSerdeError.InvalidState; };
             if frame.object.containsKey(key) { return serde.SerdeError.DuplicateKey; }
             frame.object.insert(move(key), move(value))!;
         } else {
@@ -99,7 +99,7 @@ pub class JsonDomDeserializer {
     var frames: coll.Vec<JsonReadFrame>;
     pub func init(value: Value)
         : root(move(value)), current(null), frames(coll.Vec<JsonReadFrame>()) {
-        current = some(&root);
+        current = some(raw root);
     }
     pub func kind() !serde.DataKind {
         var value = current ?? { return serde.SerdeError.InvalidState; };
@@ -232,15 +232,15 @@ func integerText(value: u64, negative: bool) !string {
 
 pub func marshal<T>(value: *const T, codec: *serde.Codec<T>) !string {
     var serializer = JsonDomSerializer();
-    serde.encode<T>(value, &serializer, codec)!;
+    serde.encode<T>(value, raw serializer, codec)!;
     var root = serializer.takeValue()!;
-    stringify(&root)
+    stringify(raw root)
 }
 
 pub func unmarshal<T>(value: str, codec: *serde.Codec<T>) !T {
     var root = parse(value)!;
     var deserializer = JsonDomDeserializer(move(root));
-    var result = serde.decode<T>(&deserializer, codec)!;
+    var result = serde.decode<T>(raw deserializer, codec)!;
     deserializer.finish()!;
     move(result)
 }

@@ -91,8 +91,8 @@ private:
       fail(current().span, "expected an identifier", "E110");
     return take();
   }
-  Token bindingName(bool ignore = true) {
-    if (!eat("&")) return name(ignore);
+  Token iterationBindingName() {
+    if (!eat("&")) return name(true);
     auto t = name();
     t.text = "&" + t.text;
     return t;
@@ -421,9 +421,9 @@ std::vector<Ast> Parser::genericArguments() {
 Ast Parser::parameterType() {
   auto start = current();
   if (!eat("in") && !eatWord("mut") && !eat("move")) return type();
+  if (current().kind == TokenKind::Punctuation && current().text.starts_with('&'))
+    fail(current().span, "write the data type directly after the parameter mode", "E110");
   auto data = type();
-  if (data->kind == NodeKind::TypePrefix && (data->text == "&" || data->text == "&const"))
-    fail(start.span, "write the data type directly after the parameter mode", "E110");
   return make(NodeKind::TypePrefix, start.span, start.text, {data});
 }
 
@@ -436,10 +436,11 @@ Ast Parser::type(bool inferArray) {
     bool writable = eatWord("mut");
     return make(NodeKind::TypePrefix, start.span, writable ? "ref mut" : "ref", {type()});
   }
-  if (typePunctuation('?') || eat("!") || eat("^") || eat("*") || typePunctuation('&') || eat("const")) {
-    auto key = start.text == "??" ? "?" : start.text == "&&" ? "&" : start.text;
+  if (start.kind == TokenKind::Punctuation && start.text.starts_with('&'))
+    fail(start.span, "legacy reference type; use 'ref T' or 'ref mut T'", "E110");
+  if (typePunctuation('?') || eat("!") || eat("^") || eat("*") || eat("const")) {
+    auto key = start.text == "??" ? "?" : start.text;
     if (key == "*" && eat("const")) key = "*const";
-    if (key == "&" && eat("const")) key = "&const";
     auto inner = type();
     const auto isWrapper = [](const Ast &node) {
       return node->kind == NodeKind::TypePrefix && (node->text == "?" || node->text == "!");
@@ -555,14 +556,12 @@ Ast Parser::statement(bool header) {
     auto t = take();
     if (t.text == "comptime") require("const");
     auto n = make(NodeKind::Binding, t.span, t.text);
-    auto binding = t.text == "var" ? bindingName() : name();
+    if (t.text == "var" && at("&"))
+      fail(current().span, "legacy reference binding; use 'ref name = place' or 'ref mut name = place'", "E110");
+    auto binding = name(t.text == "var");
     n->names.push_back(binding.text);
     n->bindingSpans.push_back(binding.span);
-    if (eat(":")) {
-      if (binding.text.starts_with('&'))
-        fail(binding.span, "use 'var name: &T = ...' for a typed reference", "E110");
-      n->type = type();
-    }
+    if (eat(":")) n->type = type();
     if (eat("=")) n->children.push_back(expression());
     if (!n->type && n->children.empty()) fail(t.span, "binding requires a type or initializer", "E110");
     if (n->children.empty() && t.text != "var") fail(t.span, "constant requires an initializer", "E110");
@@ -571,7 +570,9 @@ Ast Parser::statement(bool header) {
   if (bindingAhead()) {
     auto n = make(NodeKind::Binding, current().span, ":=");
     do {
-      auto binding = bindingName();
+      if (at("&"))
+        fail(current().span, "legacy reference binding; use 'ref name = place' or 'ref mut name = place'", "E110");
+      auto binding = name(true);
       n->names.push_back(binding.text);
       n->bindingSpans.push_back(binding.span);
     } while (eat(","));
@@ -599,16 +600,18 @@ Ast Parser::block() {
     Ast n;
     if (at("defer")) {
       auto start = take();
-      if (at("{")) fail(current().span, "deferred blocks are not yet supported; defer a void call", "E290");
-      auto call = expression();
-      if (call->kind != NodeKind::Call) fail(call->span, "defer requires a call", "E110");
-      n = make(NodeKind::Defer, start.span, "", {call});
+      auto action = at("{") ? this->block() : expression();
+      if (action->kind != NodeKind::Block && action->kind != NodeKind::Call)
+        fail(action->span, "defer requires a call or a block", "E110");
+      n = make(NodeKind::Defer, start.span, "", {action});
     } else
       n = statement();
     bool semicolon = eat(";");
-    if (n->kind == NodeKind::Binding || n->kind == NodeKind::Assign || n->kind == NodeKind::Defer ||
-        n->kind == NodeKind::Return ||
-        n->kind == NodeKind::Break || n->kind == NodeKind::Continue) {
+    if (n->kind == NodeKind::Defer) {
+      if (!semicolon && n->children.front()->kind != NodeKind::Block)
+        fail(current().span, "expected ';' after deferred call", "E110");
+    } else if (n->kind == NodeKind::Binding || n->kind == NodeKind::Assign || n->kind == NodeKind::Return ||
+               n->kind == NodeKind::Break || n->kind == NodeKind::Continue) {
       if (!semicolon && !at("}")) fail(current().span, "expected ';' after statement", "E110");
       if (!semicolon && n->kind != NodeKind::Break && n->kind != NodeKind::Continue &&
           n->kind != NodeKind::Return)
@@ -646,37 +649,34 @@ bool Parser::wrappedLoopHeader() const {
 Ast Parser::loop() {
   if (atWord("while")) {
     auto start = take();
+    if (wrappedLoopHeader())
+      fail(current().span, "omit parentheses around the while header", "E110");
     auto condition = expression(1, true);
     return make(NodeKind::For, start.span, "", {nullptr, condition, nullptr, block()});
   }
   auto t = require("for");
-  bool parens = wrappedLoopHeader();
-  if (parens) require("(");
-  if (!parens && at("{")) return make(NodeKind::For, t.span, "", {nullptr, nullptr, nullptr, block()});
+  if (wrappedLoopHeader())
+    fail(current().span, "omit parentheses around the for header; use while for a condition-only loop", "E110");
+  if (at("{")) return make(NodeKind::For, t.span, "", {nullptr, nullptr, nullptr, block()});
   if (bindingAhead(true)) {
     auto n = make(NodeKind::ForIn, t.span);
     do {
-      auto binding = bindingName();
+      auto binding = iterationBindingName();
       n->names.push_back(binding.text);
       n->bindingSpans.push_back(binding.span);
     } while (eat(","));
     require("in");
-    n->children.push_back(expression(1, !parens));
-    if (parens) require(")");
+    n->children.push_back(expression(1, true));
     n->children.push_back(block());
     return n;
   }
   Ast first, condition, step;
-  if (!at(";")) first = statement(!parens);
-  if (eat(";")) {
-    if (!at(";")) condition = expression();
-    require(";");
-    if (!at(parens ? ")" : "{")) step = statement(!parens);
-  } else {
-    condition = first;
-    first.reset();
-  }
-  if (parens) require(")");
+  if (!at(";")) first = statement(true);
+  if (at("{")) fail(t.span, "use while for a condition-only loop", "E110");
+  require(";");
+  if (!at(";")) condition = expression();
+  require(";");
+  if (!at("{")) step = statement(true);
   return make(NodeKind::For, t.span, "", {first, condition, step, block()});
 }
 
@@ -857,8 +857,10 @@ Ast Parser::primary(bool excludeFields) {
     return result;
   }
   if (atWord("while")) return loop();
+  const auto next = current(1);
+  const bool parenthesizedRaw = atWord("raw") && next.text == "(" && next.span.begin > t.span.end;
   if ((atWord("ref") || atWord("raw")) &&
-      (current(1).kind == TokenKind::Name || current(1).text == "self" || current(1).text == "*")) {
+      (next.kind == TokenKind::Name || next.text == "self" || next.text == "*" || parenthesizedRaw)) {
     take();
     auto operation = t.text == "ref" && eatWord("mut") ? "ref mut" : t.text;
     return make(NodeKind::Unary, t.span, operation, {expression(14, excludeFields)});
@@ -898,35 +900,16 @@ Ast Parser::primary(bool excludeFields) {
       else no->tail = make(NodeKind::Block, t.span);
       return make(NodeKind::Switch, t.span, "", {subject, yes, no});
     }
-    Ast cond;
-    bool blockForm = !at("(");
-    if (blockForm)
-      cond = expression(1, true);
-    else {
-      auto start = pos;
-      auto oldSplit = split;
-      try {
-        cond = expression(1, true);
-        blockForm = at("{");
-      } catch (const Diagnostic &) {
-        blockForm = false;
-      }
-      if (!blockForm) {
-        pos = start;
-        split = oldSplit;
-        require("(");
-        cond = expression();
-        require(")");
-      }
-    }
-    auto yes = blockForm ? block() : expression(1, excludeFields);
+    auto cond = expression(1, true);
+    if (!at("{")) fail(current().span, "if branch must be a block", "E110");
+    auto yes = block();
     Ast no;
-    if (!blockForm && !at("else")) fail(t.span, "single-expression if requires else", "E110");
     if (eat("else")) {
       if (at("if")) no = expression(1, excludeFields);
-      else no = blockForm ? block() : expression(1, excludeFields);
-      if (!blockForm && (yes->kind == NodeKind::Block || no->kind == NodeKind::Block))
-        fail(t.span, "if branches must both be blocks or both be single expressions", "E110");
+      else {
+        if (!at("{")) fail(current().span, "else branch must be a block or else if", "E110");
+        no = block();
+      }
     }
     return make(NodeKind::If, t.span, "", {cond, yes, no});
   }
@@ -950,7 +933,9 @@ Ast Parser::primary(bool excludeFields) {
   if (eat("break") || eat("continue"))
     return make(t.text == "break" ? NodeKind::Break : NodeKind::Continue, t.span,
                 current().kind == TokenKind::Name && !current().newline ? take().text : "");
-  if (at("!") || at("-") || at("~") || at("*") || at("&")) {
+  if (at("&"))
+    fail(t.span, "unary '&' was removed; use 'raw place' for a raw address or 'ref place' for a borrow", "E110");
+  if (at("!") || at("-") || at("~") || at("*")) {
     take();
     return make(NodeKind::Unary, t.span, t.text, {expression(14, excludeFields)});
   }

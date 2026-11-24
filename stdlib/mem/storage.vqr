@@ -5,8 +5,8 @@ pub class MaybeUninit<T: Movable> {
     func init() : storage(__vqr_uninitialized<T>()) {}
     pub static func uninit() Self { MaybeUninit<T>() }
 
-    pub func asPtr() *T { __vqr_raw_address(&storage) }
-    pub const func asConstPtr() *const T { __vqr_raw_address(&storage) }
+    pub func asPtr() *T { __vqr_raw_address(raw storage) }
+    pub const func asConstPtr() *const T { __vqr_raw_address(raw storage) }
 
     pub unsafe func write(value: T) *T {
         var address = asPtr();

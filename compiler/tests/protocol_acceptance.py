@@ -139,10 +139,10 @@ class ProtocolAcceptance(CompilerCase):
                     var first = http.Request.new(http.Method.POST, "/one")!;
                     var count = Count{total: 0};
                     var upload = Payload{remaining: 9005};
-                    connection.sendWithBodyStream(&first, &upload, &count)!;
+                    connection.sendWithBodyStream(raw first, raw upload, raw count)!;
                     io.println(connection.isOpen() && count.total == 5005)!;
                     var second = http.Request.new(http.Method.GET, "/two")!;
-                    var response = connection.send(&second)!;
+                    var response = connection.send(raw second)!;
                     io.println(response.status().value() == 204 && !connection.isOpen())!;
                 }
             """.replace("URL", url))
@@ -195,7 +195,7 @@ class ProtocolAcceptance(CompilerCase):
                                other.status().value() == 204 && reopened.status().value() == 204)!;
                     pool.close();
                     var closed = pool.get(FIRST);
-                    io.println(result.errorOf(&closed).unwrap() == io.IoError.Closed)!;
+                    io.println(result.errorOf(raw closed).unwrap() == io.IoError.Closed)!;
                 }
             """.replace('URL_ONE', json.dumps(f"http://127.0.0.1:{first.getsockname()[1]}/one"))
                 .replace('URL_TWO', json.dumps(f"http://127.0.0.1:{first.getsockname()[1]}/two"))
@@ -250,7 +250,7 @@ class ProtocolAcceptance(CompilerCase):
                 var server = http.AsyncServer.bind(net.parseSocketAddr("127.0.0.1:0")!)!;
                 io.println(server.localAddr()!.port())!;
                 var handler = Upload{};
-                server.serveOneStreaming(&handler, null)!;
+                server.serveOneStreaming(raw handler, null)!;
             }
         """)
         self.process(VAQC, program, "-o", "upload")
@@ -304,7 +304,7 @@ class ProtocolAcceptance(CompilerCase):
                     var server = move(listener);
                     var handler = Echo{};
                     var deadline = some(time.Deadline.after(time.Duration.fromSeconds(4))!);
-                    server.serveOneTls(&handler, &acceptor, deadline)
+                    server.serveOneTls(raw handler, raw acceptor, deadline)
                 };
                 var call = [move(target)]() !bool => {
                     var client = http.AsyncClient();
@@ -330,7 +330,7 @@ class ProtocolAcceptance(CompilerCase):
                     client.setRootFile(CERT)!;
                     client.setTimeout(time.Duration.fromMillis(100));
                     var outcome = client.get(idleTarget);
-                    result.errorOf(&outcome).unwrap() == io.IoError.DeadlineExceeded
+                    result.errorOf(raw outcome).unwrap() == io.IoError.DeadlineExceeded
                 };
                 var stalled = group.spawn<void>(move(stall))!;
                 var timed = group.spawn<bool>(move(request))!;
@@ -368,21 +368,21 @@ class ProtocolAcceptance(CompilerCase):
                     config.requireProtocol = true;
                     config.setRootFile({json.dumps(str(cert))})!;
                     config.addProtocol("h2".asBytes())!;
-                    var active = tls.TlsStream.connect(dial()!, "localhost", &config)!;
+                    var active = tls.TlsStream.connect(dial()!, "localhost", raw config)!;
                     var chosen = active.negotiatedProtocol()!.unwrap();
                     io.println(bytes.equal(chosen.asConstSlice(), "h2".asBytes()))!;
-                    io.writeString(&active, "ping")!;
+                    io.writeString(raw active, "ping")!;
                     var reply = [4]u8{{0, 0, 0, 0}};
-                    io.readExact(&active, reply[:])!;
+                    io.readExact(raw active, reply[:])!;
                     io.println(bytes.equal(reply[:], "pong".asBytes()))!;
                     active.close()!;
                     active.close()!;
                     var closed = active.read(reply[:]);
-                    io.println(result.errorOf(&closed).unwrap() == io.IoError.Closed)!;
-                    var rejected = tls.TlsStream.connect(dial()!, "localhost", &config);
-                    io.println(result.errorOf(&rejected).unwrap() == tls.TlsError.MissingProtocol)!;
-                    var wrongHost = tls.TlsStream.connect(dial()!, "wrong.example", &config);
-                    io.println(result.errorOf(&wrongHost).unwrap() == tls.TlsError.Certificate)!;
+                    io.println(result.errorOf(raw closed).unwrap() == io.IoError.Closed)!;
+                    var rejected = tls.TlsStream.connect(dial()!, "localhost", raw config);
+                    io.println(result.errorOf(raw rejected).unwrap() == tls.TlsError.MissingProtocol)!;
+                    var wrongHost = tls.TlsStream.connect(dial()!, "wrong.example", raw config);
+                    io.println(result.errorOf(raw wrongHost).unwrap() == tls.TlsError.Certificate)!;
                 }}
             """)
             self.process(VAQC, program, "-o", "client")
@@ -429,13 +429,13 @@ class ProtocolAcceptance(CompilerCase):
                 config.addProtocol("h2".asBytes())!;
                 config.requireProtocol = true;
                 var acceptor = tls.TlsAcceptor.fromPem({json.dumps(str(cert))}, {json.dumps(str(key))}, move(config))!;
-                var rejected = acceptor.accept(take(&listener)!);
-                io.println(result.errorOf(&rejected).unwrap() == tls.TlsError.Handshake)!;
-                var missing = acceptor.accept(take(&listener)!);
-                io.println(result.errorOf(&missing).unwrap() == tls.TlsError.MissingProtocol)!;
-                var active = acceptor.accept(take(&listener)!)!;
+                var rejected = acceptor.accept(take(raw listener)!);
+                io.println(result.errorOf(raw rejected).unwrap() == tls.TlsError.Handshake)!;
+                var missing = acceptor.accept(take(raw listener)!);
+                io.println(result.errorOf(raw missing).unwrap() == tls.TlsError.MissingProtocol)!;
+                var active = acceptor.accept(take(raw listener)!)!;
                 var chosen = active.negotiatedProtocol()!.unwrap();
-                io.writeAll(&active, chosen.asConstSlice())!
+                io.writeAll(raw active, chosen.asConstSlice())!
             }}
         """)
         self.process(VAQC, program, "-o", "server")
@@ -618,17 +618,17 @@ class ProtocolAcceptance(CompilerCase):
             func main() !void {
                 var short = [2]u8{0, 0};
                 var rejected = http2.FrameHeader.parse(short[:]);
-                io.println(result.errorOf(&rejected).unwrap() == http2.Http2Error.Protocol)!;
+                io.println(result.errorOf(raw rejected).unwrap() == http2.Http2Error.Protocol)!;
                 var header = [9]u8{0, 1, 2, 10, 1, 128, 0, 0, 7};
                 var frame = http2.FrameHeader.parse(header[:])!;
                 io.println(frame.length == 258 && frame.stream == 7 && frame.kind == 10 && frame.flags == 1)!;
                 var connection = http2.Connection.open(http2.Role.Server, http2.Settings())!;
                 var bad = connection.ingest("invalid HTTP/2 client connection preface".asBytes());
-                io.println(result.errorOf(&bad).unwrap() == http2.Http2Error.Protocol)!;
+                io.println(result.errorOf(raw bad).unwrap() == http2.Http2Error.Protocol)!;
                 var invalidOptions = http2.Settings();
                 invalidOptions.initialStreamWindow = 0xffffffffu32;
                 var badSize = http2.Connection.open(http2.Role.Client, invalidOptions);
-                io.println(result.errorOf(&badSize).unwrap() == http2.Http2Error.InvalidArgument)!;
+                io.println(result.errorOf(raw badSize).unwrap() == http2.Http2Error.InvalidArgument)!;
             }
         """, "true\n" * 4)
 
@@ -1235,14 +1235,14 @@ class ProtocolAcceptance(CompilerCase):
                 bounded.useCompression(grpc.Compression.Gzip);
                 bounded.feed(wire[:])!;
                 var oversized = bounded.next();
-                io.println(result.errorOf(&oversized).unwrap() == grpc.RpcError.MessageTooLarge)!;
+                io.println(result.errorOf(raw oversized).unwrap() == grpc.RpcError.MessageTooLarge)!;
 
                 var broken = grpc.MessageReader(32768);
                 broken.useCompression(grpc.Compression.Gzip);
                 var corrupt = [_]u8{{{vector(corrupt)}}};
                 broken.feed(corrupt[:])!;
                 var malformed = broken.next();
-                io.println(result.errorOf(&malformed).unwrap() == grpc.RpcError.Protocol)!;
+                io.println(result.errorOf(raw malformed).unwrap() == grpc.RpcError.Protocol)!;
 
                 var full = grpc.MessageReader(32768);
                 full.useCompression(grpc.Compression.Gzip);
@@ -1273,12 +1273,12 @@ class ProtocolAcceptance(CompilerCase):
                 var invalid = [5]u8{1, 0, 0, 0, 0};
                 reader.feed(invalid[:])!;
                 var unsupported = reader.next();
-                io.println(result.errorOf(&unsupported).unwrap() == grpc.RpcError.UnsupportedEncoding)!;
+                io.println(result.errorOf(raw unsupported).unwrap() == grpc.RpcError.UnsupportedEncoding)!;
                 var size = [5]u8{0, 0, 0, 0, 11};
                 var bounded = grpc.MessageReader(10);
                 bounded.feed(size[:])!;
                 var tooLong = bounded.next();
-                io.println(result.errorOf(&tooLong).unwrap() == grpc.RpcError.MessageTooLarge)!;
+                io.println(result.errorOf(raw tooLong).unwrap() == grpc.RpcError.MessageTooLarge)!;
             }
         """, "true\n" * 5)
 

@@ -25,18 +25,18 @@ pub func decodeResponse<T>(value: UnaryResponse, codec: *protobuf.Codec<T>,
         some(ref bytes) => { message = some(protobuf.decode<T>(bytes.asConstSlice(), codec, limits)!); },
         null => {},
     };
-    TypedResponse<T>{initial: core.replace<Metadata>(&value.initial, Metadata()),
-        trailing: core.replace<Metadata>(&value.trailing, Metadata()),
-        status: core.replace<Status>(&value.status, status(StatusCode.Unknown, "")), message: move(message)}
+    TypedResponse<T>{initial: core.replace<Metadata>(raw value.initial, Metadata()),
+        trailing: core.replace<Metadata>(raw value.trailing, Metadata()),
+        status: core.replace<Status>(raw value.status, status(StatusCode.Unknown, "")), message: move(message)}
 }
 
 pub func encodeResponse<T>(value: TypedResponse<T>, codec: *protobuf.Codec<T>, maxBytes: usize) !UnaryResponse {
     var data: ?coll.Vec<u8> = null;
     switch value.message {
-        some(ref message) => { data = some(protobuf.encode<T>(&message, codec, maxBytes)!); },
+        some(ref message) => { data = some(protobuf.encode<T>(message.toRaw(), codec, maxBytes)!); },
         null => {},
     };
-    UnaryResponse{initial: core.replace<Metadata>(&value.initial, Metadata()),
-        trailing: core.replace<Metadata>(&value.trailing, Metadata()),
-        status: core.replace<Status>(&value.status, status(StatusCode.Unknown, "")), body: move(data)}
+    UnaryResponse{initial: core.replace<Metadata>(raw value.initial, Metadata()),
+        trailing: core.replace<Metadata>(raw value.trailing, Metadata()),
+        status: core.replace<Status>(raw value.status, status(StatusCode.Unknown, "")), body: move(data)}
 }

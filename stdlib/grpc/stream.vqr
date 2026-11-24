@@ -59,8 +59,8 @@ pub class ServerStream {
               Compression.Gzip
           } else { Compression.Identity }),
           timeout(options.timeout), ended(false), acknowledged(false), cancelled(false),
-          path(core.replace<string>(&request.path, "")),
-          metadata(core.replace<Metadata>(&request.metadata, Metadata())), deadline(request.deadline),
+          path(core.replace<string>(raw request.path, "")),
+          metadata(core.replace<Metadata>(raw request.metadata, Metadata())), deadline(request.deadline),
           initial(Metadata()), trailing(Metadata()) {
         if (request.encoding ?? MessageEncoding.Identity) == MessageEncoding.Gzip {
             decoder.useCompression(Compression.Gzip);
@@ -79,8 +79,8 @@ pub class ServerStream {
         headers.add("content-type", "application/grpc")!;
         headers.add("grpc-accept-encoding", "identity,gzip")!;
         if compression == Compression.Gzip { headers.add("grpc-encoding", "gzip")!; }
-        initial.writeTo(&headers)!;
-        session.respond(id, &headers, false)!;
+        initial.writeTo(raw headers)!;
+        session.respond(id, raw headers, false)!;
         acknowledged = true;
         flush()
     }
@@ -118,15 +118,15 @@ pub class ServerStream {
         socket.setTimeout(timeout)!;
         if acknowledged {
             var trailers = http2.HeaderBlock();
-            trailing.writeTo(&trailers)!;
-            encodeStatus(&trailers, &result)!;
-            session.sendTrailers(id, &trailers)!;
+            trailing.writeTo(raw trailers)!;
+            encodeStatus(raw trailers, raw result)!;
+            session.sendTrailers(id, raw trailers)!;
         } else {
-            var headers = core.replace<Metadata>(&initial, Metadata());
-            var trailers = core.replace<Metadata>(&trailing, Metadata());
+            var headers = core.replace<Metadata>(raw initial, Metadata());
+            var trailers = core.replace<Metadata>(raw trailing, Metadata());
             var response = UnaryResponse{initial: move(headers), trailing: move(trailers),
                                          status: move(result), body: null};
-            sendResponse(session, id, &response, limit, Compression.Identity)!;
+            sendResponse(session, id, raw response, limit, Compression.Identity)!;
         }
         session.flush(socket)
     }
@@ -166,7 +166,7 @@ pub class ServerStream {
 func performStream(handler: *StreamingHandler, wire: *Transport, connection: *http2.Connection,
                    deferred: *DeferredEvents, id: i32, head: HeaderInfo, options: ServeOptions) !void {
     var stream = ServerStream(wire, connection, deferred, id, move(head), options);
-    var outcome = handler.handle(&stream) catch (reason) {
+    var outcome = handler.handle(raw stream) catch (reason) {
         if reason == RpcError.Cancelled { return; }
         return stream.finish(status(streamStatus(reason), ""));
     };

@@ -273,7 +273,7 @@ pub class LinkedList<T: Movable> {
         if other.length > ~usize(0) - length { return CapacityError.Overflow; }
 
         var base = nodes.len();
-        nodes.append(&other.nodes)!;
+        nodes.append(raw other.nodes)!;
         for i := base; i < nodes.len(); i++ {
             (*nodes.getMutPtr(i).unwrap()).asPtr().ownerIndex = i;
         }
@@ -306,7 +306,7 @@ pub class LinkedList<T: Movable> {
         var previous = split.previous;
         var oldLast = lastNode;
         var current: ?*ListNode<T> = some(split);
-        for current != null {
+        while current != null {
             var node = current.unwrap();
             current = node.following;
             var ownerIndex = node.ownerIndex;
@@ -340,7 +340,7 @@ pub class LinkedList<T: Movable> {
 
     pub func reverse() void {
         var current = firstNode;
-        for current != null {
+        while current != null {
             var node = current.unwrap();
             current = node.following;
             var oldPrevious = node.previous;
@@ -365,7 +365,7 @@ pub class LinkedList<T: Movable> {
     }
 
     pub func clear() void {
-        for length > 0 {
+        while length > 0 {
             var value = popFront().unwrap();
         }
     }

@@ -142,7 +142,7 @@ pub func openWrite(name: path.Path) !File {
 }
 pub func readFile(name: path.Path, limit: usize) !coll.Vec<u8> {
     var file = openRead(name)!;
-    io.readToEnd(&file, limit)
+    io.readToEnd(raw file, limit)
 }
 pub func readFile(name: str, limit: usize) !coll.Vec<u8> { readFile(path.fromString(name)!, limit) }
 pub func readText(name: path.Path, limit: usize) !string {
@@ -152,7 +152,7 @@ pub func readText(name: path.Path, limit: usize) !string {
 pub func readText(name: str, limit: usize) !string { readText(path.fromString(name)!, limit) }
 pub func writeFile(name: path.Path, data: []const u8) !void {
     var file = create(name)!;
-    io.writeAll(&file, data)!;
+    io.writeAll(raw file, data)!;
     file.flush()!;
 }
 pub func writeFile(name: str, data: []const u8) !void { writeFile(path.fromString(name)!, data) }
@@ -162,7 +162,7 @@ pub func appendFile(name: path.Path, data: []const u8) !void {
     options.append(true);
     options.create(true);
     var file = options.open(name)!;
-    io.writeAll(&file, data)!
+    io.writeAll(raw file, data)!
 }
 pub func tryExists(name: path.Path) !bool {
     stat(name) catch (reason) {
@@ -221,7 +221,7 @@ pub func copy(source: path.Path, destination: path.Path) !u64 {
         return FsError.SameFile;
     }
     if targetInfo.isFile() { output.truncate(0)!; }
-    var count = io.copyAll(&input, &output)!;
+    var count = io.copyAll(raw input, raw output)!;
     output.flush()!;
     output.close()!;
     count

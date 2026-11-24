@@ -59,7 +59,7 @@ pub class Pool<T> {
     pub func clear() void {
         if active != 0 { panic("cannot clear a pool with live slots"); }
         var allocation = nodeLayout() catch { panic("invalid pool node layout"); };
-        for nodes != null {
+        while nodes != null {
             var node = nodes.unwrap();
             nodes = node.all;
             var memory = unsafe { ptrCast<*u8>(node) };
@@ -95,7 +95,7 @@ pub class Cow<T: Copyable + Movable> {
     pub const func asRef() *const T {
         switch borrowed {
             some(source) => source,
-            null => __vqr_optional_pointer(&owned).unwrap(),
+            null => __vqr_optional_pointer(raw owned).unwrap(),
         }
     }
 
@@ -104,14 +104,14 @@ pub class Cow<T: Copyable + Movable> {
             some(source) => { owned = some(*source); borrowed = null; },
             null => {},
         }
-        __vqr_optional_pointer(&owned).unwrap()
+        __vqr_optional_pointer(raw owned).unwrap()
     }
 
     pub static func intoOwned(value: Self) T {
         switch value.borrowed {
             some(source) => *source,
             null => {
-                var owned = core.replace<?T>(&value.owned, null);
+                var owned = core.replace<?T>(raw value.owned, null);
                 move(owned).unwrap()
             },
         }

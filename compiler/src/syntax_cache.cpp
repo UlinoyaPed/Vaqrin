@@ -253,7 +253,7 @@ SyntaxCache::SyntaxCache(const std::filesystem::path &executable) {
     directory.clear();
     return;
   }
-  compilerKey = "v6\n" + *identity;
+  compilerKey = "v7\n" + *identity;
 }
 
 std::filesystem::path SyntaxCache::entry(const Source &source) const {

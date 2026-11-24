@@ -10,9 +10,9 @@ pub class Rational<T: Copyable + Movable> {
 
     static func fromBig(numerator: BigInt, denominator: BigInt) !Self {
         if denominator.isZero() { return NumError.ZeroDenominator; }
-        var divisor = BigInt.gcd(&numerator, &denominator)!;
-        var reducedNumerator = numerator.div(&divisor)!;
-        var reducedDenominator = denominator.div(&divisor)!;
+        var divisor = BigInt.gcd(raw numerator, raw denominator)!;
+        var reducedNumerator = numerator.div(raw divisor)!;
+        var reducedDenominator = denominator.div(raw divisor)!;
         if reducedDenominator.isNegative() {
             reducedNumerator = reducedNumerator.negate()!;
             reducedDenominator = reducedDenominator.negate()!;
@@ -35,10 +35,10 @@ pub class Rational<T: Copyable + Movable> {
         var rightTop = BigInt.fromInteger<T>(other.numeratorValue)!;
         var leftBottom = BigInt.fromInteger<T>(denominatorValue)!;
         var rightBottom = BigInt.fromInteger<T>(other.denominatorValue)!;
-        var left = leftTop.mul(&rightBottom)!;
-        var right = rightTop.mul(&leftBottom)!;
-        var top = left.add(&right)!;
-        var bottom = leftBottom.mul(&rightBottom)!;
+        var left = leftTop.mul(raw rightBottom)!;
+        var right = rightTop.mul(raw leftBottom)!;
+        var top = left.add(raw right)!;
+        var bottom = leftBottom.mul(raw rightBottom)!;
         Rational<T>.fromBig(move(top), move(bottom))
     }
 
@@ -47,10 +47,10 @@ pub class Rational<T: Copyable + Movable> {
         var rightTop = BigInt.fromInteger<T>(other.numeratorValue)!;
         var leftBottom = BigInt.fromInteger<T>(denominatorValue)!;
         var rightBottom = BigInt.fromInteger<T>(other.denominatorValue)!;
-        var left = leftTop.mul(&rightBottom)!;
-        var right = rightTop.mul(&leftBottom)!;
-        var top = left.sub(&right)!;
-        var bottom = leftBottom.mul(&rightBottom)!;
+        var left = leftTop.mul(raw rightBottom)!;
+        var right = rightTop.mul(raw leftBottom)!;
+        var top = left.sub(raw right)!;
+        var bottom = leftBottom.mul(raw rightBottom)!;
         Rational<T>.fromBig(move(top), move(bottom))
     }
 
@@ -59,8 +59,8 @@ pub class Rational<T: Copyable + Movable> {
         var rightTop = BigInt.fromInteger<T>(other.numeratorValue)!;
         var leftBottom = BigInt.fromInteger<T>(denominatorValue)!;
         var rightBottom = BigInt.fromInteger<T>(other.denominatorValue)!;
-        var top = leftTop.mul(&rightTop)!;
-        var bottom = leftBottom.mul(&rightBottom)!;
+        var top = leftTop.mul(raw rightTop)!;
+        var bottom = leftBottom.mul(raw rightBottom)!;
         Rational<T>.fromBig(move(top), move(bottom))
     }
 
@@ -70,8 +70,8 @@ pub class Rational<T: Copyable + Movable> {
         var rightBottom = BigInt.fromInteger<T>(other.denominatorValue)!;
         var leftBottom = BigInt.fromInteger<T>(denominatorValue)!;
         var rightTop = BigInt.fromInteger<T>(other.numeratorValue)!;
-        var top = leftTop.mul(&rightBottom)!;
-        var bottom = leftBottom.mul(&rightTop)!;
+        var top = leftTop.mul(raw rightBottom)!;
+        var bottom = leftBottom.mul(raw rightTop)!;
         Rational<T>.fromBig(move(top), move(bottom))
     }
 
@@ -80,8 +80,8 @@ pub class Rational<T: Copyable + Movable> {
         var rightTop = BigInt.fromInteger<T>(other.numeratorValue)!;
         var leftBottom = BigInt.fromInteger<T>(denominatorValue)!;
         var rightBottom = BigInt.fromInteger<T>(other.denominatorValue)!;
-        var left = leftTop.mul(&rightBottom)!;
-        var right = rightTop.mul(&leftBottom)!;
-        left.compare(&right)
+        var left = leftTop.mul(raw rightBottom)!;
+        var right = rightTop.mul(raw leftBottom)!;
+        left.compare(raw right)
     }
 }

@@ -64,7 +64,7 @@ pub class MultiReader {
 
     pub func read(dst: []u8) !usize {
         if dst.len() == 0 { return 0; }
-        for index < sources.len() {
+        while index < sources.len() {
             var count = sources[index].read(dst)!;
             if count > dst.len() { return IoError.InvalidCount; }
             if count != 0 { return count; }
@@ -96,8 +96,8 @@ pub class MultiWriter {
                 if data[i] != pending[i] { return IoError.InvalidArgument; }
             }
         }
-        for targetIndex < targets.len() {
-            writeAll(targets[targetIndex], pending.asConstSlice(), &processed)!;
+        while targetIndex < targets.len() {
+            writeAll(targets[targetIndex], pending.asConstSlice(), raw processed)!;
             targetIndex++;
             processed = 0;
         }
@@ -136,7 +136,7 @@ pub class TeeReader {
             delivered = 0;
             if filled == 0 { return 0; }
         }
-        writeAll(mirror, buffer[0..filled], &written)!;
+        writeAll(mirror, buffer[0..filled], raw written)!;
         var available = filled - delivered;
         var count = if dst.len() < available { dst.len() } else { available };
         mem.copyBytes(buffer[delivered..delivered + count], dst[0..count])!;

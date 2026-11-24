@@ -14,11 +14,11 @@ func main() !void {
     endpoint.append(port)!;
     var address = endpoint.build()!;
     var connection = grpc.dial(address, dial)!;
-    var client = generated.GreeterClient(&connection);
+    var client = generated.GreeterClient(raw connection);
     var request = generated.Msg_HelloRequest();
     request.f_name = "Vaqrin";
     var options = grpc.CallOptions();
-    var response = client.rpc_SayHello(&request, &options)!;
+    var response = client.rpc_SayHello(raw request, raw options)!;
     if !response.status.isOk() {
         io.eprintln(response.status.message)!;
         return GreeterError.RpcFailed;

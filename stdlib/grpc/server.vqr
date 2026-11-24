@@ -59,8 +59,8 @@ class Incoming {
     pub func request() !UnaryRequest {
         var body = decoder.next()! ?? { return RpcError.Protocol; };
         decoder.finish()!;
-        var path = core.replace<string>(&head.path, "");
-        var metadata = core.replace<Metadata>(&head.metadata, Metadata());
+        var path = core.replace<string>(raw head.path, "");
+        var metadata = core.replace<Metadata>(raw head.metadata, Metadata());
         UnaryRequest{path: move(path), metadata: move(metadata), deadline: head.deadline,
                      body: move(body)}
     }
@@ -90,10 +90,10 @@ pub class Server {
     pub func serveTls(socket: tls.TlsStream, options: ServeOptions) !void {
         var settings = http2.Settings();
         settings.maxStreams = options.maxConcurrentStreams;
-        var session = http2.openTls(http2.Role.Server, &socket, settings)!;
+        var session = http2.openTls(http2.Role.Server, raw socket, settings)!;
         var stream = Transport(StreamSocket.Secure(move(socket)));
         stream.setTimeout(options.timeout)!;
-        serve(&stream, &session, options, false, null)
+        serve(raw stream, raw session, options, false, null)
     }
     pub func serveH2c(socket: net.TcpStream, options: ServeOptions) !void {
         var settings = http2.Settings();
@@ -101,7 +101,7 @@ pub class Server {
         var session = http2.Connection.open(http2.Role.Server, settings)!;
         var stream = Transport(StreamSocket.Clear(move(socket)));
         stream.setTimeout(options.timeout)!;
-        serve(&stream, &session, options, false, null)
+        serve(raw stream, raw session, options, false, null)
     }
     pub func serveConcurrentH2c(socket: net.AsyncTcpStream, options: ServeOptions) !void {
         serveConcurrentH2c(move(socket), options, null)
@@ -111,7 +111,7 @@ pub class Server {
         settings.maxStreams = options.maxConcurrentStreams;
         var session = http2.Connection.open(http2.Role.Server, settings)!;
         var stream = Transport(StreamSocket.AsyncClear(move(socket)));
-        serve(&stream, &session, options, true, stop)
+        serve(raw stream, raw session, options, true, stop)
     }
     pub func acceptConcurrentTls(listener: *net.AsyncTcpListener, acceptor: *const tls.TlsAcceptor,
                              options: ServeOptions, deadline: ?time.Deadline) !void {
@@ -123,9 +123,9 @@ pub class Server {
         var secure = acceptor.acceptAsync(move(socket), some(time.Deadline.after(options.timeout)!))!;
         var settings = http2.Settings();
         settings.maxStreams = options.maxConcurrentStreams;
-        var session = http2.openTls(http2.Role.Server, &secure, settings)!;
+        var session = http2.openTls(http2.Role.Server, raw secure, settings)!;
         var stream = Transport(StreamSocket.AsyncSecure(move(secure)));
-        serve(&stream, &session, options, true, stop)
+        serve(raw stream, raw session, options, true, stop)
     }
     pub func acceptTls(listener: *net.TcpListener, acceptor: *const tls.TlsAcceptor, options: ServeOptions) !void {
         raw, _ := listener.accept()!;
@@ -176,7 +176,7 @@ pub class Server {
         for {
             var queuedWrite = false;
             if !pendingTlsWrite && drainDeadline == null && stop != null && stop.unwrap().requested()! {
-                opt.asMutPtr<CompletionWatch>(&watched).unwrap().stopWatchingShutdown()!;
+                opt.asMutPtr<CompletionWatch>(raw watched).unwrap().stopWatchingShutdown()!;
                 session.goAway(lastProcessed, 0)!;
                 drainDeadline = some(time.Deadline.after(options.shutdownTimeout)!);
             }
@@ -216,7 +216,7 @@ pub class Server {
                         continue;
                     }
                     if interest != null {
-                        var wake = opt.asMutPtr<CompletionWatch>(&watched).unwrap();
+                        var wake = opt.asMutPtr<CompletionWatch>(raw watched).unwrap();
                         wake.wait(calls.nextDeadline(idle)) catch (reason) {
                             if reason != io.IoError.DeadlineExceeded { return reason; }
                             if drainDeadline != null && drainDeadline.unwrap().expired()! { return RpcError.DeadlineExceeded; }
@@ -264,7 +264,7 @@ pub class Server {
                     _ => {},
                 };
             }
-            var position = callAt(&active, event.stream);
+            var position = callAt(raw active, event.stream);
             switch event.kind {
                 http2.EventKind.Headers => {
                     if position != null {
@@ -278,7 +278,7 @@ pub class Server {
                             continue;
                         }
                         if event.stream > lastProcessed { lastProcessed = event.stream; }
-                        var head = incoming(&event, session)! ?? { continue; };
+                        var head = incoming(raw event, session)! ?? { continue; };
                         var handler = find(head.path) ?? {
                             sendError(session, event.stream, StatusCode.Unimplemented)!;
                             continue;
@@ -288,7 +288,7 @@ pub class Server {
                                 active.push(Incoming(event.stream, handler, move(head), options.maxMessageBytes))!;
                             },
                             RouteHandler.Streaming(handler) => {
-                                performStream(handler, wire, session, &deferred, event.stream,
+                                performStream(handler, wire, session, raw deferred, event.stream,
                                               move(head), options)!;
                             },
                             RouteHandler.ConcurrentStreaming(handler) => {
@@ -322,7 +322,7 @@ pub class Server {
                 http2.EventKind.EndStream => {
                     if position != null {
                         var item = active.swapRemove(position.unwrap()).unwrap();
-                        runHandler(session, &item, options, &calls, concurrent)!;
+                        runHandler(session, raw item, options, raw calls, concurrent)!;
                     }
                 },
                 http2.EventKind.Closed => {
@@ -366,7 +366,7 @@ func runHandler(session: *http2.Connection, item: *Incoming, options: ServeOptio
             if deadline != null && deadline.unwrap().expired()! {
                 return sendError(session, item.stream, StatusCode.DeadlineExceeded);
             }
-            sendUnaryResult(session, item.stream, &result, options.maxMessageBytes, compression)
+            sendUnaryResult(session, item.stream, raw result, options.maxMessageBytes, compression)
         },
         UnaryRoute.Concurrent(handler) => {
             if !concurrent { return sendError(session, item.stream, StatusCode.Unimplemented); }
@@ -389,7 +389,7 @@ func sendUnaryResult(session: *http2.Connection, stream: i32, result: *const Una
 
 func sendError(session: *http2.Connection, stream: i32, code: StatusCode) !void {
     var answer = reply(status(code, ""));
-    sendResponse(session, stream, &answer, 0, Compression.Identity)
+    sendResponse(session, stream, raw answer, 0, Compression.Identity)
 }
 
 func sendResponse(session: *http2.Connection, stream: i32,
@@ -399,13 +399,13 @@ func sendResponse(session: *http2.Connection, stream: i32,
     headers.add("content-type", "application/grpc")!;
     headers.add("grpc-accept-encoding", "identity,gzip")!;
     if compression == Compression.Gzip && response.body != null { headers.add("grpc-encoding", "gzip")!; }
-    response.initial.writeTo(&headers)!;
+    response.initial.writeTo(raw headers)!;
     switch response.body {
         null => {
             if response.initial.items().len() == 0 {
-                response.trailing.writeTo(&headers)!;
-                encodeStatus(&headers, &response.status)!;
-                return session.respond(stream, &headers, true);
+                response.trailing.writeTo(raw headers)!;
+                encodeStatus(raw headers, raw response.status)!;
+                return session.respond(stream, raw headers, true);
             }
         },
         some(ref body) => {
@@ -415,9 +415,9 @@ func sendResponse(session: *http2.Connection, stream: i32,
         },
     };
     var trailers = http2.HeaderBlock();
-    response.trailing.writeTo(&trailers)!;
-    encodeStatus(&trailers, &response.status)!;
-    session.respond(stream, &headers, false)!;
+    response.trailing.writeTo(raw trailers)!;
+    encodeStatus(raw trailers, raw response.status)!;
+    session.respond(stream, raw headers, false)!;
     switch response.body {
         some(ref body) => {
             var payload = frameMessage(body.asConstSlice(), limit, compression)!;
@@ -425,5 +425,5 @@ func sendResponse(session: *http2.Connection, stream: i32,
         },
         null => {},
     };
-    session.sendTrailers(stream, &trailers)
+    session.sendTrailers(stream, raw trailers)
 }

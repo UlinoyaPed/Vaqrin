@@ -64,10 +64,10 @@ func main() !void {
         options.shutdownTimeout = time.Duration.fromMillis(300);
     }
     unsafe {
-        server.registerConcurrent("/interop.Concurrent/Wait", &handler)!;
-        server.registerConcurrent("/interop.Concurrent/Fast", &handler)!;
-        server.registerConcurrentStreaming("/interop.Concurrent/Echo", &echo)!;
-        server.registerConcurrent("/interop.Concurrent/Stop", &stopHandler)!;
+        server.registerConcurrent("/interop.Concurrent/Wait", raw handler)!;
+        server.registerConcurrent("/interop.Concurrent/Fast", raw handler)!;
+        server.registerConcurrentStreaming("/interop.Concurrent/Echo", raw echo)!;
+        server.registerConcurrent("/interop.Concurrent/Stop", raw stopHandler)!;
     }
     var listener = net.AsyncTcpListener.bind(net.parseSocketAddr("127.0.0.1:0")!)!;
     io.println(listener.localAddr()!.port())!;
@@ -79,7 +79,7 @@ func main() !void {
         config.addProtocol("h2".asBytes())!;
         config.requireProtocol = true;
         var acceptor = tls.TlsAcceptor.fromPem(cert, key, move(config))!;
-        return server.acceptConcurrentTls(&listener, &acceptor, options, null, some(stop.asPtr()));
+        return server.acceptConcurrentTls(raw listener, raw acceptor, options, null, some(stop.asPtr()));
     }
     socket, peer := listener.accept(null)!;
     server.serveConcurrentH2c(move(socket), options, some(stop.asPtr()))

@@ -29,7 +29,7 @@ func printArea(shape: *const Area) !void {
 
 func main() !void {
     var rectangle = Rectangle{width: 3, height: 7};
-    printArea(&rectangle)!;
+    printArea(raw rectangle)!;
     io.println(areaOf(Shape.Square(4)))!;
     io.println(areaOf(Shape.Rectangle(2, 5)))!;
 }

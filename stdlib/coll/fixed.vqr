@@ -20,12 +20,12 @@ pub class FixedVec<T: Movable, comptime N: usize> {
 
     pub const func get(index: usize) ?*const T {
         if index >= length { return null; }
-        some(&(*slots.asConstPtr())[index])
+        some(raw (*slots.asConstPtr())[index])
     }
 
     pub func getMut(index: usize) ?*T {
         if index >= length { return null; }
-        some(&(*slots.asPtr())[index])
+        some(raw (*slots.asPtr())[index])
     }
 
     pub const func first() ?*const T { get(0) }
@@ -89,7 +89,7 @@ pub class FixedVec<T: Movable, comptime N: usize> {
     }
 
     pub func truncate(n: usize) void {
-        for length > n {
+        while length > n {
             length--;
             unsafe { __vqr_slot_drop<T>(address(length)); }
         }
@@ -111,7 +111,7 @@ pub class FixedVec<T: Movable, comptime N: usize> {
         if self == other || other.length == 0 { return; }
         if other.length > N - length { return CapacityError.Overflow; }
         var base = length;
-        for other.length > 0 {
+        while other.length > 0 {
             var item = other.pop().unwrap();
             switch insert(base, move(item)) {
                 PushResult.Stored => {},
@@ -180,7 +180,7 @@ pub class FixedVec<T: Movable, comptime N: usize> {
 
     pub func deinit() void { clear(); }
 
-    func address(index: usize) *T { &(*slots.asPtr())[index] }
+    func address(index: usize) *T { raw (*slots.asPtr())[index] }
 
     func transfer(from: usize, to: usize) void {
         unsafe { __vqr_slot_write<T>(address(to), __vqr_slot_take<T>(address(from))); }

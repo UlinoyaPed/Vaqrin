@@ -43,20 +43,20 @@ pub func base64Encode(data: []const u8, opts: Base64Options) !string {
     for i := usize(0); i < data.len(); {
         var a = usize(data[i]);
         var count = data.len() - i;
-        var b = if (count > 1) usize(data[i + 1]) else usize(0);
-        var c = if (count > 2) usize(data[i + 2]) else usize(0);
-        emit(digits[a >> 2], opts.lineWidth, &line, &result)!;
-        emit(digits[((a & 3) << 4) | (b >> 4)], opts.lineWidth, &line, &result)!;
+        var b = if count > 1 { usize(data[i + 1]) } else { usize(0) };
+        var c = if count > 2 { usize(data[i + 2]) } else { usize(0) };
+        emit(digits[a >> 2], opts.lineWidth, raw line, raw result)!;
+        emit(digits[((a & 3) << 4) | (b >> 4)], opts.lineWidth, raw line, raw result)!;
         if count > 1 {
-            emit(digits[((b & 15) << 2) | (c >> 6)], opts.lineWidth, &line, &result)!;
+            emit(digits[((b & 15) << 2) | (c >> 6)], opts.lineWidth, raw line, raw result)!;
         } else if opts.padding {
-            emit(61, opts.lineWidth, &line, &result)!;
+            emit(61, opts.lineWidth, raw line, raw result)!;
         }
         if count > 2 {
-            emit(digits[c & 63], opts.lineWidth, &line, &result)!;
+            emit(digits[c & 63], opts.lineWidth, raw line, raw result)!;
             i += 3;
         } else {
-            if opts.padding { emit(61, opts.lineWidth, &line, &result)!; }
+            if opts.padding { emit(61, opts.lineWidth, raw line, raw result)!; }
             i += count;
         }
     }

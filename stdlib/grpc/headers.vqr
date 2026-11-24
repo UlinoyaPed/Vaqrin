@@ -116,7 +116,7 @@ func parseHeaders(event: *const http2.Event) !HeaderInfo {
             var value = text.fromBytes(field.value)!;
             info.details = decodeBinary(value)!;
         } else {
-            info.metadata.readField(&field)!;
+            info.metadata.readField(raw field)!;
         }
     }
     move(info)

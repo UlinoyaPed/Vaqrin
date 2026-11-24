@@ -15,13 +15,13 @@ pub func rotateRight<T>(value: T, n: usize) T { __vqr_bits_ror(value, n) }
 
 pub func firstSet<T>(value: T) ?usize {
     var index = trailingZeros(value);
-    if (index == meta.bitWidth<T>()) null else some(index)
+    if index == meta.bitWidth<T>() { null } else { some(index) }
 }
 
 pub func lastSet<T>(value: T) ?usize {
     var width = meta.bitWidth<T>();
     var leading = leadingZeros(value);
-    if (leading == width) null else some(width - leading - 1)
+    if leading == width { null } else { some(width - leading - 1) }
 }
 
 pub func testBit<T>(value: T, index: usize) bool { __vqr_bits_test(value, index) }

@@ -9,20 +9,20 @@ pub interface Codec<T> {
 
 pub func encode<T>(value: *const T, codec: *Codec<T>, maxBytes: usize) !coll.Vec<u8> {
     var writer = Writer(maxBytes);
-    codec.encode(value, &writer)!;
+    codec.encode(value, raw writer)!;
     writer.takeBytes()
 }
 
 pub func decode<T>(input: []const u8, codec: *Codec<T>, limits: DecodeLimits) !T {
     var reader = Reader.open(input, limits)!;
     var value = codec.newValue()!;
-    codec.merge(&value, &reader)!;
+    codec.merge(raw value, raw reader)!;
     if reader.remaining() != 0 { return DecodeError.TrailingData; }
     move(value)
 }
 
 pub func mergeMessage<T>(field: Field, value: *T, codec: *Codec<T>) !void {
     var reader = field.asMessage()!;
-    codec.merge(value, &reader)!;
+    codec.merge(value, raw reader)!;
     if reader.remaining() != 0 { return DecodeError.TrailingData; }
 }

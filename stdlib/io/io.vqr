@@ -5,20 +5,20 @@ pub func println<T>(value: T) !void { __vqr_println(move(value)) }
 
 pub func print(value: str) !void {
     var output = stdout();
-    writeString(&output, value)!;
+    writeString(raw output, value)!;
     output.flush()
 }
 
 pub func eprint(value: str) !void {
     var output = stderr();
-    writeString(&output, value)!;
+    writeString(raw output, value)!;
     output.flush()
 }
 
 pub func eprintln(value: str) !void {
     var output = stderr();
-    writeString(&output, value)!;
-    writeString(&output, "\n")!;
+    writeString(raw output, value)!;
+    writeString(raw output, "\n")!;
     output.flush()
 }
 

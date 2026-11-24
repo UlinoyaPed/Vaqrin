@@ -15,7 +15,7 @@ pub class QueryValueIter {
     var index: usize;
     pub func init(entries: []const QueryParam, key: string) : entries(entries), keyValue(key), index(0) {}
     pub func next() ?str {
-        for index < entries.len() {
+        while index < entries.len() {
             var current = index;
             index++;
             if entries[current].key() == keyValue { return some(entries[current].value()); }
@@ -69,7 +69,7 @@ pub class QueryParams {
     pub func set(key: str, value: str) !void {
         var found = false;
         var index: usize = 0;
-        for index < entries.len() {
+        while index < entries.len() {
             if entries[index].key() == key {
                 if !found {
                     var replacement = QueryParam(text.fromBytes(key.asBytes())!, text.fromBytes(value.asBytes())!);
@@ -100,7 +100,7 @@ pub class QueryParams {
     pub func remove(key: str) usize {
         var removed: usize = 0;
         var index: usize = 0;
-        for index < entries.len() {
+        while index < entries.len() {
             if entries[index].key() == key {
                 var item = entries.remove(index);
                 removed++;

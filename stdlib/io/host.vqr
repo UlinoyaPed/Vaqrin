@@ -120,7 +120,7 @@ pub class HostFile {
     pub static func open(path: []const u8, flags: u32, mode: u32) !Self {
         var name = cString(path)!;
         var errorCode: i32 = 0;
-        var fd = unsafe { __vqr_io_open(&name[0], flags, mode, &errorCode) };
+        var fd = unsafe { __vqr_io_open(raw name[0], flags, mode, raw errorCode) };
         if fd < 0 { return systemError(errorCode); }
         HostFile(fd, true, (flags & 4) != 0)
     }
@@ -129,11 +129,11 @@ pub class HostFile {
         var dir = parent.systemDescriptor()!;
         var name = mem.zeroedBytes<25>();
         var reason: i32 = 0;
-        var fd = unsafe { __vqr_io_temp_at(dir, &name[0], 0, &reason) };
+        var fd = unsafe { __vqr_io_temp_at(dir, raw name[0], 0, raw reason) };
         if fd < 0 { return systemError(reason); }
         var file = HostFile(fd, true, false);
         var path = text.fromBytes(name[0..24]) catch (failure) {
-            unsafe { __vqr_io_unlink_at(dir, &name[0], 0); }
+            unsafe { __vqr_io_unlink_at(dir, raw name[0], 0); }
             return failure;
         };
         (move(file), move(path))
@@ -153,7 +153,7 @@ pub class HostFile {
         if closed { return IoError.Closed; }
         if dst.len() == 0 { return 0; }
         var errorCode: i32 = 0;
-        var count = unsafe { __vqr_io_file_read(descriptor, &dst[0], dst.len(), &errorCode) };
+        var count = unsafe { __vqr_io_file_read(descriptor, raw dst[0], dst.len(), raw errorCode) };
         if count < 0 { return systemError(errorCode); }
         if usize(count)! > dst.len() { return IoError.InvalidCount; }
         usize(count)
@@ -163,7 +163,7 @@ pub class HostFile {
         if closed { return IoError.Closed; }
         if src.len() == 0 { return 0; }
         var errorCode: i32 = 0;
-        var count = unsafe { __vqr_io_file_write(descriptor, &src[0], src.len(), &errorCode) };
+        var count = unsafe { __vqr_io_file_write(descriptor, raw src[0], src.len(), raw errorCode) };
         if count < 0 { return systemError(errorCode); }
         if usize(count)! > src.len() { return IoError.InvalidCount; }
         usize(count)
@@ -174,7 +174,7 @@ pub class HostFile {
         if closed { return IoError.Closed; }
         if dst.len() == 0 { return 0; }
         var errorCode: i32 = 0;
-        var count = unsafe { __vqr_io_file_read_at(descriptor, &dst[0], dst.len(), offset, &errorCode) };
+        var count = unsafe { __vqr_io_file_read_at(descriptor, raw dst[0], dst.len(), offset, raw errorCode) };
         if count < 0 { return systemError(errorCode); }
         if usize(count)! > dst.len() { return IoError.InvalidCount; }
         usize(count)
@@ -185,7 +185,7 @@ pub class HostFile {
         if appendMode { return IoError.Unsupported; }
         if src.len() == 0 { return 0; }
         var errorCode: i32 = 0;
-        var count = unsafe { __vqr_io_file_write_at(descriptor, &src[0], src.len(), offset, &errorCode) };
+        var count = unsafe { __vqr_io_file_write_at(descriptor, raw src[0], src.len(), offset, raw errorCode) };
         if count < 0 { return systemError(errorCode); }
         if usize(count)! > src.len() { return IoError.InvalidCount; }
         usize(count)
@@ -199,7 +199,7 @@ pub class HostFile {
             SeekOrigin.End => 2,
         };
         var errorCode: i32 = 0;
-        var position = unsafe { __vqr_io_file_seek(descriptor, offset, base, &errorCode) };
+        var position = unsafe { __vqr_io_file_seek(descriptor, offset, base, raw errorCode) };
         if position < 0 { return systemError(errorCode); }
         u64(position)
     }
@@ -209,7 +209,7 @@ pub class HostFile {
     pub func syncAll() !void {
         if closed { return IoError.Closed; }
         var errorCode: i32 = 0;
-        if unsafe { __vqr_io_file_sync(descriptor, 0, &errorCode) } != 0 {
+        if unsafe { __vqr_io_file_sync(descriptor, 0, raw errorCode) } != 0 {
             return systemError(errorCode);
         }
     }
@@ -217,7 +217,7 @@ pub class HostFile {
     pub func syncData() !void {
         if closed { return IoError.Closed; }
         var errorCode: i32 = 0;
-        if unsafe { __vqr_io_file_sync(descriptor, 1, &errorCode) } != 0 {
+        if unsafe { __vqr_io_file_sync(descriptor, 1, raw errorCode) } != 0 {
             return systemError(errorCode);
         }
     }
@@ -225,7 +225,7 @@ pub class HostFile {
     pub func truncate(size: u64) !void {
         if closed { return IoError.Closed; }
         var errorCode: i32 = 0;
-        if unsafe { __vqr_io_file_truncate(descriptor, size, &errorCode) } != 0 {
+        if unsafe { __vqr_io_file_truncate(descriptor, size, raw errorCode) } != 0 {
             return systemError(errorCode);
         }
     }
@@ -239,7 +239,7 @@ pub class HostFile {
         var device: u64 = 0;
         var inode: u64 = 0;
         var errorCode: i32 = 0;
-        if unsafe { __vqr_io_file_metadata(descriptor, &size, &mode, &modified, &kind, &device, &inode, &errorCode) } != 0 {
+        if unsafe { __vqr_io_file_metadata(descriptor, raw size, raw mode, raw modified, raw kind, raw device, raw inode, raw errorCode) } != 0 {
             return systemError(errorCode);
         }
         HostMetadata(size, mode, modified, kind, some(FileIdentity{device: device, inode: inode}))
@@ -248,7 +248,7 @@ pub class HostFile {
     pub func setMode(mode: u32) !void {
         if closed { return IoError.Closed; }
         var errorCode: i32 = 0;
-        if unsafe { __vqr_io_file_set_mode(descriptor, mode, &errorCode) } != 0 {
+        if unsafe { __vqr_io_file_set_mode(descriptor, mode, raw errorCode) } != 0 {
             return systemError(errorCode);
         }
     }
@@ -259,7 +259,7 @@ pub class HostFile {
         descriptor = -1;
         closed = true;
         var errorCode: i32 = 0;
-        if unsafe { __vqr_io_file_close(fd, &errorCode) } != 0 {
+        if unsafe { __vqr_io_file_close(fd, raw errorCode) } != 0 {
             return systemError(errorCode);
         }
     }
@@ -282,7 +282,7 @@ pub class HostDirectory {
     pub static func open(path: []const u8) !Self {
         var name = cString(path)!;
         var errorCode: i32 = 0;
-        var directory = unsafe { __vqr_io_dir_open(&name[0], &errorCode) };
+        var directory = unsafe { __vqr_io_dir_open(raw name[0], raw errorCode) };
         if directory == 0 { return systemError(errorCode); }
         HostDirectory(directory)
     }
@@ -290,7 +290,7 @@ pub class HostDirectory {
     pub static func openNoFollow(path: []const u8) !Self {
         var name = cString(path)!;
         var reason: i32 = 0;
-        var directory = unsafe { __vqr_io_dir_open_nofollow(&name[0], &reason) };
+        var directory = unsafe { __vqr_io_dir_open_nofollow(raw name[0], raw reason) };
         if directory == 0 { return systemError(reason); }
         HostDirectory(directory)
     }
@@ -304,7 +304,7 @@ pub class HostDirectory {
         var child = component(name)!;
         var fd = systemDescriptor()!;
         var reason: i32 = 0;
-        var directory = unsafe { __vqr_io_dir_open_at(fd, &child[0], &reason) };
+        var directory = unsafe { __vqr_io_dir_open_at(fd, raw child[0], raw reason) };
         if directory == 0 { return systemError(reason); }
         HostDirectory(directory)
     }
@@ -312,21 +312,21 @@ pub class HostDirectory {
     pub const func removeChild(name: str, directory: bool) !void {
         var child = component(name)!;
         var fd = systemDescriptor()!;
-        checkNative(unsafe { __vqr_io_unlink_at(fd, &child[0], if directory { 1 } else { 0 }) })
+        checkNative(unsafe { __vqr_io_unlink_at(fd, raw child[0], if directory { 1 } else { 0 }) })
     }
 
     pub const func removeTree(name: str, depth: u32) !void {
         if depth > 128 { return IoError.LimitExceeded; }
         var child = component(name)!;
         var fd = systemDescriptor()!;
-        checkNative(unsafe { __vqr_io_remove_tree_at(fd, &child[0], depth) })
+        checkNative(unsafe { __vqr_io_remove_tree_at(fd, raw child[0], depth) })
     }
 
     pub const func replaceChild(from: str, to: str) !void {
         var source = component(from)!;
         var destination = component(to)!;
         var fd = systemDescriptor()!;
-        checkNative(unsafe { __vqr_io_rename_at(fd, &source[0], &destination[0]) })
+        checkNative(unsafe { __vqr_io_rename_at(fd, raw source[0], raw destination[0]) })
     }
 
     pub const func sync() !void {
@@ -338,10 +338,10 @@ pub class HostDirectory {
         var fd = systemDescriptor()!;
         var name = mem.zeroedBytes<25>();
         var reason: i32 = 0;
-        var result = unsafe { __vqr_io_temp_at(fd, &name[0], 1, &reason) };
+        var result = unsafe { __vqr_io_temp_at(fd, raw name[0], 1, raw reason) };
         if result < 0 { return systemError(reason); }
         text.fromBytes(name[0..24]) catch (failure) {
-            unsafe { __vqr_io_unlink_at(fd, &name[0], 1); }
+            unsafe { __vqr_io_unlink_at(fd, raw name[0], 1); }
             return failure;
         }
     }
@@ -350,12 +350,12 @@ pub class HostDirectory {
         if handle == 0 { return IoError.Closed; }
         var directory = unsafe { ptrFromInt<*u8>(handle) };
         var storage = __vqr_uninitialized<[4096]u8>();
-        var name = unsafe { (*__vqr_raw_address(&storage))[:] };
+        var name = unsafe { (*__vqr_raw_address(raw storage))[:] };
         mem.zeroBytes(name);
         var length: usize = 0;
         var kind: i32 = 0;
         var errorCode: i32 = 0;
-        var status = unsafe { __vqr_io_dir_next(directory, &name[0], name.len(), &length, &kind, &errorCode) };
+        var status = unsafe { __vqr_io_dir_next(directory, raw name[0], name.len(), raw length, raw kind, raw errorCode) };
         if status == 0 { return null; }
         if status < 0 { return systemError(errorCode); }
         var value = text.fromBytes(name[0..length])!;
@@ -367,7 +367,7 @@ pub class HostDirectory {
         var directory = unsafe { ptrFromInt<*u8>(handle) };
         handle = 0;
         var errorCode: i32 = 0;
-        if unsafe { __vqr_io_dir_close(directory, &errorCode) } != 0 {
+        if unsafe { __vqr_io_dir_close(directory, raw errorCode) } != 0 {
             return systemError(errorCode);
         }
     }
@@ -383,7 +383,7 @@ pub func hostStat(path: []const u8, follow: bool) !HostMetadata {
     var device: u64 = 0;
     var inode: u64 = 0;
     var errorCode: i32 = 0;
-    if unsafe { __vqr_io_stat(&name[0], if follow { 1 } else { 0 }, &size, &mode, &modified, &kind, &device, &inode, &errorCode) } != 0 {
+    if unsafe { __vqr_io_stat(raw name[0], if follow { 1 } else { 0 }, raw size, raw mode, raw modified, raw kind, raw device, raw inode, raw errorCode) } != 0 {
         return systemError(errorCode);
     }
     HostMetadata(size, mode, modified, kind, some(FileIdentity{device: device, inode: inode}))
@@ -392,16 +392,16 @@ pub func hostStat(path: []const u8, follow: bool) !HostMetadata {
 pub func hostSymlink(target: []const u8, path: []const u8) !void {
     var value = cString(target)!;
     var name = cString(path)!;
-    checkNative(unsafe { __vqr_io_symlink(&value[0], &name[0]) })
+    checkNative(unsafe { __vqr_io_symlink(raw value[0], raw name[0]) })
 }
 
 pub func hostReadLink(path: []const u8) !string {
     var name = cString(path)!;
     var storage = __vqr_uninitialized<[4096]u8>();
-    var buffer = unsafe { (*__vqr_raw_address(&storage))[:] };
+    var buffer = unsafe { (*__vqr_raw_address(raw storage))[:] };
     mem.zeroBytes(buffer);
     var reason: i32 = 0;
-    var size = unsafe { __vqr_io_readlink(&name[0], &buffer[0], buffer.len(), &reason) };
+    var size = unsafe { __vqr_io_readlink(raw name[0], raw buffer[0], buffer.len(), raw reason) };
     if size < 0 { return systemError(reason); }
     var count = usize(size)!;
     if count >= buffer.len() { return IoError.LimitExceeded; }
@@ -411,26 +411,26 @@ pub func hostReadLink(path: []const u8) !string {
 pub func hostMkdir(path: []const u8, mode: u32) !void {
     var name = cString(path)!;
     var errorCode: i32 = 0;
-    if unsafe { __vqr_io_mkdir(&name[0], mode, &errorCode) } != 0 { return systemError(errorCode); }
+    if unsafe { __vqr_io_mkdir(raw name[0], mode, raw errorCode) } != 0 { return systemError(errorCode); }
 }
 
 pub func hostRemove(path: []const u8) !void {
     var name = cString(path)!;
     var errorCode: i32 = 0;
-    if unsafe { __vqr_io_remove(&name[0], &errorCode) } != 0 { return systemError(errorCode); }
+    if unsafe { __vqr_io_remove(raw name[0], raw errorCode) } != 0 { return systemError(errorCode); }
 }
 
 pub func hostRemoveDir(path: []const u8) !void {
     var name = cString(path)!;
     var errorCode: i32 = 0;
-    if unsafe { __vqr_io_remove_dir(&name[0], &errorCode) } != 0 { return systemError(errorCode); }
+    if unsafe { __vqr_io_remove_dir(raw name[0], raw errorCode) } != 0 { return systemError(errorCode); }
 }
 
 pub func hostRename(from: []const u8, to: []const u8) !void {
     var source = cString(from)!;
     var target = cString(to)!;
     var errorCode: i32 = 0;
-    if unsafe { __vqr_io_rename(&source[0], &target[0], &errorCode) } != 0 {
+    if unsafe { __vqr_io_rename(raw source[0], raw target[0], raw errorCode) } != 0 {
         return systemError(errorCode);
     }
 }
@@ -438,16 +438,16 @@ pub func hostRename(from: []const u8, to: []const u8) !void {
 pub func hostChmod(path: []const u8, mode: u32) !void {
     var name = cString(path)!;
     var errorCode: i32 = 0;
-    if unsafe { __vqr_io_chmod(&name[0], mode, &errorCode) } != 0 { return systemError(errorCode); }
+    if unsafe { __vqr_io_chmod(raw name[0], mode, raw errorCode) } != 0 { return systemError(errorCode); }
 }
 
 pub func currentDir() !string {
     var storage = __vqr_uninitialized<[4096]u8>();
-    var buffer = unsafe { (*__vqr_raw_address(&storage))[:] };
+    var buffer = unsafe { (*__vqr_raw_address(raw storage))[:] };
     mem.zeroBytes(buffer);
     var length: usize = 0;
     var errorCode: i32 = 0;
-    if unsafe { __vqr_io_getcwd(&buffer[0], buffer.len(), &length, &errorCode) } != 0 {
+    if unsafe { __vqr_io_getcwd(raw buffer[0], buffer.len(), raw length, raw errorCode) } != 0 {
         return systemError(errorCode);
     }
     text.fromBytes(buffer[0..length])
@@ -456,7 +456,7 @@ pub func currentDir() !string {
 pub func setCurrentDir(path: []const u8) !void {
     var name = cString(path)!;
     var errorCode: i32 = 0;
-    if unsafe { __vqr_io_chdir(&name[0], &errorCode) } != 0 { return systemError(errorCode); }
+    if unsafe { __vqr_io_chdir(raw name[0], raw errorCode) } != 0 { return systemError(errorCode); }
 }
 
 pub func stdin() HostFile { HostFile.standardInput() }

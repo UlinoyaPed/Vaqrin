@@ -35,7 +35,7 @@
     "fields": {},
     "children": {
       "multiple": true,
-      "required": false,
+      "required": true,
       "types": [
         {
           "type": "import_item",
@@ -64,10 +64,6 @@
         "types": [
           {
             "type": "import_path",
-            "named": true
-          },
-          {
-            "type": "string",
             "named": true
           }
         ]
@@ -255,6 +251,14 @@
     "named": false
   },
   {
+    "type": "*|",
+    "named": false
+  },
+  {
+    "type": "*|=",
+    "named": false
+  },
+  {
     "type": "+",
     "named": false
   },
@@ -272,6 +276,14 @@
   },
   {
     "type": "+=",
+    "named": false
+  },
+  {
+    "type": "+|",
+    "named": false
+  },
+  {
+    "type": "+|=",
     "named": false
   },
   {
@@ -296,6 +308,14 @@
   },
   {
     "type": "-=",
+    "named": false
+  },
+  {
+    "type": "-|",
+    "named": false
+  },
+  {
+    "type": "-|=",
     "named": false
   },
   {
@@ -348,6 +368,14 @@
   },
   {
     "type": "<<=",
+    "named": false
+  },
+  {
+    "type": "<<|",
+    "named": false
+  },
+  {
+    "type": "<<|=",
     "named": false
   },
   {
@@ -452,6 +480,10 @@
     "named": false
   },
   {
+    "type": "defer",
+    "named": false
+  },
+  {
     "type": "else",
     "named": false
   },
@@ -541,15 +573,7 @@
     "named": false
   },
   {
-    "type": "private",
-    "named": false
-  },
-  {
     "type": "pub",
-    "named": false
-  },
-  {
-    "type": "public",
     "named": false
   },
   {

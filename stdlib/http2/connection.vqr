@@ -74,7 +74,7 @@ class NativeEvent {
     func deinit() void { unsafe { __vqr_http2_drop_event(handle); } }
     pub func init(handle: usize) : handle(handle) {}
     pub const func copyTo(dst: []u8) void {
-        if dst.len() != 0 { unsafe { __vqr_http2_copy_event(handle, &dst[0]); } }
+        if dst.len() != 0 { unsafe { __vqr_http2_copy_event(handle, raw dst[0]); } }
     }
 }
 
@@ -88,7 +88,7 @@ pub class Connection {
         var server = if role == Role.Server { 1 } else { 0 };
         var reason: i32 = 0;
         var handle = unsafe { __vqr_http2_open(server, settings.maxStreams, settings.initialStreamWindow,
-            settings.headerTableSize, settings.maxHeaderBytes, settings.maxQueuedBytes, &reason) };
+            settings.headerTableSize, settings.maxHeaderBytes, settings.maxQueuedBytes, raw reason) };
         checkStatus(reason)!;
         Connection(handle)
     }
@@ -101,7 +101,7 @@ pub class Connection {
     pub func ingest(data: []const u8) !void {
         checkOpen()!;
         if data.len() != 0 {
-            var reason = unsafe { __vqr_http2_ingest(handle, &data[0], data.len()) };
+            var reason = unsafe { __vqr_http2_ingest(handle, raw data[0], data.len()) };
             if reason < 0 { broken = true; }
             checkStatus(reason)!;
         }
@@ -109,7 +109,7 @@ pub class Connection {
     pub func receive(reader: *io.Reader) !bool {
         checkOpen()!;
         var buffer = __vqr_uninitialized<[4096]u8>();
-        var data = unsafe { (*__vqr_raw_address(&buffer))[:] };
+        var data = unsafe { (*__vqr_raw_address(raw buffer))[:] };
         mem.zeroBytes(data);
         var count = io.read(reader, data)!;
         if count == 0 { broken = true; return false; }
@@ -121,7 +121,7 @@ pub class Connection {
         for {
             var address: usize = 0;
             var count: usize = 0;
-            var reason = unsafe { __vqr_http2_output(handle, &address, &count) };
+            var reason = unsafe { __vqr_http2_output(handle, raw address, raw count) };
             if reason < 0 { broken = true; checkStatus(reason)!; }
             if count == 0 { break; }
             var wire = unsafe { __vqr_const_slice<u8>(some(ptrFromInt<*u8>(address)), count) };
@@ -139,7 +139,7 @@ pub class Connection {
         if handle == 0 { return Http2Error.ConnectionClosed; }
         var info = [3]u32{0, 0, 0};
         var size: usize = 0;
-        var event = unsafe { __vqr_http2_next(handle, &info[0], &size) };
+        var event = unsafe { __vqr_http2_next(handle, raw info[0], raw size) };
         if event == 0 { return null; }
         var source = NativeEvent(event);
         var payload = coll.Vec<u8>.withCapacity(size) catch (reason) {
@@ -176,7 +176,7 @@ pub class Connection {
         if stream <= 0 { return Http2Error.InvalidArgument; }
         var flag = if end { 1 } else { 0 };
         var empty: u8 = 0;
-        var input: *const u8 = if data.len() == 0 { &empty } else { &data[0] };
+        var input: *const u8 = if data.len() == 0 { raw empty } else { raw data[0] };
         checkStatus(unsafe { __vqr_http2_send(handle, stream, input, data.len(), flag) })
     }
     // True while the transport needs more output or peer window credit for queued DATA.
@@ -191,7 +191,7 @@ pub class Connection {
         checkOpen()!;
         var data = headers.encoded();
         if stream <= 0 || data.len() == 0 { return Http2Error.InvalidArgument; }
-        checkStatus(unsafe { __vqr_http2_trailers(handle, stream, &data[0], data.len()) })
+        checkStatus(unsafe { __vqr_http2_trailers(handle, stream, raw data[0], data.len()) })
     }
     pub func reset(stream: i32, code: u32) !void {
         checkOpen()!;
@@ -209,7 +209,7 @@ pub class Connection {
     }
     pub func ping(token: [8]u8) !void {
         checkOpen()!;
-        checkStatus(unsafe { __vqr_http2_ping(handle, &token[0]) })
+        checkStatus(unsafe { __vqr_http2_ping(handle, raw token[0]) })
     }
     const func checkOpen() !void {
         if handle == 0 || broken { return Http2Error.ConnectionClosed; }
@@ -219,7 +219,7 @@ pub class Connection {
         var data = headers.encoded();
         if data.len() == 0 { return Http2Error.InvalidArgument; }
         var flag = if end { 1 } else { 0 };
-        var response = unsafe { __vqr_http2_headers(handle, stream, flag, &data[0], data.len()) };
+        var response = unsafe { __vqr_http2_headers(handle, stream, flag, raw data[0], data.len()) };
         checkStatus(response)!;
         response
     }

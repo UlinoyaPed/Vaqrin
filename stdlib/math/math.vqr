@@ -167,11 +167,11 @@ pub func fract<T>(x: T) T { x - trunc(x) }
 pub func modf<T>(x: T) (T, T) {
     if meta.bitWidth<T>() == 32 {
         var integer: f32 = 0.0;
-        var fraction = unsafe { ffi.modff(toF32<T>(x), &integer) };
+        var fraction = unsafe { ffi.modff(toF32<T>(x), raw integer) };
         (fromF32<T>(fraction), fromF32<T>(integer))
     } else {
         var integer: f64 = 0.0;
-        var fraction = unsafe { ffi.modf(toF64<T>(x), &integer) };
+        var fraction = unsafe { ffi.modf(toF64<T>(x), raw integer) };
         (fromF64<T>(fraction), fromF64<T>(integer))
     }
 }
@@ -186,10 +186,10 @@ pub func remainder<T>(x: T, y: T) T {
 pub func remQuo<T>(x: T, y: T) (T, i32) {
     var quotient: i32 = 0;
     if meta.bitWidth<T>() == 32 {
-        var result = fromF32<T>(unsafe { ffi.remquof(toF32<T>(x), toF32<T>(y), &quotient) });
+        var result = fromF32<T>(unsafe { ffi.remquof(toF32<T>(x), toF32<T>(y), raw quotient) });
         (result, quotient)
     } else {
-        var result = fromF64<T>(unsafe { ffi.remquo(toF64<T>(x), toF64<T>(y), &quotient) });
+        var result = fromF64<T>(unsafe { ffi.remquo(toF64<T>(x), toF64<T>(y), raw quotient) });
         (result, quotient)
     }
 }
@@ -215,7 +215,7 @@ pub func powi<T>(x: T, n: i32) T {
     };
     var factor = if n < 0 { T(1) / x } else { x };
     var result = T(1);
-    for exponent > 0 {
+    while exponent > 0 {
         if (exponent & 1) != 0 { result *= factor; }
         exponent >>= 1;
         if exponent != 0 { factor *= factor; }
@@ -368,10 +368,10 @@ pub func minNum<T>(a: T, b: T) T {
     if a < b { a } else { b }
 }
 pub func totalMin<T>(a: T, b: T) T {
-    if cmp.totalCmp(&a, &b) == cmp.Ordering.Greater { b } else { a }
+    if cmp.totalCmp(raw a, raw b) == cmp.Ordering.Greater { b } else { a }
 }
 pub func totalMax<T>(a: T, b: T) T {
-    if cmp.totalCmp(&a, &b) == cmp.Ordering.Less { b } else { a }
+    if cmp.totalCmp(raw a, raw b) == cmp.Ordering.Less { b } else { a }
 }
 pub func clamp<T>(x: T, low: T, high: T) T {
     if isNan(low) || isNan(high) || low > high { panic("invalid clamp bounds"); }
@@ -397,8 +397,8 @@ pub func reduceAngle<T>(x: T) T { remainder(x, tau<T>()) }
 func scaledProduct(x: f64, y: f64) (f64, c_int) {
     var xExponent: c_int = 0;
     var yExponent: c_int = 0;
-    var xFraction = unsafe { ffi.frexp(x, &xExponent) };
-    var yFraction = unsafe { ffi.frexp(y, &yExponent) };
+    var xFraction = unsafe { ffi.frexp(x, raw xExponent) };
+    var yFraction = unsafe { ffi.frexp(y, raw yExponent) };
     (xFraction * yFraction, xExponent + yExponent)
 }
 func scaledDot(a: f64, b: f64, c: f64, d: f64) (f64, c_int) {
@@ -544,6 +544,6 @@ pub class Interval<T> {
         var a = T(1) / other.low;
         var b = T(1) / other.high;
         var reciprocal = Interval<T>(if a < b { a } else { b }, if a > b { a } else { b });
-        mul(&reciprocal)
+        mul(raw reciprocal)
     }
 }

@@ -51,7 +51,7 @@ func threadsWork() !bool {
     var mainId = thread.currentId().value;
     var work = [mainId]() u32 => {
         if thread.currentId().value == mainId { return 0; }
-        for !thread.stopRequested() { thread.yieldNow(); }
+        while !thread.stopRequested() { thread.yieldNow(); }
         42
     };
     var worker = thread.Thread<u32>.spawn(move(work))!;
@@ -79,7 +79,7 @@ func synchronizationWorks() !bool {
     };
     var updater = thread.Thread<void>.spawn(move(update))!;
     var updated = (value: *i32) bool => *value == 23;
-    var acquired = sync.waitUntil(&local.ready, move(guard), updated)!;
+    var acquired = sync.waitUntil(raw local.ready, move(guard), updated)!;
     updater.join()!;
 
     var deadline = time.Deadline.after(time.Duration.fromMillis(5))!;

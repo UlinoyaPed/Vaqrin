@@ -172,7 +172,7 @@ pub func remEuclid<T>(a: T, b: T) !T {
 pub func gcd<T>(a: T, b: T) !T {
     var left = magnitudeU128<T>(a);
     var right = magnitudeU128<T>(b);
-    for right != 0 {
+    while right != 0 {
         var remainder = left % right;
         left = right;
         right = remainder;
@@ -196,7 +196,7 @@ pub func powInt<T>(base: T, exponent: usize) !T {
     var power = exponent;
     var factor = base;
     var result = T(1);
-    for power != 0 {
+    while power != 0 {
         if (power & 1) != 0 { result = checkedMul<T>(result, factor)!; }
         power >>= 1;
         if power != 0 { factor = checkedMul<T>(factor, factor)!; }
@@ -242,10 +242,10 @@ pub func average<T: Copyable + Movable>(values: []const T) !?T {
     var total = BigInt.zero();
     for value in values {
         var term = BigInt.fromInteger<T>(value)!;
-        var next = total.add(&term)!;
+        var next = total.add(raw term)!;
         total = move(next);
     }
     var count = BigInt.fromInteger<usize>(values.len())!;
-    var mean = total.div(&count)!;
+    var mean = total.div(raw count)!;
     some(mean.toInteger<T>()!)
 }

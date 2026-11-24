@@ -99,7 +99,7 @@ pub class BigUint {
         if limbs.len() < other.limbs.len() { return cmp.Ordering.Less; }
         if limbs.len() > other.limbs.len() { return cmp.Ordering.Greater; }
         var index = limbs.len();
-        for index > 0 {
+        while index > 0 {
             index--;
             var left = limbs.asConstSlice()[index];
             var right = other.limbs.asConstSlice()[index];
@@ -167,7 +167,7 @@ pub class BigUint {
                 carry = total >> 32;
             }
             var index = i + other.limbs.len();
-            for carry != 0 {
+            while carry != 0 {
                 if index >= data.len() { return NumError.Overflow; }
                 var total = u64(data[index]) + carry;
                 data[index] = u32(total & 0xffffffffu64)!;
@@ -183,7 +183,7 @@ pub class BigUint {
         var quotient = BigUint();
         var remainder = BigUint();
         var index = bitLength();
-        for index > 0 {
+        while index > 0 {
             index--;
             remainder.mulSmall(2)!;
             if getBit(index) { remainder.addSmall(1)!; }
@@ -232,7 +232,7 @@ pub class BigUint {
         var data = out.asSlice();
         var carry: u64 = 0;
         var index = limbs.len();
-        for index > words {
+        while index > words {
             index--;
             var value = u64(limbs.asConstSlice()[index]);
             var shifted = if shift == 0 { value } else { (value >> shift) | (carry << (32 - shift)) };
@@ -256,7 +256,7 @@ pub class BigUint {
                     value >>= 8;
                 }
             }
-            for out.len() > 1 && out.asConstSlice()[out.len() - 1] == 0 {
+            while out.len() > 1 && out.asConstSlice()[out.len() - 1] == 0 {
                 out.truncate(out.len() - 1);
             }
         }
@@ -269,7 +269,7 @@ pub class BigUint {
         if isZero() { return "0"; }
         var work = clone()!;
         var output = coll.Vec<u8>();
-        for !work.isZero() {
+        while !work.isZero() {
             var digit = work.divSmallInPlace(u32(radix))!;
             var byte = if digit < 10 { u8(48 + digit)! } else { u8(87 + digit)! };
             output.push(byte)!;
@@ -286,13 +286,13 @@ pub class BigUint {
 
     func setBit(index: usize) !void {
         var word = index / 32;
-        for limbs.len() <= word { limbs.push(0)!; }
+        while limbs.len() <= word { limbs.push(0)!; }
         var data = limbs.asSlice();
         data[word] = data[word] | (u32(1) << (index % 32));
     }
 
     func normalize() void {
-        for limbs.len() > 0 && limbs.asConstSlice()[limbs.len() - 1] == 0 {
+        while limbs.len() > 0 && limbs.asConstSlice()[limbs.len() - 1] == 0 {
             limbs.truncate(limbs.len() - 1);
         }
     }
@@ -321,7 +321,7 @@ pub class BigUint {
         var carry = u64(value);
         var data = limbs.asSlice();
         var index: usize = 0;
-        for carry != 0 && index < data.len() {
+        while carry != 0 && index < data.len() {
             var total = u64(data[index]) + carry;
             data[index] = u32(total & 0xffffffffu64)!;
             carry = total >> 32;
@@ -335,7 +335,7 @@ pub class BigUint {
         var remainder: u64 = 0;
         var data = limbs.asSlice();
         var index = data.len();
-        for index > 0 {
+        while index > 0 {
             index--;
             var current = (remainder << 32) | u64(data[index]);
             data[index] = u32(current / u64(divisor))!;
@@ -429,7 +429,7 @@ pub class BigInt {
             if carry == 0 { break; }
             var total = u16(data[i]) + carry;
             data[i] = u8(total & 0xffu16)!;
-            carry = u16(total >> 8)!;
+            carry = total >> 8;
         }
         var mag = BigUint.fromBytes(little.asConstSlice(), meta.Endian.Little)!;
         BigInt(if mag.isZero() { i8(0) } else { i8(-1) }, move(mag))
@@ -457,7 +457,7 @@ pub class BigInt {
         if sign < other.sign { return cmp.Ordering.Less; }
         if sign > other.sign { return cmp.Ordering.Greater; }
         if sign == 0 { return cmp.Ordering.Equal; }
-        var order = magnitude.compare(&other.magnitude);
+        var order = magnitude.compare(raw other.magnitude);
         if sign < 0 {
             if order == cmp.Ordering.Less { return cmp.Ordering.Greater; }
             if order == cmp.Ordering.Greater { return cmp.Ordering.Less; }
@@ -473,31 +473,31 @@ pub class BigInt {
         if sign == 0 { return other.clone(); }
         if other.sign == 0 { return clone(); }
         if sign == other.sign {
-            BigInt(sign, magnitude.add(&other.magnitude)!)
+            BigInt(sign, magnitude.add(raw other.magnitude)!)
         } else {
-            var order = magnitude.compare(&other.magnitude);
+            var order = magnitude.compare(raw other.magnitude);
             if order == cmp.Ordering.Equal { return BigInt(); }
             if order == cmp.Ordering.Greater {
-                BigInt(sign, magnitude.sub(&other.magnitude)!)
+                BigInt(sign, magnitude.sub(raw other.magnitude)!)
             } else {
-                BigInt(other.sign, other.magnitude.sub(&magnitude)!)
+                BigInt(other.sign, other.magnitude.sub(raw magnitude)!)
             }
         }
     }
 
     pub const func sub(other: *const Self) !Self {
         var negative = other.negated()!;
-        add(&negative)
+        add(raw negative)
     }
 
     pub const func mul(other: *const Self) !Self {
         if sign == 0 || other.sign == 0 { return BigInt(); }
-        BigInt(if sign == other.sign { i8(1) } else { i8(-1) }, magnitude.mul(&other.magnitude)!)
+        BigInt(if sign == other.sign { i8(1) } else { i8(-1) }, magnitude.mul(raw other.magnitude)!)
     }
 
     pub const func divMod(other: *const Self) !(Self, Self) {
         if other.sign == 0 { return NumError.DivisionByZero; }
-        quotient, remainder := magnitude.divMod(&other.magnitude)!;
+        quotient, remainder := magnitude.divMod(raw other.magnitude)!;
         var quotientSign = if quotient.isZero() { i8(0) } else { sign * other.sign };
         var remainderSign = if remainder.isZero() { i8(0) } else { sign };
         (BigInt(quotientSign, move(quotient)), BigInt(remainderSign, move(remainder)))
@@ -521,9 +521,9 @@ pub class BigInt {
         var shifted = magnitude.shr(count)!;
         if sign < 0 {
             var restored = shifted.shl(count)!;
-            if restored.compare(&magnitude) != cmp.Ordering.Equal {
+            if restored.compare(raw magnitude) != cmp.Ordering.Equal {
                 var one = BigUint.fromU64(1)!;
-                shifted = shifted.add(&one)!;
+                shifted = shifted.add(raw one)!;
             }
         }
         BigInt(sign, move(shifted))
@@ -536,8 +536,8 @@ pub class BigInt {
     pub static const func gcd(a: *const Self, b: *const Self) !Self {
         var left = a.abs()!;
         var right = b.abs()!;
-        for !right.isZero() {
-            var remainder = left.rem(&right)!;
+        while !right.isZero() {
+            var remainder = left.rem(raw right)!;
             left = move(right);
             right = move(remainder);
         }
@@ -587,7 +587,7 @@ pub class BigInt {
                 if carry == 0 { break; }
                 var total = u16(data[i]) + carry;
                 data[i] = u8(total & 0xffu16)!;
-                carry = u16(total >> 8)!;
+                carry = total >> 8;
             }
             if (data[data.len() - 1] & 0x80) == 0 { out.push(0xff)!; }
         }

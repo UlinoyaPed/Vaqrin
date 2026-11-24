@@ -79,20 +79,20 @@ class StandardLibraryAcceptance(CompilerCase):
             func main() !void {
                 var data = Point{x: -42, y: 1.25};
                 var codec = serde.DerivedCodec<Point>{};
-                var encoded = cbor.marshal<Point>(&data, &codec)!;
+                var encoded = cbor.marshal<Point>(raw data, raw codec)!;
                 var wire = [16]u8{162, 97, 120, 56, 41, 97, 121, 251, 63, 244, 0, 0, 0, 0, 0, 0};
                 io.println(bytes.equal(encoded.asConstSlice(), wire[:]))!;
 
                 // Indefinite map with reversed keys, binary16 value, and a break.
                 var reference = [11]u8{191, 97, 121, 249, 61, 0, 97, 120, 56, 41, 255};
-                var decoded = cbor.unmarshal<Point>(reference[:], &codec)!;
+                var decoded = cbor.unmarshal<Point>(reference[:], raw codec)!;
                 io.println(decoded.x == -42 && decoded.y == 1.25)!;
-                var truncated = cbor.unmarshal<Point>(reference[0..10], &codec);
-                io.println(result.errorOf(&truncated).unwrap() == serde.SerdeError.UnexpectedEnd)!;
+                var truncated = cbor.unmarshal<Point>(reference[0..10], raw codec);
+                io.println(result.errorOf(raw truncated).unwrap() == serde.SerdeError.UnexpectedEnd)!;
 
                 var input = cbor.Decoder(serde.DecodeLimits.withLimits(8, 8, 5));
-                var tooManyBytes = serde.decodeFromBytes<Point>(wire[:], &input, &codec);
-                io.println(result.errorOf(&tooManyBytes).unwrap() == serde.SerdeError.ByteLimit)!;
+                var tooManyBytes = serde.decodeFromBytes<Point>(wire[:], raw input, raw codec);
+                io.println(result.errorOf(raw tooManyBytes).unwrap() == serde.SerdeError.ByteLimit)!;
                 var sequence = cbor.Encoder();
                 sequence.beginSeq(null)!;
                 sequence.writeBool(true)!;
@@ -124,20 +124,20 @@ class StandardLibraryAcceptance(CompilerCase):
                 var adapter = codec.DerivedCodec<Record<u16>>{};
                 var value = Record<u16>{entry: Entry{id: -9223372036854775810i128, name: "hello"},
                                         data: 32, maybe: null};
-                var serialized = json.marshal<Record<u16>>(&value, &adapter)!;
+                var serialized = json.marshal<Record<u16>>(raw value, raw adapter)!;
                 io.println(serialized)!;
-                var decoded = json.unmarshal<Record<u16>>(serialized, &adapter)!;
+                var decoded = json.unmarshal<Record<u16>>(serialized, raw adapter)!;
                 io.println(decoded.entry.name == "hello" && decoded.data == 32 &&
                            decoded.entry.id == -9223372036854775810i128 && decoded.maybe == null)!;
                 io.println(Entry.serdeFieldCount() == 2 &&
                            Entry.serdeFieldName(1).unwrap() == "display-name")!;
                 var withoutOptional = json.unmarshal<Record<u16>>(
-                    "{\"data\":3,\"entry\":{\"id\":1,\"display-name\":\"name\"}}", &adapter)!;
+                    "{\"data\":3,\"entry\":{\"id\":1,\"display-name\":\"name\"}}", raw adapter)!;
                 io.println(withoutOptional.maybe == null && withoutOptional.data == 3)!;
-                var missing = json.unmarshal<Record<u16>>("{}", &adapter);
-                io.println(result.errorOf(&missing).unwrap() == codec.SerdeError.MissingField)!;
-                var extra = json.unmarshal<Record<u16>>("{\"extra\":1}", &adapter);
-                io.println(result.errorOf(&extra).unwrap() == codec.SerdeError.UnknownField)!;
+                var missing = json.unmarshal<Record<u16>>("{}", raw adapter);
+                io.println(result.errorOf(raw missing).unwrap() == codec.SerdeError.MissingField)!;
+                var extra = json.unmarshal<Record<u16>>("{\"extra\":1}", raw adapter);
+                io.println(result.errorOf(raw extra).unwrap() == codec.SerdeError.UnknownField)!;
             }
         """, '{"entry":{"id":-9223372036854775810,"display-name":"hello"},"data":32,"maybe":null}\n'
              + "true\n" * 5)
@@ -156,14 +156,14 @@ class StandardLibraryAcceptance(CompilerCase):
 
             func main() !void {
                 var out = io.stdout();
-                var json = log.JsonHandler.new(&out);
-                var first = log.Logger.new(&json)!;
+                var json = log.JsonHandler.new(raw out);
+                var first = log.Logger.new(raw json)!;
                 var attrs = [1]log.Attr{log.Attr.int("value", 7)!};
                 first.log(log.Level.Info, "first", attrs[:])!;
                 json.flush()!;
                 tx, rx := channel.bounded<i32>(1)!;
                 var handler = log.AsyncHandler.new(Counting(move(tx)), 4)!;
-                var second = log.Logger.new(&handler)!;
+                var second = log.Logger.new(raw handler)!;
                 second.log(log.Level.Info, "second", attrs[:])!;
                 handler.flush()!;
                 io.println(rx.recv()!.unwrap() == 42 && handler.dropped() == 0)!;
@@ -181,16 +181,16 @@ class StandardLibraryAcceptance(CompilerCase):
                 io.println(zone.offsetAt(summer).seconds())!;
                 var local = time.LocalDateTime.new(time.Date.new(2024, 11, 3)!,
                                                   time.TimeOfDay.new(1, 30, 0, 123)!);
-                var first = time.toUtc(local, &zone, time.LocalTimePolicy.Earlier)!;
-                var second = time.toUtc(local, &zone, time.LocalTimePolicy.Later)!;
+                var first = time.toUtc(local, raw zone, time.LocalTimePolicy.Earlier)!;
+                var second = time.toUtc(local, raw zone, time.LocalTimePolicy.Later)!;
                 io.println(second.unixSeconds() - first.unixSeconds())!;
                 var gap = time.LocalDateTime.new(time.Date.new(2024, 3, 10)!,
                                                 time.TimeOfDay.new(2, 30, 0, 123)!);
-                var rejected = time.toUtc(gap, &zone, time.LocalTimePolicy.RejectGap);
+                var rejected = time.toUtc(gap, raw zone, time.LocalTimePolicy.RejectGap);
                 var invalid = time.TimeZone.load("../zoneinfo/America/New_York");
-                io.println(core.isErr(&rejected) && core.isErr(&invalid))!;
+                io.println(core.isErr(raw rejected) && core.isErr(raw invalid))!;
                 var moved = time.ZonedDateTime.fromLocal(gap, move(zone), time.LocalTimePolicy.ShiftForward)!;
-                var formatted = time.formatDateTime(&moved, "%Y-%m-%d %H:%M:%S.%f %z %%")!;
+                var formatted = time.formatDateTime(raw moved, "%Y-%m-%d %H:%M:%S.%f %z %%")!;
                 io.println(formatted)!;
             }
         """, "-14400\n3600\ntrue\n2024-03-10 03:30:00.000000123 -0400 %\n")
@@ -200,7 +200,7 @@ class StandardLibraryAcceptance(CompilerCase):
             import (mem)
             func main() !void {
                 var allocator = mem.GlobalAllocator();
-                var arena = mem.Arena(&allocator);
+                var arena = mem.Arena(raw allocator);
                 var tight = mem.Layout.fromSizeAlign(32, 32)!;
                 var memory = arena.alloc(tight)!.unwrap();
                 io.println(mem.isAligned(memory, 32) && arena.used() == 32)!;
@@ -213,7 +213,7 @@ class StandardLibraryAcceptance(CompilerCase):
                 unsafe { arena.reset(); }
                 io.println(arena.used() == 0 && arena.capacity() == 0)!;
 
-                var pool = mem.Pool<i64>(&allocator);
+                var pool = mem.Pool<i64>(raw allocator);
                 var first = pool.acquire()!.unwrap();
                 unsafe { mem.write<i64>(first, 7); }
                 io.println(*first == 7 && pool.allocated() == 1 && pool.live() == 1)!;
@@ -224,7 +224,7 @@ class StandardLibraryAcceptance(CompilerCase):
                 pool.clear();
 
                 var original = 41;
-                var value = unsafe { mem.Cow<i32>.borrow(&original) };
+                var value = unsafe { mem.Cow<i32>.borrow(raw original) };
                 io.println(value.isBorrowed() && *value.asRef() == 41)!;
                 var writable = value.toMut();
                 *writable += 1;
@@ -270,15 +270,15 @@ class StandardLibraryAcceptance(CompilerCase):
             func main() !void {
                 var pattern = regex.Regex.compile("(?<kind>[a-z]+)(?P<suffix>[0-9]+)?")!;
                 var hit = pattern.captures("box42")!.unwrap();
-                io.println(pattern.captureNamed(&hit, "kind").unwrap().asStr() == "box")!;
-                io.println(pattern.captureNamed(&hit, "suffix").unwrap().asStr() == "42")!;
+                io.println(pattern.captureNamed(raw hit, "kind").unwrap().asStr() == "box")!;
+                io.println(pattern.captureNamed(raw hit, "suffix").unwrap().asStr() == "42")!;
                 io.println(pattern.captureIndex("unknown") == null)!;
                 var missing = pattern.captures("box")!.unwrap();
-                io.println(pattern.captureNamed(&missing, "suffix") == null)!;
+                io.println(pattern.captureNamed(raw missing, "suffix") == null)!;
                 var duplicate = regex.Regex.compile("(?<x>a)(?<x>b)");
-                io.println(result.errorOf(&duplicate).unwrap() == regex.RegexError.DuplicateCaptureName)!;
+                io.println(result.errorOf(raw duplicate).unwrap() == regex.RegexError.DuplicateCaptureName)!;
                 var lookbehind = regex.Regex.compile("(?<=x)y");
-                io.println(result.errorOf(&lookbehind).unwrap() == regex.RegexError.UnsupportedConstruct)!;
+                io.println(result.errorOf(raw lookbehind).unwrap() == regex.RegexError.UnsupportedConstruct)!;
             }
         """, "true\n" * 6)
 
@@ -320,13 +320,13 @@ class StandardLibraryAcceptance(CompilerCase):
                     _ => panic("array of tables missing"),
                 }
                 var earlier = toml.parse("[a.b]\nx = 1\n[a]\ny = 2\n");
-                io.println(result.errorOf(&earlier) == null)!;
+                io.println(result.errorOf(raw earlier) == null)!;
                 var duplicate = toml.parse("a.b = 1\n[a]\nc = 2\n");
-                io.println(result.errorOf(&duplicate).unwrap() == toml.TomlError.DuplicateTable)!;
+                io.println(result.errorOf(raw duplicate).unwrap() == toml.TomlError.DuplicateTable)!;
                 var frozen = toml.parse("a = { b = 1 }\n[a.c]\nz = 3\n");
-                io.println(result.errorOf(&frozen).unwrap() == toml.TomlError.DuplicateTable)!;
+                io.println(result.errorOf(raw frozen).unwrap() == toml.TomlError.DuplicateTable)!;
                 var conflict = toml.parse("a = []\n[[a]]\n");
-                io.println(result.errorOf(&conflict).unwrap() == toml.TomlError.TypeConflict)!;
+                io.println(result.errorOf(raw conflict).unwrap() == toml.TomlError.TypeConflict)!;
             }
         """, "true\n" * 10)
 
@@ -347,8 +347,8 @@ class StandardLibraryAcceptance(CompilerCase):
                 var second = parse.parseUint<U>("42")!;
                 var pair = Pair<S, U>{signed: first, unsigned: second};
                 var codec = serde.DerivedCodec<Pair<S, U>>{};
-                var wire = json.marshal<Pair<S, U>>(&pair, &codec)!;
-                var decoded = json.unmarshal<Pair<S, U>>(wire, &codec)!;
+                var wire = json.marshal<Pair<S, U>>(raw pair, raw codec)!;
+                var decoded = json.unmarshal<Pair<S, U>>(wire, raw codec)!;
                 var values = coll.Vec<U>();
                 values.push(decoded.unsigned)!;
                 io.println(decoded.signed == first && values.pop().unwrap() == second)!;
@@ -372,7 +372,7 @@ class StandardLibraryAcceptance(CompilerCase):
                 io.println(normalized.real() == huge && normalized.imag() == tiny)!;
                 var zero = math.Complex<T>.new(T(0), -T(0));
                 var rejected = small.div(zero);
-                io.println(result.errorOf(&rejected).unwrap() == math.MathError.DivisionByZero)!;
+                io.println(result.errorOf(raw rejected).unwrap() == math.MathError.DivisionByZero)!;
                 io.println(math.signbit(zero.sqrt().imag()))!;
                 var root = shared.sqrt();
                 io.println(math.isFinite(root.real()) && root.real() > math.sqrt(huge))!;
@@ -426,6 +426,28 @@ class StandardLibraryAcceptance(CompilerCase):
             (REPOSITORY / "examples/stdlib/numerics/expected.txt").read_text(encoding="utf-8"),
         )
 
+    def test_bigint_twos_complement_byte_carry(self):
+        program = self.source("bigint_twos_complement.vqr", """
+            import (io, meta, num)
+            func main() !void {
+                little := [_]u8{0, 0, 255};
+                var negative = num.BigInt.fromTwosComplementBytes(little[:], meta.Endian.Little)!;
+                io.println(negative.toInteger<i64>()!)!;
+                var roundtrip = negative.toTwosComplementBytes(meta.Endian.Little)!;
+                var reversed = negative.toTwosComplementBytes(meta.Endian.Big)!;
+                for byte in roundtrip.asConstSlice() { io.println(byte)!; }
+                for byte in reversed.asConstSlice() { io.println(byte)!; }
+
+                big := [_]u8{255, 0, 0};
+                var decoded = num.BigInt.fromTwosComplementBytes(big[:], meta.Endian.Big)!;
+                io.println(decoded.toInteger<i64>()!)!;
+                var positive = num.BigInt.fromInteger<i64>(128)!;
+                var positiveBytes = positive.toTwosComplementBytes(meta.Endian.Little)!;
+                for byte in positiveBytes.asConstSlice() { io.println(byte)!; }
+            }
+        """)
+        self.assertEqual(self.run_program(program), "-65536\n0\n0\n255\n255\n0\n0\n-65536\n128\n0\n")
+
     def test_integer_arithmetic_edges(self):
         program = self.source("integers.vqr", '''
             import (core, io, num)
@@ -433,7 +455,7 @@ class StandardLibraryAcceptance(CompilerCase):
                 var overflow = num.checkedAdd<i64>(num.maxValue<i64>(), 1);
                 var zero = num.checkedDiv<i64>(1, 0);
                 var minimum = num.checkedDiv<i64>(num.minValue<i64>(), -1);
-                io.println(core.isErr(&overflow) && core.isErr(&zero) && core.isErr(&minimum))!;
+                io.println(core.isErr(raw overflow) && core.isErr(raw zero) && core.isErr(raw minimum))!;
                 io.println(num.divEuclid<i64>(-7, -3)!)!;
                 io.println(num.remEuclid<i64>(-7, -3)!)!;
                 io.println(num.gcd<i64>(-18, 24)!)!;
@@ -495,12 +517,12 @@ class StandardLibraryAcceptance(CompilerCase):
                 var rng = random.Pcg64.seed(42u64);
                 var bins = [7]usize{0, 0, 0, 0, 0, 0, 0};
                 for sample in usize(0)..7000 {
-                    var offset = random.rangeInt(&rng, -3i64, 4i64)! + 3i64;
+                    var offset = random.rangeInt(raw rng, -3i64, 4i64)! + 3i64;
                     bins[usize(offset)!]++;
                 }
                 for count in bins { if count < 800 || count > 1200 { panic("uniform smoke failed"); } }
-                var bad = random.rangeInt(&rng, 2u64, 2u64);
-                io.println(core.isErr(&bad))!;
+                var bad = random.rangeInt(raw rng, 2u64, 2u64);
+                io.println(core.isErr(raw bad))!;
                 io.println(math.isNan<f64>(math.sqrt<f64>(-1.0)))!;
             }
         ''')
@@ -558,7 +580,7 @@ class StandardLibraryAcceptance(CompilerCase):
                     0.0f32
                 };
                 var input = io.MemoryReader(" .5 -2.5e1 ".asBytes());
-                var scanner = bufio.newScanner(&input)!;
+                var scanner = bufio.newScanner(raw input)!;
                 io.println(scanner.readFloat<f32>()! == 0.5f32)!;
                 io.println(scanner.readFloat<f64>()! == -25.0)!;
                 io.println(scanner.nextFloat<f64>()! == null)!;
@@ -579,7 +601,7 @@ class StandardLibraryAcceptance(CompilerCase):
                 var jsonWriter = json.JsonDomSerializer();
                 jsonWriter.writeF64(-0.0)!;
                 var jsonValue = jsonWriter.takeValue()!;
-                var wire = json.stringify(&jsonValue)!;
+                var wire = json.stringify(raw jsonValue)!;
                 var jsonReader = json.JsonDomDeserializer(json.parse(wire)!);
                 var signedZero = jsonReader.readF64()!;
                 io.println(convert.bitCast<u64>(signedZero) == 0x8000000000000000u64)!;
@@ -596,7 +618,7 @@ class StandardLibraryAcceptance(CompilerCase):
                 io.println(convert.bitCast<u64>(subnormal) == 1)!;
                 tomlWriter.writeF64(-math.inf<f64>())!;
                 var infinity = tomlWriter.takeValue()!;
-                io.println(toml.asF64(&infinity)! == -math.inf<f64>())!;
+                io.println(toml.asF64(raw infinity)! == -math.inf<f64>())!;
             }
         """, "true\n" * 7)
 
@@ -691,7 +713,7 @@ class StandardLibraryAcceptance(CompilerCase):
                 io.println(child.tryWait()! == null)!;
                 {
                     var input = child.stdin().unwrap();
-                    io.writeAll(&input, "hello\n".asBytes())!;
+                    io.writeAll(input.toRaw(), "hello\n".asBytes())!;
                     input.close()!;
                 }
                 var captured = child.waitWithOutput(20)!;
@@ -710,7 +732,7 @@ class StandardLibraryAcceptance(CompilerCase):
                 producer.stdout(process.Stdio.File(move(destination)));
                 io.println(producer.status()!.success())!;
                 var file = fs.openRead(path.fromString("redirected.txt")!)!;
-                io.println(io.readToString(&file)!)!;
+                io.println(io.readToString(raw file)!)!;
 
                 var blocked = process.Command.new(path.fromString("/bin/cat")!);
                 blocked.stdin(process.Stdio.Piped);
@@ -727,7 +749,7 @@ class StandardLibraryAcceptance(CompilerCase):
                 {
                     var out = noInput.stdout().unwrap();
                     var byte = [1]u8{0};
-                    io.readExact(&out, byte[:])!;
+                    io.readExact(out.toRaw(), byte[:])!;
                 }
                 {
                     var input = noInput.stdin().unwrap();
@@ -763,7 +785,7 @@ class StandardLibraryAcceptance(CompilerCase):
                 var address6 = net.parseSocketAddr("[fe80::1%7]:80")!;
                 io.println(address6.toString()!)!;
                 var invalid = net.parseSocketAddr("::1:80");
-                io.println(result.errorOf(&invalid).unwrap() == net.NetError.InvalidAddress)!;
+                io.println(result.errorOf(raw invalid).unwrap() == net.NetError.InvalidAddress)!;
                 var resolved = net.resolveAddr("127.0.0.1", 81)!;
                 io.println(resolved[0].toString()!)!;
                 io.println(net.ntohl(net.htonl(0x12345678)) == 0x12345678)!;
@@ -777,17 +799,17 @@ class StandardLibraryAcceptance(CompilerCase):
                 io.println(accepted.1.port() == client.localAddr()!.port())!;
                 client.setNoDelay(true)!;
                 client.setWriteTimeout(some(time.Duration.fromSeconds(1)))!;
-                io.writeString(&client, "ping")!;
+                io.writeString(raw client, "ping")!;
                 client.shutdownWrite()!;
                 var clone = accepted.0.tryClone()!;
                 accepted.0.close()!;
-                io.println(io.readToString(&clone, 8)!)!;
+                io.println(io.readToString(raw clone, 8)!)!;
                 var broken = client.write("again".asBytes());
-                io.println(io.systemErrorCode(result.errorOf(&broken).unwrap()).unwrap() == BROKEN_PIPE_ERRNO)!;
+                io.println(io.systemErrorCode(result.errorOf(raw broken).unwrap()).unwrap() == BROKEN_PIPE_ERRNO)!;
 
                 listener.setNonblocking(true)!;
                 var pending = listener.accept();
-                io.println(io.isWouldBlock(result.errorOf(&pending).unwrap()))!;
+                io.println(io.isWouldBlock(result.errorOf(raw pending).unwrap()))!;
 
                 var receiver = net.bindUdp(local)!;
                 var sender = net.bindUdp(local)!;
@@ -819,15 +841,15 @@ class StandardLibraryAcceptance(CompilerCase):
                 var rhs = [2]f64{4.0, 7.0};
                 var matrix = linalg.Matrix<f64>.fromFlat(2, 2, entries[:])!;
                 var b = linalg.Vector<f64>.fromSlice(rhs[:])!;
-                var solution = linalg.solve<f64>(&matrix, &b)!;
+                var solution = linalg.solve<f64>(raw matrix, raw b)!;
                 io.println(*solution.get(0).unwrap() == 1.0 && *solution.get(1).unwrap() == 2.0)!;
-                io.println(linalg.determinant<f64>(&matrix)! == -2.0)!;
-                var inverse = linalg.inverse<f64>(&matrix)!;
-                var identity = matrix.matmul(&inverse)!;
+                io.println(linalg.determinant<f64>(raw matrix)! == -2.0)!;
+                var inverse = linalg.inverse<f64>(raw matrix)!;
+                var identity = matrix.matmul(raw inverse)!;
                 io.println(math.abs<f64>(identity.at(0, 0) - 1.0) < 0.000001)!;
                 var singular = linalg.Matrix<f64>.zeros(2, 2)!;
-                var rejected = linalg.inverse<f64>(&singular);
-                io.println(result.errorOf(&rejected).unwrap() == linalg.LinalgError.Singular)!;
+                var rejected = linalg.inverse<f64>(raw singular);
+                io.println(result.errorOf(raw rejected).unwrap() == linalg.LinalgError.Singular)!;
             }
         """, "true\n" * 4)
 
@@ -839,23 +861,23 @@ class StandardLibraryAcceptance(CompilerCase):
                 var measurements = [3]f64{1.0, 2.0, 2.0};
                 var matrix = linalg.Matrix<f64>.fromFlat(3, 2, design[:])!;
                 var rhs = linalg.Vector<f64>.fromSlice(measurements[:])!;
-                var factor = linalg.qr<f64>(&matrix)!;
-                var coeff = factor.solveLeastSquares(&rhs)!;
+                var factor = linalg.qr<f64>(raw matrix)!;
+                var coeff = factor.solveLeastSquares(raw rhs)!;
                 io.println(math.abs<f64>(*coeff.get(0).unwrap() - 7.0 / 6.0) < 0.000001)!;
                 io.println(math.abs<f64>(*coeff.get(1).unwrap() - 0.5) < 0.000001)!;
                 var q = factor.q()!;
                 var r = factor.r()!;
-                var reconstructed = q.matmul(&r)!;
+                var reconstructed = q.matmul(raw r)!;
                 var transpose = q.transposeCopy()!;
-                var gram = transpose.matmul(&q)!;
+                var gram = transpose.matmul(raw q)!;
                 io.println(linalg.distance<f64>(reconstructed.asSlice(), matrix.asSlice())! < 0.000001)!;
                 io.println(math.abs<f64>(gram.at(0, 0) - 1.0) < 0.000001 &&
                            math.abs<f64>(gram.at(1, 1) - 1.0) < 0.000001 &&
                            math.abs<f64>(gram.at(0, 1)) < 0.000001)!;
                 var rankZero = linalg.Matrix<f64>.zeros(3, 2)!;
-                var deficient = linalg.qr<f64>(&rankZero)!;
-                var rejected = deficient.solveLeastSquares(&rhs);
-                io.println(result.errorOf(&rejected).unwrap() == linalg.LinalgError.Singular)!;
+                var deficient = linalg.qr<f64>(raw rankZero)!;
+                var rejected = deficient.solveLeastSquares(raw rhs);
+                io.println(result.errorOf(raw rejected).unwrap() == linalg.LinalgError.Singular)!;
             }
         """, "true\n" * 5)
 
@@ -865,25 +887,25 @@ class StandardLibraryAcceptance(CompilerCase):
             func main() !void {
                 var input = io.MemoryReader("POST /submit HTTP/1.1\r\nhOsT: localhost\r\nTransfer-Encoding: chunked\r\n\r\n4\r\ndata\r\n0\r\n\r\nGET /next HTTP/1.1\r\nHost: localhost\r\n\r\n".asBytes());
                 var limits = http.HttpLimits();
-                var request = http.parseRequest(&input, limits)!;
+                var request = http.parseRequest(raw input, limits)!;
                 io.println(request.target())!;
                 io.println(request.bodyBytes().len())!;
-                var next = http.parseRequest(&input, limits)!;
+                var next = http.parseRequest(raw input, limits)!;
                 io.println(next.target())!;
                 var response = http.Response.new(200)!;
                 response.setBody(http.Body.fromBytes("hello".asBytes())!);
                 var writer = io.MemoryWriter();
-                http.writeResponse(&writer, &response)!;
+                http.writeResponse(raw writer, raw response)!;
                 var back = io.MemoryReader(writer.asSlice());
-                var decoded = http.parseResponse(&back, limits)!;
+                var decoded = http.parseResponse(raw back, limits)!;
                 io.println(decoded.status().value())!;
                 io.println(decoded.bodyBytes().len())!;
                 var other = io.MemoryReader("HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\n".asBytes());
-                var head = http.parseResponseFor(&other, http.Method.HEAD, limits)!;
+                var head = http.parseResponseFor(raw other, http.Method.HEAD, limits)!;
                 io.println(head.bodyBytes().len())!;
                 var duplicate = io.MemoryReader("POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nContent-Length: 1\r\n\r\n".asBytes());
-                var rejected = http.parseRequest(&duplicate, limits);
-                io.println(result.errorOf(&rejected).unwrap() == http.HttpError.InvalidFraming)!;
+                var rejected = http.parseRequest(raw duplicate, limits);
+                io.println(result.errorOf(raw rejected).unwrap() == http.HttpError.InvalidFraming)!;
             }
         """, "/submit\n4\n/next\n200\n5\n0\ntrue\n")
 
@@ -977,7 +999,7 @@ class StandardLibraryAcceptance(CompilerCase):
                     var client = http.Client();
                     if env.contains("VAQRIN_TEST_UNTRUSTED")! {{
                         var rejected = client.get("https://localhost:{port}/");
-                        io.println(result.errorOf(&rejected).unwrap() == http.TlsError.Certificate)!;
+                        io.println(result.errorOf(raw rejected).unwrap() == http.TlsError.Certificate)!;
                         return;
                     }}
                     var fetched = http.get("https://localhost:{port}/probe?name=vqr#fragment")!;
@@ -990,15 +1012,15 @@ class StandardLibraryAcceptance(CompilerCase):
                     var message = http.Request.new(http.Method.POST, "/custom")!;
                     message.headers().set("X-Probe", "custom")!;
                     message.setBody(http.Body.fromBytes("example".asBytes())!);
-                    var sent = client.send("https://localhost:{port}/", &message)!;
+                    var sent = client.send("https://localhost:{port}/", raw message)!;
                     io.println(sent.status().value())!;
                     var truncated = client.get("https://localhost:{port}/");
-                    io.println(result.errorOf(&truncated).unwrap() == http.TlsError.Protocol)!;
+                    io.println(result.errorOf(raw truncated).unwrap() == http.TlsError.Protocol)!;
                     var mismatch = client.get("https://127.0.0.1:{port}/");
-                    io.println(result.errorOf(&mismatch).unwrap() == http.TlsError.Certificate)!;
+                    io.println(result.errorOf(raw mismatch).unwrap() == http.TlsError.Certificate)!;
                     client.setTimeout(time.Duration.fromMillis(250));
                     var stalled = client.get("https://localhost:{port}/");
-                    io.println(result.errorOf(&stalled).unwrap() == io.systemError({errno.ETIMEDOUT}))!;
+                    io.println(result.errorOf(raw stalled).unwrap() == io.systemError({errno.ETIMEDOUT}))!;
                 }}
             """)
             executable = self.root / "https-client"
@@ -1060,7 +1082,7 @@ class StandardLibraryAcceptance(CompilerCase):
                 io.print(digits)!;
                 io.print("\n")!;
                 var handler = Echo{};
-                server.serveOne(&handler)
+                server.serveOne(raw handler)
             }
         """)
         executable = self.root / "http-server"
@@ -1118,17 +1140,17 @@ class StandardLibraryAcceptance(CompilerCase):
                 var options = json.EncodeOptions();
                 options.escapeNonAscii = true;
                 var compact = io.MemoryWriter();
-                json.write(&compact, &value, options)!;
+                json.write(raw compact, raw value, options)!;
                 io.println(text.fromBytes(compact.asSlice())!)!;
 
                 options.sortKeys = true;
                 options.indent = 2;
                 var pretty = io.MemoryWriter();
-                var encoder = json.Encoder(&pretty, options);
-                encoder.encodeValue(&value)!;
+                var encoder = json.Encoder(raw pretty, options);
+                encoder.encodeValue(raw value)!;
                 encoder.flush()!;
                 io.println(text.fromBytes(pretty.asSlice())!)!;
-                io.println(json.stringify(&value)!)!;
+                io.println(json.stringify(raw value)!)!;
             }
         ''', expected)
 
@@ -1140,14 +1162,14 @@ class StandardLibraryAcceptance(CompilerCase):
                 var options = json.EncodeOptions();
                 options.maxDepth = 1;
                 var output = io.MemoryWriter();
-                var encoder = json.Encoder(&output, options);
+                var encoder = json.Encoder(raw output, options);
                 var nested = json.parse("[[]]")!;
-                encoder.encodeValue(&nested) catch (reason) {
+                encoder.encodeValue(raw nested) catch (reason) {
                     if reason != json.JsonError.DepthLimit { return reason; }
                     io.println("depth limit")!;
                 };
                 var shallow = json.parse("[]")!;
-                encoder.encodeValue(&shallow)!;
+                encoder.encodeValue(raw shallow)!;
                 io.println(text.fromBytes(output.asSlice())!)!;
             }
         ''', "depth limit\n[[]\n")
@@ -1219,8 +1241,8 @@ class StandardLibraryAcceptance(CompilerCase):
                 var inputLimit = anotherBuilder.maxInputBytes(1);
                 var limited = inputLimit.compile()!;
                 var tooLong = limited.find("aa");
-                io.println(core.isErr(&invalidUtf8) && core.isErr(&invalidPattern) &&
-                           core.isErr(&tooManyStates) && core.isErr(&tooLong))!;
+                io.println(core.isErr(raw invalidUtf8) && core.isErr(raw invalidPattern) &&
+                           core.isErr(raw tooManyStates) && core.isErr(raw tooLong))!;
             }
         ''')
         self.assertEqual(self.run_program(program), "e\u0301\nAfi\nAe\u0301\n3\ntrue\n")

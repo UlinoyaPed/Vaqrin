@@ -6,7 +6,7 @@ pub func load<T: Copyable + Movable, comptime N: usize>(src: []const T) !Simd<T,
     var array = mem.MaybeUninit<[N]T>.uninit();
     unsafe {
         var data = array.asPtr();
-        for i in usize(0)..N { __vqr_slot_write<T>(&(*data)[i], src[i]); }
+        for i in usize(0)..N { __vqr_slot_write<T>(raw (*data)[i], src[i]); }
         Simd<T, N>.fromArray(array.assumeInit())
     }
 }
@@ -16,7 +16,7 @@ pub unsafe func loadUnaligned<T: Copyable + Movable, comptime N: usize>(ptr: *co
     unsafe {
         var data = array.asPtr();
         for i in usize(0)..N {
-            __vqr_slot_write<T>(&(*data)[i], __vqr_unaligned_load(ptr.offset(i)));
+            __vqr_slot_write<T>(raw (*data)[i], __vqr_unaligned_load(ptr.offset(i)));
         }
         Simd<T, N>.fromArray(array.assumeInit())
     }
@@ -55,7 +55,7 @@ pub func permute<T: Copyable + Movable, comptime N: usize>(
     var out = a.toArray();
     for i in usize(0)..N {
         var index = indices[i];
-        out[i] = if (index < N) a.extract(index) else b.extract(index - N);
+        out[i] = if index < N { a.extract(index) } else { b.extract(index - N) };
     }
     Simd<T, N>.fromArray(move(out))
 }
@@ -67,7 +67,7 @@ pub func gather<T: Copyable + Movable, comptime N: usize>(src: []const T, indice
     var array = mem.MaybeUninit<[N]T>.uninit();
     unsafe {
         var data = array.asPtr();
-        for i in usize(0)..N { __vqr_slot_write<T>(&(*data)[i], src[indices[i]]); }
+        for i in usize(0)..N { __vqr_slot_write<T>(raw (*data)[i], src[indices[i]]); }
         Simd<T, N>.fromArray(array.assumeInit())
     }
 }

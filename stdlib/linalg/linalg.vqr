@@ -271,7 +271,7 @@ pub class LU<T: Copyable> {
             values[i] = value;
         }
         var i = size;
-        for i != 0 {
+        while i != 0 {
             i--;
             var value = values[i];
             for j in i + 1..size { value -= factors.at(i, j) * values[j]; }
@@ -293,7 +293,7 @@ pub class LU<T: Copyable> {
         var basis = Vector<T>.zeros(size)!;
         for j in usize(0)..size {
             *basis.getMut(j).unwrap() = T(1);
-            var column = solve(&basis)!;
+            var column = solve(raw basis)!;
             *basis.getMut(j).unwrap() = T(0);
             var values = column.asSlice();
             for i in usize(0)..size { out.set(i, j, values[i]); }

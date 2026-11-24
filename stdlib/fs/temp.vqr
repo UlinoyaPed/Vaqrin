@@ -14,7 +14,7 @@ pub class TempFile {
     func deinit() void { close() catch {}; }
     pub static func inDir(directory: path.Path) !Self {
         var parent = io.HostDirectory.open(directory.asString().asBytes())!;
-        handle, leaf := io.HostFile.tempIn(&parent)!;
+        handle, leaf := io.HostFile.tempIn(raw parent)!;
         TempFile(move(parent), move(directory), move(leaf), File(move(handle)))
     }
     pub static func inDir(directory: str) !Self { TempFile.inDir(path.fromString(directory)!) }
@@ -75,9 +75,9 @@ pub func atomicWrite(target: path.Path, data: []const u8) !void {
     if wire.len() == 0 || wire[wire.len() - 1] == 47 { return FsError.InvalidPath; }
     var name = target.filename() ?? { return FsError.InvalidPath; };
     if name == "." || name == ".." || name.byteLen() > 255 { return FsError.InvalidPath; }
-    var directory = parentOf(&target)!;
+    var directory = parentOf(raw target)!;
     var file = TempFile.inDir(move(directory))!;
-    io.writeAll(&file, data)!;
+    io.writeAll(raw file, data)!;
     file.commit(name)
 }
 pub func atomicWrite(target: str, data: []const u8) !void {

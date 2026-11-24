@@ -12,7 +12,7 @@ func main() !void {
     options.createNew(true);
     var file = fs.open(target, options)!;
 
-    io.writeString(&file, "vaqrin I/O\n")!;
+    io.writeString(raw file, "vaqrin I/O\n")!;
     file.writeAt(0, "V".asBytes())!;
     var first = [1]u8{0};
     if file.readAt(0, first[:])! != 1 { return io.IoError.UnexpectedEof; }
@@ -20,12 +20,12 @@ func main() !void {
     // Positional I/O keeps the cursor in place. Rewind for sequential reading.
     file.seek(0, io.SeekOrigin.Start)!;
     {
-        var reader = bufio.BufferedReader(&file, 64)!;
+        var reader = bufio.BufferedReader(raw file, 64)!;
         var line = reader.readLine(64)! ?? { return io.IoError.UnexpectedEof; };
         var output = io.stdout();
-        fmt.writeTo(&output, "read: ")!;
-        fmt.writeTo(&output, line)!;
-        fmt.writeTo(&output, "\n")!;
+        fmt.writeTo(raw output, "read: ")!;
+        fmt.writeTo(raw output, line)!;
+        fmt.writeTo(raw output, "\n")!;
         output.flush()!;
     }
     io.println(file.metadata()!.len())!;

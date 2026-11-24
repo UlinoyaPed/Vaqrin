@@ -160,7 +160,7 @@ pub class Graphemes {
             offset += first.1;
         }
 
-        for offset < bytes.len() {
+        while offset < bytes.len() {
             var next = decodeUtf8(bytes[offset..bytes.len()]) catch { offset = bytes.len(); return null; };
             var nextStart = offset;
             if segmenter.feed(next.0) {
@@ -185,7 +185,7 @@ pub func isGraphemeBoundary(value: str, byteOffset: usize) bool {
     if (bytes[byteOffset] & 0xc0) == 0x80 { return false; }
     var segmenter = GraphemeSegmenter();
     var position: usize = 0;
-    for position < byteOffset {
+    while position < byteOffset {
         var decoded = decodeUtf8(bytes[position..bytes.len()]) catch { return false; };
         segmenter.feed(decoded.0);
         position += decoded.1;

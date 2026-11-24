@@ -7,9 +7,9 @@ pub class Cell<T: Copyable + Movable> {
     pub static func new(value: T) Self { Cell<T>(move(value)) }
     pub const func get() T { slot.unwrap() }
     pub func set(value: T) void { slot = some(move(value)); }
-    pub func replace(value: T) T { opt.replace<T>(&slot, move(value)).unwrap() }
+    pub func replace(value: T) T { opt.replace<T>(raw slot, move(value)).unwrap() }
     pub func update<F: Movable>(transform: F) void { set(transform(get())); }
-    pub static func intoInner(value: Self) T { opt.take<T>(&value.slot).unwrap() }
+    pub static func intoInner(value: Self) T { opt.take<T>(raw value.slot).unwrap() }
 }
 
 pub class OnceCell<T: Movable> {
@@ -18,18 +18,18 @@ pub class OnceCell<T: Movable> {
     var initializing: bool;
     func init() : slot(null), initializing(false) {}
     pub static func new() Self { OnceCell<T>() }
-    pub const func get() ?*const T { opt.asPtr<T>(&slot) }
-    pub func getMut() ?*T { opt.asMutPtr<T>(&slot) }
+    pub const func get() ?*const T { opt.asPtr<T>(raw slot) }
+    pub func getMut() ?*T { opt.asMutPtr<T>(raw slot) }
 
     pub func set(value: T) ?T {
-        if initializing || core.isSome<T>(&slot) { return some(move(value)); }
+        if initializing || core.isSome<T>(raw slot) { return some(move(value)); }
         slot = some(move(value));
         null
     }
 
     pub func take() ?T {
         if initializing { return null; }
-        opt.take<T>(&slot)
+        opt.take<T>(raw slot)
     }
 
     pub func getOrInit<F: Movable>(factory: F) *const T {
@@ -71,7 +71,7 @@ pub class Lazy<T: Movable, F: Movable> {
     pub func init(factory: F) : slot(null), factory(move(factory)), initializing(false) {}
 
     pub func force() !*const T {
-        switch opt.asPtr<T>(&slot) {
+        switch opt.asPtr<T>(raw slot) {
             some(ptr) => ptr,
             null => {
                 if initializing { return CellError.RecursiveInitialization; }
@@ -83,7 +83,7 @@ pub class Lazy<T: Movable, F: Movable> {
                 };
                 slot = some(move(value));
                 initializing = false;
-                opt.asPtr<T>(&slot).unwrap()
+                opt.asPtr<T>(raw slot).unwrap()
             },
         }
     }
@@ -94,5 +94,5 @@ pub class UnsafeCell<T: Movable> {
     var slot: T;
     func init(value: T) : slot(move(value)) {}
     pub static func new(value: T) Self { UnsafeCell<T>(move(value)) }
-    pub unsafe func get() *T { &slot }
+    pub unsafe func get() *T { raw slot }
 }

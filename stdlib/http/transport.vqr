@@ -59,7 +59,7 @@ func exchange(reader: *io.Reader, writer: *io.Writer, request: *Request, limits:
     writeRequest(writer, request)!;
     var buffer = bufio.BufferedReader(reader, 8192)!;
     for attempt in 0..8 {
-        var response = parseResponseFor(&buffer, request.method(), limits)!;
+        var response = parseResponseFor(raw buffer, request.method(), limits)!;
         if response.status().value() >= 200 { return move(response); }
     }
     HttpError.TooManyResponses
@@ -71,14 +71,14 @@ pub class Client {
     pub func setTimeout(value: time.Duration) void { limits.timeout = value; }
     pub const func send(address: str, request: *Request) !Response {
         var target = parseUrl(address)!;
-        sendTo(&target, request)
+        sendTo(raw target, request)
     }
     pub const func request(address: str, method: Method, body: Body) !Response {
         var target = parseUrl(address)!;
-        var path = pathTarget(&target)!;
+        var path = pathTarget(raw target)!;
         var message = Request.new(method, path)!;
         message.setBody(move(body));
-        sendTo(&target, &message)
+        sendTo(raw target, raw message)
     }
     pub const func get(address: str) !Response { request(address, Method.GET, Body()) }
     pub const func head(address: str) !Response { request(address, Method.HEAD, Body()) }
@@ -96,14 +96,14 @@ pub class Client {
         stream.setWriteTimeout(some(limits.timeout))!;
         if secure {
             var config = tls.TlsConfig();
-            var encrypted = tls.TlsStream.connect(move(stream), host, &config) catch (reason) {
+            var encrypted = tls.TlsStream.connect(move(stream), host, raw config) catch (reason) {
                 return httpTlsError(reason);
             };
-            return exchange(&encrypted, &encrypted, request, limits) catch (reason) {
+            return exchange(raw encrypted, raw encrypted, request, limits) catch (reason) {
                 return httpTlsError(reason);
             };
         }
-        exchange(&stream, &stream, request, limits)
+        exchange(raw stream, raw stream, request, limits)
     }
 }
 
@@ -123,12 +123,12 @@ pub class Server {
         var accepted = listener.accept()!;
         accepted.0.setReadTimeout(some(limits.timeout))!;
         accepted.0.setWriteTimeout(some(limits.timeout))!;
-        var reader = bufio.BufferedReader(&accepted.0, 8192)!;
-        var request = parseRequest(&reader, limits)!;
+        var reader = bufio.BufferedReader(raw accepted.0, 8192)!;
+        var request = parseRequest(raw reader, limits)!;
         var method = request.method();
         var response = handler.handle(move(request))!;
         response.headers().set("Connection", "close")!;
-        writeResponseFor(&accepted.0, &response, method)
+        writeResponseFor(raw accepted.0, raw response, method)
     }
 }
 

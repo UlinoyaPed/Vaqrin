@@ -75,7 +75,7 @@ pub class OptionalCodec<T> {
     pub func encode(value: *const ?T, serializer: *Serializer) !void {
         switch *value {
             null => serializer.writeNull(),
-            some(ref item) => element.encode(&item, serializer),
+            some(ref item) => element.encode(item.toRaw(), serializer),
         }
     }
     pub func decode(deserializer: *Deserializer) !?T {
@@ -101,7 +101,7 @@ pub class SequenceCodec<T> {
         var length = deserializer.beginSeq()!;
         var output = coll.Vec<T>();
         switch length { some(count) => output.reserve(count)!, null => {}, }
-        for deserializer.nextElement()! {
+        while deserializer.nextElement()! {
             var item = element.decode(deserializer)!;
             output.push(move(item))!;
         }
@@ -118,7 +118,7 @@ pub class StringMapCodec<T> {
         for index in usize(0)..value.len() {
             var entry = value.getPtr(index).unwrap();
             serializer.writeKey(entry.0)!;
-            element.encode(&entry.1, serializer)!;
+            element.encode(raw entry.1, serializer)!;
         }
         serializer.endMap()
     }

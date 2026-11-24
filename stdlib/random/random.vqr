@@ -29,10 +29,10 @@ class NativeEntropy {
     comptime if __vqr_windows_system_entropy() {
         pub static func fill(dst: []u8) !void {
             var position: usize = 0;
-            for position < dst.len() {
+            while position < dst.len() {
                 var available = dst.len() - position;
                 var count = if available > 0x40000000 { usize(0x40000000) } else { available };
-                var status = __vqr_windows_fill_entropy(&dst[position], u32(count)!);
+                var status = __vqr_windows_fill_entropy(raw dst[position], u32(count)!);
                 if status < 0 { return RandomError.SystemEntropyUnavailable; }
                 position += count;
             }
@@ -40,7 +40,7 @@ class NativeEntropy {
     } else {
         pub static func fill(dst: []u8) !void {
             if dst.len() == 0 { return; }
-            var status = unsafe { __vqr_io_random(&dst[0], dst.len()) };
+            var status = unsafe { __vqr_io_random(raw dst[0], dst.len()) };
             if status != 0 { return io.systemError(status); }
         }
     }
@@ -126,7 +126,7 @@ pub class Pcg64 {
 
     pub func fill(dst: []u8) void {
         var index: usize = 0;
-        for index < dst.len() {
+        while index < dst.len() {
             var value = nextU64();
             for j in usize(0)..8 {
                 if index >= dst.len() { break; }
@@ -144,7 +144,7 @@ pub class Pcg64 {
         var plus = increment;
         var accumulatedMultiplier: u128 = 1;
         var accumulatedPlus: u128 = 0;
-        for delta > 0 {
+        while delta > 0 {
             if (delta & 1) != 0 {
                 accumulatedMultiplier *%= multiplier;
                 accumulatedPlus = accumulatedPlus *% multiplier +% plus;
@@ -204,7 +204,7 @@ pub class Xoshiro256 {
 
     pub func fill(dst: []u8) void {
         var index: usize = 0;
-        for index < dst.len() {
+        while index < dst.len() {
             var value = nextU64();
             for j in usize(0)..8 {
                 if index >= dst.len() { break; }
@@ -449,7 +449,7 @@ pub class WeightedIndex {
         if target >= total { target = math.nextAfter<f64>(total, 0.0); }
         var first: usize = 0;
         var end = cumulative.len();
-        for first < end {
+        while first < end {
             var middle = first + (end - first) / 2;
             if cumulative.asConstSlice()[middle] <= target { first = middle + 1; }
             else { end = middle; }
@@ -460,7 +460,7 @@ pub class WeightedIndex {
 
 pub func shuffle<R: Rng, T: Movable>(items: []T, rng: *R) void {
     var index = items.len();
-    for index > 1 {
+    while index > 1 {
         index--;
         var selected = indexFromU64(rangeInt<R>(rng, 0, u64(index + 1))!);
         if selected != index {
@@ -474,12 +474,12 @@ pub func shuffle<R: Rng, T: Movable>(items: []T, rng: *R) void {
 pub func choose<R: Rng, T>(items: []const T, rng: *R) ?*const T {
     if items.len() == 0 { return null; }
     var index = indexFromU64(rangeInt<R>(rng, 0, u64(items.len()))!);
-    some(&items[index])
+    some(raw items[index])
 }
 pub func chooseMut<R: Rng, T>(items: []T, rng: *R) ?*T {
     if items.len() == 0 { return null; }
     var index = indexFromU64(rangeInt<R>(rng, 0, u64(items.len()))!);
-    some(&items[index])
+    some(raw items[index])
 }
 
 pub func sample<R: Rng, T: Copyable + Movable>(items: []const T, count: usize, rng: *R) !coll.Vec<T> {
@@ -541,7 +541,7 @@ pub func randomString<R: Rng>(alphabet: str, length: usize, rng: *R) !string {
     var output = coll.Vec<u8>();
     for i in usize(0)..length {
         var index = indexFromU64(rangeInt<R>(rng, 0, u64(scalars.len()))!);
-        appendScalar(scalars.asConstSlice()[index], &output)!;
+        appendScalar(scalars.asConstSlice()[index], raw output)!;
     }
     text.fromBytes(output.asConstSlice())
 }

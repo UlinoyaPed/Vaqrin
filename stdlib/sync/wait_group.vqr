@@ -11,7 +11,7 @@ pub class WaitGroup {
 
     pub const func add(n: usize) !void {
         var amount = u32(n) catch { return SyncError.CountOverflow; };
-        var state = unsafe { constCast<*u32>(&pending) };
+        var state = unsafe { constCast<*u32>(raw pending) };
         var old = __vqr_atomic_load(state, atomic.Order.Relaxed);
         for {
             if amount > ~u32(0) - old { return SyncError.CountOverflow; }
@@ -23,7 +23,7 @@ pub class WaitGroup {
     }
 
     pub const func done() void {
-        var state = unsafe { constCast<*u32>(&pending) };
+        var state = unsafe { constCast<*u32>(raw pending) };
         var old = __vqr_atomic_load(state, atomic.Order.Relaxed);
         for {
             if old == 0 { panic("WaitGroup.done requires a pending operation"); }
@@ -37,10 +37,10 @@ pub class WaitGroup {
         }
     }
 
-    pub const func count() usize { usize(__vqr_atomic_load(&pending, atomic.Order.Acquire)) }
+    pub const func count() usize { usize(__vqr_atomic_load(raw pending, atomic.Order.Acquire)) }
 
     pub const func wait() !void {
-        var state = &pending;
+        var state = raw pending;
         for {
             var left = __vqr_atomic_load(state, atomic.Order.Acquire);
             if left == 0 { return; }

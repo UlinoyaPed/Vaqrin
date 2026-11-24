@@ -9,7 +9,7 @@ func bitLength(bytes: usize) usize {
 
 func positionWithinByte(index: usize, order: BitOrder) usize {
     var offset = index % 8;
-    if (order == BitOrder.LsbFirst) offset else 7 - offset
+    if order == BitOrder.LsbFirst { offset } else { 7 - offset }
 }
 
 pub class BitReader {
@@ -27,7 +27,7 @@ pub class BitReader {
         for i in usize(0)..count {
             var index = cursor + i;
             if testBit(source[index / 8], positionWithinByte(index, order)) {
-                var bit = if (order == BitOrder.LsbFirst) i else count - 1 - i;
+                var bit = if order == BitOrder.LsbFirst { i } else { count - 1 - i };
                 value = setBit(value, bit);
             }
         }
@@ -58,19 +58,19 @@ pub class BitWriter {
         if count > 64 || count > remaining() { return BitError.OutOfRange; }
         for i in usize(0)..count {
             var index = cursor + i;
-            var bit = if (order == BitOrder.LsbFirst) i else count - 1 - i;
+            var bit = if order == BitOrder.LsbFirst { i } else { count - 1 - i };
             var bitInByte = positionWithinByte(index, order);
-            var address = &destination[index / 8];
-            *address = if (testBit(value, bit)) setBit(*address, bitInByte) else clearBit(*address, bitInByte);
+            var address = raw destination[index / 8];
+            *address = if testBit(value, bit) { setBit(*address, bitInByte) } else { clearBit(*address, bitInByte) };
         }
         cursor += count;
     }
 
     pub func alignByte(fillBit: bool) !void {
-        writeBits(if (fillBit) ~0u64 else 0u64, (usize(8) - cursor % 8) % 8)
+        writeBits(if fillBit { ~0u64 } else { 0u64 }, (usize(8) - cursor % 8) % 8)
     }
 
     pub const func position() usize { cursor }
-    pub const func writtenBytes() usize { cursor / 8 + (if (cursor % 8 == 0) usize(0) else usize(1)) }
+    pub const func writtenBytes() usize { cursor / 8 + (if cursor % 8 == 0 { usize(0) } else { usize(1) }) }
     pub const func remaining() usize { end - cursor }
 }

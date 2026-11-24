@@ -28,7 +28,7 @@ pub func mkdirAll(name: str) !void { mkdirAll(path.fromString(name)!) }
 pub func removeAll(name: path.Path, maxDepth: u32) !void {
     var leaf = name.filename() ?? { return FsError.InvalidPath; };
     if leaf == "." || leaf == ".." { return FsError.InvalidPath; }
-    var dir = parentOf(&name)!;
+    var dir = parentOf(raw name)!;
     var parent = io.HostDirectory.open(dir.asString().asBytes()) catch (reason) {
         if reason == io.systemError(2) { return; }
         return reason;
@@ -70,7 +70,7 @@ func walkChildren(directory: *io.HostDirectory, root: path.Path, visitor: *WalkV
             var childPath = path.join(root, path.fromString(label)!)!;
             var child = directory.openChild(label)!;
             visitor.visit(DirectoryEntry(move(entry), root), depth)!;
-            walkChildren(&child, childPath, visitor, maxDepth, depth + 1, remaining)!;
+            walkChildren(raw child, childPath, visitor, maxDepth, depth + 1, remaining)!;
         } else {
             visitor.visit(DirectoryEntry(move(entry), root), depth)!;
         }
@@ -89,9 +89,9 @@ func openWalkRoot(name: *const path.Path) !io.HostDirectory {
 
 pub func walkDir(root: path.Path, options: WalkLimits, visitor: *WalkVisitor) !void {
     if options.maxDepth > 128 { return FsError.WalkLimit; }
-    var directory = openWalkRoot(&root)!;
+    var directory = openWalkRoot(raw root)!;
     var remaining = options.maxEntries;
-    walkChildren(&directory, root, visitor, options.maxDepth, 1, &remaining)
+    walkChildren(raw directory, root, visitor, options.maxDepth, 1, raw remaining)
 }
 pub func walkDir(root: str, options: WalkLimits, visitor: *WalkVisitor) !void {
     walkDir(path.fromString(root)!, options, visitor)

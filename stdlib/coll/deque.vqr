@@ -139,7 +139,7 @@ pub class VecDeque<T: Movable> {
         if length < capacity() { reallocate(length)!; }
     }
 
-    func physical(index: usize) usize {
+    const func physical(index: usize) usize {
         var cap = capacity();
         if cap == 0 { return 0; }
         var tail = cap - head;
@@ -161,7 +161,7 @@ pub class VecDeque<T: Movable> {
             var value = unsafe { slots.getMutPtr(source).unwrap().assumeInit() };
             unsafe { next.getMutPtr(i).unwrap().write(move(value)); }
         }
-        core.swap<Vec<mem.MaybeUninit<T>>>(&slots, &next);
+        core.swap<Vec<mem.MaybeUninit<T>>>(raw slots, raw next);
         head = 0;
     }
 
@@ -353,7 +353,7 @@ pub class VecDeque<T: Movable> {
     pub static func intoIter(value: Self) IntoDequeIter<T> { IntoDequeIter<T>(move(value)) }
 
     pub func truncate(n: usize) void {
-        for length > n {
+        while length > n {
             var value = popBack().unwrap();
         }
         if length == 0 { head = 0; }
@@ -395,7 +395,7 @@ pub class FixedDeque<T: Movable, comptime N: usize> {
 
     func address(index: usize) *mem.MaybeUninit<T> { slots.getMut(index).unwrap() }
 
-    func physical(index: usize) usize {
+    const func physical(index: usize) usize {
         if N == 0 { return 0; }
         var tail = N - head;
         if index >= tail { index - tail } else { head + index }
@@ -525,7 +525,7 @@ pub class FixedDeque<T: Movable, comptime N: usize> {
     }
 
     pub func truncate(n: usize) void {
-        for length > n {
+        while length > n {
             var value = popBack().unwrap();
         }
     }
@@ -543,7 +543,7 @@ pub class FixedDeque<T: Movable, comptime N: usize> {
     pub func append(other: *Self) !void {
         if self == other || other.length == 0 { return; }
         if other.length > N - length { return CapacityError.Overflow; }
-        for other.length > 0 {
+        while other.length > 0 {
             var item = other.popFront().unwrap();
             switch pushBack(move(item)) {
                 PushResult.Stored => {},

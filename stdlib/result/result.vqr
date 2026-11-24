@@ -21,7 +21,7 @@ pub func orElse<T: Movable, F: Movable>(value: !T, fallback: F) !T {
 
 pub func inspect<T: Movable, F: Movable>(value: !T, observer: F) !T {
     var item = move(value)!;
-    observer(&item);
+    observer(raw item);
     ok(move(item))
 }
 

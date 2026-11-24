@@ -1,5 +1,5 @@
 package coll
-import (core, iter as iterator, mem)
+import (core, iter as iterator, mem, meta)
 
 pub error CapacityError { Overflow, IndexOutOfBounds }
 
@@ -69,7 +69,7 @@ pub class Vec<T: Movable> {
     }
 
     pub func shrinkTo(minCapacity: usize) !void {
-        var target = if (minCapacity > length) minCapacity else length;
+        var target = if minCapacity > length { minCapacity } else { length };
         if target >= reserved { return; }
         reallocate(target)
     }
@@ -129,10 +129,10 @@ pub class Vec<T: Movable> {
         }
 
         var i: usize = 0;
-        if __vqr_optional_present(&data) {
+        if __vqr_optional_present(raw data) {
             var previous = data.unwrap();
             unsafe {
-                for i < length {
+                while i < length {
                     __vqr_slot_write<T>(next.offset(i), __vqr_slot_take<T>(previous.offset(i)));
                     i++;
                 }
@@ -149,20 +149,39 @@ pub class Vec<T: Movable> {
         reserve(nextSequenceCapacity(reserved))
     }
 
-    pub func push(value: T) !void {
-        ensureRoomForOne()!;
-        unsafe { __vqr_slot_write<T>(data.unwrap().offset(length), move(value)); }
-        length++;
-    }
+    // Each specialization exposes one mode, not two overloads.
+    comptime if meta.isCopyable<T>() {
+        pub func push(value: T) !void {
+            ensureRoomForOne()!;
+            unsafe { __vqr_slot_write<T>(data.unwrap().offset(length), move(value)); }
+            length++;
+        }
 
-    // Returns the original value if allocation or capacity growth fails.
-    pub func pushPreserving(value: T) PushResult<T> {
-        ensureRoomForOne() catch (reason) {
-            return PushResult<T>.Failed(reason, move(value));
-        };
-        unsafe { __vqr_slot_write<T>(data.unwrap().offset(length), move(value)); }
-        length++;
-        PushResult<T>.Stored()
+        // Returns the argument copy if allocation or capacity growth fails.
+        pub func pushPreserving(value: T) PushResult<T> {
+            ensureRoomForOne() catch (reason) {
+                return PushResult<T>.Failed(reason, move(value));
+            };
+            unsafe { __vqr_slot_write<T>(data.unwrap().offset(length), move(value)); }
+            length++;
+            PushResult<T>.Stored()
+        }
+    } else {
+        pub func push(value: move T) !void {
+            ensureRoomForOne()!;
+            unsafe { __vqr_slot_write<T>(data.unwrap().offset(length), move(value)); }
+            length++;
+        }
+
+        // Returns the original value if allocation or capacity growth fails.
+        pub func pushPreserving(value: move T) PushResult<T> {
+            ensureRoomForOne() catch (reason) {
+                return PushResult<T>.Failed(reason, move(value));
+            };
+            unsafe { __vqr_slot_write<T>(data.unwrap().offset(length), move(value)); }
+            length++;
+            PushResult<T>.Stored()
+        }
     }
 
     pub func pop() ?T {
@@ -319,7 +338,7 @@ pub class Vec<T: Movable> {
         var destination = start + incoming;
         if destination > end {
             var i = length;
-            for i > end {
+            while i > end {
                 i--;
                 unsafe {
                     __vqr_slot_write<T>(storage.offset(destination + (i - end)),
@@ -376,10 +395,10 @@ pub class Vec<T: Movable> {
     pub const func asConstPtr() ?*const T { if length == 0 { null } else { some(data.unwrap()) } }
 
     pub const func getPtr(index: usize) ?*const T {
-        if index < length { some(&asSlice()[index]) } else { null }
+        if index < length { some(raw asSlice()[index]) } else { null }
     }
     pub func getMutPtr(index: usize) ?*T {
-        if index < length { some(&asSlice()[index]) } else { null }
+        if index < length { some(raw asSlice()[index]) } else { null }
     }
     pub const func get(index: usize) ?ref T from self {
         if index >= length { return null; }
@@ -411,7 +430,7 @@ pub class Vec<T: Movable> {
     pub func clear() void { truncate(0); }
 
     pub func truncate(n: usize) void {
-        for length > n {
+        while length > n {
             length--;
             unsafe { __vqr_slot_drop<T>(data.unwrap().offset(length)); }
         }

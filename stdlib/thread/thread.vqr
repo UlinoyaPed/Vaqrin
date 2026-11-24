@@ -30,8 +30,8 @@ class Work<T: Movable + Sendable, F: Movable + Sendable> {
     pub func run() void {
         var owned = unsafe { Box<Work<T, F>>.fromRaw(self) };
         var shared = state;
-        __vqr_thread_set_stop(&shared.stop);
-        var ready = opt.take<F>(&callback);
+        __vqr_thread_set_stop(raw shared.stop);
+        var ready = opt.take<F>(raw callback);
         var call = move(ready).unwrap();
         var outcome: !T = move(call)();
         shared.result = some(move(outcome));
@@ -54,7 +54,7 @@ pub class Thread<T: Movable + Sendable> {
         var rawWork = Box.intoRaw(move(work));
         var native: usize = 0;
         var id: usize = 0;
-        if unsafe { __vqr_thread_start<Work<T, F>>(&native, rawWork, &id) } != 0 {
+        if unsafe { __vqr_thread_start<Work<T, F>>(raw native, rawWork, raw id) } != 0 {
             var rejectedWork = unsafe { Box<Work<T, F>>.fromRaw(rawWork) };
             var rejectedState = unsafe { Box<State<T>>.fromRaw(rawState) };
             return ThreadError.StartFailed;
@@ -83,7 +83,7 @@ pub class Thread<T: Movable + Sendable> {
         if identity == __vqr_thread_id() && !isFinished() { return ThreadError.SelfJoin; }
         if __vqr_thread_join(handle) != 0 { return ThreadError.JoinFailed; }
         state = null;
-        var result = opt.take<!T>(&current.result);
+        var result = opt.take<!T>(raw current.result);
         release<T>(current);
         move(result) ?? ThreadError.MissingResult
     }

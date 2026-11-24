@@ -11,15 +11,15 @@ pub class Normalizer {
         var cp = convert.fromChar(ch);
         var compatibility = form == NormalForm.NFKC || form == NormalForm.NFKD;
         var expanded = coll.Vec<u32>();
-        decomposeScalar(cp, compatibility, &expanded, 0)!;
-        for scalar in expanded.asSlice() { insertOrdered(&pending, scalar)!; }
+        decomposeScalar(cp, compatibility, raw expanded, 0)!;
+        for scalar in expanded.asSlice() { insertOrdered(raw pending, scalar)!; }
     }
 
     pub func finish() !string {
         var compose = form == NormalForm.NFC || form == NormalForm.NFKC;
         var scalars = if compose { composeSegment(pending.asConstSlice())! } else { pending.clone()! };
         var output = coll.Vec<u8>();
-        for cp in scalars.asSlice() { appendNormalizedScalarUtf8(cp, &output)!; }
+        for cp in scalars.asSlice() { appendNormalizedScalarUtf8(cp, raw output)!; }
         text.fromBytes(output.asConstSlice())
     }
 
@@ -37,7 +37,7 @@ func insertOrdered(pending: *coll.Vec<u32>, cp: u32) !void {
     var cls = combiningClass(__vqr_char(cp));
     if cls == 0 { pending.push(cp)!; return; }
     var at = pending.len();
-    for at > 0 {
+    while at > 0 {
         var previous = combiningClass(__vqr_char(pending.asConstSlice()[at - 1]));
         if previous == 0 || previous <= cls { break; }
         at--;
@@ -59,7 +59,7 @@ func decomposeScalar(cp: u32, compatibility: bool, out: *coll.Vec<u32>, depth: u
     }
     var lo: usize = 0;
     var hi = decompositionIndex.len() / 3;
-    for lo < hi {
+    while lo < hi {
         var mid = lo + (hi - lo) / 2;
         var key = decompositionIndex[mid * 3];
         if cp < key { hi = mid; }
@@ -86,10 +86,10 @@ func composeSegment(segment: []const u32) !coll.Vec<u32> {
     for cp in segment {
         var cls = combiningClass(__vqr_char(cp));
         var combined: ?u32 = null;
-        if core.isSome<usize>(&starterIndex) && (lastClass < cls || lastClass == 0) {
+        if core.isSome<usize>(raw starterIndex) && (lastClass < cls || lastClass == 0) {
             combined = composePair(out[starterIndex.unwrap()], cp);
         }
-        if core.isSome<u32>(&combined) {
+        if core.isSome<u32>(raw combined) {
             out[starterIndex.unwrap()] = combined.unwrap();
         } else {
             if cls == 0 { starterIndex = some(out.len()); }
@@ -111,7 +111,7 @@ func composePair(a: u32, b: u32) ?u32 {
     var lo: usize = 0;
     var hi = compositionPairs.len() / 3;
     var key = u64(a) * 0x110000 + u64(b);
-    for lo < hi {
+    while lo < hi {
         var mid = lo + (hi - lo) / 2;
         var candidate = u64(compositionPairs[mid * 3]) * 0x110000 +
                         u64(compositionPairs[mid * 3 + 1]);
@@ -175,7 +175,7 @@ pub class StreamingNormalizer {
         if available() != 0 { return UnicodeError.OutputPending; }
         var expanded = coll.Vec<u32>();
         var compatibility = form == NormalForm.NFKC || form == NormalForm.NFKD;
-        decomposeScalar(convert.fromChar(ch), compatibility, &expanded, 0)!;
+        decomposeScalar(convert.fromChar(ch), compatibility, raw expanded, 0)!;
         for cp in expanded.asConstSlice() {
             append(cp) catch (reason) {
                 failure = some(reason);
@@ -204,7 +204,7 @@ pub class StreamingNormalizer {
             if flushSegment(some(cp))! { return; }
         }
         if segment.len() >= maximum { return UnicodeError.SegmentTooLong; }
-        insertOrdered(&segment, cp)
+        insertOrdered(raw segment, cp)
     }
 
     // A zero-class scalar can still combine with the previous starter.
@@ -222,9 +222,9 @@ pub class StreamingNormalizer {
                     return true;
                 }
             }
-            for cp in normalized.asConstSlice() { appendNormalizedScalarUtf8(cp, &ready)!; }
+            for cp in normalized.asConstSlice() { appendNormalizedScalarUtf8(cp, raw ready)!; }
         } else {
-            for cp in segment.asConstSlice() { appendNormalizedScalarUtf8(cp, &ready)!; }
+            for cp in segment.asConstSlice() { appendNormalizedScalarUtf8(cp, raw ready)!; }
         }
         segment.clear();
         false

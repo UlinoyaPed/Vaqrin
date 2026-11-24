@@ -34,35 +34,35 @@ func main() !void {
     var connection = grpc.dial(endpoint, dialOptions)!;
     var options = grpc.CallOptions();
 
-    var broadcast = connection.start("/interop.Stream/Broadcast", &options)!;
-    send(&connection, &broadcast, 10)!;
-    connection.finishSend(&broadcast)!;
-    receive(&connection, &broadcast, 10)!;
-    receive(&connection, &broadcast, 11)!;
-    receive(&connection, &broadcast, 12)!;
-    finish(&connection, &broadcast)!;
+    var broadcast = connection.start("/interop.Stream/Broadcast", raw options)!;
+    send(raw connection, raw broadcast, 10)!;
+    connection.finishSend(raw broadcast)!;
+    receive(raw connection, raw broadcast, 10)!;
+    receive(raw connection, raw broadcast, 11)!;
+    receive(raw connection, raw broadcast, 12)!;
+    finish(raw connection, raw broadcast)!;
 
-    var sum = connection.start("/interop.Stream/Sum", &options)!;
-    send(&connection, &sum, 2)!;
-    send(&connection, &sum, 3)!;
-    send(&connection, &sum, 4)!;
-    connection.finishSend(&sum)!;
-    receive(&connection, &sum, 9)!;
-    finish(&connection, &sum)!;
+    var sum = connection.start("/interop.Stream/Sum", raw options)!;
+    send(raw connection, raw sum, 2)!;
+    send(raw connection, raw sum, 3)!;
+    send(raw connection, raw sum, 4)!;
+    connection.finishSend(raw sum)!;
+    receive(raw connection, raw sum, 9)!;
+    finish(raw connection, raw sum)!;
 
-    var echo = connection.start("/interop.Stream/Echo", &options)!;
-    send(&connection, &echo, 15)!;
-    receive(&connection, &echo, 30)!;
-    send(&connection, &echo, 16)!;
-    receive(&connection, &echo, 32)!;
-    connection.finishSend(&echo)!;
-    finish(&connection, &echo)!;
+    var echo = connection.start("/interop.Stream/Echo", raw options)!;
+    send(raw connection, raw echo, 15)!;
+    receive(raw connection, raw echo, 30)!;
+    send(raw connection, raw echo, 16)!;
+    receive(raw connection, raw echo, 32)!;
+    connection.finishSend(raw echo)!;
+    finish(raw connection, raw echo)!;
 
-    var cancelled = connection.start("/interop.Stream/Echo", &options)!;
-    send(&connection, &cancelled, 5)!;
-    receive(&connection, &cancelled, 10)!;
-    connection.cancel(&cancelled)!;
-    var rejected = connection.recvMessage(&cancelled);
-    require(result.errorOf(&rejected).unwrap() == grpc.RpcError.Cancelled)!;
+    var cancelled = connection.start("/interop.Stream/Echo", raw options)!;
+    send(raw connection, raw cancelled, 5)!;
+    receive(raw connection, raw cancelled, 10)!;
+    connection.cancel(raw cancelled)!;
+    var rejected = connection.recvMessage(raw cancelled);
+    require(result.errorOf(raw rejected).unwrap() == grpc.RpcError.Cancelled)!;
     connection.close()
 }

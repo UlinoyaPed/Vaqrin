@@ -27,8 +27,8 @@ pub class Buffer {
         var offset: ?usize = null;
         if original != 0 {
             var current = contents.asConstSlice();
-            var base = __vqr_pointer_address(&current[0]);
-            var address = __vqr_pointer_address(&data[0]);
+            var base = __vqr_pointer_address(raw current[0]);
+            var address = __vqr_pointer_address(raw data[0]);
             if address >= base && address - base < original { offset = address - base; }
         }
         contents.reserveAdditional(count)!;
@@ -84,11 +84,11 @@ pub class Buffer {
     pub func clear() void { contents.clear(); cursor = 0; }
 
     pub static func intoVec(value: Self) coll.Vec<u8> {
-        mem.replace<coll.Vec<u8>>(&value.contents, coll.Vec<u8>())
+        mem.replace<coll.Vec<u8>>(raw value.contents, coll.Vec<u8>())
     }
 }
 
-func shorter(a: usize, b: usize) usize { if (a < b) a else b }
+func shorter(a: usize, b: usize) usize { if a < b { a } else { b } }
 
 pub class ByteReader {
     var source: []const u8;

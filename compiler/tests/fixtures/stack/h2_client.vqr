@@ -25,15 +25,15 @@ func main() !void {
     config.setRootFile(cert)!;
     config.addProtocol("h2".asBytes())!;
     config.requireProtocol = true;
-    var secure = tls.TlsStream.connect(move(socket), "localhost", &config)!;
+    var secure = tls.TlsStream.connect(move(socket), "localhost", raw config)!;
     var options = http2.Settings();
     options.initialStreamWindow = 4096;
-    var connection = http2.openTls(http2.Role.Client, &secure, options)!;
+    var connection = http2.openTls(http2.Role.Client, raw secure, options)!;
 
     var first = headers("/one")!;
     var second = headers("/two")!;
-    var one = connection.request(&first, false)!;
-    var two = connection.request(&second, false)!;
+    var one = connection.request(raw first, false)!;
+    var two = connection.request(raw second, false)!;
     require(one == 1 && two == 3)!;
     var request = coll.Vec<u8>.withCapacity(70000)!;
     for i in usize(0)..70000 { request.push(65)!; }
@@ -48,9 +48,9 @@ func main() !void {
     var trailers: usize = 0;
     var statuses: usize = 0;
     var ping = false;
-    for ends < 2 || !ping {
-        connection.flush(&secure)!;
-        require(connection.receive(&secure)!)!;
+    while ends < 2 || !ping {
+        connection.flush(raw secure)!;
+        require(connection.receive(raw secure)!)!;
         for {
             var event = connection.next()! ?? { break; };
             switch event.kind {
@@ -90,5 +90,5 @@ func main() !void {
     }
     require(totalOne == 90000 && totalTwo == 111 && trailers == 2 && statuses == 2)!;
     connection.goAway(0)!;
-    connection.flush(&secure)!;
+    connection.flush(raw secure)!;
 }

@@ -11,11 +11,11 @@ pub func parseFloatPrefix<T>(value: str) !Parsed<T> {
     var status: i32 = 0;
     if __vqr_decimal_width<T>() == 32 {
         var narrowed: f32 = 0.0;
-        status = unsafe { __vqr_decimal_parse_f32(&source[0], source.len(), &narrowed, &consumed) };
+        status = unsafe { __vqr_decimal_parse_f32(raw source[0], source.len(), raw narrowed, raw consumed) };
         parsed = T(narrowed);
     } else {
         var wide: f64 = 0.0;
-        status = unsafe { __vqr_decimal_parse_f64(&source[0], source.len(), &wide, &consumed) };
+        status = unsafe { __vqr_decimal_parse_f64(raw source[0], source.len(), raw wide, raw consumed) };
         parsed = T(wide);
     }
     if status == 2 { return ParseError.OutOfRange; }

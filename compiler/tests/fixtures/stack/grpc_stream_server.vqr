@@ -56,10 +56,10 @@ func main() !void {
     io.print("\n")!;
     var server = grpc.Server();
     var handler = Handler{};
-    server.registerStreaming("/interop.Stream/Broadcast", &handler)!;
-    server.registerStreaming("/interop.Stream/Sum", &handler)!;
-    server.registerStreaming("/interop.Stream/Echo", &handler)!;
+    server.registerStreaming("/interop.Stream/Broadcast", raw handler)!;
+    server.registerStreaming("/interop.Stream/Sum", raw handler)!;
+    server.registerStreaming("/interop.Stream/Echo", raw handler)!;
     var options = grpc.ServeOptions();
     options.timeout = time.Duration.fromSeconds(5);
-    server.acceptTls(&listener, &acceptor, options)
+    server.acceptTls(raw listener, raw acceptor, options)
 }

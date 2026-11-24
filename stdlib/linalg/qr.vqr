@@ -52,7 +52,7 @@ pub class QR<T: Copyable> {
                 reflectors.set(i, k, reflectors.at(i, k) / length);
             }
             factors.set(k, k, -sign * norm);
-            applyReflector<T>(&factors, &reflectors, k, k + 1)!;
+            applyReflector<T>(raw factors, raw reflectors, k, k + 1)!;
         }
 
         var q = Matrix<T>.zeros(rows, cols)!;
@@ -62,10 +62,10 @@ pub class QR<T: Copyable> {
             for j in i..cols { r.set(i, j, factors.at(i, j)); }
         }
         var k = cols;
-        for k != 0 {
+        while k != 0 {
             k--;
             if reflectors.at(k, k) != T(0) {
-                applyReflector<T>(&q, &reflectors, k, 0)!;
+                applyReflector<T>(raw q, raw reflectors, k, 0)!;
             }
         }
         QR<T>(move(q), move(r))
@@ -97,7 +97,7 @@ pub class QR<T: Copyable> {
         var epsilon = num.floatInfo<T>().epsilon;
         var tolerance = epsilon * T(rows);
         var i = cols;
-        for i != 0 {
+        while i != 0 {
             i--;
             var diagonal = triangular.at(i, i);
             if largest == T(0) || math.abs<T>(diagonal) / largest <= tolerance {

@@ -95,7 +95,7 @@ pub class Writer {
         if count > remaining() { return BinaryError.EndOfBuffer; }
         if count != 0 {
             var target = data[cursor..cursor + count];
-            __vqr_move_bytes(&target[0], &value[0], count);
+            __vqr_move_bytes(raw target[0], raw value[0], count);
         }
         cursor += count;
     }

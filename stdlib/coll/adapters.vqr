@@ -187,7 +187,7 @@ pub class BinaryHeap<T: Movable> {
     pub func pushPop(value: T) T {
         if values.isEmpty() { return move(value); }
         var root = values.at(0);
-        var replaceRoot = if (order == HeapOrder.Max) less(&value, root) else less(root, &value);
+        var replaceRoot = if order == HeapOrder.Max { less(raw value, root) } else { less(root, raw value) };
         if replaceRoot {
             var previous = values.replace(0, move(value)).unwrap();
             siftDown(0);
@@ -201,7 +201,7 @@ pub class BinaryHeap<T: Movable> {
 
     pub func intoSortedVec() !Vec<T> {
         var result = Vec<T>.withCapacity(values.len())!;
-        for values.len() > 0 {
+        while values.len() > 0 {
             var item = pop().unwrap();
             result.push(move(item))!;
         }
@@ -215,7 +215,7 @@ pub class BinaryHeap<T: Movable> {
 
     func siftUp(index: usize) void {
         var child = index;
-        for child > 0 {
+        while child > 0 {
             var parent = (child - 1) / 2;
             if !higherPriority(child, parent) { return; }
             values.swap(child, parent);
@@ -225,7 +225,7 @@ pub class BinaryHeap<T: Movable> {
 
     func siftDown(index: usize) void {
         var root = index;
-        for root < values.len() / 2 {
+        while root < values.len() / 2 {
             var child = root * 2 + 1;
             if child + 1 < values.len() && higherPriority(child + 1, child) { child++; }
             if !higherPriority(child, root) { return; }
@@ -236,7 +236,7 @@ pub class BinaryHeap<T: Movable> {
 
     func heapify() void {
         var i = values.len() / 2;
-        for i > 0 {
+        while i > 0 {
             i--;
             siftDown(i);
         }

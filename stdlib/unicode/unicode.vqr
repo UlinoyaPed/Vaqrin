@@ -30,7 +30,7 @@ func packedInfo(ch: char) u64 {
     var cp = convert.fromChar(ch);
     var lo: usize = 0;
     var hi: usize = unicodePropertyRanges.len() / 2;
-    for lo < hi {
+    while lo < hi {
         var mid = lo + (hi - lo) / 2;
         var bounds = unicodePropertyRanges[mid * 2];
         var first = __vqr_parse_bits<u32>(u128(bounds >> 21));
@@ -94,7 +94,7 @@ func simpleMapping(ch: char, column: usize) char {
     var cp = convert.fromChar(ch);
     var lo: usize = 0;
     var hi = simpleCaseMappings.len() / 4;
-    for lo < hi {
+    while lo < hi {
         var mid = lo + (hi - lo) / 2;
         var key = simpleCaseMappings[mid * 4];
         if cp < key { hi = mid; }
@@ -174,7 +174,7 @@ pub func caseFoldFull(ch: char) !string {
     var cp = convert.fromChar(ch);
     var lo: usize = 0;
     var hi = caseFoldIndex.len() / 3;
-    for lo < hi {
+    while lo < hi {
         var mid = lo + (hi - lo) / 2;
         var key = caseFoldIndex[mid * 3];
         if cp < key { hi = mid; }
@@ -184,13 +184,13 @@ pub func caseFoldFull(ch: char) !string {
             var count = usize(caseFoldIndex[mid * 3 + 2]);
             var output = coll.Vec<u8>();
             for i in usize(0)..count {
-                appendCaseFoldScalarUtf8(caseFoldScalars[offset + i], &output)!;
+                appendCaseFoldScalarUtf8(caseFoldScalars[offset + i], raw output)!;
             }
             return text.fromBytes(output.asConstSlice());
         }
     }
     var output = coll.Vec<u8>();
-    appendCaseFoldScalarUtf8(cp, &output)!;
+    appendCaseFoldScalarUtf8(cp, raw output)!;
     text.fromBytes(output.asConstSlice())
 }
 

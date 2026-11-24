@@ -41,10 +41,10 @@ class Job<T: Movable + Sendable, F: Movable + Sendable> {
 
     pub func run() void {
         var own = unsafe { Box<Job<T, F>>.fromRaw(self) };
-        var ready = opt.take<F>(&callback);
+        var ready = opt.take<F>(raw callback);
         var input = move(ready).unwrap();
         var outcome: !T = move(input)();
-        switch result.errorOf<T>(&outcome) {
+        switch result.errorOf<T>(raw outcome) {
             some(reason) => { __vqr_task_record_error(reason); },
             null => {},
         }
@@ -81,7 +81,7 @@ pub class Task<T: Movable + Sendable> {
 
     pub func deinit() void { unsafe { __vqr_rt_task_release(handle); } }
     func takeResult() !T {
-        var outcome = opt.take<!T>(&completion.value);
+        var outcome = opt.take<!T>(raw completion.value);
         move(outcome).unwrap()
     }
 }
@@ -140,7 +140,7 @@ pub class TaskGroup {
     pub func completionDescriptor() !i32 {
         var group = ensure()!;
         var reason: i32 = 0;
-        var descriptor = unsafe { __vqr_rt_group_completion_fd(group, &reason) };
+        var descriptor = unsafe { __vqr_rt_group_completion_fd(group, raw reason) };
         if descriptor < 0 { return io.systemError(reason); }
         descriptor
     }
@@ -229,7 +229,7 @@ pub func sleep(duration: time.Duration) !void {
 
 pub func scope<F: Movable>(callback: F) !void {
     var group = TaskGroup();
-    var outcome: !void = move(callback)(&group);
+    var outcome: !void = move(callback)(raw group);
     outcome!;
     group.joinAll()
 }

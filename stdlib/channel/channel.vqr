@@ -30,7 +30,7 @@ class Mailbox<T: Movable + Sendable> {
 
     pub func receiveQueue() TryRecv<T> {
         if offer == Offer.Committed || (offer == Offer.Pending && !closed && !hasExpired(sendDeadline)) {
-            var item = opt.take<T>(&handoff);
+            var item = opt.take<T>(raw handoff);
             offer = if offer == Offer.Pending { Offer.Claimed } else { Offer.Empty };
             return TryRecv<T>.Value(move(item).unwrap());
         }
@@ -44,7 +44,7 @@ class Mailbox<T: Movable + Sendable> {
     pub func findChoice(sending: bool, excluding: ?*Choice) ?*SelectNode<T> {
         if offer != Offer.Empty || closed { return null; }
         var current = choices;
-        for current != null {
+        while current != null {
             var node = current.unwrap();
             var isSend = node.source != null;
             if isSend == sending && node.choice.pending() &&
@@ -102,7 +102,7 @@ class State<T: Movable + Sendable> {
     }
 
     pub const func wait(guard: sync.MutexGuard<Mailbox<T>>, deadline: ?time.Deadline) sync.MutexGuard<Mailbox<T>> {
-        var address = &sequence;
+        var address = raw sequence;
         var version = __vqr_atomic_load(address, atomic.Order.Relaxed);
         seconds, nanos := switch deadline {
             some(alarm) => unsafe { alarm.instant().monotonicParts() },
@@ -118,7 +118,7 @@ class State<T: Movable + Sendable> {
     }
 
     pub const func notifyAll() void {
-        var address = unsafe { constCast<*u32>(&sequence) };
+        var address = unsafe { constCast<*u32>(raw sequence) };
         var previous = __vqr_atomic_add(address, 1u32, atomic.Order.Relaxed);
         __vqr_task_channel_notify(address);
         __vqr_sync_wake(address, 0x7fffffffu32);
@@ -181,7 +181,7 @@ pub class Sender<T: Movable + Sendable> {
             if data.readyReceiver() { data.deliver(move(value), Offer.Committed, null); }
             else {
                 var offered = some(move(value));
-                if !data.deliverToChoice(&offered) { return TrySendResult<T>.Full(move(offered).unwrap()); }
+                if !data.deliverToChoice(raw offered) { return TrySendResult<T>.Full(move(offered).unwrap()); }
             }
         } else {
             if data.queue.isFull() { return TrySendResult<T>.Full(move(value)); }
@@ -260,7 +260,7 @@ pub class Sender<T: Movable + Sendable> {
                 }
                 if hasExpired(deadline) { return SendResult<T>.Cancelled(move(value)); }
                 var offered = some(move(value));
-                if data.deliverToChoice(&offered) {
+                if data.deliverToChoice(raw offered) {
                     state.notifyAll();
                     return SendResult<T>.Sent;
                 }
@@ -284,7 +284,7 @@ pub class Sender<T: Movable + Sendable> {
             }
             var closed = data.closed;
             if closed || __vqr_task_channel_cancelled() || hasExpired(deadline) {
-                var recovered = opt.take<T>(&data.handoff);
+                var recovered = opt.take<T>(raw data.handoff);
                 data.offer = Offer.Empty;
                 state.notifyAll();
                 if closed { return SendResult<T>.Closed(move(recovered).unwrap()); }
@@ -360,7 +360,7 @@ pub class Receiver<T: Movable + Sendable> {
         var unread = data.queue.takeBuffer();
         var completed: ?T = null;
         if data.offer == Offer.Committed {
-            completed = opt.take<T>(&data.handoff);
+            completed = opt.take<T>(raw data.handoff);
             data.offer = Offer.Empty;
         }
         state.notifyAll();

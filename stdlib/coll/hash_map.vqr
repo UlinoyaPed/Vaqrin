@@ -90,13 +90,13 @@ pub class MapIterRef<K: Movable, V: Movable> {
           frontIndex(0), backIndex(0), count(0),
           snapshot(some(IteratorSnapshot<(*const K, *const V)>(move(items), count))) {}
     pub func next() ?(*const K, *const V) {
-        switch __vqr_optional_pointer(&snapshot) {
+        switch __vqr_optional_pointer(raw snapshot) {
             some(saved) => return saved.take(false),
             null => {},
         }
         if count == 0 { return null; }
-        for frontIndex < backIndex {
-            var bucket = &buckets[frontIndex];
+        while frontIndex < backIndex {
+            var bucket = raw buckets[frontIndex];
             frontIndex++;
             if bucket.isOccupied() {
                 count--;
@@ -107,14 +107,14 @@ pub class MapIterRef<K: Movable, V: Movable> {
     }
 
     pub func nextBack() ?(*const K, *const V) {
-        switch __vqr_optional_pointer(&snapshot) {
+        switch __vqr_optional_pointer(raw snapshot) {
             some(saved) => return saved.take(true),
             null => {},
         }
         if count == 0 { return null; }
-        for frontIndex < backIndex {
+        while frontIndex < backIndex {
             backIndex--;
-            var bucket = &buckets[backIndex];
+            var bucket = raw buckets[backIndex];
             if bucket.isOccupied() {
                 count--;
                 return some((bucket.keyRef(), bucket.valueRef()));
@@ -124,7 +124,7 @@ pub class MapIterRef<K: Movable, V: Movable> {
     }
 
     pub const func remaining() usize {
-        switch __vqr_optional_pointer(&snapshot) {
+        switch __vqr_optional_pointer(raw snapshot) {
             some(saved) => saved.remaining(),
             null => count,
         }
@@ -158,7 +158,7 @@ pub class Values<K: Movable, V: Movable> {
 func hashTableCapacity(entries: usize) !usize {
     if entries == 0 { return 0; }
     var capacity: usize = 8;
-    for entries > capacity - capacity / 8 {
+    while entries > capacity - capacity / 8 {
         if capacity > ~usize(0) / 2 { return CapacityError.Overflow; }
         capacity *= 2;
     }
@@ -274,7 +274,7 @@ pub class HashMap<K: Movable, V: Movable> {
             some(config) => {
                 var hasher = hashing.SipHasher(config.0);
                 var feed = config.1;
-                feed(key, &hasher);
+                feed(key, raw hasher);
                 hasher.finish()
             },
             null => {
@@ -340,7 +340,7 @@ pub class HashMap<K: Movable, V: Movable> {
         next.reserve(newCapacity)!;
         for i in usize(0)..newCapacity { next.push(HashBucket<K, V>())!; }
 
-        core.swap<Vec<HashBucket<K, V>>>(&buckets, &next);
+        core.swap<Vec<HashBucket<K, V>>>(raw buckets, raw next);
         var previousLength = length;
         length = 0;
         tombstones = 0;
@@ -387,8 +387,8 @@ pub class HashMap<K: Movable, V: Movable> {
     }
 
     pub func insertPreserving(key: K, value: V) InsertResult<K, V> {
-        var hash = hashKey(&key);
-        switch findIndex(&key, hash) {
+        var hash = hashKey(raw key);
+        switch findIndex(raw key, hash) {
             some(index) => {
                 var bucket = buckets.getMutPtr(index).unwrap();
                 var previous = bucket.take();
@@ -415,12 +415,12 @@ pub class HashMap<K: Movable, V: Movable> {
     }
 
     pub const func get(key: in K) ?ref V from self {
-        var index = findIndex(&key, hashKey(&key))?;
+        var index = findIndex(key.toRaw(), hashKey(key.toRaw()))?;
         unsafe { __vqr_borrow_from_self(buckets.getPtr(index).unwrap().valueRef()) }
     }
 
     pub func getMut(key: in K) ?ref mut V from self {
-        var index = findIndex(&key, hashKey(&key))?;
+        var index = findIndex(key.toRaw(), hashKey(key.toRaw()))?;
         unsafe { __vqr_borrow_from_self(buckets.getMutPtr(index).unwrap().valueMut()) }
     }
 
@@ -430,7 +430,7 @@ pub class HashMap<K: Movable, V: Movable> {
     }
 
     pub func getOrInsertWith<F: Movable>(key: K, create: F) !ref mut V from self {
-        var index = findIndex(&key, hashKey(&key));
+        var index = findIndex(raw key, hashKey(raw key));
         switch index {
             some(at) => {
                 return unsafe { __vqr_borrow_from_self(buckets.getMutPtr(at).unwrap().valueMut()) };
@@ -443,8 +443,8 @@ pub class HashMap<K: Movable, V: Movable> {
     }
 
     pub func getOrInsertPtr(key: K, initial: V) !*V {
-        var hash = hashKey(&key);
-        var location = probe(&key, hash);
+        var hash = hashKey(raw key);
+        var location = probe(raw key, hash);
         switch location.0 {
             some(index) => buckets.getMutPtr(index).unwrap().valueMut(),
             null => {
@@ -474,12 +474,12 @@ pub class HashMap<K: Movable, V: Movable> {
     }
 
     pub const func containsKey(key: in K) bool {
-        findIndex(&key, hashKey(&key)) != null
+        findIndex(key.toRaw(), hashKey(key.toRaw())) != null
     }
 
     pub func removeEntry(key: in K) ?(K, V) {
-        var hash = hashKey(&key);
-        switch findIndex(&key, hash) {
+        var hash = hashKey(key.toRaw());
+        switch findIndex(key.toRaw(), hash) {
             null => null,
             some(index) => {
                 var pair = buckets.getMutPtr(index).unwrap().take();
@@ -593,10 +593,10 @@ pub class Entry<K: Movable, V: Movable> {
         }
     }
     const func queryPtr() *const K {
-        __vqr_optional_pointer(&query) ?? { panic("hash map entry has already been consumed"); }
+        __vqr_optional_pointer(raw query) ?? { panic("hash map entry has already been consumed"); }
     }
     func takeKey() K {
-        var value = core.replace<?K>(&query, null);
+        var value = core.replace<?K>(raw query, null);
         move(value).unwrap()
     }
 }

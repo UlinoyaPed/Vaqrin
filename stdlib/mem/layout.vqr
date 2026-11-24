@@ -28,7 +28,7 @@ pub class Layout {
         var offset = alignUp(bytes, other.align())!;
         var size = other.size();
         if size > ~usize(0) - offset { return LayoutError.Overflow; }
-        var align = if (alignment >= other.align()) alignment else other.align();
+        var align = if alignment >= other.align() { alignment } else { other.align() };
         Layout.fromSizeAlign(offset + size, align)
     }
 }
@@ -49,8 +49,8 @@ pub func moveBytes(src: []const u8, dst: []u8) !void {
     var count = src.len();
     if count > dst.len() { return LayoutError.ShortDestination; }
     if count == 0 { return; }
-    var source = __vqr_pointer_address(&src[0]);
-    var target = __vqr_pointer_address(&dst[0]);
+    var source = __vqr_pointer_address(raw src[0]);
+    var target = __vqr_pointer_address(raw dst[0]);
     if source == target { return; }
     if target > source {
         for i := count; i != 0; i-- { dst[i - 1] = src[i - 1]; }
@@ -66,14 +66,14 @@ pub func zeroBytes(dst: []u8) void {
 }
 
 pub func compareBytes(a: []const u8, b: []const u8) cmp.Ordering {
-    var count = if (a.len() < b.len()) a.len() else b.len();
+    var count = if a.len() < b.len() { a.len() } else { b.len() };
     for i in usize(0)..count {
         if a[i] < b[i] { return cmp.Ordering.Less; }
         if a[i] > b[i] { return cmp.Ordering.Greater; }
     }
     var lhs = a.len();
     var rhs = b.len();
-    cmp.compare(&lhs, &rhs)
+    cmp.compare(raw lhs, raw rhs)
 }
 
 pub func swap<T: Movable>(a: *T, b: *T) void { core.swap(a, b); }

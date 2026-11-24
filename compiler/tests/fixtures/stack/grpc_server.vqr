@@ -55,12 +55,12 @@ func main() !void {
     var handler = Twice{};
     var missing = Missing{};
     var wait = Sleep{};
-    server.register("/interop.Echo/Double", &handler)!;
-    server.register("/interop.Echo/Missing", &missing)!;
-    server.register("/interop.Echo/Wait", &wait)!;
+    server.register("/interop.Echo/Double", raw handler)!;
+    server.register("/interop.Echo/Missing", raw missing)!;
+    server.register("/interop.Echo/Wait", raw wait)!;
     var options = grpc.ServeOptions();
     options.timeout = time.Duration.fromSeconds(5);
-    server.acceptTls(&listener, &tlsAcceptor, options) catch (reason) {
+    server.acceptTls(raw listener, raw tlsAcceptor, options) catch (reason) {
         if reason == tls.TlsError.UnexpectedEof || reason == grpc.RpcError.ConnectionClosed { return; }
         return reason;
     }

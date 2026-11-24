@@ -210,7 +210,7 @@ class Output {
     pub func init(maxBytes: usize) : data(coll.Vec<u8>()), limit(if maxBytes > 0x7fffffff { 0x7fffffff } else { maxBytes }) {}
     pub const func maximum() usize { limit }
     pub const func written() []const u8 { data.asConstSlice() }
-    pub func take() coll.Vec<u8> { core.replace<coll.Vec<u8>>(&data, coll.Vec<u8>()) }
+    pub func take() coll.Vec<u8> { core.replace<coll.Vec<u8>>(raw data, coll.Vec<u8>()) }
     pub func append(a: []const u8, b: []const u8, c: []const u8) !void {
         var remaining = limit - data.len();
         if a.len() > remaining { return EncodeError.SizeLimit; }
@@ -289,7 +289,7 @@ pub class Writer {
         limits.maxBytes = maximum();
         limits.maxDepth = depth;
         var reader = Reader.open(raw, limits)!;
-        for reader.next()! != null {}
+        while reader.next()! != null {}
         output.append(raw, raw[0..0], raw[0..0])
     }
     pub func writeUnknown(field: Field) !void {

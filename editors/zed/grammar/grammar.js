@@ -11,11 +11,11 @@ module.exports = grammar({
     )),
 
     package_declaration: $ => prec.right(seq("package", optional(field("name", $.identifier)))),
-    import_declaration: $ => prec.right(seq(
-      "import", optional(seq("(", optional(seq($.import_item, repeat(seq(",", $.import_item)), optional(","))), ")"))
-    )),
+    import_declaration: $ => seq(
+      "import", "(", $.import_item, repeat(seq(",", $.import_item)), optional(","), ")"
+    ),
     import_item: $ => seq(
-      field("path", choice($.import_path, $.string)),
+      field("path", $.import_path),
       optional(seq("as", field("alias", $.identifier)))
     ),
     import_path: $ => seq($.identifier, repeat(seq("/", $.identifier))),
@@ -23,9 +23,9 @@ module.exports = grammar({
     identifier: _ => /[_\p{XID_Start}][_\p{XID_Continue}]*/,
     keyword: _ => choice(
       "as", "pub", "var", "const", "comptime", "func", "class",
-      "interface", "enum", "error", "type", "public", "private", "static", "operator",
+      "interface", "enum", "error", "type", "static", "operator",
       "embed", "self", "extern", "export", "unsafe", "return", "break", "continue",
-      "if", "else", "switch", "select", "for", "in", "move", "new", "catch", "_"
+      "if", "else", "switch", "select", "for", "in", "move", "new", "catch", "defer", "_"
     ),
     boolean: _ => choice("true", "false"),
     null_literal: _ => "null",
@@ -37,10 +37,10 @@ module.exports = grammar({
     line_comment: _ => token(seq("//", /[^\r\n]*/)),
     block_comment: _ => token(seq("/*", /[^*]*\*+([^/*][^*]*\*+)*/, "/")),
     operator: _ => choice(
-      "<<%=", "<<=", ">>=", "+%=", "-%=", "*%=",
-      "<<%", "..=", "=>", ":=", "?.", "??", "<<", ">>", "..", "<=", ">=",
+      "<<%=", "<<|=", "<<=", ">>=", "+%=", "-%=", "*%=", "+|=", "-|=", "*|=",
+      "<<%", "<<|", "..=", "=>", ":=", "?.", "??", "<<", ">>", "..", "<=", ">=",
       "==", "!=", "&&", "||", "+=", "-=", "*=", "/=", "%=", "&=", "^=", "|=", "++",
-      "--", "+%", "-%", "*%", "=", "+", "-", "*", "/", "%", "&",
+      "--", "+%", "-%", "*%", "+|", "-|", "*|", "=", "+", "-", "*", "/", "%", "&",
       "^", "|", "~", "!", "?", "<", ">"
     ),
     delimiter: _ => choice(".", ":", ";", ","),

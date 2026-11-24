@@ -34,18 +34,18 @@ func escapeQuoted(value: str, escapeNonAscii: bool) !string {
         for scalar in text.chars(value) {
             var code = convert.fromChar(scalar);
             if code < 0x80 {
-                appendEscapedByte(&output, u8(code)!)!;
+                appendEscapedByte(raw output, u8(code)!)!;
             } else if code <= 0xffff {
-                appendUnicodeEscape(&output, code)!;
+                appendUnicodeEscape(raw output, code)!;
             } else {
                 // Supplementary scalars require two UTF-16 code units.
                 var offset = code - 0x10000;
-                appendUnicodeEscape(&output, 0xd800 + (offset >> 10))!;
-                appendUnicodeEscape(&output, 0xdc00 + (offset & 0x3ff))!;
+                appendUnicodeEscape(raw output, 0xd800 + (offset >> 10))!;
+                appendUnicodeEscape(raw output, 0xdc00 + (offset & 0x3ff))!;
             }
         }
     } else {
-        for byte in value.asBytes() { appendEscapedByte(&output, byte)!; }
+        for byte in value.asBytes() { appendEscapedByte(raw output, byte)!; }
     }
     output.push(34)!;
     text.fromBytes(output.asConstSlice())
@@ -138,7 +138,7 @@ pub class Encoder {
             },
             Value.Object(ref items) => {
                 if depth >= options.maxDepth { return JsonError.DepthLimit; }
-                writeObject(&items, depth)
+                writeObject(items.toRaw(), depth)
             },
         }
     }
@@ -152,7 +152,7 @@ pub func write(writer: *io.Writer, value: *const Value, options: EncodeOptions) 
 
 pub func stringify(value: *const Value) !string {
     var writer = io.MemoryWriter();
-    write(&writer, value, EncodeOptions())!;
+    write(raw writer, value, EncodeOptions())!;
     var data = io.MemoryWriter.intoBytes(move(writer));
     text.fromBytes(data.asConstSlice())
 }
@@ -161,7 +161,7 @@ pub func stringifyPretty(value: *const Value, indent: usize) !string {
     var options = EncodeOptions();
     options.indent = indent;
     var writer = io.MemoryWriter();
-    write(&writer, value, options)!;
+    write(raw writer, value, options)!;
     var data = io.MemoryWriter.intoBytes(move(writer));
     text.fromBytes(data.asConstSlice())
 }

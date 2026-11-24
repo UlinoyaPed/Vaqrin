@@ -11,19 +11,19 @@ pub class Atomic<T> {
     #copy: disabled
     var cell: T;
     pub func init(value: T) : cell(value) {
-        __vqr_atomic_store(&cell, value, Order.Relaxed);
+        __vqr_atomic_store(raw cell, value, Order.Relaxed);
     }
     pub static func new(value: T) Self { Atomic<T>(value) }
 
-    pub const func load(order: Order) T { __vqr_atomic_load(&cell, order) }
+    pub const func load(order: Order) T { __vqr_atomic_load(raw cell, order) }
     pub const func load() T { load(Order.SeqCst) }
-    pub func store(value: T, order: Order) void { __vqr_atomic_store(&cell, value, order) }
+    pub func store(value: T, order: Order) void { __vqr_atomic_store(raw cell, value, order) }
     pub func store(value: T) void { store(value, Order.SeqCst); }
-    pub func swap(value: T, order: Order) T { __vqr_atomic_swap(&cell, value, order) }
+    pub func swap(value: T, order: Order) T { __vqr_atomic_swap(raw cell, value, order) }
     pub func swap(value: T) T { swap(value, Order.SeqCst) }
 
     pub func compareExchange(expected: T, desired: T, success: Order, failure: Order) CompareExchange<T> {
-        old, exchanged := __vqr_atomic_compare(&cell, expected, desired, success, failure);
+        old, exchanged := __vqr_atomic_compare(raw cell, expected, desired, success, failure);
         CompareExchange<T>{old: old, exchanged: exchanged}
     }
     pub func compareExchange(expected: T, desired: T) CompareExchange<T> {
@@ -31,26 +31,26 @@ pub class Atomic<T> {
     }
 
     pub func compareExchangeWeak(expected: T, desired: T, success: Order, failure: Order) CompareExchange<T> {
-        old, exchanged := __vqr_atomic_compare_weak(&cell, expected, desired, success, failure);
+        old, exchanged := __vqr_atomic_compare_weak(raw cell, expected, desired, success, failure);
         CompareExchange<T>{old: old, exchanged: exchanged}
     }
     pub func compareExchangeWeak(expected: T, desired: T) CompareExchange<T> {
         compareExchangeWeak(expected, desired, Order.SeqCst, Order.SeqCst)
     }
 
-    pub func fetchAdd(value: T, order: Order) T { __vqr_atomic_add(&cell, value, order) }
+    pub func fetchAdd(value: T, order: Order) T { __vqr_atomic_add(raw cell, value, order) }
     pub func fetchAdd(value: T) T { fetchAdd(value, Order.SeqCst) }
-    pub func fetchSub(value: T, order: Order) T { __vqr_atomic_sub(&cell, value, order) }
+    pub func fetchSub(value: T, order: Order) T { __vqr_atomic_sub(raw cell, value, order) }
     pub func fetchSub(value: T) T { fetchSub(value, Order.SeqCst) }
-    pub func fetchAnd(value: T, order: Order) T { __vqr_atomic_and(&cell, value, order) }
+    pub func fetchAnd(value: T, order: Order) T { __vqr_atomic_and(raw cell, value, order) }
     pub func fetchAnd(value: T) T { fetchAnd(value, Order.SeqCst) }
-    pub func fetchOr(value: T, order: Order) T { __vqr_atomic_or(&cell, value, order) }
+    pub func fetchOr(value: T, order: Order) T { __vqr_atomic_or(raw cell, value, order) }
     pub func fetchOr(value: T) T { fetchOr(value, Order.SeqCst) }
-    pub func fetchXor(value: T, order: Order) T { __vqr_atomic_xor(&cell, value, order) }
+    pub func fetchXor(value: T, order: Order) T { __vqr_atomic_xor(raw cell, value, order) }
     pub func fetchXor(value: T) T { fetchXor(value, Order.SeqCst) }
-    pub func fetchMax(value: T, order: Order) T { __vqr_atomic_max(&cell, value, order) }
+    pub func fetchMax(value: T, order: Order) T { __vqr_atomic_max(raw cell, value, order) }
     pub func fetchMax(value: T) T { fetchMax(value, Order.SeqCst) }
-    pub func fetchMin(value: T, order: Order) T { __vqr_atomic_min(&cell, value, order) }
+    pub func fetchMin(value: T, order: Order) T { __vqr_atomic_min(raw cell, value, order) }
     pub func fetchMin(value: T) T { fetchMin(value, Order.SeqCst) }
 
     pub static func intoInner(value: Self) T { value.cell }
@@ -75,7 +75,7 @@ pub comptime func isAlwaysLockFree<T>() bool { __vqr_atomic_supported<T>() }
 
 const widths: [4]usize = [4]usize{8, 16, 32, 64};
 pub func supportedWidths() []const usize {
-    var count: usize = if isLockFree<u64>() { 4 } else { if (isLockFree<u32>()) 3 else 0 };
+    var count: usize = if isLockFree<u64>() { 4 } else { if isLockFree<u32>() { 3 } else { 0 } };
     widths[0..count]
 }
 

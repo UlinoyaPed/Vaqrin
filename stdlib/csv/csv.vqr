@@ -42,7 +42,7 @@ pub class CsvReader {
     pub func init(reader: *io.Reader, options: CsvOptions) !void
         : reader(reader), options(options), pendingByte(null), eof(false),
           recordNumber(0), byteOffset(0), headerValues(null) {
-        validateOptions(&options)!;
+        validateOptions(raw options)!;
     }
 
     pub func readRecord() !?coll.Vec<string> {
@@ -74,7 +74,7 @@ pub class CsvReader {
     }
 
     pub const func headers() ?*const coll.Vec<string> {
-        switch headerValues { null => null, some(ref value) => some(&value) }
+        switch headerValues { null => null, some(ref value) => some(value.toRaw()) }
     }
     pub const func position() (usize, usize) { (recordNumber, byteOffset) }
     pub func close() void {}
@@ -104,7 +104,7 @@ pub class CsvReader {
         field.clear();
     }
 
-    func countRecordByte(recordBytes: &usize) !void {
+    func countRecordByte(recordBytes: ref mut usize) !void {
         if recordBytes == ~usize(0) { return CsvError.InputLimit; }
         recordBytes += 1;
         if recordBytes > options.maxRecordBytes { return CsvError.RecordLimit; }
@@ -117,14 +117,14 @@ pub class CsvReader {
         var afterQuote = false;
         var sawInput = false;
         var byteCount: usize = 0;
-        var recordBytes: &usize = &byteCount;
+        var recordBytes: ref mut usize = raw byteCount;
         for {
             var next = nextByte()!;
             switch move(next) {
                 null => {
                     if inQuotes { return CsvError.UnterminatedQuote; }
                     if !sawInput { return null; }
-                    finishField(&fields, &field)!;
+                    finishField(raw fields, raw field)!;
                     break;
                 },
                 some(byte) => {
@@ -151,10 +151,10 @@ pub class CsvReader {
                         }
                     } else if afterQuote {
                         if byte == options.delimiter {
-                            finishField(&fields, &field)!;
+                            finishField(raw fields, raw field)!;
                             afterQuote = false;
                         } else if byte == 10 {
-                            finishField(&fields, &field)!;
+                            finishField(raw fields, raw field)!;
                             break;
                         } else if byte == 13 {
                             var lookahead = nextByte()!;
@@ -165,7 +165,7 @@ pub class CsvReader {
                                 },
                                 null => {},
                             }
-                            finishField(&fields, &field)!;
+                            finishField(raw fields, raw field)!;
                             break;
                         } else {
                             return CsvError.UnexpectedAfterQuote;
@@ -174,9 +174,9 @@ pub class CsvReader {
                         if field.len() != 0 { return CsvError.InvalidQuote; }
                         inQuotes = true;
                     } else if byte == options.delimiter {
-                        finishField(&fields, &field)!;
+                        finishField(raw fields, raw field)!;
                     } else if byte == 10 {
-                        finishField(&fields, &field)!;
+                        finishField(raw fields, raw field)!;
                         break;
                     } else if byte == 13 {
                         var lookahead = nextByte()!;
@@ -187,7 +187,7 @@ pub class CsvReader {
                             },
                             null => {},
                         }
-                        finishField(&fields, &field)!;
+                        finishField(raw fields, raw field)!;
                         break;
                     } else {
                         field.push(byte)!;
@@ -207,7 +207,7 @@ pub class CsvWriter {
     var options: CsvOptions;
     var recordNumber: usize;
     pub func init(writer: *io.Writer, options: CsvOptions) !void
-        : writer(writer), options(options), recordNumber(0) { validateOptions(&options)!; }
+        : writer(writer), options(options), recordNumber(0) { validateOptions(raw options)!; }
 
     pub func writeRecord(fields: []const str) !void {
         var encoded = coll.Vec<u8>();
@@ -239,7 +239,7 @@ pub func parseRecord(value: str, options: CsvOptions) !coll.Vec<string> {
     var localOptions = options;
     localOptions.hasHeader = false;
     var memory = io.MemoryReader(value.asBytes());
-    var reader = CsvReader(&memory, localOptions)!;
+    var reader = CsvReader(raw memory, localOptions)!;
     var fields = reader.readRecord()! ?? { return coll.Vec<string>(); };
     if reader.readRecord()! != null { return CsvError.RecordLimit; }
     move(fields)
@@ -248,7 +248,7 @@ pub func parseRecord(value: str, options: CsvOptions) !coll.Vec<string> {
 pub func parse(value: str, options: CsvOptions) !coll.Vec<coll.Vec<string>> {
     if value.byteLen() > options.maxInputBytes { return CsvError.InputLimit; }
     var memory = io.MemoryReader(value.asBytes());
-    var reader = CsvReader(&memory, options)!;
+    var reader = CsvReader(raw memory, options)!;
     var rows = coll.Vec<coll.Vec<string>>();
     for {
         var row = reader.readRecord()!;
@@ -261,7 +261,7 @@ pub func parse(value: str, options: CsvOptions) !coll.Vec<coll.Vec<string>> {
 }
 
 pub func escapeField(value: str, options: CsvOptions) !string {
-    validateOptions(&options)!;
+    validateOptions(raw options)!;
     var needsQuote = false;
     for byte in value.asBytes() {
         if byte == options.delimiter || byte == options.quote || byte == 10 || byte == 13 {
@@ -281,7 +281,7 @@ pub func escapeField(value: str, options: CsvOptions) !string {
 
 pub func stringify(records: []const []const str, options: CsvOptions) !string {
     var writer = io.MemoryWriter();
-    var csvWriter = CsvWriter(&writer, options)!;
+    var csvWriter = CsvWriter(raw writer, options)!;
     csvWriter.writeAll(records)!;
     var data = io.MemoryWriter.intoBytes(move(writer));
     if data.len() > options.maxInputBytes { return CsvError.InputLimit; }

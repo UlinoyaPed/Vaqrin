@@ -36,21 +36,21 @@ func showUrls() !void {
 
     // Malformed escapes and invalid decoded UTF-8 are errors.
     var badUrl = url.parse("https://example.com/%Q0");
-    io.println(core.isErr(&badUrl))!;
+    io.println(core.isErr(raw badUrl))!;
     var badEscape = url.queryUnescape("%Q0");
-    io.println(core.isErr(&badEscape))!;
+    io.println(core.isErr(raw badEscape))!;
     var badUtf8 = url.queryUnescape("%FF");
-    io.println(core.isErr(&badUtf8))!;
+    io.println(core.isErr(raw badUtf8))!;
 }
 
 func showDiagnostics() !void {
     // Synchronous structured logging with two independent handlers.
     var memory = io.MemoryWriter();
-    var textHandler = log.TextHandler.new(&memory);
+    var textHandler = log.TextHandler.new(raw memory);
     var bufferHandler = log.BufferHandler();
-    var handlers = [2]*log.Handler{&textHandler, &bufferHandler};
+    var handlers = [2]*log.Handler{raw textHandler, raw bufferHandler};
     var multi = log.MultiHandler.new(handlers[:]);
-    var logger = log.newLogger(&multi)!;
+    var logger = log.newLogger(raw multi)!;
     logger.setLevel(log.Level.Info);
     var attributes = [_]log.Attr{
         log.Attr.string("component", "worker")!,
@@ -58,8 +58,8 @@ func showDiagnostics() !void {
         log.Attr.bool("retry", false)!,
     };
     var networkLogger = logger.withGroup("network")!;
-    log.debug(&networkLogger, "filtered", attributes[:])!;
-    log.info(&networkLogger, "connected", attributes[:])!;
+    log.debug(raw networkLogger, "filtered", attributes[:])!;
+    log.info(raw networkLogger, "connected", attributes[:])!;
     networkLogger.flush()!;
     io.println(bufferHandler.len())!;
     io.println(text.fromBytes(memory.asSlice())!)!;
@@ -73,25 +73,25 @@ func showDiagnostics() !void {
     var cause = errors.fromError(NetworkError.Timeout)!;
     cause.addContext("socket wait expired")!;
     report.addCause(move(cause))!;
-    io.println(errors.format(&report)!)!;
+    io.println(errors.format(raw report)!)!;
 
     var other = errors.fromError(NetworkError.Refused)!;
     var aggregate = errors.join(move(report), move(other))!;
-    io.println(errors.format(&aggregate)!)!;
+    io.println(errors.format(raw aggregate)!)!;
 
     // ErrorSink owns submitted reports and can aggregate them.
     var sink = errors.ErrorSink();
     sink.push(move(aggregate))!;
     sink.push(errors.fromError(NetworkError.Refused)!)!;
     var collected = sink.toReport()!;
-    io.println(errors.format(&collected)!)!;
+    io.println(errors.format(raw collected)!)!;
 
     // drain transfers ownership to an independent iterator.
     var pending = errors.ErrorSink();
     pending.push(errors.fromError(NetworkError.Timeout)!)!;
     var drained = pending.drain();
     var first = drained.next();
-    io.println(core.isSome(&first))!;
+    io.println(core.isSome(raw first))!;
 }
 
 func main() !void {

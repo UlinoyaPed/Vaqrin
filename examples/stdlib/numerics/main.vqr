@@ -4,7 +4,7 @@ import (io, math, num, random)
 func main() !void {
     var wide = num.BigUint.fromU64(18446744073709551615u64)!;
     var two = num.BigUint.fromU64(2u64)!;
-    var product = wide.mul(&two)!;
+    var product = wide.mul(raw two)!;
     io.println(product.toText(10)!)!;
 
     var minimum = num.BigInt.parse("-9223372036854775808", 10)!;
@@ -24,12 +24,12 @@ func main() !void {
     var second = random.Pcg64.seed(42u64);
     var reproducible = true;
     for i in usize(0)..16 {
-        if random.randomU64(&first) != random.randomU64(&second) {
+        if random.randomU64(raw first) != random.randomU64(raw second) {
             reproducible = false;
         }
     }
     io.println(reproducible)!;
 
-    var picked = random.rangeInt(&first, 0u64, 10u64)!;
+    var picked = random.rangeInt(raw first, 0u64, 10u64)!;
     io.println(picked < 10u64)!;
 }

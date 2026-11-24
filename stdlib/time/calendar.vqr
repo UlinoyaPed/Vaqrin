@@ -67,7 +67,7 @@ pub class Date {
         var day = ordinal + epochOrdinal;
         var low = firstYear;
         var high = pastLastYear;
-        for high - low > 1 {
+        while high - low > 1 {
             var middle = low + (high - low) / 2;
             if beforeYear(middle) <= day { low = middle; } else { high = middle; }
         }

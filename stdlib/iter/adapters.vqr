@@ -33,7 +33,7 @@ pub class SkipIter<I: Movable, T: Movable> {
     var skipCount: usize;
     pub func init(source: I, count: usize) : source(move(source)), skipCount(count) {}
     pub func next() ?T {
-        for skipCount > 0 {
+        while skipCount > 0 {
             skipCount--;
             switch source.next() {
                 null => { skipCount = 0; return null; },

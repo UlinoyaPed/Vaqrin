@@ -5,8 +5,8 @@ pub class OnceOptional<T: Movable> {
     pub func init(value: ?T) : item(move(value)) {}
     pub func next() ?T {
         unsafe {
-            var old = __vqr_slot_take<?T>(&item);
-            __vqr_slot_write<?T>(&item, null);
+            var old = __vqr_slot_take<?T>(raw item);
+            __vqr_slot_write<?T>(raw item, null);
             move(old)
         }
     }

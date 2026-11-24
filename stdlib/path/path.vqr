@@ -16,10 +16,10 @@ pub class PathComponents {
     pub func next() ?Component {
         if rootPending { rootPending = false; return some(Component.Root); }
         var bytes = value.asBytes();
-        for position < bytes.len() && bytes[position] == 47u8 { position++; }
+        while position < bytes.len() && bytes[position] == 47u8 { position++; }
         if position == bytes.len() { return null; }
         var start = position;
-        for position < bytes.len() && bytes[position] != 47u8 { position++; }
+        while position < bytes.len() && bytes[position] != 47u8 { position++; }
         var part = unsafe { __vqr_text_borrow_utf8(bytes[start..position]) };
         if part == "." { return some(Component.Current); }
         if part == ".." { return some(Component.Parent); }
@@ -41,23 +41,23 @@ pub class Path {
     pub const func filename() ?str {
         var bytes = value.asBytes();
         var end = bytes.len();
-        for end > 0 && bytes[end - 1] == 47u8 { end--; }
+        while end > 0 && bytes[end - 1] == 47u8 { end--; }
         if end == 0 { return null; }
         var start = end;
-        for start > 0 && bytes[start - 1] != 47u8 { start--; }
+        while start > 0 && bytes[start - 1] != 47u8 { start--; }
         some(unsafe { __vqr_text_borrow_utf8(bytes[start..end]) })
     }
 
     pub const func parent() !?Path {
         var bytes = value.asBytes();
         var end = bytes.len();
-        for end > 0 && bytes[end - 1] == 47u8 { end--; }
+        while end > 0 && bytes[end - 1] == 47u8 { end--; }
         if end == 0 { return null; }
         var start = end;
-        for start > 0 && bytes[start - 1] != 47u8 { start--; }
+        while start > 0 && bytes[start - 1] != 47u8 { start--; }
         if start == 0 { return some(Path(".")); }
         var parentEnd = start - 1;
-        for parentEnd > 0 && bytes[parentEnd - 1] == 47u8 { parentEnd--; }
+        while parentEnd > 0 && bytes[parentEnd - 1] == 47u8 { parentEnd--; }
         if parentEnd == 0 { return some(Path("/")); }
         some(Path(text.fromBytes(bytes[0..parentEnd])!))
     }
@@ -66,7 +66,7 @@ pub class Path {
         var name = filename() ?? { return null; };
         var bytes = name.asBytes();
         var index = bytes.len();
-        for index > 0 && bytes[index - 1] != 46u8 { index--; }
+        while index > 0 && bytes[index - 1] != 46u8 { index--; }
         if index <= 1 || name == ".." { return null; }
         some(unsafe { __vqr_text_borrow_utf8(bytes[index..bytes.len()]) })
     }
@@ -75,7 +75,7 @@ pub class Path {
         var name = filename() ?? { return null; };
         var bytes = name.asBytes();
         var index = bytes.len();
-        for index > 0 && bytes[index - 1] != 46u8 { index--; }
+        while index > 0 && bytes[index - 1] != 46u8 { index--; }
         if index <= 1 || name == ".." { return some(name); }
         some(unsafe { __vqr_text_borrow_utf8(bytes[0..index - 1]) })
     }
@@ -87,11 +87,11 @@ pub class Path {
         var absolute = isAbsolute();
         var segments = coll.Vec<string>();
         var position: usize = 0;
-        for position < bytes.len() {
-            for position < bytes.len() && bytes[position] == 47u8 { position++; }
+        while position < bytes.len() {
+            while position < bytes.len() && bytes[position] == 47u8 { position++; }
             if position == bytes.len() { break; }
             var start = position;
-            for position < bytes.len() && bytes[position] != 47u8 { position++; }
+            while position < bytes.len() && bytes[position] != 47u8 { position++; }
             var part = unsafe { __vqr_text_borrow_utf8(bytes[start..position]) };
             if part == "." || part.byteLen() == 0 { continue; }
             if part == ".." {
@@ -120,7 +120,7 @@ pub class Path {
         }
         var bytes = value.asBytes();
         var end = bytes.len();
-        for end > 0 && bytes[end - 1] == 47u8 { end--; }
+        while end > 0 && bytes[end - 1] == 47u8 { end--; }
         var prefix = end - original.byteLen();
         var output = text.StringBuilder();
         if prefix != 0 {

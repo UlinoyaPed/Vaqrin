@@ -51,7 +51,7 @@ class NativeOutput {
     pub const func toOutput() !Output {
         var code: i32 = 0;
         var signal: i32 = 0;
-        unsafe { __vqr_process_output_status(handle, &code, &signal); }
+        unsafe { __vqr_process_output_status(handle, raw code, raw signal); }
         var out = copyStream(0)!;
         var err = copyStream(1)!;
         Output(ExitStatus(code, signal), move(out), move(err))
@@ -59,7 +59,7 @@ class NativeOutput {
     pub func deinit() void { unsafe { __vqr_process_output_free(handle); } }
     const func copyStream(stream: i32) !coll.Vec<u8> {
         var length: usize = 0;
-        var address = unsafe { __vqr_process_output_bytes(handle, stream, &length) };
+        var address = unsafe { __vqr_process_output_bytes(handle, stream, raw length) };
         if length == 0 { return coll.Vec<u8>(); }
         var data = unsafe { ptrFromInt<*u8>(address) };
         var view = unsafe { __vqr_const_slice<u8>(some(data), length) };
@@ -92,7 +92,7 @@ func hasPipe(handle: usize, stream: i32) bool {
 func nonblockingPipe(handle: usize, stream: i32) !i32 {
     if !hasPipe(handle, stream) { return io.IoError.Closed; }
     var reason: i32 = 0;
-    var descriptor = unsafe { __vqr_process_child_nonblocking(handle, stream, &reason) };
+    var descriptor = unsafe { __vqr_process_child_nonblocking(handle, stream, raw reason) };
     if reason != 0 { return io.systemError(reason); }
     descriptor
 }
@@ -131,7 +131,7 @@ pub class ChildInput {
         if !hasPipe(handle, 0) { return io.IoError.Closed; }
         if source.len() == 0 { return 0; }
         var reason: i32 = 0;
-        var count = unsafe { __vqr_process_child_write(handle, &source[0], source.len(), &reason) };
+        var count = unsafe { __vqr_process_child_write(handle, raw source[0], source.len(), raw reason) };
         if reason != 0 { return io.systemError(reason); }
         usize(count)
     }
@@ -167,7 +167,7 @@ pub class ChildOutput {
         if !hasPipe(handle, stream) { return io.IoError.Closed; }
         if destination.len() == 0 { return 0; }
         var reason: i32 = 0;
-        var count = unsafe { __vqr_process_child_read(handle, stream, &destination[0], destination.len(), &reason) };
+        var count = unsafe { __vqr_process_child_read(handle, stream, raw destination[0], destination.len(), raw reason) };
         if reason != 0 { return io.systemError(reason); }
         usize(count)
     }
@@ -178,7 +178,7 @@ func waitState(handle: usize, mode: i32) !?ExitStatus {
     var ready: i32 = 0;
     var code: i32 = 0;
     var signal: i32 = 0;
-    var reason = unsafe { __vqr_process_child_wait(handle, mode, &ready, &code, &signal) };
+    var reason = unsafe { __vqr_process_child_wait(handle, mode, raw ready, raw code, raw signal) };
     if reason != 0 { return io.systemError(reason); }
     if ready == 0 { return null; }
     some(ExitStatus(code, signal))
@@ -196,24 +196,24 @@ pub class Child {
     pub const func id() u64 { unsafe { __vqr_process_child_id(handle) } }
     pub func stdin() ?ref mut ChildInput from self {
         if !hasPipe(handle, 0) { return null; }
-        var pipe: &ChildInput = &inputPipe;
+        var pipe: ref mut ChildInput = raw inputPipe;
         some(pipe)
     }
     pub func stdout() ?ref mut ChildOutput from self {
         if !hasPipe(handle, 1) { return null; }
-        var pipe: &ChildOutput = &outputPipe;
+        var pipe: ref mut ChildOutput = raw outputPipe;
         some(pipe)
     }
     pub func stderr() ?ref mut ChildOutput from self {
         if !hasPipe(handle, 2) { return null; }
-        var pipe: &ChildOutput = &errorPipe;
+        var pipe: ref mut ChildOutput = raw errorPipe;
         some(pipe)
     }
     pub func tryWait() !?ExitStatus { waitState(handle, 1) }
     pub func wait() !ExitStatus { waitState(handle, 0)!.unwrap() }
     pub func waitWithOutput(limit: usize) !Output {
         var reason: i32 = 0;
-        var captured = unsafe { __vqr_process_child_output(handle, limit, &reason) };
+        var captured = unsafe { __vqr_process_child_output(handle, limit, raw reason) };
         if reason == -1 { return ProcessError.OutputLimit; }
         if reason != 0 { return io.systemError(reason); }
         var result = NativeOutput(captured);
@@ -328,14 +328,14 @@ pub class Command {
         var argv = argumentBlock()!;
         var cwd = directoryBlock()!;
         var overrides = coll.Vec<u8>();
-        for entry in environment.iterRef() { appendCString(&overrides, *entry)!; }
+        for entry in environment.iterRef() { appendCString(raw overrides, *entry)!; }
         overrides.push(0)!;
-        var modes = [3]i32{mode(&inputMode, defaultInput)!,
-                           mode(&outputMode, defaultOutput)!, mode(&errorMode, defaultOutput)!};
+        var modes = [3]i32{mode(raw inputMode, defaultInput)!,
+                           mode(raw outputMode, defaultOutput)!, mode(raw errorMode, defaultOutput)!};
         var reason: i32 = 0;
         var inherit = if inheritEnvironment { 1 } else { 0 };
-        var handle = unsafe { __vqr_process_spawn(&argv[0], arguments.len() + 1, &cwd[0], &modes[0],
-            &overrides[0], environment.len(), inherit, &reason) };
+        var handle = unsafe { __vqr_process_spawn(raw argv[0], arguments.len() + 1, raw cwd[0], raw modes[0],
+            raw overrides[0], environment.len(), inherit, raw reason) };
         if reason != 0 { return io.systemError(reason); }
         handle
     }
@@ -343,13 +343,13 @@ pub class Command {
         var name = program.asString();
         if name.byteLen() == 0 || containsNul(name) { return ProcessError.InvalidProgram; }
         var result = coll.Vec<u8>();
-        appendCString(&result, name)!;
-        for value in arguments.iterRef() { appendCString(&result, *value)!; }
+        appendCString(raw result, name)!;
+        for value in arguments.iterRef() { appendCString(raw result, *value)!; }
         move(result)
     }
     const func directoryBlock() !coll.Vec<u8> {
         var result = coll.Vec<u8>();
-        appendCString(&result, directory.asString())!;
+        appendCString(raw result, directory.asString())!;
         move(result)
     }
 }

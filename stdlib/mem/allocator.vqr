@@ -38,19 +38,19 @@ pub class FixedBufferAllocator {
     pub func alloc(layout: Layout) !?*u8 {
         if layout.size() == 0 { return null; }
         if cursor == buffer.len() { return AllocationError.OutOfMemory; }
-        var base = __vqr_pointer_address(&buffer[0]);
+        var base = __vqr_pointer_address(raw buffer[0]);
         if cursor > ~usize(0) - base { return AllocationError.OutOfMemory; }
         var position = alignUp(base + cursor, layout.align())! - base;
         if position >= buffer.len() || layout.size() > buffer.len() - position {
             return AllocationError.OutOfMemory;
         }
         cursor = position + layout.size();
-        some(&buffer[position])
+        some(raw buffer[position])
     }
 
     pub func free(ptr: *u8, layout: Layout) void {
         if buffer.len() == 0 { return; }
-        var base = __vqr_pointer_address(&buffer[0]);
+        var base = __vqr_pointer_address(raw buffer[0]);
         var address = __vqr_pointer_address(ptr);
         if address < base { return; }
         var position = address - base;

@@ -39,7 +39,7 @@ func cString(value: str) !coll.Vec<u8> {
 
 func formatIp(version: i32, data: []const u8) !string {
     var buffer = mem.zeroedBytes<46>();
-    var count = unsafe { __vqr_net_format_ip(version, &data[0], &buffer[0], buffer.len()) };
+    var count = unsafe { __vqr_net_format_ip(version, raw data[0], raw buffer[0], buffer.len()) };
     if count < 0 { return NetError.InvalidAddress; }
     text.fromBytes(buffer[0..usize(count)!])
 }
@@ -118,14 +118,14 @@ pub class SocketAddr {
 pub func parseIpv4(value: str) !Ipv4Addr {
     var input = cString(value)!;
     var data = mem.zeroedBytes<4>();
-    if unsafe { __vqr_net_parse_ip(4, &input[0], &data[0]) } != 1 { return NetError.InvalidAddress; }
+    if unsafe { __vqr_net_parse_ip(4, raw input[0], raw data[0]) } != 1 { return NetError.InvalidAddress; }
     Ipv4Addr.fromOctets(data)
 }
 
 pub func parseIpv6(value: str) !Ipv6Addr {
     var input = cString(value)!;
     var data = mem.zeroedBytes<16>();
-    if unsafe { __vqr_net_parse_ip(6, &input[0], &data[0]) } != 1 { return NetError.InvalidAddress; }
+    if unsafe { __vqr_net_parse_ip(6, raw input[0], raw data[0]) } != 1 { return NetError.InvalidAddress; }
     Ipv6Addr.fromOctets(data)
 }
 
@@ -149,17 +149,17 @@ pub func parseSocketAddr(value: str) !SocketAddr {
     if data.len() == 0 { return NetError.InvalidAddress; }
     if data[0] == 91 {
         var end: usize = 1;
-        for end < data.len() && data[end] != 93 { end++; }
+        while end < data.len() && data[end] != 93 { end++; }
         if data.len() - end < 2 || data[end + 1] != 58 { return NetError.InvalidAddress; }
         var split: usize = 1;
-        for split < end && data[split] != 37 { split++; }
+        while split < end && data[split] != 37 { split++; }
         var host = unsafe { __vqr_text_borrow_utf8(data[1..split]) };
         var scope = if split == end { 0u32 } else { parseDecimal<u32>(data[split + 1..end])! };
         var port = parseDecimal<u16>(data[end + 2..data.len()])!;
         return SocketAddr.scoped(parseIpv6(host)!, port, scope);
     }
     var split: usize = 0;
-    for split < data.len() && data[split] != 58 { split++; }
+    while split < data.len() && data[split] != 58 { split++; }
     if split == data.len() { return NetError.InvalidAddress; }
     var host = unsafe { __vqr_text_borrow_utf8(data[0..split]) };
     SocketAddr.new(IpAddr.V4(parseIpv4(host)!), parseDecimal<u16>(data[split + 1..data.len()])!)
@@ -220,7 +220,7 @@ class Socket {
     pub func deinit() void { close() catch {}; }
     pub const func address(peer: i32) !SocketAddr {
         var wire = mem.zeroedBytes<24>();
-        checkStatus(unsafe { __vqr_net_address(fd()!, peer, &wire[0]) })!;
+        checkStatus(unsafe { __vqr_net_address(fd()!, peer, raw wire[0]) })!;
         fromWire(wire[:])
     }
     pub const func option(option: i32, value: bool) !void {
@@ -232,16 +232,16 @@ class Socket {
 func openSocket(address: SocketAddr, operation: i32, timeout: i64) !Socket {
     var wire = toWire(address);
     var reason: i32 = 0;
-    var fd = unsafe { __vqr_net_open(&wire[0], operation, timeout, &reason) };
+    var fd = unsafe { __vqr_net_open(raw wire[0], operation, timeout, raw reason) };
     checkStatus(reason)!;
     Socket(fd)
 }
 
 func sendBytes(fd: i32, source: []const u8) !usize {
     var dummy: u8 = 0;
-    var data: *const u8 = if source.len() == 0 { &dummy } else { &source[0] };
+    var data: *const u8 = if source.len() == 0 { raw dummy } else { raw source[0] };
     var reason: i32 = 0;
-    var count = unsafe { __vqr_net_send(fd, data, source.len(), &reason) };
+    var count = unsafe { __vqr_net_send(fd, data, source.len(), raw reason) };
     checkStatus(reason)!;
     usize(count)
 }
@@ -261,7 +261,7 @@ pub class TcpStream {
         var fd = socket.fd()!;
         if dst.len() == 0 { return 0; }
         var reason: i32 = 0;
-        var count = unsafe { __vqr_net_receive(fd, &dst[0], dst.len(), &reason) };
+        var count = unsafe { __vqr_net_receive(fd, raw dst[0], dst.len(), raw reason) };
         checkStatus(reason)!;
         usize(count)
     }
@@ -284,7 +284,7 @@ pub class TcpStream {
     pub func setWriteTimeout(value: ?time.Duration) !void { setTimeout(value, 1) }
     pub const func tryClone() !Self {
         var reason: i32 = 0;
-        var copy = unsafe { __vqr_net_clone(socket.fd()!, &reason) };
+        var copy = unsafe { __vqr_net_clone(socket.fd()!, raw reason) };
         checkStatus(reason)!;
         TcpStream(Socket(copy))
     }
@@ -303,7 +303,7 @@ pub class TcpListener {
     pub func accept() !(TcpStream, SocketAddr) {
         var wire = mem.zeroedBytes<24>();
         var reason: i32 = 0;
-        var client = unsafe { __vqr_net_accept(socket.fd()!, &wire[0], &reason) };
+        var client = unsafe { __vqr_net_accept(socket.fd()!, raw wire[0], raw reason) };
         checkStatus(reason)!;
         var stream = TcpStream(Socket(client));
         var peer = fromWire(wire[:])!;
@@ -328,25 +328,25 @@ pub class UdpSocket {
     pub static func bind(address: SocketAddr) !Self { UdpSocket(openSocket(address, 2, -1)!) }
     pub func connect(address: SocketAddr) !void {
         var wire = toWire(address);
-        checkStatus(unsafe { __vqr_net_connect(socket.fd()!, &wire[0]) })
+        checkStatus(unsafe { __vqr_net_connect(socket.fd()!, raw wire[0]) })
     }
     pub func send(src: []const u8) !usize { sendBytes(socket.fd()!, src) }
     pub func sendTo(src: []const u8, address: SocketAddr) !usize {
         var wire = toWire(address);
         var dummy: u8 = 0;
-        var data: *const u8 = if src.len() == 0 { &dummy } else { &src[0] };
+        var data: *const u8 = if src.len() == 0 { raw dummy } else { raw src[0] };
         var reason: i32 = 0;
-        var count = unsafe { __vqr_net_send_to(socket.fd()!, data, src.len(), &wire[0], &reason) };
+        var count = unsafe { __vqr_net_send_to(socket.fd()!, data, src.len(), raw wire[0], raw reason) };
         checkStatus(reason)!;
         usize(count)
     }
     pub func recvFrom(dst: []u8) !Datagram {
         var wire = mem.zeroedBytes<24>();
         var dummy: u8 = 0;
-        var data = if dst.len() == 0 { &dummy } else { &dst[0] };
+        var data = if dst.len() == 0 { raw dummy } else { raw dst[0] };
         var reason: i32 = 0;
         var truncated: i32 = 0;
-        var count = unsafe { __vqr_net_receive_from(socket.fd()!, data, dst.len(), &wire[0], &truncated, &reason) };
+        var count = unsafe { __vqr_net_receive_from(socket.fd()!, data, dst.len(), raw wire[0], raw truncated, raw reason) };
         checkStatus(reason)!;
         Datagram{len: usize(count)!, source: fromWire(wire[:])!, truncated: truncated != 0}
     }
@@ -368,7 +368,7 @@ class ResolverResults {
         var cursor = handle;
         var wire = mem.zeroedBytes<24>();
         var portBytes = binary.u16ToBytes(port, binary.Endian.Big);
-        for unsafe { __vqr_net_next_address(&cursor, &wire[0]) } != 0 {
+        while unsafe { __vqr_net_next_address(raw cursor, raw wire[0]) } != 0 {
             wire[2] = portBytes[0];
             wire[3] = portBytes[1];
             addresses.push(fromWire(wire[:])!)!;
@@ -381,7 +381,7 @@ class ResolverResults {
 pub func resolveAddr(name: str, port: u16) !coll.Vec<SocketAddr> {
     var input = cString(name)!;
     var reason: i32 = 0;
-    var handle = unsafe { __vqr_net_resolve(&input[0], &reason) };
+    var handle = unsafe { __vqr_net_resolve(raw input[0], raw reason) };
     if reason == -1 { return NetError.NameResolution; }
     checkStatus(reason)!;
     var results = ResolverResults(handle);

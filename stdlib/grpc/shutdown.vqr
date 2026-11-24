@@ -16,7 +16,7 @@ pub class Shutdown {
     pub static func open() !Self {
         __vqr_task_validate();
         var status: i32 = 0;
-        var fd = unsafe { __vqr_rt_open_signal(&status) };
+        var fd = unsafe { __vqr_rt_open_signal(raw status) };
         if fd < 0 { return io.systemError(status); }
         Shutdown(fd)
     }
@@ -28,7 +28,7 @@ pub class Shutdown {
 
     pub const func requested() !bool {
         var status: i32 = 0;
-        var ready = unsafe { __vqr_rt_signal_ready(fd, &status) };
+        var ready = unsafe { __vqr_rt_signal_ready(fd, raw status) };
         if ready < 0 { return io.systemError(status); }
         ready != 0
     }

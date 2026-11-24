@@ -146,7 +146,7 @@ pub class Regex {
         }
         var result = runNfa(self, value, byteOffset, true)!;
         switch move(result) {
-            some(item) => some(core.replace<?Captures>(&item.captures, null).unwrap()),
+            some(item) => some(core.replace<?Captures>(raw item.captures, null).unwrap()),
             null => null
         }
     }
@@ -169,15 +169,15 @@ pub class Regex {
         var search: usize = 0;
         var replaced = false;
         var done = false;
-        for search <= value.byteLen() && !done {
+        while search <= value.byteLen() && !done {
             var result = runNfa(self, value, search, true)!;
             switch move(result) {
                 null => { done = true; },
                 some(item) => {
                     var matched = item.matched;
                     for i in cursor..matched.startByte { output.push(value.asBytes()[i])!; }
-                    var captures = core.replace<?Captures>(&item.captures, null).unwrap();
-                    appendReplacement(replacement, &captures, &output)!;
+                    var captures = core.replace<?Captures>(raw item.captures, null).unwrap();
+                    appendReplacement(replacement, raw captures, raw output)!;
                     cursor = matched.endByte;
                     replaced = true;
                     if !all { done = true; }
@@ -336,7 +336,7 @@ pub class SplitIter {
 func appendReplacement(replacement: str, captures: *const Captures, output: *coll.Vec<u8>) !void {
     var bytes = replacement.asBytes();
     var position: usize = 0;
-    for position < bytes.len() {
+    while position < bytes.len() {
         if bytes[position] != 36 || position + 1 >= bytes.len() {
             output.push(bytes[position])!;
             position++;
@@ -348,18 +348,18 @@ func appendReplacement(replacement: str, captures: *const Captures, output: *col
             position += 2;
         } else if next == 38 {
             var full = captures.get(0);
-            if core.isSome<Match>(&full) {
+            if core.isSome<Match>(raw full) {
                 for byte in full.unwrap().asStr().asBytes() { output.push(byte)!; }
             }
             position += 2;
         } else if 48 <= next && next <= 57 {
             var index: usize = 0;
-            for position + 1 < bytes.len() && 48 <= bytes[position + 1] && bytes[position + 1] <= 57 {
+            while position + 1 < bytes.len() && 48 <= bytes[position + 1] && bytes[position + 1] <= 57 {
                 index = index * 10 + (usize(bytes[position + 1]) - usize(48));
                 position++;
             }
             var capture = captures.get(index);
-            if core.isSome<Match>(&capture) {
+            if core.isSome<Match>(raw capture) {
                 for byte in capture.unwrap().asStr().asBytes() { output.push(byte)!; }
             }
             position++;
@@ -394,7 +394,7 @@ pub func findAll(pattern: str, value: str) !coll.Vec<Match> {
     var result = coll.Vec<Match>();
     var iterator = regex.findAll(value);
     var done = false;
-    for !done {
+    while !done {
         var item = iterator.next()!;
         switch item {
             null => { done = true; },
@@ -409,7 +409,7 @@ pub func split(pattern: str, value: str) !coll.Vec<str> {
     var result = coll.Vec<str>();
     var iterator = regex.split(value);
     var done = false;
-    for !done {
+    while !done {
         var item = iterator.next()!;
         switch item {
             null => { done = true; },

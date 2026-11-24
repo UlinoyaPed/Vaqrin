@@ -13,7 +13,7 @@ class Echo {
 func serve() !void {
     var server = grpc.Server();
     var handler = Echo{};
-    server.register("/interop.Raw/Echo", &handler)!;
+    server.register("/interop.Raw/Echo", raw handler)!;
     var listener = net.listenTcp(net.parseSocketAddr("127.0.0.1:0")!)!;
     io.println(listener.localAddr()!.port())!;
     raw, _ := listener.accept()!;
@@ -31,22 +31,22 @@ func main() !void {
     options.compression = grpc.Compression.Gzip;
     var message = coll.Vec<u8>.withCapacity(8192)!;
     for i in usize(0)..8192 { message.push(97)!; }
-    var large = connection.start("/interop.Raw/Echo", &options)!;
-    var short = connection.start("/interop.Raw/Echo", &options)!;
-    connection.sendMessage(&large, message.asConstSlice())!;
-    connection.finishSend(&large)!;
-    connection.sendMessage(&short, "short".asBytes())!;
-    connection.finishSend(&short)!;
+    var large = connection.start("/interop.Raw/Echo", raw options)!;
+    var short = connection.start("/interop.Raw/Echo", raw options)!;
+    connection.sendMessage(raw large, message.asConstSlice())!;
+    connection.finishSend(raw large)!;
+    connection.sendMessage(raw short, "short".asBytes())!;
+    connection.finishSend(raw short)!;
 
-    var shortReply = connection.recvMessage(&short)! ?? { return TestError.Unexpected; };
+    var shortReply = connection.recvMessage(raw short)! ?? { return TestError.Unexpected; };
     if !bytes.equal(shortReply.asConstSlice(), "short".asBytes()) { return TestError.Unexpected; }
-    if connection.recvMessage(&short)! != null { return TestError.Unexpected; }
+    if connection.recvMessage(raw short)! != null { return TestError.Unexpected; }
     var shortStatus = short.complete()!;
     if !shortStatus.status.isOk() { return TestError.Unexpected; }
 
-    var longReply = connection.recvMessage(&large)! ?? { return TestError.Unexpected; };
+    var longReply = connection.recvMessage(raw large)! ?? { return TestError.Unexpected; };
     if !bytes.equal(longReply.asConstSlice(), message.asConstSlice()) { return TestError.Unexpected; }
-    if connection.recvMessage(&large)! != null { return TestError.Unexpected; }
+    if connection.recvMessage(raw large)! != null { return TestError.Unexpected; }
     var largeStatus = large.complete()!;
     if !largeStatus.status.isOk() { return TestError.Unexpected; }
     connection.close()

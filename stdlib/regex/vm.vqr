@@ -66,7 +66,7 @@ func epsilonClosure(regex: *const Regex, seeds: []const Thread,
         stack.clear();
         stack.push(seed)!;
         var draining = true;
-        for draining {
+        while draining {
             var popped = stack.pop();
             switch popped {
                 null => { draining = false; },
@@ -237,7 +237,7 @@ func buildSearchResult(candidate: ?Thread, endByte: usize, input: str,
                 slots[0] = some(thread.startByte);
                 slots[1] = some(endByte);
                 var head = thread.history;
-                for head >= 0 {
+                while head >= 0 {
                     var item = history.asConstSlice()[usize(head)!];
                     if item.slot < slots.len() && slots[item.slot] == null {
                         slots[item.slot] = some(item.offset);
@@ -287,7 +287,7 @@ func runNfa(regex: *const Regex, input: str, start: usize, captureOutput: bool) 
     var position = start;
     var budget = regex.workLimit();
 
-    for position <= input.byteLen() {
+    while position <= input.byteLen() {
         seeds.clear();
         for thread in current.asSlice() { seeds.push(thread)!; }
 
@@ -297,8 +297,8 @@ func runNfa(regex: *const Regex, input: str, start: usize, captureOutput: bool) 
 
         active.clear();
         generation++;
-        epsilonClosure(regex, seeds.asConstSlice(), &active, &history,
-                       &seen, generation, &stack, input, position, captureOutput, &budget)!;
+        epsilonClosure(regex, seeds.asConstSlice(), raw active, raw history,
+                       raw seen, generation, raw stack, input, position, captureOutput, raw budget)!;
 
         var matchIndex: ?usize = null;
         for i in usize(0)..active.len() {
@@ -318,11 +318,11 @@ func runNfa(regex: *const Regex, input: str, start: usize, captureOutput: bool) 
 
         if active.isEmpty() {
             if candidate != null || position == input.byteLen() {
-                return buildSearchResult(candidate, candidateEnd, input, &history, regex.captureGroupCount(), captureOutput);
+                return buildSearchResult(candidate, candidateEnd, input, raw history, regex.captureGroupCount(), captureOutput);
             }
         }
         if position == input.byteLen() {
-            return buildSearchResult(candidate, candidateEnd, input, &history, regex.captureGroupCount(), captureOutput);
+            return buildSearchResult(candidate, candidateEnd, input, raw history, regex.captureGroupCount(), captureOutput);
         }
 
         var decoded = unicode.decodeUtf8(input.asBytes()[position..input.asBytes().len()]) catch { return RegexError.InvalidUtf8; };
@@ -346,7 +346,7 @@ func runNfa(regex: *const Regex, input: str, start: usize, captureOutput: bool) 
         }
         if nextSeeds.isEmpty() {
             if candidate != null {
-                return buildSearchResult(candidate, candidateEnd, input, &history, regex.captureGroupCount(), captureOutput);
+                return buildSearchResult(candidate, candidateEnd, input, raw history, regex.captureGroupCount(), captureOutput);
             }
             position += decoded.1;
             current.clear();
@@ -357,5 +357,5 @@ func runNfa(regex: *const Regex, input: str, start: usize, captureOutput: bool) 
         for thread in nextSeeds.asSlice() { current.push(thread)!; }
         position += decoded.1;
     }
-    buildSearchResult(candidate, candidateEnd, input, &history, regex.captureGroupCount(), captureOutput)
+    buildSearchResult(candidate, candidateEnd, input, raw history, regex.captureGroupCount(), captureOutput)
 }

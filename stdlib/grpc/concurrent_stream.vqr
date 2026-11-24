@@ -41,8 +41,8 @@ pub class ConcurrentServerStream {
           compression(if head.acceptsCompressed && options.compressResponses {
               Compression.Gzip
           } else { Compression.Identity }),
-          acknowledged(false), finished(false), path(core.replace<string>(&head.path, "")),
-          metadata(core.replace<Metadata>(&head.metadata, Metadata())), deadline(head.deadline),
+          acknowledged(false), finished(false), path(core.replace<string>(raw head.path, "")),
+          metadata(core.replace<Metadata>(raw head.metadata, Metadata())), deadline(head.deadline),
           initial(Metadata()), trailing(Metadata()) {}
 
     pub const func maxMessageBytes() usize { limit }
@@ -59,7 +59,7 @@ pub class ConcurrentServerStream {
         headers.add("content-type", "application/grpc")!;
         headers.add("grpc-accept-encoding", "identity,gzip")!;
         if compression == Compression.Gzip { headers.add("grpc-encoding", "gzip")!; }
-        initial.writeTo(&headers)!;
+        initial.writeTo(raw headers)!;
         send(StreamOperation.Headers(move(headers)))!;
         acknowledged = true;
     }
@@ -80,8 +80,8 @@ pub class ConcurrentServerStream {
     pub func finish(result: *const Status) !void {
         if finished { return; }
         var trailers = http2.HeaderBlock();
-        trailing.writeTo(&trailers)!;
-        encodeStatus(&trailers, result)!;
+        trailing.writeTo(raw trailers)!;
+        encodeStatus(raw trailers, result)!;
         sendHeaders()!;
         send(StreamOperation.Finish(move(trailers)))!;
         finished = true;
@@ -102,7 +102,7 @@ pub class ConcurrentServerStream {
         if unsafe { __vqr_rt_signal_completion_fd(descriptor) } != 0 { return RpcError.ConnectionClosed; }
         var reply = replies.recv() catch { return RpcError.Cancelled; };
         var response = move(reply) ?? { return RpcError.Cancelled; };
-        var result = core.replace<StreamResult>(&response.result, StreamResult.End);
+        var result = core.replace<StreamResult>(raw response.result, StreamResult.End);
         switch result {
             StreamResult.Failure(reason) => { return reason; },
             _ => {},
@@ -117,8 +117,8 @@ class ConcurrentStreamInput {
     pub var stream: ConcurrentServerStream;
 
     pub func run() !void {
-        var result = handler.handle(&stream) catch (reason) { status(streamStatus(reason), "") };
-        stream.finish(&result)
+        var result = handler.handle(raw stream) catch (reason) { status(streamStatus(reason), "") };
+        stream.finish(raw result)
     }
 }
 
@@ -149,7 +149,7 @@ class PendingStream {
         replyable = false;
         job.cancel();
         replies.close();
-        opt.take<coll.Vec<u8>>(&outbound);
+        opt.take<coll.Vec<u8>>(raw outbound);
     }
 
     pub func abort(session: *http2.Connection, code: StatusCode) !void {
@@ -159,8 +159,8 @@ class PendingStream {
         if headersSent {
             var trailers = http2.HeaderBlock();
             var result = status(code, "");
-            encodeStatus(&trailers, &result)!;
-            session.sendTrailers(id, &trailers)
+            encodeStatus(raw trailers, raw result)!;
+            session.sendTrailers(id, raw trailers)
         } else {
             sendError(session, id, code)
         }
@@ -183,14 +183,14 @@ class PendingStream {
         if outbound != null { return; }
         switch requests.tryRecv() {
             channel.TryRecv.Value(command) => {
-                var operation = core.replace<StreamOperation>(&command.operation, StreamOperation.Receive);
+                var operation = core.replace<StreamOperation>(raw command.operation, StreamOperation.Receive);
                 switch move(operation) {
                     StreamOperation.Receive => {
                         reading = true;
                         receive(session)
                     },
                     StreamOperation.Headers(headers) => {
-                        session.respond(id, &headers, false)!;
+                        session.respond(id, raw headers, false)!;
                         headersSent = true;
                         reply(StreamResult.Sent)
                     },
@@ -198,7 +198,7 @@ class PendingStream {
                         outbound = some(move(bytes));
                     },
                     StreamOperation.Finish(trailers) => {
-                        session.sendTrailers(id, &trailers)!;
+                        session.sendTrailers(id, raw trailers)!;
                         reply(StreamResult.Sent)!;
                         replyable = false;
                     },
@@ -211,9 +211,9 @@ class PendingStream {
     pub func advanceWrite(session: *http2.Connection) !bool {
         if !replyable || outbound == null { return false; }
         if sentBytes != 0 && session.hasPendingData(id)! { return false; }
-        var bytes = opt.asPtr<coll.Vec<u8>>(&outbound).unwrap().asConstSlice();
+        var bytes = opt.asPtr<coll.Vec<u8>>(raw outbound).unwrap().asConstSlice();
         if sentBytes == bytes.len() {
-            opt.take<coll.Vec<u8>>(&outbound);
+            opt.take<coll.Vec<u8>>(raw outbound);
             sentBytes = 0;
             reply(StreamResult.Sent)!;
             return false;

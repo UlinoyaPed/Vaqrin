@@ -24,7 +24,7 @@ pub class Parser {
     }
 
     func skipWhitespace() void {
-        for position < data.len() {
+        while position < data.len() {
             var byte = data[position];
             if byte == 32 || byte == 9 || byte == 10 || byte == 13 {
                 position++;
@@ -80,14 +80,14 @@ pub class Parser {
             }
         } else {
             if data[position] < 49 || data[position] > 57 { return JsonError.InvalidNumber; }
-            for position < data.len() && 48 <= data[position] && data[position] <= 57 {
+            while position < data.len() && 48 <= data[position] && data[position] <= 57 {
                 position++;
             }
         }
         if position < data.len() && data[position] == 46 {
             position++;
             var fractionStart = position;
-            for position < data.len() && 48 <= data[position] && data[position] <= 57 {
+            while position < data.len() && 48 <= data[position] && data[position] <= 57 {
                 position++;
             }
             if position == fractionStart { return JsonError.InvalidNumber; }
@@ -98,7 +98,7 @@ pub class Parser {
                 position++;
             }
             var exponentStart = position;
-            for position < data.len() && 48 <= data[position] && data[position] <= 57 {
+            while position < data.len() && 48 <= data[position] && data[position] <= 57 {
                 position++;
             }
             if position == exponentStart { return JsonError.InvalidNumber; }
@@ -135,7 +135,7 @@ pub class Parser {
                 110 => output.push(10)!,
                 114 => output.push(13)!,
                 116 => output.push(9)!,
-                117 => appendUnicodeEscape(&output)!,
+                117 => appendUnicodeEscape(raw output)!,
                 _ => return JsonError.InvalidEscape,
             }
         }

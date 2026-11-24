@@ -86,8 +86,8 @@ pub class Metadata {
     func addEncoded(name: str, value: []const u8) !void {
         var first: usize = 0;
         var last = value.len();
-        for first < last && (value[first] == 32 || value[first] == 9) { first++; }
-        for last > first && (value[last - 1] == 32 || value[last - 1] == 9) { last--; }
+        while first < last && (value[first] == 32 || value[first] == 9) { first++; }
+        while last > first && (value[last - 1] == 32 || value[last - 1] == 9) { last--; }
         var encoded = text.fromBytes(value[first..last])!;
         var data = decodeBinary(encoded)!;
         addBinary(name, data.asConstSlice())

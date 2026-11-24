@@ -12,7 +12,7 @@ The writer sends a fixed-length body. `http.get`, `http.head`, and `http.post`
 accept both `http://` and `https://` URLs. Use
 `Client.request(address, method, body)` to choose another method and have the
 client build the request target from the URL path and query. Use
-`Client.send(address, &request)` to supply a request target and custom headers.
+`Client.send(address, raw request)` to supply a request target and custom headers.
 The client sets `Host` from the URL and uses `Connection: close`. Set
 `Client.setTimeout` to change the timeout for connection attempts and socket I/O,
 including the TLS handshake.

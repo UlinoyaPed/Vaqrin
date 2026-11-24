@@ -22,11 +22,11 @@ func main() !void {
     config.addProtocol("h2".asBytes())!;
     var acceptor = tls.TlsAcceptor.fromPem(certificate, key, move(config))!;
     var service = Greeter{};
-    var adapter = generated.GreeterServer(&service);
+    var adapter = generated.GreeterServer(raw service);
     var server = grpc.Server();
-    adapter.register(&server)!;
+    adapter.register(raw server)!;
     var loopback = net.IpAddr.V4(net.Ipv4Addr.new(127, 0, 0, 1));
     var listener = net.listenTcp(net.SocketAddr.new(loopback, settings.port()!))!;
     io.println(listener.localAddr()!.port())!;
-    server.acceptTls(&listener, &acceptor, grpc.ServeOptions())
+    server.acceptTls(raw listener, raw acceptor, grpc.ServeOptions())
 }

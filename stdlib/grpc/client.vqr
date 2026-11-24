@@ -38,9 +38,9 @@ pub class Call {
     pub const func sendCompression() Compression { compression }
     pub func complete() !UnaryResponse {
         if !remoteEnd { return RpcError.CallInProgress; }
-        var current = core.replace<?Status>(&status, null) ?? { return RpcError.CallClosed; };
-        var headers = core.replace<Metadata>(&initial, Metadata());
-        var trailers = core.replace<Metadata>(&trailing, Metadata());
+        var current = core.replace<?Status>(raw status, null) ?? { return RpcError.CallClosed; };
+        var headers = core.replace<Metadata>(raw initial, Metadata());
+        var trailers = core.replace<Metadata>(raw trailing, Metadata());
         UnaryResponse{initial: move(headers), trailing: move(trailers), status: move(current), body: null}
     }
 }
@@ -75,7 +75,7 @@ pub class ClientConn {
         terminated = true;
         active.clear();
         connection.goAway(0) catch {};
-        connection.flush(&wire) catch {};
+        connection.flush(raw wire) catch {};
         connection.close();
         wire.close()
     }
@@ -97,9 +97,9 @@ pub class ClientConn {
             var value = durationHeader(remaining)!;
             headers.add("grpc-timeout", value)!;
         }
-        options.metadata.writeTo(&headers)!;
+        options.metadata.writeTo(raw headers)!;
         active.reserve(active.len() + 1)!;
-        var stream = connection.request(&headers, false)!;
+        var stream = connection.request(raw headers, false)!;
         serial +%= 1;
         active.push(ActiveCall(stream, serial))!;
         Call.withCompression(stream, options.deadline, serial, limit, options.compression)
@@ -110,7 +110,7 @@ pub class ClientConn {
         var encoded = frameMessage(message, limit, call.sendCompression())!;
         connection.sendData(call.stream, encoded.asConstSlice(), false)!;
         updateTimeout(call)!;
-        connection.flush(&wire)
+        connection.flush(raw wire)
     }
     pub func finishSend(call: *Call) !void {
         requireActive(call)!;
@@ -118,7 +118,7 @@ pub class ClientConn {
         connection.sendData(call.stream, "".asBytes(), true)!;
         call.sentEnd = true;
         updateTimeout(call)!;
-        connection.flush(&wire)
+        connection.flush(raw wire)
     }
     pub func cancel(call: *Call) !void {
         requireActive(call)!;
@@ -128,7 +128,7 @@ pub class ClientConn {
         drainCallEvents(call.stream);
         reset!;
         wire.setTimeout(timeout)!;
-        connection.flush(&wire)
+        connection.flush(raw wire)
     }
     pub func recvMessage(call: *Call) !?coll.Vec<u8> {
         if call.cancelled { return RpcError.Cancelled; }
@@ -150,11 +150,11 @@ pub class ClientConn {
     }
     pub func unary(path: str, message: []const u8, options: *const CallOptions) !UnaryResponse {
         var call = start(path, options)!;
-        sendMessage(&call, message) catch (reason) { cancel(&call) catch {}; return reason; };
-        finishSend(&call) catch (reason) { cancel(&call) catch {}; return reason; };
-        var body = recvMessage(&call)!;
-        var extra = recvMessage(&call)!;
-        if extra != null { cancel(&call) catch {}; return RpcError.Protocol; }
+        sendMessage(raw call, message) catch (reason) { cancel(raw call) catch {}; return reason; };
+        finishSend(raw call) catch (reason) { cancel(raw call) catch {}; return reason; };
+        var body = recvMessage(raw call)!;
+        var extra = recvMessage(raw call)!;
+        if extra != null { cancel(raw call) catch {}; return RpcError.Protocol; }
         var response = call.complete()!;
         if response.status.isOk() && body == null { return RpcError.Protocol; }
         response.body = move(body);
@@ -193,8 +193,8 @@ pub class ClientConn {
                 return RpcError.ConnectionClosed;
             }
             var event = connection.next()! ?? {
-                connection.flush(&wire)!;
-                if !connection.receive(&wire)! {
+                connection.flush(raw wire)!;
+                if !connection.receive(raw wire)! {
                     terminated = true;
                     return RpcError.ConnectionClosed;
                 }
@@ -244,7 +244,7 @@ pub class ClientConn {
             var event = nextEvent(call)!;
             switch event.kind {
                 http2.EventKind.Headers => {
-                    var info = parseHeaders(&event)!;
+                    var info = parseHeaders(raw event)!;
                     if info.http >= 100 && info.http < 200 { continue; }
                     var initial = !call.gotHeaders;
                     if initial {
@@ -258,14 +258,14 @@ pub class ClientConn {
                     if info.remoteStatus != null {
                         if (event.code & 1) == 0 || call.status != null { return RpcError.Protocol; }
                         var remote = Status{code: info.remoteStatus.unwrap(),
-                            message: core.replace<string>(&info.message, ""),
-                            details: core.replace<coll.Vec<u8>>(&info.details, coll.Vec<u8>())};
+                            message: core.replace<string>(raw info.message, ""),
+                            details: core.replace<coll.Vec<u8>>(raw info.details, coll.Vec<u8>())};
                         call.status = some(move(remote));
-                        call.trailing = core.replace<Metadata>(&info.metadata, Metadata());
+                        call.trailing = core.replace<Metadata>(raw info.metadata, Metadata());
                     } else if initial {
-                        call.initial = core.replace<Metadata>(&info.metadata, Metadata());
+                        call.initial = core.replace<Metadata>(raw info.metadata, Metadata());
                     } else {
-                        call.trailing = core.replace<Metadata>(&info.metadata, Metadata());
+                        call.trailing = core.replace<Metadata>(raw info.metadata, Metadata());
                     }
                 },
                 http2.EventKind.Data => {

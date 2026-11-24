@@ -9,13 +9,13 @@ var choiceRotation: usize = 0;
 class ChoiceLock {
     #copy: disabled
     pub func init() {
-        for __vqr_atomic_swap(&choiceLock, 1u32, atomic.Order.Acquire) != 0 {
-            __vqr_sync_wait(&choiceLock, 1u32);
+        while __vqr_atomic_swap(raw choiceLock, 1u32, atomic.Order.Acquire) != 0 {
+            __vqr_sync_wait(raw choiceLock, 1u32);
         }
     }
     pub func deinit() void {
-        __vqr_atomic_store(&choiceLock, 0u32, atomic.Order.Release);
-        __vqr_sync_wake(&choiceLock, 1u32);
+        __vqr_atomic_store(raw choiceLock, 0u32, atomic.Order.Release);
+        __vqr_sync_wake(raw choiceLock, 1u32);
     }
 }
 
@@ -24,11 +24,11 @@ class Choice {
     pub var index: usize;
     pub var failure: ?ErrorId;
     pub func init() : index(~usize(0)), failure(null) {
-        var old = __vqr_atomic_add(&activeChoices, 1u32, atomic.Order.Relaxed);
+        var old = __vqr_atomic_add(raw activeChoices, 1u32, atomic.Order.Relaxed);
         if old == ~u32(0) { panic("too many active selections"); }
     }
     pub func deinit() void {
-        var old = __vqr_atomic_sub(&activeChoices, 1u32, atomic.Order.Relaxed);
+        var old = __vqr_atomic_sub(raw activeChoices, 1u32, atomic.Order.Relaxed);
     }
     // Caller holds ChoiceLock while accessing these fields.
     pub const func pending() bool { index == ~usize(0) && failure == null }
@@ -53,15 +53,15 @@ class Choice {
 }
 
 func notifyChoices() void {
-    if __vqr_atomic_load(&activeChoices, atomic.Order.Relaxed) == 0 { return; }
-    var old = __vqr_atomic_add(&choiceVersion, 1u32, atomic.Order.Release);
-    __vqr_task_channel_notify(&choiceVersion);
-    __vqr_sync_wake(&choiceVersion, 0x7fffffffu32);
+    if __vqr_atomic_load(raw activeChoices, atomic.Order.Relaxed) == 0 { return; }
+    var old = __vqr_atomic_add(raw choiceVersion, 1u32, atomic.Order.Release);
+    __vqr_task_channel_notify(raw choiceVersion);
+    __vqr_sync_wake(raw choiceVersion, 0x7fffffffu32);
 }
 
-func choiceSnapshot() u32 { __vqr_atomic_load(&choiceVersion, atomic.Order.Acquire) }
+func choiceSnapshot() u32 { __vqr_atomic_load(raw choiceVersion, atomic.Order.Acquire) }
 func choiceStart(count: usize) usize {
-    __vqr_atomic_add(&choiceRotation, usize(1), atomic.Order.Relaxed) % count
+    __vqr_atomic_add(raw choiceRotation, usize(1), atomic.Order.Relaxed) % count
 }
 
 func choiceWait(version: u32, deadline: ?time.Deadline) void {
@@ -69,9 +69,9 @@ func choiceWait(version: u32, deadline: ?time.Deadline) void {
         some(alarm) => unsafe { alarm.instant().monotonicParts() },
         null => (i64(-1), i32(0)),
     };
-    if !__vqr_task_channel_wait(&choiceVersion, version, seconds, i64(nanos)) {
-        if seconds < 0 { __vqr_sync_wait(&choiceVersion, version); }
-        else { var timedOut = __vqr_sync_wait_until(&choiceVersion, version, seconds, i64(nanos)); }
+    if !__vqr_task_channel_wait(raw choiceVersion, version, seconds, i64(nanos)) {
+        if seconds < 0 { __vqr_sync_wait(raw choiceVersion, version); }
+        else { var timedOut = __vqr_sync_wait_until(raw choiceVersion, version, seconds, i64(nanos)); }
     }
 }
 
@@ -131,7 +131,7 @@ class Ticket<T: Movable + Sendable> {
         var box = guard.get();
         if !box.queue.isRendezvous() { return; }
         node.next = box.choices;
-        box.choices = some(&node);
+        box.choices = some(raw node);
         linked = true;
         channel.notifyAll();
     }
@@ -141,20 +141,20 @@ class Ticket<T: Movable + Sendable> {
         var channel = state.asPtr();
         var guard = channel.lock();
         var box = guard.get();
-        var cursor = &box.choices;
-        for *cursor != null {
+        var cursor = raw box.choices;
+        while *cursor != null {
             var candidate = (*cursor).unwrap();
-            if candidate == &node {
+            if candidate == raw node {
                 *cursor = node.next;
                 break;
             }
-            cursor = &candidate.next;
+            cursor = raw candidate.next;
         }
         linked = false;
     }
 
     pub func deinit() void { unlink(); }
-    pub func take() ?T { opt.take<T>(&node.value) }
+    pub func take() ?T { opt.take<T>(raw node.value) }
 
     pub func probe() void {
         var channel = state.asPtr();
@@ -176,14 +176,14 @@ class Ticket<T: Movable + Sendable> {
                 node.choice.failure = some(ChannelError.OutOfMemory);
                 return true;
             };
-            box.queue.push(takeOffered<T>(&node));
+            box.queue.push(takeOffered<T>(raw node));
         } else {
             if box.offer != Offer.Empty { return false; }
             if box.readyReceiver() {
-                box.deliver(takeOffered<T>(&node), Offer.Committed, null);
+                box.deliver(takeOffered<T>(raw node), Offer.Committed, null);
             } else {
                 var receiver = box.findChoice(false, some(node.choice)) ?? { return false; };
-                receiver.value = some(takeOffered<T>(&node));
+                receiver.value = some(takeOffered<T>(raw node));
                 receiver.choice.index = receiver.index;
             }
         }

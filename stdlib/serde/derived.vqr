@@ -83,7 +83,7 @@ pub func decodeValue<T>(deserializer: *Deserializer) !T {
 pub func encodeOptional<T>(value: *const ?T, serializer: *Serializer) !void {
     switch *value {
         null => serializer.writeNull(),
-        some(ref item) => encodeValue<T>(&item, serializer),
+        some(ref item) => encodeValue<T>(item.toRaw(), serializer),
     }
 }
 

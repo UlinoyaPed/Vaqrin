@@ -8,13 +8,13 @@ class ConcurrentInput {
     pub func init(handler: *const ConcurrentUnaryHandler, request: UnaryRequest)
         : handler(handler), request(move(request)) {}
     pub func run(limit: usize) !ConcurrentOutput {
-        var input = core.replace<UnaryRequest>(&request,
+        var input = core.replace<UnaryRequest>(raw request,
             UnaryRequest{path: "", metadata: Metadata(), deadline: null, body: coll.Vec<u8>()});
         var result = handler.call(move(input)) catch {
             var code = if task.isCancelled() { StatusCode.Cancelled } else { StatusCode.Internal };
             reply(status(code, ""))
         };
-        ConcurrentOutput(&result, limit)
+        ConcurrentOutput(raw result, limit)
     }
 }
 
@@ -169,7 +169,7 @@ class ConcurrentCalls {
     pub func collect(session: *http2.Connection, limit: usize) !void {
         collectStreams(session)!;
         var index = usize(0);
-        for index < running.len() {
+        while index < running.len() {
             var call = running.atMut(index);
             if call.replyable && call.deadline != null && call.deadline.unwrap().expired()! {
                 call.replyable = false;
@@ -188,7 +188,7 @@ class ConcurrentCalls {
                 continue;
             };
             if !completed.replyable { continue; }
-            sendUnaryResult(session, completed.stream, &result.result, limit, completed.compression)
+            sendUnaryResult(session, completed.stream, raw result.result, limit, completed.compression)
                 catch (reason) { if reason != http2.Http2Error.StreamClosed { return reason; } };
         }
     }
@@ -209,7 +209,7 @@ class ConcurrentCalls {
 
     func collectStreams(session: *http2.Connection) !void {
         var index = usize(0);
-        for index < streaming.len() {
+        while index < streaming.len() {
             var stream = streaming.atMut(index);
             stream.poll(session) catch (reason) {
                 if reason == http2.Http2Error.StreamClosed { stream.cancel(); }

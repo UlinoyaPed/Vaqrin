@@ -51,7 +51,7 @@ func allocateBTreeNode<K: Movable, V: Movable>(
 func destroyBTreeNode<K: Movable, V: Movable>(
     node: *BTreeNode<K, V>
 ) void {
-    for node.childCount() > 0 {
+    while node.childCount() > 0 {
         var child = node.removeChild(0);
         destroyBTreeNode<K, V>(child);
     }
@@ -63,8 +63,8 @@ func btreeLowerIndex<K: Movable, V: Movable>(
     less: func(*const K, *const K) bool
 ) usize {
     var index: usize = 0;
-    for index < node.entryCount() {
-        if !less(&node.entryAt(index).0, key) { return index; }
+    while index < node.entryCount() {
+        if !less(raw node.entryAt(index).0, key) { return index; }
         index++;
     }
     index
@@ -91,7 +91,7 @@ class BTreeCursor<K: Movable, V: Movable> {
     }
 
     pub func seekLower(key: *const K, less: func(*const K, *const K) bool) void {
-        for !stack.isEmpty() {
+        while !stack.isEmpty() {
             var frame = stack.lastMut().unwrap();
             var node = frame.0;
             var index = btreeLowerIndex<K, V>(node, key, less);
@@ -105,7 +105,7 @@ class BTreeCursor<K: Movable, V: Movable> {
     }
 
     pub func next() ?*(K, V) {
-        for !stack.isEmpty() {
+        while !stack.isEmpty() {
             var frame = stack.lastMut().unwrap();
             var node = frame.0;
             var leaf = node.isLeaf();
@@ -149,18 +149,18 @@ pub class BTreeIterRef<K: Movable, V: Movable> {
     pub func next() ?(*const K, *const V) { take(false) }
     pub func nextBack() ?(*const K, *const V) { take(true) }
     pub const func remaining() usize {
-        switch __vqr_optional_pointer(&snapshot) {
+        switch __vqr_optional_pointer(raw snapshot) {
             some(saved) => saved.remaining(),
             null => cursors.remaining(),
         }
     }
     func take(reverse: bool) ?(*const K, *const V) {
         var entry: *const (K, V);
-        switch __vqr_optional_pointer(&snapshot) {
+        switch __vqr_optional_pointer(raw snapshot) {
             some(saved) => { entry = saved.take(reverse) ?? { return null; }; },
             null => { entry = cursors.next(reverse) ?? { return null; }; },
         }
-        some((&entry.0, &entry.1))
+        some((raw entry.0, raw entry.1))
     }
 }
 
@@ -174,18 +174,18 @@ pub class BTreeIterMut<K: Movable, V: Movable> {
     pub func next() ?(*const K, *V) { take(false) }
     pub func nextBack() ?(*const K, *V) { take(true) }
     pub const func remaining() usize {
-        switch __vqr_optional_pointer(&snapshot) {
+        switch __vqr_optional_pointer(raw snapshot) {
             some(saved) => saved.remaining(),
             null => cursors.remaining(),
         }
     }
     func take(reverse: bool) ?(*const K, *V) {
         var entry: *(K, V);
-        switch __vqr_optional_pointer(&snapshot) {
+        switch __vqr_optional_pointer(raw snapshot) {
             some(saved) => { entry = saved.take(reverse) ?? { return null; }; },
             null => { entry = cursors.next(reverse) ?? { return null; }; },
         }
-        some((&entry.0, &entry.1))
+        some((raw entry.0, raw entry.1))
     }
 }
 
@@ -207,12 +207,12 @@ pub class BTreeRangeRef<K: Movable, V: Movable> {
         var entry = cursor.next() ?? { done = true; return null; };
         switch endKey {
             some(key) => {
-                var address: *const K = &entry.0;
+                var address: *const K = raw entry.0;
                 if key == address { done = true; return null; }
             },
             null => {},
         }
-        some((&entry.0, &entry.1))
+        some((raw entry.0, raw entry.1))
     }
 }
 
@@ -290,10 +290,10 @@ pub class BTreeMap<K: Movable, V: Movable> {
     func insertNonFull(
         node: *BTreeNode<K, V>, key: K, value: V
     ) !?V {
-        var index = btreeLowerIndex<K, V>(node, &key, less);
+        var index = btreeLowerIndex<K, V>(node, raw key, less);
         if index < node.entryCount() {
-            var existing = &node.entryAt(index).0;
-            if !less(&key, existing) && !less(existing, &key) {
+            var existing = raw node.entryAt(index).0;
+            if !less(raw key, existing) && !less(existing, raw key) {
                 return replaceEntry(node, index, move(key), move(value));
             }
         }
@@ -306,11 +306,11 @@ pub class BTreeMap<K: Movable, V: Movable> {
         var child = node.childAt(index);
         if child.entryCount() == btreeMaximumEntries {
             splitChild(node, index)!;
-            var promoted = &node.entryAt(index).0;
-            if !less(&key, promoted) && !less(promoted, &key) {
+            var promoted = raw node.entryAt(index).0;
+            if !less(raw key, promoted) && !less(promoted, raw key) {
                 return replaceEntry(node, index, move(key), move(value));
             }
-            if less(promoted, &key) { index++; }
+            if less(promoted, raw key) { index++; }
         }
         insertNonFull(node.childAt(index), move(key), move(value))
     }
@@ -351,12 +351,12 @@ pub class BTreeMap<K: Movable, V: Movable> {
         var separator = parent.removeEntry(index);
         left.insertEntry(left.entryCount(), move(separator));
 
-        for right.entryCount() > 0 {
+        while right.entryCount() > 0 {
             var entry = right.removeEntry(0);
             left.insertEntry(left.entryCount(), move(entry));
         }
 
-        for right.childCount() > 0 {
+        while right.childCount() > 0 {
             var branch = right.removeChild(0);
             left.insertChild(left.childCount(), branch);
         }
@@ -401,7 +401,7 @@ pub class BTreeMap<K: Movable, V: Movable> {
         var index = btreeLowerIndex<K, V>(node, key, less);
         var found = false;
         if index < node.entryCount() {
-            var existing = &node.entryAt(index).0;
+            var existing = raw node.entryAt(index).0;
             found = !less(key, existing) && !less(existing, key);
         }
 
@@ -443,13 +443,13 @@ pub class BTreeMap<K: Movable, V: Movable> {
 
     const func minimumEntry(node: *BTreeNode<K, V>) *const (K, V) {
         var current = node;
-        for !current.isLeaf() { current = current.childAt(0); }
+        while !current.isLeaf() { current = current.childAt(0); }
         current.entryAt(0)
     }
 
     const func maximumEntry(node: *BTreeNode<K, V>) *const (K, V) {
         var current = node;
-        for !current.isLeaf() { current = current.childAt(current.childCount() - 1); }
+        while !current.isLeaf() { current = current.childAt(current.childCount() - 1); }
         current.entryAt(current.entryCount() - 1)
     }
 
@@ -482,15 +482,15 @@ pub class BTreeMap<K: Movable, V: Movable> {
     }
 
     pub const func get(query: in K) ?ref V from self {
-        var key = &query;
+        var key = query.toRaw();
         var current = root;
-        for current != null {
+        while current != null {
             var node = current.unwrap();
             var index = btreeLowerIndex<K, V>(node, key, less);
             if index < node.entryCount() &&
-               !less(key, &node.entryAt(index).0) &&
-               !less(&node.entryAt(index).0, key) {
-                return unsafe { __vqr_borrow_from_self(&node.entryAt(index).1) };
+               !less(key, raw node.entryAt(index).0) &&
+               !less(raw node.entryAt(index).0, key) {
+                return unsafe { __vqr_borrow_from_self(raw node.entryAt(index).1) };
             }
             if node.isLeaf() { return null; }
             current = some(node.childAt(index));
@@ -499,15 +499,15 @@ pub class BTreeMap<K: Movable, V: Movable> {
     }
 
     pub func getMut(query: in K) ?ref mut V from self {
-        var key = &query;
+        var key = query.toRaw();
         var current = root;
-        for current != null {
+        while current != null {
             var node = current.unwrap();
             var index = btreeLowerIndex<K, V>(node, key, less);
             if index < node.entryCount() &&
-               !less(key, &node.entryAt(index).0) &&
-               !less(&node.entryAt(index).0, key) {
-                return unsafe { __vqr_borrow_from_self(&node.entryAtMut(index).1) };
+               !less(key, raw node.entryAt(index).0) &&
+               !less(raw node.entryAt(index).0, key) {
+                return unsafe { __vqr_borrow_from_self(raw node.entryAtMut(index).1) };
             }
             if node.isLeaf() { return null; }
             current = some(node.childAt(index));
@@ -521,7 +521,7 @@ pub class BTreeMap<K: Movable, V: Movable> {
         switch root {
             null => return null,
             some(node) => {
-                var removed = removeFrom(node, &key);
+                var removed = removeFrom(node, key.toRaw());
                 if removed != null { length--; }
                 contractRoot();
                 move(removed)
@@ -544,7 +544,7 @@ pub class BTreeMap<K: Movable, V: Movable> {
             null => null,
             some(node) => {
                 var entry = minimumEntry(node);
-                some((&entry.0, &entry.1))
+                some((raw entry.0, raw entry.1))
             },
         }
     }
@@ -554,7 +554,7 @@ pub class BTreeMap<K: Movable, V: Movable> {
             null => null,
             some(node) => {
                 var entry = maximumEntry(node);
-                some((&entry.0, &entry.1))
+                some((raw entry.0, raw entry.1))
             },
         }
     }
@@ -586,11 +586,11 @@ pub class BTreeMap<K: Movable, V: Movable> {
     pub const func lowerBound(key: *const K) ?*const K {
         var current = root;
         var candidate: ?*const K = null;
-        for current != null {
+        while current != null {
             var node = current.unwrap();
             var index = btreeLowerIndex<K, V>(node, key, less);
             if index < node.entryCount() {
-                candidate = some(&node.entryAt(index).0);
+                candidate = some(raw node.entryAt(index).0);
             }
             if node.isLeaf() { break; }
             current = some(node.childAt(index));
@@ -601,16 +601,16 @@ pub class BTreeMap<K: Movable, V: Movable> {
     pub const func upperBound(key: *const K) ?*const K {
         var current = root;
         var candidate: ?*const K = null;
-        for current != null {
+        while current != null {
             var node = current.unwrap();
             var index = btreeLowerIndex<K, V>(node, key, less);
             if index < node.entryCount() &&
-               !less(key, &node.entryAt(index).0) &&
-               !less(&node.entryAt(index).0, key) {
+               !less(key, raw node.entryAt(index).0) &&
+               !less(raw node.entryAt(index).0, key) {
                 index++;
             }
             if index < node.entryCount() {
-                candidate = some(&node.entryAt(index).0);
+                candidate = some(raw node.entryAt(index).0);
             }
             if node.isLeaf() { break; }
             current = some(node.childAt(index));

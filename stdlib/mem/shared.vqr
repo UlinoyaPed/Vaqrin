@@ -56,7 +56,7 @@ pub class Shared<T: Movable> {
 
     pub const func copy() Self {
         var state = owner.unwrap();
-        if !countReference(&state.strong) { panic("copy requires a strong owner"); }
+        if !countReference(raw state.strong) { panic("copy requires a strong owner"); }
         Shared<T>(state)
     }
 
@@ -64,13 +64,13 @@ pub class Shared<T: Movable> {
 
     pub const func downgrade() Weak<T> {
         var state = owner.unwrap();
-        if !countReference(&state.weak) { panic("downgrade requires a strong owner"); }
+        if !countReference(raw state.weak) { panic("downgrade requires a strong owner"); }
         unsafe { Weak<T>.fromRetained(state) }
     }
 
     pub const func asPtr() *const T { owner.unwrap().payload.asConstPtr() }
     pub const func strongCount() usize { owner.unwrap().strong.load(atomic.Order.Acquire) }
-    pub const func weakCount() usize { weakTotal(&owner.unwrap().weak) - 1 }
+    pub const func weakCount() usize { weakTotal(raw owner.unwrap().weak) - 1 }
     pub const func ptrEq(other: *const Self) bool { owner.unwrap() == other.owner.unwrap() }
 
     pub func getMut() ?*T {
@@ -113,7 +113,7 @@ pub class Weak<T: Movable> {
     pub unsafe static func fromRetained(state: *SharedState<T>) Self { Weak<T>(state) }
 
     pub const func copy() Self {
-        if !countReference(&owner.weak) { panic("copy requires a weak owner"); }
+        if !countReference(raw owner.weak) { panic("copy requires a weak owner"); }
         Weak<T>(owner)
     }
 
@@ -121,13 +121,13 @@ pub class Weak<T: Movable> {
     pub const func strongCount() usize { owner.strong.load(atomic.Order.Acquire) }
     pub const func weakCount() usize {
         var strong = strongCount();
-        var weak = weakTotal(&owner.weak);
+        var weak = weakTotal(raw owner.weak);
         if strong != 0 && weak != 0 { weak - 1 } else { weak }
     }
     pub const func ptrEq(other: *const Self) bool { owner == other.owner }
 
     pub const func upgrade() ?Shared<T> {
-        if countReference(&owner.strong) {
+        if countReference(raw owner.strong) {
             return some(unsafe { Shared<T>.fromRetained(owner) });
         }
         null

@@ -59,7 +59,7 @@ func complete(processed: usize) IoProgress {
 
 pub func readExactProgress(reader: *Reader, dst: []u8) !IoProgress {
     var offset: usize = 0;
-    for offset < dst.len() {
+    while offset < dst.len() {
         var count = read(reader, dst[offset..dst.len()]) catch (reason) { return stopped(offset, reason); };
         if count == 0 { return IoProgress{processed: offset, status: ReadStatus.Eof, reason: null}; }
         offset += count;
@@ -74,11 +74,11 @@ pub func readExact(reader: *Reader, dst: []u8, processed: *usize) !void {
 }
 pub func readExact(reader: *Reader, dst: []u8) !void {
     var processed: usize = 0;
-    readExact(reader, dst, &processed)
+    readExact(reader, dst, raw processed)
 }
 pub func readAtLeast(reader: *Reader, dst: []u8, min: usize, processed: *usize) !usize {
     if min > dst.len() || *processed > dst.len() { return IoError.InvalidCount; }
-    for *processed < min {
+    while *processed < min {
         var count = read(reader, dst[*processed..dst.len()])!;
         if count == 0 { return IoError.UnexpectedEof; };
         *processed += count;
@@ -87,11 +87,11 @@ pub func readAtLeast(reader: *Reader, dst: []u8, min: usize, processed: *usize) 
 }
 pub func readAtLeast(reader: *Reader, dst: []u8, min: usize) !usize {
     var processed: usize = 0;
-    readAtLeast(reader, dst, min, &processed)
+    readAtLeast(reader, dst, min, raw processed)
 }
 pub func writeAllProgress(writer: *Writer, src: []const u8) !IoProgress {
     var offset: usize = 0;
-    for offset < src.len() {
+    while offset < src.len() {
         var count = write(writer, src[offset..src.len()]) catch (reason) { return stopped(offset, reason); };
         offset += count;
     }
@@ -105,7 +105,7 @@ pub func writeAll(writer: *Writer, src: []const u8, processed: *usize) !void {
 }
 pub func writeAll(writer: *Writer, src: []const u8) !void {
     var processed: usize = 0;
-    writeAll(writer, src, &processed)
+    writeAll(writer, src, raw processed)
 }
 pub func writeString(writer: *Writer, value: str) !void { writeAll(writer, value.asBytes()) }
 
@@ -146,7 +146,7 @@ pub class CopyCursor {
     pub func transfer(reader: *Reader, writer: *Writer, limit: u64, scratch: []u8) !u64 {
         if total > limit || last > scratch.len() || u64(pending()) > limit - total ||
             (total < limit && scratch.len() == 0) { return IoError.InvalidCount; }
-        for total < limit && !ended {
+        while total < limit && !ended {
             if first == last {
                 var count = read(reader, scratch[0..usableBytes(limit - total, scratch.len())])!;
                 if count == 0 { ended = true; break; }
@@ -168,14 +168,14 @@ pub func copyN(reader: *Reader, writer: *Writer, n: u64, scratch: []u8) !u64 {
 }
 pub func copyAll(reader: *Reader, writer: *Writer) !u64 {
     var storage = __vqr_uninitialized<[8192]u8>();
-    var scratch = unsafe { (*__vqr_raw_address(&storage))[:] };
+    var scratch = unsafe { (*__vqr_raw_address(raw storage))[:] };
     mem.zeroBytes(scratch);
     copy(reader, writer, scratch)
 }
 pub func discard(reader: *Reader, n: u64, scratch: []u8) !u64 {
     if n != 0 && scratch.len() == 0 { return IoError.InvalidCount; }
     var discarded: u64 = 0;
-    for discarded < n {
+    while discarded < n {
         var count = read(reader, scratch[0..usableBytes(n - discarded, scratch.len())])!;
         if count == 0 { break; }
         discarded += u64(count);
@@ -209,7 +209,7 @@ pub func writeAt(writer: *WriterAt, offset: u64, src: []const u8) !usize {
 
 pub func readExactAt(reader: *ReaderAt, offset: u64, dst: []u8) !void {
     var processed: usize = 0;
-    for processed < dst.len() {
+    while processed < dst.len() {
         if u64(processed) > ~u64(0) - offset { return IoError.PositionOutOfRange; }
         var count = readAt(reader, offset + u64(processed), dst[processed..dst.len()])!;
         if count > dst.len() - processed { return IoError.InvalidCount; }
@@ -220,7 +220,7 @@ pub func readExactAt(reader: *ReaderAt, offset: u64, dst: []u8) !void {
 
 pub func writeAllAt(writer: *WriterAt, offset: u64, src: []const u8) !void {
     var processed: usize = 0;
-    for processed < src.len() {
+    while processed < src.len() {
         if u64(processed) > ~u64(0) - offset { return IoError.PositionOutOfRange; }
         var count = writeAt(writer, offset + u64(processed), src[processed..src.len()])!;
         if count > src.len() - processed { return IoError.InvalidCount; }

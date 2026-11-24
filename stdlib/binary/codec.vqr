@@ -16,7 +16,7 @@ func readUnsigned(data: []const u8, width: usize, endian: Endian) !u64 {
     var little = littleEndian(endian);
     var value = 0u64;
     for i in usize(0)..width {
-        var index = if (little) i else width - 1 - i;
+        var index = if little { i } else { width - 1 - i };
         value |= u64(data[index]) << (i * 8);
     }
     value
@@ -26,7 +26,7 @@ func writeUnsigned(data: []u8, value: u64, width: usize, endian: Endian) !void {
     if data.len() < width { return BinaryError.EndOfBuffer; }
     var little = littleEndian(endian);
     for i in usize(0)..width {
-        var index = if (little) i else width - 1 - i;
+        var index = if little { i } else { width - 1 - i };
         data[index] = u8((value >> (i * 8)) & 255u64)!;
     }
 }
@@ -51,7 +51,7 @@ func writeVarintWord(value: u64, dst: []u8) !usize {
     var encoded: [10]u8 = [10]u8{0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     var index: usize = 0;
     var rest = value;
-    for rest >= 128u64 {
+    while rest >= 128u64 {
         encoded[index] = u8((rest & 127u64) | 128u64)!;
         rest = rest >> 7;
         index++;

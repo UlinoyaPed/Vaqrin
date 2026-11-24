@@ -63,7 +63,7 @@ pub class Document {
     pub const func get(key: str) ?*const Value {
         for index in usize(0)..entries.len() {
             var entry = entries.getPtr(index).unwrap();
-            if entry.key == key { return some(&entry.value); }
+            if entry.key == key { return some(raw entry.value); }
         }
         null
     }
@@ -71,7 +71,7 @@ pub class Document {
     pub func getMut(key: str) ?*Value {
         for index in usize(0)..entries.len() {
             var entry = entries.getMutPtr(index).unwrap();
-            if entry.key == key { return some(&entry.value); }
+            if entry.key == key { return some(raw entry.value); }
         }
         null
     }
@@ -106,7 +106,7 @@ pub class Document {
 
     pub const func valueAt(index: usize) ?*const Value {
         if index >= entries.len() { return null; }
-        some(&entries.getPtr(index).unwrap().value)
+        some(raw entries.getPtr(index).unwrap().value)
     }
 
     pub const func getPath(path: str) ?*const Value { lookupPath(self, path) }
@@ -121,8 +121,8 @@ func trim(value: str) str {
     var data = value.asBytes();
     var start: usize = 0;
     var end = data.len();
-    for start < end && isWhitespace(data[start]) { start++; }
-    for end > start && isWhitespace(data[end - 1]) { end--; }
+    while start < end && isWhitespace(data[start]) { start++; }
+    while end > start && isWhitespace(data[end - 1]) { end--; }
     unsafe { __vqr_text_borrow_utf8(data[start..end]) }
 }
 
@@ -152,7 +152,7 @@ class QuoteState {
         } else if byte == mark && (!multiline || tripleQuote(data, index, mark)) {
             *cursor += if multiline { usize(3) } else { usize(1) };
             if multiline {
-                for *cursor < data.len() && data[*cursor] == mark { *cursor += 1; }
+                while *cursor < data.len() && data[*cursor] == mark { *cursor += 1; }
             }
             mark = 0;
         } else {
@@ -168,7 +168,7 @@ func nextStatement(data: []const u8, position: *usize, output: *coll.Vec<u8>) !v
     var quote = QuoteState();
     var square: usize = 0;
     var curly: usize = 0;
-    for *position < data.len() {
+    while *position < data.len() {
         var start = *position;
         if quote.skip(data, position) {
             for byte in data[start..*position] { output.push(byte)!; }
@@ -180,7 +180,7 @@ func nextStatement(data: []const u8, position: *usize, output: *coll.Vec<u8>) !v
             return TomlError.InvalidSyntax;
         }
         if byte == 35 {
-            for *position < data.len() && data[*position] != 10 {
+            while *position < data.len() && data[*position] != 10 {
                 var comment = data[*position];
                 if comment < 32 && comment != 9 &&
                    !(comment == 13 && *position + 1 < data.len() && data[*position + 1] == 10) {
@@ -279,15 +279,15 @@ func parseBasicString(value: str, allowMultiline: bool) !string {
     var stop = data.len() - (if multiline { usize(3) } else { usize(1) });
     var output = coll.Vec<u8>();
     var index = stringStart(data, multiline);
-    for index < stop {
+    while index < stop {
         if data[index] != 92 {
-            appendStringByte(data, &index, stop, multiline, 34, &output)!;
+            appendStringByte(data, raw index, stop, multiline, 34, raw output)!;
             continue;
         }
         index++;
         if multiline && index < stop && isWhitespace(data[index]) {
             var crossedLine = false;
-            for index < stop && isWhitespace(data[index]) {
+            while index < stop && isWhitespace(data[index]) {
                 if data[index] == 10 { crossedLine = true; }
                 else if data[index] == 13 && (index + 1 == stop || data[index + 1] != 10) {
                     return TomlError.InvalidString;
@@ -317,7 +317,7 @@ func parseBasicString(value: str, allowMultiline: bool) !string {
                     scalar = (scalar << 4) | digit;
                 }
                 index += digits;
-                appendScalar(&output, scalar)!;
+                appendScalar(raw output, scalar)!;
             },
             _ => return TomlError.InvalidString,
         }
@@ -333,7 +333,7 @@ func parseLiteralString(value: str, allowMultiline: bool) !string {
     var stop = data.len() - (if multiline { usize(3) } else { usize(1) });
     var output = coll.Vec<u8>();
     var index = stringStart(data, multiline);
-    for index < stop { appendStringByte(data, &index, stop, multiline, 39, &output)!; }
+    while index < stop { appendStringByte(data, raw index, stop, multiline, 39, raw output)!; }
     text.fromBytes(output.asConstSlice()) catch { return TomlError.InvalidString; }
 }
 
@@ -345,8 +345,8 @@ func splitTopLevel(value: str, delimiter: u8) !coll.Vec<string> {
     var quote = QuoteState();
     var square: usize = 0;
     var curly: usize = 0;
-    for index < data.len() {
-        if quote.skip(data, &index) { continue; }
+    while index < data.len() {
+        if quote.skip(data, raw index) { continue; }
         var byte = data[index];
         if byte == 91 { square++; }
         else if byte == 93 {
@@ -373,8 +373,8 @@ func findTopLevel(value: str, delimiter: u8) ?usize {
     var index: usize = 0;
     var square: usize = 0;
     var curly: usize = 0;
-    for index < data.len() {
-        if quote.skip(data, &index) { continue; }
+    while index < data.len() {
+        if quote.skip(data, raw index) { continue; }
         var byte = data[index];
         if byte == 91 { square++; }
         else if byte == 93 && square != 0 { square--; }
@@ -421,7 +421,7 @@ func lookupPath(document: *const Document, path: str) ?*const Value {
         var value = current.get(key) ?? { return null; };
         if index + 1 == keys.len() { return value; }
         switch *value {
-            Value.Table(ref table) => { current = &table; },
+            Value.Table(ref table) => { current = table.toRaw(); },
             _ => return null,
         }
     }
@@ -445,7 +445,7 @@ func setDotted(document: *Document, path: []const string, value: Value, rejectDu
                     if kind != TableKind.Implicit && kind != TableKind.Dotted { return TomlError.DuplicateTable; }
                     table.setTableKind(TableKind.Dotted);
                 }
-                current = &table;
+                current = table.toRaw();
             },
             _ => return TomlError.TypeConflict,
         }
@@ -463,7 +463,7 @@ func arrayTable(array: *coll.Vec<Value>) !*Document {
     switch *tail {
         Value.Table(ref mut table) => {
             if table.tableKind() != TableKind.ArrayElement { return TomlError.TypeConflict; }
-            var address: *Document = &table;
+            var address: *Document = table.toRaw();
             return address;
         },
         _ => TomlError.TypeConflict,
@@ -482,9 +482,9 @@ func declareTable(document: *Document, path: []const string, array: bool) !*Docu
         switch *child.unwrap() {
             Value.Table(ref mut table) => {
                 if table.tableKind() == TableKind.Inline { return TomlError.DuplicateTable; }
-                current = &table;
+                current = table.toRaw();
             },
-            Value.Array(ref mut tables) => { current = arrayTable(&tables)!; },
+            Value.Array(ref mut tables) => { current = arrayTable(tables.toRaw())!; },
             _ => return TomlError.TypeConflict,
         }
     }
@@ -497,7 +497,7 @@ func declareTable(document: *Document, path: []const string, array: bool) !*Docu
             current.set(text.fromBytes(key.asBytes())!, Value.Array(move(tables)))!;
             child = current.getMut(key);
             switch *child.unwrap() {
-                Value.Array(ref mut list) => return arrayTable(&list),
+                Value.Array(ref mut list) => return arrayTable(list.toRaw()),
                 _ => panic("TOML array table invariant"),
             }
         }
@@ -509,14 +509,14 @@ func declareTable(document: *Document, path: []const string, array: bool) !*Docu
             if array { return TomlError.TypeConflict; }
             if table.tableKind() != TableKind.Implicit { return TomlError.DuplicateTable; }
             table.setTableKind(TableKind.Explicit);
-            var address: *Document = &table;
+            var address: *Document = table.toRaw();
             return address;
         },
         Value.Array(ref mut tables) => {
             if !array { return TomlError.TypeConflict; }
-            var previous = arrayTable(&tables)!;
+            var previous = arrayTable(tables.toRaw())!;
             tables.push(Value.Table(Document(TableKind.ArrayElement)))!;
-            arrayTable(&tables)
+            arrayTable(tables.toRaw())
         },
         _ => TomlError.TypeConflict,
     }
@@ -525,7 +525,7 @@ func declareTable(document: *Document, path: []const string, array: bool) !*Docu
 func parseDigitRun(data: []const u8, position: *usize, radix: u8) !usize {
     var count: usize = 0;
     var previousDigit = false;
-    for *position < data.len() {
+    while *position < data.len() {
         var byte = data[*position];
         if isDigitFor(byte, radix) {
             count++;
@@ -565,7 +565,7 @@ func cleanInteger(value: str, radix: *u8) !string {
     var digits = coll.Vec<u8>();
     if sign != 0 { digits.push(sign)!; }
     var digitStart = position;
-    var digitCount = parseDigitRun(data, &position, *radix)!;
+    var digitCount = parseDigitRun(data, raw position, *radix)!;
     if position != data.len() { return TomlError.InvalidNumber; }
     if *radix == 10 && data[digitStart] == 48 && digitCount > 1 {
         return TomlError.InvalidNumber;
@@ -585,14 +585,14 @@ func validateFloat(value: str) !void {
     if data[position] == 43 || data[position] == 45 { position++; }
     if position >= data.len() { return TomlError.InvalidNumber; }
     var start = position;
-    var integerDigits = parseDigitRun(data, &position, 10)!;
+    var integerDigits = parseDigitRun(data, raw position, 10)!;
     if integerDigits > 1 && data[start] == 48 { return TomlError.InvalidNumber; }
     var hasFraction = false;
     var hasExponent = false;
     if position < data.len() && data[position] == 46 {
         hasFraction = true;
         position++;
-        parseDigitRun(data, &position, 10)!;
+        parseDigitRun(data, raw position, 10)!;
     }
     if position < data.len() && (data[position] == 101 || data[position] == 69) {
         hasExponent = true;
@@ -600,7 +600,7 @@ func validateFloat(value: str) !void {
         if position < data.len() && (data[position] == 43 || data[position] == 45) {
             position++;
         }
-        parseDigitRun(data, &position, 10)!;
+        parseDigitRun(data, raw position, 10)!;
     }
     if !hasFraction && !hasExponent { return TomlError.InvalidNumber; }
     if position != data.len() { return TomlError.InvalidNumber; }
@@ -719,7 +719,7 @@ func parseInlineTable(value: str, depth: usize, options: *const TomlOptions) !Va
         var key = parseKeyPath(trim(unsafe { __vqr_text_borrow_utf8(part.asBytes()[0..equal]) }))!;
         var rhs = trim(unsafe { __vqr_text_borrow_utf8(part.asBytes()[equal + 1..part.byteLen()]) });
         var item = parseValue(rhs, depth + 1, options)!;
-        setDotted(&document, key.asConstSlice(), move(item), true)!;
+        setDotted(raw document, key.asConstSlice(), move(item), true)!;
     }
     document.setTableKind(TableKind.Inline);
     Value.Table(move(document))
@@ -757,7 +757,7 @@ func parseValue(value: str, depth: usize, options: *const TomlOptions) !Value {
         return Value.Float(text.fromBytes(data)!);
     }
     var radix: u8 = 10;
-    var clean = cleanInteger(source, &radix)!;
+    var clean = cleanInteger(source, raw radix)!;
     var integer = numberParser.parseInt<i64>(clean, radix) catch { return TomlError.InvalidNumber; };
     Value.Integer(integer)
 }
@@ -768,7 +768,7 @@ func countEntries(document: *const Document, depth: usize, maxDepth: usize) !usi
     for index in usize(0)..document.len() {
         switch *document.valueAt(index).unwrap() {
             Value.Table(ref table) => {
-                var nested = countEntries(&table, depth + 1, maxDepth)!;
+                var nested = countEntries(table.toRaw(), depth + 1, maxDepth)!;
                 if nested > ~usize(0) - count { return TomlError.SizeLimit; }
                 count += nested;
             },
@@ -776,7 +776,7 @@ func countEntries(document: *const Document, depth: usize, maxDepth: usize) !usi
                 for item in array.iterRef() {
                     switch *item {
                         Value.Table(ref table) => {
-                            var nested = countEntries(&table, depth + 1, maxDepth)!;
+                            var nested = countEntries(table.toRaw(), depth + 1, maxDepth)!;
                             if nested > ~usize(0) - count { return TomlError.SizeLimit; }
                             count += nested;
                         },
@@ -795,12 +795,12 @@ pub func parseWithOptions(value: str, options: TomlOptions) !Document {
     var source = value.asBytes();
     text.validateUtf8(source) catch { return TomlError.InvalidSyntax; };
     var document = Document();
-    var section = &document;
+    var section = raw document;
     var sectionDepth: usize = 0;
     var statement = coll.Vec<u8>();
     var position: usize = 0;
-    for position < source.len() {
-        nextStatement(source, &position, &statement)!;
+    while position < source.len() {
+        nextStatement(source, raw position, raw statement)!;
         var line = trim(unsafe { __vqr_text_borrow_utf8(statement.asConstSlice()) });
         if line.byteLen() == 0 { continue; }
         var data = line.asBytes();
@@ -813,7 +813,7 @@ pub func parseWithOptions(value: str, options: TomlOptions) !Document {
             var header = trim(unsafe { __vqr_text_borrow_utf8(data[brackets..data.len() - brackets]) });
             var path = parseKeyPath(header)!;
             if path.len() == 0 || path.len() > options.maxDepth { return TomlError.DepthLimit; }
-            section = declareTable(&document, path.asConstSlice(), array)!;
+            section = declareTable(raw document, path.asConstSlice(), array)!;
             sectionDepth = path.len();
             continue;
         }
@@ -822,10 +822,10 @@ pub func parseWithOptions(value: str, options: TomlOptions) !Document {
         var rhs = trim(unsafe { __vqr_text_borrow_utf8(data[equal + 1..data.len()]) });
         var keys = parseKeyPath(keyText)!;
         if keys.len() == 0 || keys.len() > options.maxDepth - sectionDepth { return TomlError.DepthLimit; }
-        var item = parseValue(rhs, sectionDepth, &options)!;
+        var item = parseValue(rhs, sectionDepth, raw options)!;
         setDotted(section, keys.asConstSlice(), move(item), true)!;
     }
-    if countEntries(&document, 0, options.maxDepth)! > options.maxEntries { return TomlError.SizeLimit; }
+    if countEntries(raw document, 0, options.maxDepth)! > options.maxEntries { return TomlError.SizeLimit; }
     move(document)
 }
 
@@ -977,15 +977,15 @@ func writeDocument(document: *const Document, builder: *text.StringBuilder,
             Value.Table(ref table) => {
                 var pathBuilder = text.StringBuilder();
                 if prefix.byteLen() != 0 {
-                    appendRaw(&pathBuilder, prefix)!;
-                    appendRaw(&pathBuilder, ".")!;
+                    appendRaw(raw pathBuilder, prefix)!;
+                    appendRaw(raw pathBuilder, ".")!;
                 }
-                appendKey(&pathBuilder, document.keyAt(index).unwrap())!;
+                appendKey(raw pathBuilder, document.keyAt(index).unwrap())!;
                 var path = pathBuilder.build()!;
                 appendRaw(builder, "\n[")!;
                 appendRaw(builder, path)!;
                 appendRaw(builder, "]\n")!;
-                writeDocument(&table, builder, path, depth + 1, maxDepth)!;
+                writeDocument(table.toRaw(), builder, path, depth + 1, maxDepth)!;
             },
             _ => {},
         }
@@ -996,6 +996,6 @@ pub func stringify(document: *const Document) !string { stringifyDocument(docume
 
 func stringifyDocument(document: *const Document) !string {
     var builder = text.StringBuilder();
-    writeDocument(document, &builder, "", 0, 64)!;
+    writeDocument(document, raw builder, "", 0, 64)!;
     builder.build()
 }

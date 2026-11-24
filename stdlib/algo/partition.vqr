@@ -4,8 +4,8 @@ import (core)
 pub func partition<T: Movable, F: Movable>(values: []T, predicate: F) usize {
     var boundary: usize = 0;
     for index in usize(0)..values.len() {
-        if predicate(&values[index]) {
-            if index != boundary { core.swap<T>(&values[boundary], &values[index]); }
+        if predicate(raw values[index]) {
+            if index != boundary { core.swap<T>(raw values[boundary], raw values[index]); }
             boundary++;
         }
     }
@@ -14,7 +14,7 @@ pub func partition<T: Movable, F: Movable>(values: []T, predicate: F) usize {
 
 func stablePartitionRange<T: Movable, F>(values: []T, predicate: *F) usize {
     if values.len() == 0 { return 0; }
-    if values.len() == 1 { return if (*predicate)(&values[0]) { 1 } else { 0 }; }
+    if values.len() == 1 { return if (*predicate)(raw values[0]) { 1 } else { 0 }; }
 
     var middle = values.len() / 2;
     var left = stablePartitionRange<T, F>(values[0..middle], predicate);
@@ -27,13 +27,13 @@ func stablePartitionRange<T: Movable, F>(values: []T, predicate: *F) usize {
 }
 
 pub func stablePartition<T: Movable, F: Movable>(values: []T, predicate: F) !usize {
-    stablePartitionRange<T, F>(values, &predicate)
+    stablePartitionRange<T, F>(values, raw predicate)
 }
 
 pub func isPartitioned<T, F: Movable>(values: []const T, predicate: F) bool {
     var seenRejected = false;
     for index in usize(0)..values.len() {
-        if predicate(&values[index]) {
+        if predicate(raw values[index]) {
             if seenRejected { return false; }
         } else {
             seenRejected = true;
@@ -45,9 +45,9 @@ pub func isPartitioned<T, F: Movable>(values: []const T, predicate: F) bool {
 pub func partitionPoint<T, F: Movable>(values: []const T, predicate: F) usize {
     var low: usize = 0;
     var high = values.len();
-    for low < high {
+    while low < high {
         var middle = low + (high - low) / 2;
-        if predicate(&values[middle]) { low = middle + 1; }
+        if predicate(raw values[middle]) { low = middle + 1; }
         else { high = middle; }
     }
     low

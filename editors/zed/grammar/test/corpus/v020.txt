@@ -1,0 +1,53 @@
+==================
+Logical package imports and v0.2 keywords
+==================
+package sample;
+import (std/io as output, util,);
+pub defer public private
+---
+
+(source_file
+  (package_declaration
+    (identifier))
+  (delimiter)
+  (import_declaration
+    (import_item
+      (import_path
+        (identifier)
+        (identifier))
+      (identifier))
+    (import_item
+      (import_path
+        (identifier))))
+  (delimiter)
+  (keyword)
+  (keyword)
+  (identifier)
+  (identifier))
+
+==================
+File imports are rejected
+:error
+==================
+import ("./old.vqr")
+---
+
+(source_file)
+
+==================
+Import requires parentheses
+:error
+==================
+import io
+---
+
+(source_file)
+
+==================
+Import lists cannot be empty
+:error
+==================
+import ()
+---
+
+(source_file)

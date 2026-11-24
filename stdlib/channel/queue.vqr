@@ -27,7 +27,7 @@ class Queue<T: Movable> {
         var size = if used == 0 { usize(4) } else { num.saturatingMul<usize>(used, usize(2)) };
         var expanded = coll.Vec<?T>.withCapacity(size)!;
         for position in usize(0)..used {
-            var item = opt.take<T>(&slots[index(position)]);
+            var item = opt.take<T>(raw slots[index(position)]);
             expanded.push(move(item)) catch { panic("reserved channel buffer could not accept an item"); };
         }
         for position in used..size {
@@ -44,7 +44,7 @@ class Queue<T: Movable> {
 
     pub func pop() ?T {
         if used == 0 { return null; }
-        var item = opt.take<T>(&slots[head]);
+        var item = opt.take<T>(raw slots[head]);
         head++;
         if head == slots.len() { head = 0; }
         used--;
@@ -54,7 +54,7 @@ class Queue<T: Movable> {
     pub func takeBuffer() coll.Vec<?T> {
         used = 0;
         head = 0;
-        core.replace<coll.Vec<?T>>(&slots, coll.Vec<?T>())
+        core.replace<coll.Vec<?T>>(raw slots, coll.Vec<?T>())
     }
     const func index(offset: usize) usize {
         var beforeWrap = slots.len() - head;

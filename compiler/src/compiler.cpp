@@ -449,11 +449,10 @@ Type *Program::type(const Ast &n, const File &file, const Types &generics, const
     if (n->text != "?" && n->text != "!" && hasReference(inner))
       fail(n->span, "indirect storage of a reference-bearing type is not supported", "E230");
     if (n->text == "*" || n->text == "*const") return pointer(inner, n->text == "*const");
-    if (n->text == "&" || n->text == "&const" || n->text == "ref" ||
-        n->text == "ref mut" || mode == ParameterMode::In || mode == ParameterMode::Mut) {
+    if (n->text == "ref" || n->text == "ref mut" ||
+        mode == ParameterMode::In || mode == ParameterMode::Mut) {
       if (inner == voidTy || inner == neverTy) fail(n->span, "reference requires an object type");
-      return reference(inner, n->text != "&" && n->text != "ref mut" && mode != ParameterMode::Mut,
-                       mode);
+      return reference(inner, n->text != "ref mut" && mode != ParameterMode::Mut, mode);
     }
     if (n->text == "^") return box(inner);
     if (n->text == "[]" || n->text == "[]const") return slice(inner, n->text == "[]const");
@@ -535,6 +534,13 @@ void Program::ensureSized(Type *t, Span span) {
   checkingLayoutConstraints = false;
 }
 
+static bool containsLayoutMember(const std::vector<Decl> &members) {
+  return std::ranges::any_of(members, [](const Decl &member) {
+    if (member.kind != DeclKind::Conditional) return member.kind != DeclKind::Function;
+    return containsLayoutMember(member.members) || containsLayoutMember(member.otherwise);
+  });
+}
+
 void Program::fill(Type *t, const Types &substitutions) {
   const auto &d = *t->def.decl;
   std::set<std::string> names;
@@ -542,6 +548,13 @@ void Program::fill(Type *t, const Types &substitutions) {
   auto collect = [&](auto &&self, const std::vector<Decl> &members) -> void {
     for (const auto &member : members) {
       if (member.kind == DeclKind::Conditional) {
+        // Conditional methods do not affect the class's storage. Resolve them
+        // only when needed, after pointer-backed recursive layout can finish.
+        if (!t->scopedBorrow && !containsLayoutMember(member.members) &&
+            !containsLayoutMember(member.otherwise)) {
+          t->members.push_back(&member);
+          continue;
+        }
         auto [_, condition] = evaluate(member.body, *t->def.file, boolTy, substitutions,
                                         t->comptimeArguments);
         self(self, cast<ConstantInt>(condition)->isOne() ? member.members : member.otherwise);
@@ -625,6 +638,45 @@ void Program::fill(Type *t, const Types &substitutions) {
   cast<StructType>(t->ir)->setBody(layout);
 }
 
+std::vector<const Decl *> Program::resolvedMembers(Type *t, std::string_view name,
+                                                    std::optional<bool> associated) {
+  auto matches = [&](const Decl &member) {
+    return name.empty() || (member.kind == DeclKind::Function && member.name == name &&
+                            (!associated || member.associated == *associated));
+  };
+  auto mayMatch = [&](auto &&self, const Decl &member) -> bool {
+    if (member.kind != DeclKind::Conditional) return matches(member);
+    auto search = [&](const Decl &branch) { return self(self, branch); };
+    return std::ranges::any_of(member.members, search) || std::ranges::any_of(member.otherwise, search);
+  };
+  std::vector<const Decl *> out;
+  auto collect = [&](auto &&self, const Decl &member) -> void {
+    if (member.kind != DeclKind::Conditional) {
+      if (matches(member)) out.push_back(&member);
+      return;
+    }
+    if (!mayMatch(mayMatch, member)) return;
+    // Compile-time evaluation may itself look up members. Reject an actual
+    // dependency cycle rather than recursing in the compiler.
+    using Active = std::pair<Type *, const Decl *>;
+    static thread_local std::vector<Active> active;
+    Active key{t, &member};
+    if (std::ranges::find(active, key) != active.end())
+      fail(member.span, "cycle in compile-time method selection", "E220");
+    active.push_back(key);
+    struct PopActive {
+      std::vector<Active> &entries;
+      ~PopActive() { entries.pop_back(); }
+    } guard{active};
+    auto [_, condition] =
+        evaluate(member.body, *t->def.file, boolTy, classTypes(t), t->comptimeArguments);
+    for (const auto &child : cast<ConstantInt>(condition)->isOne() ? member.members : member.otherwise)
+      self(self, child);
+  };
+  for (const auto *member : t->members) collect(collect, *member);
+  return out;
+}
+
 std::vector<Definition> Program::methods(Type *t, std::string_view name, bool isStatic, bool keepHidden) {
   std::vector<Definition> out;
   if (t->kind == Kind::Interface && !isStatic) {
@@ -634,7 +686,7 @@ std::vector<Definition> Program::methods(Type *t, std::string_view name, bool is
   }
   if (t->kind != Kind::Class) return out;
   if (!t->filling) ensureSized(t, t->def.decl->span);
-  for (const auto *member : t->members)
+  for (const auto *member : resolvedMembers(t, name, isStatic))
     if (member->kind == DeclKind::Function && member->name == name && member->associated == isStatic)
       out.push_back({t->def.file, member});
   if (isStatic || name == "init" || name == "deinit" || name == "copy" || name == "clone")
@@ -667,7 +719,7 @@ std::vector<Definition> Program::methods(Type *t, std::string_view name, bool is
 void Program::validatePromotions(Type *type) {
   if (std::ranges::none_of(type->fields, [](const auto &field) { return field.decl->embed; })) return;
   auto substitutions = classTypes(type);
-  for (const auto *own : type->members) {
+  for (const auto *own : resolvedMembers(type)) {
     if (own->kind != DeclKind::Function || own->associated || !own->generics.empty() ||
         hasComptimeParameters(*own))
       continue;
@@ -1312,7 +1364,7 @@ std::unique_ptr<Module> Program::build() {
         if (d.kind == DeclKind::Global) global(def);
         if ((d.kind == DeclKind::Enum || d.kind == DeclKind::Class) && d.generics.empty()) {
           auto *t = nominal(def, {});
-          for (const auto *member : t->members)
+          for (const auto *member : resolvedMembers(t))
             if (member->kind == DeclKind::Function && member->generics.empty() &&
                 !hasComptimeParameters(*member))
               function({&file, member}, classTypes(t), t);

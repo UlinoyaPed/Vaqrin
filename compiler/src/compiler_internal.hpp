@@ -179,6 +179,8 @@ struct Local {
   Span declaration{};
   bool noBorrowPayload = false;
   std::optional<std::size_t> deferredCall = std::nullopt;
+  int deferOuter = -1;
+  bool receiverReservation = false;
 };
 struct Loop {
   BasicBlock *leave, *next;
@@ -233,6 +235,8 @@ private:
   };
   std::vector<Local> locals;
   std::vector<DeferredCall> deferredCalls;
+  bool deferredCleanup = false;
+  std::map<int, bool> deferredCaptureWrites;
   std::multiset<int> patternBorrows;
   std::vector<std::vector<int>> scopes;
   std::size_t temporaryScope = 0;
@@ -264,10 +268,13 @@ private:
   void dropLocal(int index);
   void emitCleanup(int index);
   void registerDefer(CallInst *call, Span span, DeferRegistration &registration);
+  void registerDeferBlock(const Ast &block, Span span, DeferRegistration &registration);
+  void holdDeferCapture(int local, bool write, Span span, std::size_t scope);
   void validateDeferredBorrow(ValueAt value, Span span, std::size_t scope);
-  void retainDeferredLoan(int index, std::size_t scope);
+  void retainDeferredLocal(int index, std::size_t scope);
   void requireInit(ValueAt v, Span span);
   void checkAccess(ValueAt v, bool write, Span span);
+  bool hasReceiverReservation(const ValueAt &v) const;
   void checkRootAccess(int root, Borrow origin, bool write, Span span);
   Borrow joinBorrow(Borrow left, Borrow right, Type *type, Span span);
   void invalidateOwnedAddresses(ValueAt owner);
@@ -404,6 +411,8 @@ public:
                                              const Types &types, const Constants &values);
   void fill(Type *t, const Types &substitutions);
   void validatePromotions(Type *type);
+  std::vector<const Decl *> resolvedMembers(Type *t, std::string_view name = {},
+                                            std::optional<bool> associated = {});
   void validateInterfaces(Type *type);
   bool matchesGenericInterface(Definition required, const Types &requiredTypes,
                                const Constants &requiredValues, Definition method,

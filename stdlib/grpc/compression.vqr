@@ -23,11 +23,11 @@ class GzipBuffer {
 
 func gzip(input: []const u8, limit: usize, encode: bool) !coll.Vec<u8> {
     var empty = u8(0);
-    var source: *const u8 = if input.len() == 0 { &empty } else { &input[0] };
+    var source: *const u8 = if input.len() == 0 { raw empty } else { raw input[0] };
     var address = usize(0);
     var size = usize(0);
     var mode = if encode { 1 } else { 0 };
-    var code = unsafe { __vqr_gzip_transform(mode, source, input.len(), limit, &address, &size) };
+    var code = unsafe { __vqr_gzip_transform(mode, source, input.len(), limit, raw address, raw size) };
     if code == 1 { return RpcError.MessageTooLarge; }
     if code == 3 { return RpcError.ResourceExhausted; }
     if code != 0 { return RpcError.Protocol; }
@@ -40,8 +40,8 @@ func acceptsGzip(value: []const u8) bool {
     for index in usize(0)..=value.len() {
         if index < value.len() && value[index] != 44 { continue; }
         var finish = index;
-        for start < finish && (value[start] == 32 || value[start] == 9) { start++; }
-        for start < finish && (value[finish - 1] == 32 || value[finish - 1] == 9) { finish--; }
+        while start < finish && (value[start] == 32 || value[start] == 9) { start++; }
+        while start < finish && (value[finish - 1] == 32 || value[finish - 1] == 9) { finish--; }
         if bytes.equal(value[start..finish], "gzip".asBytes()) { return true; }
         start = index + 1;
     }

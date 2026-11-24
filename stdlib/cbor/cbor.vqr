@@ -72,7 +72,7 @@ pub class Encoder {
         if !root || frames.len() != 0 { return serde.SerdeError.InvalidState; }
         root = false;
         items = 0;
-        core.replace<coll.Vec<u8>>(&output, coll.Vec<u8>())
+        core.replace<coll.Vec<u8>>(raw output, coll.Vec<u8>())
     }
     func byte(value: u8) !void {
         if output.len() == limits.maxBytes { return serde.SerdeError.ByteLimit; }
@@ -351,10 +351,10 @@ pub class Decoder {
 
 pub func marshal<T>(value: *const T, codec: *serde.Codec<T>) !coll.Vec<u8> {
     var output = Encoder();
-    serde.encodeToBytes<T>(value, &output, codec)
+    serde.encodeToBytes<T>(value, raw output, codec)
 }
 
 pub func unmarshal<T>(data: []const u8, codec: *serde.Codec<T>) !T {
     var input = Decoder();
-    serde.decodeFromBytes<T>(data, &input, codec)
+    serde.decodeFromBytes<T>(data, raw input, codec)
 }

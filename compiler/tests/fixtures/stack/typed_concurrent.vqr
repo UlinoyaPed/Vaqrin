@@ -27,7 +27,7 @@ class Handler {
             var value = move(request) ?? { break; };
             var result = interop.Msg_Child();
             result.f_left = value.f_count ?? 0;
-            stream.send(&result)!;
+            stream.send(raw result)!;
         }
         grpc.status(grpc.StatusCode.Ok, "")
     }
@@ -37,7 +37,7 @@ func main() !void {
     var service = mem.Shared<Handler>.new(Handler{})!;
     var adapter = types.ConcurrentServer_Echo<Handler>(move(service));
     var server = grpc.Server();
-    unsafe { adapter.register(&server)!; }
+    unsafe { adapter.register(raw server)!; }
     var options = grpc.ServeOptions();
     options.applicationWorkers = 1;
     var listener = net.AsyncTcpListener.bind(net.parseSocketAddr("127.0.0.1:0")!)!;

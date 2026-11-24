@@ -22,7 +22,7 @@ pub class FilterIter<I: Movable, T: Movable, F: Movable> {
             switch source.next() {
                 null => return null,
                 some(item) => {
-                    if predicate(&item) { return some(move(item)); }
+                    if predicate(raw item) { return some(move(item)); }
                 },
             }
         }
@@ -71,7 +71,7 @@ pub class TryFilterIter<I: Movable, T: Movable, F: Movable> {
             switch source.next() {
                 null => return null,
                 some(item) => {
-                    if predicate(&item)! { return some(move(item)); }
+                    if predicate(raw item)! { return some(move(item)); }
                 },
             }
         }
@@ -104,7 +104,7 @@ pub class InspectIter<I: Movable, T: Movable, F: Movable> {
         switch source.next() {
             null => null,
             some(item) => {
-                observer(&item);
+                observer(raw item);
                 some(move(item))
             },
         }

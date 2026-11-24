@@ -38,11 +38,11 @@ pub class AsyncConnection {
 
     pub func close() !void {
         usable = false;
-        switch opt.asMutPtr<net.AsyncTcpStream>(&plain) {
+        switch opt.asMutPtr<net.AsyncTcpStream>(raw plain) {
             some(socket) => return socket.close(),
             null => {},
         }
-        switch opt.asMutPtr<tls.TlsStream>(&encrypted) {
+        switch opt.asMutPtr<tls.TlsStream>(raw encrypted) {
             some(socket) => return socket.close(),
             null => {},
         }
@@ -87,7 +87,7 @@ pub class AsyncConnection {
 
     func streamResponse(request: *Request, source: ?*io.Reader, consumer: *ResponseConsumer,
                         deadline: ?time.Deadline) !bool {
-        switch opt.asMutPtr<net.AsyncTcpStream>(&plain) {
+        switch opt.asMutPtr<net.AsyncTcpStream>(raw plain) {
             some(socket) => {
                 socket.setReadDeadline(deadline);
                 socket.setWriteDeadline(deadline);
@@ -95,14 +95,14 @@ pub class AsyncConnection {
             },
             null => {},
         }
-        var secure = opt.asMutPtr<tls.TlsStream>(&encrypted).unwrap();
+        var secure = opt.asMutPtr<tls.TlsStream>(raw encrypted).unwrap();
         secure.setReadDeadline(deadline);
         secure.setWriteDeadline(deadline);
         exchangeStreamed(secure, secure, request, source, limits, consumer) catch (reason) { return httpTlsError(reason); }
     }
 
     func exchangeOnStream(request: *Request, deadline: ?time.Deadline) !(Response, bool) {
-        switch opt.asMutPtr<net.AsyncTcpStream>(&plain) {
+        switch opt.asMutPtr<net.AsyncTcpStream>(raw plain) {
             some(socket) => {
                 socket.setReadDeadline(deadline);
                 socket.setWriteDeadline(deadline);
@@ -110,7 +110,7 @@ pub class AsyncConnection {
             },
             null => {},
         }
-        var secure = opt.asMutPtr<tls.TlsStream>(&encrypted).unwrap();
+        var secure = opt.asMutPtr<tls.TlsStream>(raw encrypted).unwrap();
         secure.setReadDeadline(deadline);
         secure.setWriteDeadline(deadline);
         exchangePersistent(secure, secure, request, limits) catch (reason) { return httpTlsError(reason); }
@@ -122,7 +122,7 @@ func exchangePersistent(reader: *io.Reader, writer: *io.Writer, request: *Reques
     writeRequest(writer, request)!;
     var buffer = bufio.BufferedReader(reader, 8192)!;
     for attempt in 0..8 {
-        response, persistent := parseResponseState(&buffer, request.method(), limits)!;
+        response, persistent := parseResponseState(raw buffer, request.method(), limits)!;
         if response.status().value() >= 200 {
             return (move(response), persistent && buffer.bufferLen() == 0);
         }
@@ -136,9 +136,9 @@ func exchangeStreamed(reader: *io.Reader, writer: *io.Writer, request: *Request,
     else { writeRequest(writer, request)!; }
     var buffer = bufio.BufferedReader(reader, 8192)!;
     for attempt in 0..8 {
-        response, body, persistent := parseResponseHead(&buffer, request.method(), limits)!;
+        response, body, persistent := parseResponseHead(raw buffer, request.method(), limits)!;
         if response.status().value() < 200 { continue; }
-        consumer.consume(&response, &body)!;
+        consumer.consume(raw response, raw body)!;
         return persistent && body.isComplete() && buffer.bufferLen() == 0;
     }
     HttpError.TooManyResponses
@@ -159,8 +159,8 @@ pub class AsyncClient {
         var target = parseUrl(address)!;
         var secure = sameName(target.scheme(), "https");
         if !secure && !sameName(target.scheme(), "http") { return HttpError.UnsupportedScheme; }
-        var host = httpHost(&target)!;
-        var authority = hostHeader(&target, host)!;
+        var host = httpHost(raw target)!;
+        var authority = hostHeader(raw target, host)!;
         var defaultPort: u16 = if secure { 443 } else { 80 };
         var socket = dialAsync(host, target.port() ?? defaultPort, deadline)!;
         if secure {
@@ -174,14 +174,14 @@ pub class AsyncClient {
 
     pub const func send(address: str, request: *Request) !Response {
         var target = parseUrl(address)!;
-        sendTo(&target, request)
+        sendTo(raw target, request)
     }
     pub const func request(address: str, method: Method, body: Body) !Response {
         var target = parseUrl(address)!;
-        var path = pathTarget(&target)!;
+        var path = pathTarget(raw target)!;
         var message = Request.new(method, path)!;
         message.setBody(move(body));
-        sendTo(&target, &message)
+        sendTo(raw target, raw message)
     }
     pub const func get(address: str) !Response { request(address, Method.GET, Body()) }
     pub const func head(address: str) !Response { request(address, Method.HEAD, Body()) }
@@ -202,11 +202,11 @@ pub class AsyncClient {
             var encrypted = tlsOptions.connectAsync(move(stream), host, deadline) catch (reason) {
                 return httpTlsError(reason);
             };
-            return exchange(&encrypted, &encrypted, request, limits) catch (reason) {
+            return exchange(raw encrypted, raw encrypted, request, limits) catch (reason) {
                 return httpTlsError(reason);
             };
         }
-        exchange(&stream, &stream, request, limits)
+        exchange(raw stream, raw stream, request, limits)
     }
 }
 
@@ -228,7 +228,7 @@ pub class AsyncServer {
         var deadline = some(time.Deadline.after(limits.timeout)!);
         socket.setReadDeadline(deadline);
         socket.setWriteDeadline(deadline);
-        serveHttp(&socket, &socket, handler, limits)
+        serveHttp(raw socket, raw socket, handler, limits)
     }
 
     pub func serveOneStreaming(handler: *RequestConsumer, acceptDeadline: ?time.Deadline) !void {
@@ -236,7 +236,7 @@ pub class AsyncServer {
         var deadline = some(time.Deadline.after(limits.timeout)!);
         socket.setReadDeadline(deadline);
         socket.setWriteDeadline(deadline);
-        serveStreamedHttp(&socket, &socket, handler, limits)
+        serveStreamedHttp(raw socket, raw socket, handler, limits)
     }
 
     pub func serveOneStreamingTls(handler: *RequestConsumer, config: *const tls.TlsAcceptor,
@@ -244,32 +244,32 @@ pub class AsyncServer {
         socket, peer := listener.accept(acceptDeadline)!;
         var deadline = some(time.Deadline.after(limits.timeout)!);
         var stream = config.acceptAsync(move(socket), deadline)!;
-        serveStreamedHttp(&stream, &stream, handler, limits)
+        serveStreamedHttp(raw stream, raw stream, handler, limits)
     }
 
     pub func serveOneTls(handler: *Handler, config: *const tls.TlsAcceptor, acceptDeadline: ?time.Deadline) !void {
         socket, peer := listener.accept(acceptDeadline)!;
         var deadline = some(time.Deadline.after(limits.timeout)!);
         var stream = config.acceptAsync(move(socket), deadline)!;
-        serveHttp(&stream, &stream, handler, limits)
+        serveHttp(raw stream, raw stream, handler, limits)
     }
 }
 
 func serveHttp(reader: *io.Reader, writer: *io.Writer, handler: *Handler, limits: HttpLimits) !void {
     var buffer = bufio.BufferedReader(reader, 8192)!;
-    var request = parseRequest(&buffer, limits)!;
+    var request = parseRequest(raw buffer, limits)!;
     var method = request.method();
     var response = handler.handle(move(request))!;
     response.headers().set("Connection", "close")!;
-    writeResponseFor(writer, &response, method)
+    writeResponseFor(writer, raw response, method)
 }
 
 
 func serveStreamedHttp(reader: *io.Reader, writer: *io.Writer, handler: *RequestConsumer,
                        limits: HttpLimits) !void {
     var buffer = bufio.BufferedReader(reader, 8192)!;
-    request, body := parseRequestStream(&buffer, limits)!;
-    var response = handler.consume(&request, &body)!;
+    request, body := parseRequestStream(raw buffer, limits)!;
+    var response = handler.consume(raw request, raw body)!;
     response.headers().set("Connection", "close")!;
-    writeResponseFor(writer, &response, request.method())
+    writeResponseFor(writer, raw response, request.method())
 }

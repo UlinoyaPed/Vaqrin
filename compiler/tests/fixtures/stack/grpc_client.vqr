@@ -19,7 +19,7 @@ func main() !void {
     options.deadline = some(time.Deadline.after(time.Duration.fromSeconds(3))!);
     var request = protobuf.Writer(128);
     request.writeInt32(1, 14)!;
-    var reply = connection.unary("/interop.Echo/Double", request.written(), &options)!;
+    var reply = connection.unary("/interop.Echo/Double", request.written(), raw options)!;
     require(reply.status.isOk())!;
     require(bytes.equal(reply.initial.get("x-initial").unwrap(), "open".asBytes()))!;
     require(bytes.equal(reply.trailing.get("proof-bin").unwrap(), "tail\u{0}".asBytes()))!;
@@ -31,13 +31,13 @@ func main() !void {
         },
         null => { return TestError.Unexpected; },
     };
-    var missing = connection.unary("/interop.Echo/Missing", request.written(), &options)!;
+    var missing = connection.unary("/interop.Echo/Missing", request.written(), raw options)!;
     require(missing.status.code == grpc.StatusCode.NotFound)!;
     require(missing.status.message == "缺失 % field")!;
     require(bytes.equal(missing.status.details.asConstSlice(), "details".asBytes()))!;
     options.deadline = some(time.Deadline.after(time.Duration.fromMillis(80))!);
-    var wait = connection.unary("/interop.Echo/Wait", request.written(), &options);
-    switch result.errorOf(&wait) {
+    var wait = connection.unary("/interop.Echo/Wait", request.written(), raw options);
+    switch result.errorOf(raw wait) {
         some(reason) => { require(reason == grpc.RpcError.DeadlineExceeded)!; },
         null => {
             var reply = move(wait)!;

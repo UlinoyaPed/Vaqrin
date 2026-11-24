@@ -10,7 +10,7 @@ pub class Simd<T: Copyable + Movable, comptime N: usize> {
         var array = mem.MaybeUninit<[N]T>.uninit();
         unsafe {
             var data = array.asPtr();
-            for i in usize(0)..N { __vqr_slot_write<T>(&(*data)[i], value); }
+            for i in usize(0)..N { __vqr_slot_write<T>(raw (*data)[i], value); }
             Simd<T, N>(array.assumeInit())
         }
     }

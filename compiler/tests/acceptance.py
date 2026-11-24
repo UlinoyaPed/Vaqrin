@@ -132,6 +132,21 @@ class Acceptance(CompilerCase):
         source = self.source("bad_move.vqr", "func f(n: move i32) void {}")
         self.assertIn(b"non-Copyable", self.process(VAQC, "check", source, good=False).stderr)
 
+    def test_v020_consuming_captured_box_requires_moving_the_closure(self):
+        setup = """
+            var owner = new i32(9)!;
+            var take = [move(owner)]() i32 => owner.intoInner();
+        """
+        source = self.source("repeat.vqr", "func main() !void { " + setup + "take(); take(); }")
+        self.assertIn(b"closure must be consumed with move",
+                      self.process(VAQC, "check", source, good=False).stderr)
+        self.hosted("func main() !void { " + setup + """
+            io.println(move(take)())!;
+        }""", "9\n", "build", "-O2")
+        source = self.source("again.vqr", "func main() !void { " + setup +
+                             "move(take)(); move(take)(); }")
+        self.assertIn(b"not initialized", self.process(VAQC, "check", source, good=False).stderr)
+
     def test_v020_if_let_and_labeled_loops(self):
         self.hosted('''
             func main() !void {
@@ -282,6 +297,207 @@ class Acceptance(CompilerCase):
                 source = self.source(name + ".vqr", prefix + "func main() !void { " + body + " }")
                 self.assertIn(message.encode(), self.process(VAQC, "check", source, good=False).stderr)
 
+    def test_v020_deferred_blocks_capture_lexical_bindings(self):
+        program = """
+            error BlockError { Failed }
+            class Receiver {
+                var id: i32;
+                pub func init(id: i32) : id(id) {}
+                pub const func reportLater() void {
+                    defer { record(id); }
+                    record(61);
+                }
+            }
+            func record(value: i32) void { io.println(value) catch {}; }
+            func cleanup() !void { BlockError.Failed }
+            func formerExit() !i32 {
+                defer {
+                    cleanup() catch (reason) {
+                        if reason == BlockError.Failed { record(100); }
+                    };
+                }
+                return 101;
+            }
+            func preservedError() !void {
+                defer { cleanup() catch { record(102); }; }
+                cleanup()!;
+            }
+            func main() !void {
+                var outside = 7;
+                {
+                    defer {
+                        record(outside);
+                        var local = 3;
+                        defer { record(local); }
+                        for i in 0..4 {
+                            if i == 0 { continue; }
+                            if i == 2 { break; }
+                            record(40 + i);
+                        }
+                    }
+                    var outside = 8;
+                    record(outside);
+                }
+                var state = 1;
+                {
+                    defer { state += 3; }
+                    defer record(55);
+                    record(50);
+                }
+                record(state);
+                var free: i32;
+                {
+                    defer { var free = 10; record(free); }
+                    free = 9;
+                    record(free);
+                }
+                var receiver = Receiver(62);
+                receiver.reportLater();
+                record(formerExit()!);
+                preservedError() catch (reason) {
+                    if reason == BlockError.Failed { record(103); }
+                };
+            }
+        """
+        expected = "8\n7\n41\n3\n50\n55\n4\n9\n10\n61\n62\n100\n101\n102\n103\n"
+        for optimization in ("-O0", "-O2"):
+            with self.subTest(optimization=optimization):
+                self.hosted(program, expected, optimization)
+
+    def test_v020_deferred_block_rejects_escaping_control_and_invalid_captures(self):
+        prefix = """
+            error BlockError { Failed }
+            func cleanup() !void { BlockError.Failed }
+            func show(n: i32) void {}
+        """
+        cases = {
+            "returns": ("defer { return; }", "deferred cleanup cannot return"),
+            "loop_exit": ("for { defer { break; } break; }", "deferred cleanup cannot jump"),
+            "propagated_error": ("defer { cleanup()!; }", "deferred cleanup cannot propagate"),
+            "propagated_absence": (
+                "defer { var missing: ?i32 = null; var value = missing?; }",
+                "deferred cleanup cannot propagate",
+            ),
+            "ignored_error": ("defer { cleanup(); }", "unused error result"),
+            "bound_but_ignored_error": (
+                "defer { var unused = cleanup(); }",
+                "handle the error before binding",
+            ),
+            "empty_catch": ("defer { cleanup() catch {}; }", "empty catch discards"),
+            "write_after_read_capture": ("var x = 1; defer { show(x); } x = 2;", "active borrow"),
+            "read_after_write_capture": ("var x = 1; defer { x = 2; } show(x);", "active borrow"),
+            "uninitialized": ("var x: i32; defer { show(x); } x = 1;", "not initialized"),
+            "move_capture": (
+                "var box = new i32(1)!; defer { var moved = move(box); }",
+                "source cannot be moved",
+            ),
+            "deferred_raw": (
+                "var x = 1; var y = raw x; defer { unsafe { show(*y); } }",
+                "untracked borrows",
+            ),
+        }
+        for name, (body, message) in cases.items():
+            with self.subTest(case=name):
+                source = self.source(name + ".vqr", prefix + "func main() !void { " + body + " }")
+                self.assertIn(message.encode(), self.process(VAQC, "check", source, good=False).stderr)
+
+    def test_v020_deferred_closures_keep_their_environment(self):
+        program = """
+            error Stop { Failure }
+            class Probe {
+                var id: i32;
+                pub func init(id: i32) : id(id) {}
+                func deinit() void { record(id + 100); }
+            }
+            func record(value: i32) void { io.println(value) catch {}; }
+            func failed() !i32 { Stop.Failure }
+            func abandon() !void {
+                var resource = new Probe(24)!;
+                var callback = [move(resource)] (value: i32) void => { record(value); };
+                defer move(callback)(failed()!);
+            }
+            func main() !void {
+                {
+                    var base = 20;
+                    var callback = [base] (amount: i32) void => { base += amount; record(base); };
+                    defer callback(2);
+                    base = 99;
+                    record(21);
+                }
+                {
+                    var owned = new i32(23)!;
+                    var consuming = [move(owned)] () void => { var box = move(owned); record(box.intoInner()); };
+                    defer move(consuming)();
+                    record(22);
+                }
+                abandon() catch { record(25); };
+            }
+        """
+        for optimization in ("-O0", "-O2"):
+            with self.subTest(optimization=optimization):
+                self.hosted(program, "21\n22\n22\n23\n124\n25\n", optimization)
+
+        invalid = self.source("moved_callback.vqr", """
+            func main() void {
+                var number = 1;
+                var callback = [number] () void => { number++; };
+                defer callback();
+                var moved = move(callback);
+            }
+        """)
+        self.assertIn(b"conflicts with active borrow", self.process(VAQC, "check", invalid, good=False).stderr)
+        invalid = self.source("mutable_callback_capture.vqr", """
+            func main() void {
+                var number = 1;
+                var callback = [number] () void => { number++; };
+                defer { callback(); }
+                callback();
+            }
+        """)
+        self.assertIn(b"conflicts with active borrow", self.process(VAQC, "check", invalid, good=False).stderr)
+
+    def test_v020_closure_environment_mutation_preserves_shared_referents(self):
+        self.hosted("""
+            class View {
+                #borrowed: scoped
+                pub var number: ref i32;
+            }
+            func record(value: i32) void { io.println(value) catch {}; }
+            func main() void {
+                var referent = 10;
+                {
+                    var view = View{number: ref referent};
+                    var counter = 0;
+                    var first = [view, counter]() void => {
+                        counter++;
+                        record(*view.number + counter);
+                    };
+                    var second = first;
+                    first();
+                    defer first();
+                    defer { second(); }
+                }
+                referent++;
+                record(referent);
+            }
+        """, "11\n11\n12\n11\n")
+
+        invalid = self.source("closure_environment_reserved.vqr", """
+            class View {
+                #borrowed: scoped
+                pub var number: ref i32;
+            }
+            func main() void {
+                var referent = 1;
+                var view = View{number: ref referent};
+                var counter = 0;
+                var update = [view, counter]() void => { counter += *view.number; };
+                defer update();
+                update();
+            }
+        """)
+        self.assertIn(b"active borrow of 'update'", self.process(VAQC, "check", invalid, good=False).stderr)
+
     def test_v020_borrow_projections(self):
         prelude = '''
             class Pair {
@@ -312,6 +528,72 @@ class Acceptance(CompilerCase):
         }.items():
             with self.subTest(case=name):
                 source = self.source(name + ".vqr", prelude + "func f() void { " + body + " }")
+                self.assertIn(b"active borrow", self.process(VAQC, "check", source, good=False).stderr)
+
+    def test_v020_receiver_reservation_preserves_order_and_nested_reads(self):
+        source = self.source("receiver-order.vqr", """
+            package main;
+            import (coll, io);
+            var order: i32 = 0;
+            func step(expected: i32) i32 {
+                if order != expected { panic("incorrect operand evaluation order"); }
+                order++;
+                expected
+            }
+            interface Reader { const func readMore(extra: i32) i32; }
+            class Counter {
+                #implements: Reader
+                pub var value: i32;
+                pub func init() : value(4) {}
+                pub const func read() i32 { value }
+                pub const func readMore(extra: i32) i32 { value + extra }
+                pub func add(a: i32, b: i32) i32 { value += a + b; value }
+            }
+            func selectCounter(counter: mut Counter) ref mut Counter from counter {
+                step(0);
+                counter
+            }
+            func main() !void {
+                var counter = Counter();
+                io.println(selectCounter(counter).add(step(1), step(2)))!;
+                io.println(counter.add(counter.read(), if order == 3 { counter.read() } else { 0 }))!;
+                var reader: ref Reader = counter;
+                io.println(reader.readMore(reader.readMore(1)))!;
+                var data = coll.Vec<usize>();
+                data.push(999)!;
+                data.push(data.len())!;
+                data.push(data[1] + 2)!;
+                io.println(data.len())!;
+                io.println(*data.get(2).unwrap())!;
+            }
+        """)
+        for level in ("-O0", "-O2"):
+            with self.subTest(optimization=level):
+                self.process(VAQC, "build", level, source, "-o", "receiver-order")
+                self.assertEqual(self.process("./receiver-order").stdout, b"7\n21\n43\n3\n3\n")
+
+    def test_v020_receiver_reservation_rejects_invalidation_and_overlap(self):
+        prelude = """
+            package main;
+            class Item {
+                pub var tag: i32;
+                pub func init(n: i32) : tag(n) {}
+                pub const func read(extra: i32) i32 { tag + extra }
+                pub func write(extra: in i32) i32 { tag += extra; tag }
+            }
+            func consume(value: move ^Item) i32 {
+                var owned = value.intoInner();
+                owned.tag
+            }
+        """
+        cases = {
+            "replace_owner": "var box = new Item(1)!; (*box).read({ box = new Item(2)!; 0 });",
+            "move_owner": "var box = new Item(1)!; (*box).read(consume(move(box)));",
+            "overlapping_arg": "var item = Item(1); item.write(item.tag);",
+        }
+        for name, body in cases.items():
+            with self.subTest(case=name):
+                source = self.source(name + "/main.vqr", prelude + "func main() !void { " + body + " }")
                 self.assertIn(b"active borrow", self.process(VAQC, "check", source, good=False).stderr)
 
     def test_v020_run_single_file(self):
@@ -674,7 +956,7 @@ class Acceptance(CompilerCase):
             func main() !void {
                 var tuple = ((1, 2), 3);
                 tuple.0.1 = 9;
-                var pointer: *const ((i32, i32), i32) = &tuple;
+                var pointer: *const ((i32, i32), i32) = raw tuple;
                 io.println(pointer.0.1)!;
                 var optional = some(tuple.0);
                 io.println(optional?.1.unwrap())!;
@@ -709,7 +991,7 @@ class Acceptance(CompilerCase):
                 for i, n in enumerate(café[:]) {
                     io.println(usize(n)! + i)!;
                 }
-                for (i := 0; i < 2; i++) { io.println(i)!; }
+                for i := 0; i < 2; i++ { io.println(i)!; }
                 io.println(value)!;
             }
         ''')
@@ -729,6 +1011,36 @@ class Acceptance(CompilerCase):
                 bad = self.source("bad.vqr", "package t\n" + snippet)
                 result = self.process(VAQC, "check", bad, good=False)
                 self.assertIn(diagnostic, result.stderr.decode())
+
+    def test_v020_raw_address_and_ampersand_operators(self):
+        self.hosted('''
+            func read(pointer: *const i32) i32 { unsafe { *pointer } }
+            func overwrite(pointer: *i32, value: i32) void { unsafe { *pointer = value; } }
+            func borrowed(value: in i32) i32 { read(value.toRaw()) }
+            func raw(value: i32) i32 { value }
+            func main() !void {
+                var numbers = [_]i32{2, 3};
+                const immutable = 6;
+                var writable: *i32 = raw (numbers)[1];
+                var readOnly: *const i32 = raw immutable;
+                overwrite(writable, 7);
+                io.println(read(raw numbers[1]))!;
+                io.println(read(readOnly))!;
+                io.println(borrowed(11))!;
+                var bits = 6 & 3;
+                bits &= 1;
+                if bits == 0 && raw(5) == 5 { io.println(bits)!; }
+            }
+        ''', "7\n6\n11\n0\n")
+        for code, diagnostic in (
+            ("func bad() void { var x = 0; var p = &x; }", "use 'raw place'"),
+            ("func bad(x: in i32) *const i32 { raw x }", "use toRaw()"),
+            ("func bad() *const i32 { raw (1) }", "existing storage location"),
+        ):
+            with self.subTest(code=code):
+                source = self.source("bad_raw.vqr", code)
+                result = self.process(VAQC, "check", source, good=False)
+                self.assertIn(diagnostic.encode(), result.stderr)
 
     def test_v020_direct_wrapper_limit_and_alias_composition(self):
         self.hosted('''
@@ -829,8 +1141,8 @@ class Acceptance(CompilerCase):
                 comptime const A: usize = 2;
                 comptime const B: usize = add(A);
                 a := [B]u8{4, 5, 6};
-                io.println(length(&a))!;
-                io.println(length<u8, (1 + 2)>(&a))!;
+                io.println(length(raw a))!;
+                io.println(length<u8, (1 + 2)>(raw a))!;
                 io.println(scale(2 + 3, 8))!;
                 io.println(add(5))!;
                 io.println(u8(250) + u8(5))!;
@@ -986,8 +1298,8 @@ class Acceptance(CompilerCase):
                 io.println(it.next().unwrap() == '🙂')!;
                 var optional: ?i32 = 41;
                 var result: !i32 = 42;
-                io.println(core.isSome(&optional))!;
-                io.println(core.isOk(&result))!;
+                io.println(core.isSome(raw optional))!;
+                io.println(core.isOk(raw result))!;
                 io.println(core.unwrapOr<i32>(null, seven))!;
                 var box: core.Box<i32> = new i32(4)!;
                 io.println(*box.asPtr())!;
@@ -1009,7 +1321,7 @@ class Acceptance(CompilerCase):
             func main() !void {
                 var v = coll.Vec<?i32>();
                 v.push(null)!;
-                io.println(sequenceLen(&v))!;
+                io.println(sequenceLen(raw v))!;
                 var cursor = v.iter();
                 io.println(tag(cursor.next()))!;
                 io.println(tag(cursor.next()))!;
@@ -1057,7 +1369,7 @@ class Acceptance(CompilerCase):
                 io.println(text.equal(decoded, "é"))!;
                 var bad = [_]u8{0xed, 0xa0, 0x80};
                 var invalid = text.fromBytes(bad[:]);
-                io.println(core.isOk(&invalid))!;
+                io.println(core.isOk(raw invalid))!;
             }
         ''', "静态\n2\ntrue\n中🙂\ntrue\n7\nlatest\ntrue\nfalse\n", "-O2")
 
@@ -1099,13 +1411,13 @@ class Acceptance(CompilerCase):
                 for id in 1..=4 { vec.push(Probe(id))!; }
                 unsafe { fail_next(); }
                 var push = vec.push(Probe(99));
-                if core.isOk(&push) || vec.len() != 4 { return 1; }
+                if core.isOk(raw push) || vec.len() != 4 { return 1; }
 
                 var builder = text.StringBuilder();
                 builder.append("持久")!;
                 unsafe { fail_next(); }
                 var failed = builder.build();
-                if core.isOk(&failed) { return 2; }
+                if core.isOk(raw failed) { return 2; }
                 var value = builder.build()!;
                 var copied = value;
                 value = "";
@@ -1182,7 +1494,7 @@ class Acceptance(CompilerCase):
             export "C" func allocate_explicit() c_int {
                 var backing = mem.zeroedBytes<64>();
                 var allocator = mem.FixedBufferAllocator(backing[:]);
-                var v = coll.Vec<u8>.withAllocator(&allocator);
+                var v = coll.Vec<u8>.withAllocator(raw allocator);
                 v.push(19) catch { return 3; };
                 v.push(10) catch { return 4; };
                 i32(v[0]) + i32(v[1])
@@ -1421,6 +1733,177 @@ class Acceptance(CompilerCase):
         self.source("package.toml", "[build]\nentry = 'a/main.vqr'\n")
         self.assertIn(b"package::main", self.process(VAQC, "build", self.root, good=False).stderr)
 
+    def test_v020_catch_binding_tail_and_function_return(self):
+        self.hosted("""
+            error Failure { Missing, Broken }
+            func read(fail: bool) !i32 {
+                if fail { return Failure.Missing; }
+                5
+            }
+            func fallback(fail: bool) i32 {
+                var ran = false;
+                value := read(fail) catch (reason) {
+                    ran = true;
+                    if reason == Failure.Missing { 40 } else { 90 }
+                };
+                if ran { value + 2 } else { value + 1 }
+            }
+            func early(fail: bool) i32 {
+                value := read(fail) catch (reason) {
+                    if reason == Failure.Missing { return 41; }
+                    13
+                };
+                value + 1
+            }
+            func shadow() i32 {
+                reason := 7;
+                value := read(true) catch (reason) {
+                    if reason == Failure.Missing { 9 } else { 0 }
+                };
+                reason + value
+            }
+            func forward() !i32 {
+                var value = read(true) catch (reason) { return reason; };
+                value + 100
+            }
+            func main() !void {
+                for result in [_]i32{fallback(false), fallback(true), early(false), early(true), shadow()} {
+                    io.println(result)!;
+                }
+                io.println(forward() catch (reason) {
+                    if reason == Failure.Missing { 11 } else { 0 }
+                })!;
+            }
+        """, "6\n42\n6\n41\n16\n11\n")
+
+        source = self.source("catch-leak.vqr", """
+            error Failure { Missing }
+            func read() !i32 { Failure.Missing }
+            func main() i32 {
+                value := read() catch (onlyInHandler) { 0 };
+                if onlyInHandler == Failure.Missing { 1 } else { value }
+            }
+        """)
+        result = self.process(VAQC, "check", source, good=False)
+        self.assertIn(b"unknown value 'onlyInHandler'", result.stderr)
+
+    def test_v020_if_branches_are_blocks(self):
+        for body, diagnostic in (
+            ("if (true) 7 else 0", "if branch must be a block"),
+            ("if (true) { 7 } else 0", "else branch must be a block"),
+            ("if (true) 7 else { 0 }", "if branch must be a block"),
+        ):
+            with self.subTest(body=body):
+                entry = self.source("removed-if.vqr", f"func main() i32 {{ {body} }}")
+                result = self.process(VAQC, "check", "--syntax-only", entry, good=False)
+                self.assertIn(diagnostic.encode(), result.stderr)
+
+        self.source("helper/values.vqr", "package helper; pub func value() i32 { 4 }")
+        for package_suffix, import_suffix in (("", ";"), (";", ""), ("", "")):
+            with self.subTest(package_suffix=package_suffix, import_suffix=import_suffix):
+                entry = self.source("main.vqr", f"""
+                    package app{package_suffix}
+                    import (helper){import_suffix}
+                    func choose(n: i32) i32 {{
+                        if (n < 0) {{
+                            magnitude := 0 - n;
+                            magnitude + 1
+                        }} else if (n == 0) {{
+                            2
+                        }} else {{
+                            helper.value()
+                        }}
+                    }}
+                    func main() i32 {{ choose(-3) + choose(0) + choose(7) }}
+                """)
+                self.assertEqual(self.process(VAQC, "run", entry, good=False).returncode, 10)
+
+    def test_v020_loop_headers_require_canonical_spelling(self):
+        for header, diagnostic in (
+            ("for i < 3", "use while for a condition-only loop"),
+            ("for (i < 3)", "omit parentheses around the for header"),
+            ("for (j in 0..3)", "omit parentheses around the for header"),
+            ("for (i = 0; i < 3; i++)", "omit parentheses around the for header"),
+            ("while (i < 3)", "omit parentheses around the while header"),
+        ):
+            with self.subTest(header=header):
+                source = self.source("removed-loop.vqr", f"func main() void {{ i := 0; {header} {{ break; }} }}")
+                result = self.process(VAQC, "check", "--syntax-only", source, good=False)
+                self.assertIn(diagnostic.encode(), result.stderr)
+
+        self.hosted("""
+            func main() !void {
+                total := 0;
+                for i in (0..3) { total += i; }
+                for i := (1 + 1); i > 0; i-- { total += i; }
+                outer: while (total + 1) < 10 {
+                    for {
+                        total++;
+                        if total == 8 { continue outer; }
+                        if total == 9 { break outer; }
+                        break;
+                    }
+                }
+                if let some(number) = some(total) { io.println(number)!; }
+            }
+        """, "9\n")
+
+    def test_v020_local_reference_bindings_are_explicit(self):
+        for binding in (
+            "var &loan = raw number;",
+            "var &loan: i32 = raw number;",
+            "&loan := raw number;",
+            "key, &loan := (7, raw number);",
+            "&loan, key := (raw number, 7);",
+        ):
+            with self.subTest(binding=binding):
+                source = self.source("legacy-binding.vqr", f"func f() void {{ number := 4; {binding} }}")
+                result = self.process(VAQC, "check", "--syntax-only", source, good=False)
+                self.assertIn(b"legacy reference binding", result.stderr)
+
+        for body, diagnostic in (
+            ("ref mut loan = *new i32(4)!; loan", "borrow from a temporary cannot escape"),
+            ("owner := new i32(4)!; ref loan = *owner; next := move(owner); loan",
+             "access conflicts with active borrow"),
+        ):
+            source = self.source("bad-borrow.vqr", f"func f() !i32 {{ {body} }}")
+            result = self.process(VAQC, "check", source, good=False)
+            self.assertIn(diagnostic.encode(), result.stderr)
+
+        self.hosted("""
+            func main() !void {
+                key, owner := (7, new i32(34)!);
+                {
+                    ref mut value = *owner;
+                    value++;
+                }
+                ref value = *owner;
+                io.println(key + value)!;
+            }
+        """, "42\n")
+
+    def test_v020_safe_reference_types_use_ref(self):
+        for spelling in ("&i32", "&const i32", "&mut i32", "?&i32", "&&i32"):
+            with self.subTest(spelling=spelling):
+                source = self.source("legacy-type.vqr", f"type Legacy = {spelling};")
+                result = self.process(VAQC, "check", "--syntax-only", source, good=False)
+                self.assertIn(b"legacy reference type; use 'ref T' or 'ref mut T'", result.stderr)
+
+        source = self.source("ref-types.vqr", """
+            func read(value: ref i32) i32 { value }
+            func bump(value: ref mut i32) void { value++; }
+            func main() i32 {
+                number := 4;
+                {
+                    ref mut cursor = number;
+                    bump(cursor);
+                }
+                var loan: ref i32 = ref number;
+                read(loan) + (7 & 3)
+            }
+        """)
+        self.assertEqual(self.process(VAQC, "run", source, good=False).returncode, 8)
+
     def test_v020_removed_access_and_borrow_syntax(self):
         for code, diagnostic in (
             ("class C { public: func next() i32 { 1 } }", b"use 'pub'"),
@@ -1452,8 +1935,8 @@ class Acceptance(CompilerCase):
         dep.write_text("package helpers; import (src) pub func secret() i32 { 3 }")
         self.assertIn(b"cyclic", self.process(VAQC, "check", entry, good=False).stderr)
         entry.write_text("package src; func main() i32 { even(4) }")
-        self.source("src/e.vqr", "package src; func even(n: i32) i32 { if (n == 0) 1 else odd(n-1) }")
-        self.source("src/o.vqr", "package src; func odd(n: i32) i32 { if (n == 0) 0 else even(n-1) }")
+        self.source("src/e.vqr", "package src; func even(n: i32) i32 { if n == 0 { 1 } else { odd(n-1) } }")
+        self.source("src/o.vqr", "package src; func odd(n: i32) i32 { if n == 0 { 0 } else { even(n-1) } }")
         self.assertEqual(self.process(VAQC, "run", entry, good=False).returncode, 1)
 
     def test_module_identity_and_unused_code(self):
@@ -1492,15 +1975,11 @@ class Acceptance(CompilerCase):
             ("func main() bool { true }", "main must return"),
             ("func f() (i32,i32) { return 1, 2; }", "tuple"),
             ("func f(x: i32) void { x move= x; }", "expected"),
-            ("func f() i32 { if (true) 7 }", "else"),
+            ("func f() i32 { if (true) 7 }", "if branch must be a block"),
             ("func f() never {}", "never"),
-            ("func f() void { var n = 0; var x: &const i32 = &n; var x: &const i32 = &n; }", "duplicate local"),
-            ("func f() void { var n = 0; var x: &const i32 = &n; x = 2; }", "writable"),
-            ("func f() void { var n = 0; &x := &n; y := move(x); }", "cannot be moved"),
-            ("func f() void { var &x: *i32; }", "typed reference"),
-            ("func f(p: ?*i32) void { &x := p; }", "requires a pointer"),
-            ("func f(p: !*i32) void { &x := p; }", "requires a pointer"),
-            ("func f(p: *i32) void { var &x: i32 = p; }", "typed reference"),
+            ("func f() void { var n = 0; var x: ref i32 = raw n; var x: ref i32 = raw n; }", "duplicate local"),
+            ("func f() void { var n = 0; var x: ref i32 = raw n; x = 2; }", "writable"),
+            ("func f() void { var n = 0; ref mut x = n; y := move(x); }", "cannot be moved"),
             ("func f(&x: *i32) void {} func f(p: *i32) void {}", "identifier"),
             ("func f(p: *const ?i32) void { switch *p { some(ref x) => { x++; }, null => {} } }", "writable"),
             ("func f(v: ?i32) void { switch v { some(ref x) => { a := move(v); }, null => {} } }", "active borrow"),
@@ -1513,35 +1992,35 @@ class Acceptance(CompilerCase):
     def test_borrowing_and_control_flow(self):
         self.hosted("""
             enum Event { Link(*i32), Num(i32) }
-            func inc(x: &i32) void { x++; }
+            func inc(x: ref mut i32) void { x++; }
             func pair(x: i32, p: *i32) (i32, *i32) { return (x, p); }
             class C { pub var n: i32; pub const func value() !i32 { n } }
             func abort() never { panic("stop") }
             func liveValue(okay: bool) i32 { if okay { 7 } else { abort() } }
             func main() !void {
-                a := 1; b := 8; p := &a;
+                a := 1; b := 8; p := raw a;
                 {
-                    &x := p;
-                    f := (target: &i32) void => { target++; };
-                    p = &b; f(x); inc(x);
+                    ref mut x = a;
+                    f := (target: ref mut i32) void => { target++; };
+                    p = raw b; f(x); inc(x);
                 }
-                { var slot: &*i32 = &p; slot = &a; }
+                { var slot: ref mut *i32 = raw p; slot = raw a; }
                 n, address := pair(4, p);
                 *address += n;
-                event := Event.Link(&a);
+                event := Event.Link(raw a);
                 switch event {
                     Event.Link(&v) => { v++; },
                     Event.Num(ref mut v) => { v++; },
                 }
-                for (&v in [_]*i32{&a, &b}) { v++; }
-                { var readOnly: &const i32 = &a; io.println(readOnly)!; }
+                for &v in [_]*i32{raw a, raw b} { v++; }
+                { var readOnly: ref i32 = raw a; io.println(readOnly)!; }
                 io.println(b)!;
                 c := C{n: 9}; maybe := some(c);
                 var nested: ?!i32 = maybe?.value();
                 io.println(nested.unwrap()!)!;
                 i := 0;
-                for (i < 3) { i++; }
-                io.println(if (i == 3) liveValue(true) else 0)!;
+                while i < 3 { i++; }
+                io.println(if i == 3 { liveValue(true) } else { 0 })!;
             }
         """, "9\n9\n9\n7\n")
 
@@ -1573,7 +2052,7 @@ class Acceptance(CompilerCase):
             }
             func record(counter: *i32) ?i32 { (*counter)++; null }
             func once(counter: *i32) ?i32 { record(counter)? }
-            func borrowed(value: ?&const i32) !?&const i32 { value? }
+            func borrowed(value: ?ref i32) !?ref i32 { value? }
             comptime func atCompileTime(value: ?i32) ?i32 { value? + 1 }
             comptime const answer = atCompileTime(some(40));
             func main() !void {
@@ -1598,7 +2077,7 @@ class Acceptance(CompilerCase):
                 io.println(callback(some(7)) ?? 0)!;
                 io.println(callback(null) ?? 0)!;
                 var counter = 0;
-                io.println(once(&counter) ?? counter)!;
+                io.println(once(raw counter) ?? counter)!;
                 io.println(owned(some(new Probe(7)!)) ?? 0)!;
                 io.println(owned(null) ?? 0)!;
                 var failure = [&counter]() ErrorId => { counter++; Lookup.Missing };
@@ -1616,7 +2095,7 @@ class Acceptance(CompilerCase):
                     io.println(r)!;
                 }
                 switch borrowed(map.get(6))! { null => {}, some(_) => panic("unexpected reference") }
-                var pointer: ?*i32 = some(&counter);
+                var pointer: ?*i32 = some(raw counter);
                 var unwrapped = (x: ?*i32) ?*i32 => x?;
                 io.println(*unwrapped(pointer).unwrap())!;
                 io.println(answer.unwrap())!;
@@ -1633,7 +2112,7 @@ class Acceptance(CompilerCase):
             ("type Maybe = ?i32; func f(v: ?i32) !!Maybe { v? }", "requires '?U' or '!?U'"),
             ("func f(v: ?^i32) ?^i32 { v? }", "move(value)?"),
             ("comptime const n = some(2)?;", "error[E220]"),
-            ("func read(x: in i32) ?&const i32 { x } "
+            ("func read(x: in i32) ?ref i32 { x } "
              "func leak() ?i32 { var view = read(5)?; view }", "temporary"),
             ("import (opt) func f(v: ?i32, wrong: func() i32) !i32 { opt.okOrElse(v, wrong) }", "expected 'ErrorId'"),
         ]:
@@ -1665,10 +2144,10 @@ class Acceptance(CompilerCase):
     def test_readonly_reference_joins_pin_all_sources(self):
         self.hosted(r"""
             func choose(a, b: i32, first: bool) !void {
-                var left: &const i32 = &a;
-                var right: &const i32 = &b;
-                var selected: &const i32 = if first { left } else { right };
-                var switched: &const i32 = switch first { true => right, false => selected };
+                var left: ref i32 = raw a;
+                var right: ref i32 = raw b;
+                var selected: ref i32 = if first { left } else { right };
+                var switched: ref i32 = switch first { true => right, false => selected };
                 io.println(selected)!;
                 io.println(switched)!;
             }
@@ -1682,11 +2161,11 @@ class Acceptance(CompilerCase):
                 func invalid(flag: bool) i32 {{
                     var a = 1;
                     var b = 2;
-                    var view: &const i32 = if flag {{
-                        var left: &const i32 = &a;
+                    var view: ref i32 = if flag {{
+                        var left: ref i32 = raw a;
                         left
                     }} else {{
-                        var right: &const i32 = &b;
+                        var right: ref i32 = raw b;
                         right
                     }};
                     {target} = 3;
@@ -1700,25 +2179,25 @@ class Acceptance(CompilerCase):
         self.hosted(r"""
             class View<T> {
                 #borrowed: scoped
-                pub var first: &const T;
-                pub var second: &const T;
+                pub var first: ref T;
+                pub var second: ref T;
                 pub var tag: i32;
             }
-            func pair(value: &const i32) View<i32> {
+            func pair(value: ref i32) View<i32> {
                 View<i32>{first: value, second: value, tag: 1}
             }
-            func first(value: View<i32>) &const i32 { value.first }
+            func first(value: View<i32>) ref i32 { value.first }
             func main() !void {
                 var number = 11;
                 var alternate = 30;
                 {
-                    var both = View<i32>{first: &number, second: &alternate, tag: 99};
+                    var both = View<i32>{first: raw number, second: raw alternate, tag: 99};
                     io.println(*both.first + *both.second + both.tag)!;
                     var included: ?View<i32> = some(both);
                     switch included?.first { some(&item) => { io.println(item)!; }, null => {} }
                 }
                 number++;
-                var borrow: &const i32 = &number;
+                var borrow: ref i32 = raw number;
                 var held = pair(borrow);
                 io.println(*first(held))!;
             }
@@ -1733,7 +2212,7 @@ class Acceptance(CompilerCase):
             }
             class View {
                 #borrowed: scoped
-                pub var owner: &const Owner;
+                pub var owner: ref Owner;
                 pub var tag: i32;
             }
             func consume(value: Owner) i32 { value.number }
@@ -1742,36 +2221,36 @@ class Acceptance(CompilerCase):
         cases = {
             "move": """func bad() i32 {
                 var x = Owner{number: 1};
-                var saved = View{owner: &x, tag: 3};
+                var saved = View{owner: raw x, tag: 3};
                 consume(move(x))
             }""",
             "temporary": """func bad() i32 {
                 var x = Owner{number: 1};
-                inspect(View{owner: &x, tag: 3}, consume(move(x)))
+                inspect(View{owner: raw x, tag: 3}, consume(move(x)))
             }""",
             "initializer": """func bad() void {
                 var x = Owner{number: 1};
-                var view = View{owner: &x, tag: consume(move(x))};
+                var view = View{owner: raw x, tag: consume(move(x))};
             }""",
             "address": """func bad() void {
                 var x = Owner{number: 1};
-                var view = View{owner: &x, tag: 3};
-                var pointer = &view;
+                var view = View{owner: raw x, tag: 3};
+                var pointer = raw view;
             }""",
-            "escape": """func bad(source: &const Owner) View {
+            "escape": """func bad(source: ref Owner) View {
                 var x = Owner{number: 1};
-                View{owner: &x, tag: 3}
+                View{owner: raw x, tag: 3}
             }""",
             "container": "func bad() void { var values = coll.Vec<View>(); }",
             "pointer_type": "type Invalid = *View;",
             "rebind": """func bad() void {
                 var owner = Owner{number: 1};
                 var other = Owner{number: 2};
-                var view = View{owner: &owner, tag: 3};
-                var next: &const Owner = &other;
+                var view = View{owner: raw owner, tag: 3};
+                var next: ref Owner = raw other;
                 view.owner = next;
             }""",
-            "mutable": "class Invalid { #borrowed: scoped; pub var owner: &Owner; }",
+            "mutable": "class Invalid { #borrowed: scoped; pub var owner: ref mut Owner; }",
         }
         for name, body in cases.items():
             with self.subTest(name=name):
@@ -1784,15 +2263,15 @@ class Acceptance(CompilerCase):
         self.hosted(r"""
             class View {
                 #borrowed: scoped
-                pub var item: &const i32;
+                pub var item: ref i32;
             }
             func forward<T>(value: T) T { value }
             func main() !void {
                 var left = 10;
                 var right = 20;
                 {
-                    var view = View{item: &left};
-                    var other: &const i32 = &right;
+                    var view = View{item: raw left};
+                    var other: ref i32 = raw right;
                     var bias = 3;
                     var reader = [view, &other, bias]() i32 => *view.item + other + bias;
                     var get = forward(reader);
@@ -1807,7 +2286,7 @@ class Acceptance(CompilerCase):
         cases = {
             "owner_change": """func bad() i32 {
                 var number = 10;
-                var view = View{item: &number};
+                var view = View{item: raw number};
                 var callback = [view]() i32 => *view.item;
                 number++;
                 callback()
@@ -1815,28 +2294,28 @@ class Acceptance(CompilerCase):
             "escaping_owner": """func bad() void {
                 var callback = {
                     var number = 10;
-                    var loan: &const i32 = &number;
+                    var loan: ref i32 = raw number;
                     [&loan]() i32 => loan
                 };
             }""",
             "captured_return": """func bad() void {
                 var number = 10;
-                var loan: &const i32 = &number;
-                var callback = [&loan](argument: &const i32) &const i32 => loan;
+                var loan: ref i32 = raw number;
+                var callback = [&loan](argument: ref i32) ref i32 => loan;
             }""",
             "mutable_capture": """func bad() void {
                 var number = 10;
-                var loan: &i32 = &number;
+                var loan: ref mut i32 = raw number;
                 var callback = [&loan]() i32 => loan;
             }""",
             "mixed_capture": """func bad() void {
                 var number = 10;
                 var regular = 7;
-                var loan: &const i32 = &number;
+                var loan: ref i32 = raw number;
                 var callback = [&loan, &regular]() i32 => loan + regular;
             }""",
         }
-        view = "class View { #borrowed: scoped; pub var item: &const i32; }\n"
+        view = "class View { #borrowed: scoped; pub var item: ref i32; }\n"
         for name, body in cases.items():
             with self.subTest(name=name):
                 source = self.source(f"{name}/main.vqr", view + body)
@@ -1845,17 +2324,17 @@ class Acceptance(CompilerCase):
 
     def test_readonly_reference_tuples(self):
         self.hosted(r"""
-            type Same = (&const i32, &const i32);
-            func twice(value: &const i32) Same { (value, value) }
+            type Same = (ref i32, ref i32);
+            func twice(value: ref i32) Same { (value, value) }
             func main() !void {
                 var first = 17;
                 var second = 25;
                 {
-                    var pair: (&const i32, &const i32, i32) = (&first, &second, 1);
+                    var pair: (ref i32, ref i32, i32) = (raw first, raw second, 1);
                     io.println(*pair.0 + *pair.1 + pair.2)!;
                 }
                 first++;
-                var input: &const i32 = &first;
+                var input: ref i32 = raw first;
                 a, b := twice(input);
                 io.println(a + b)!;
             }
@@ -1864,26 +2343,26 @@ class Acceptance(CompilerCase):
             """func bad() i32 {
                 var left = 10;
                 var right = 20;
-                var pair: (&const i32, &const i32) = (&left, &right);
+                var pair: (ref i32, ref i32) = (raw left, raw right);
                 right++;
                 *pair.1
             }""",
             """func bad() void {
                 var first = 1;
                 var second = 2;
-                var pair: (&i32, &i32) = (&first, &second);
+                var pair: (ref mut i32, ref mut i32) = (raw first, raw second);
             }""",
             """func bad() void {
                 var outer = 1;
                 var pair = {
                     var inner = 2;
-                    var value: (&const i32, &const i32) = (&outer, &inner);
+                    var value: (ref i32, ref i32) = (raw outer, raw inner);
                     value
                 };
             }""",
             """func bad() void {
                 var first = 1;
-                var pair: (&const i32, string) = (&first, "owned");
+                var pair: (ref i32, string) = (raw first, "owned");
             }""",
         ]
         for index, source in enumerate(cases):
@@ -1894,59 +2373,59 @@ class Acceptance(CompilerCase):
 
     def test_readonly_reference_arrays_index_and_iterate(self):
         self.hosted(r"""
-            func twice(number: &const i32) [2]&const i32 {
-                [_]&const i32{number, number}
+            func twice(number: ref i32) [2]ref i32 {
+                [_]ref i32{number, number}
             }
             func main() !void {
                 var left = 20;
                 var right = 22;
                 {
-                    var items = [_]&const i32{&left, &right};
+                    var items = [_]ref i32{raw left, raw right};
                     var total = 0;
                     for item in items { total += item; }
                     io.println(total)!;
                     io.println(*items[1])!;
                 }
                 left++;
-                var input: &const i32 = &left;
+                var input: ref i32 = raw left;
                 io.println(*twice(input)[0] + *twice(input)[1])!;
             }
         """, "42\n22\n42\n")
         cases = {
             "mutation": """func bad() void {
                 var number = 42;
-                var values = [_]&const i32{&number};
+                var values = [_]ref i32{raw number};
                 number++;
             }""",
             "write_in_loop": """func bad() void {
                 var number = 42;
-                for value in [_]&const i32{&number} { number += value; }
+                for value in [_]ref i32{raw number} { number += value; }
             }""",
             "move_during_loop": """func bad() void {
                 var number = 42;
-                var references = [_]&const i32{&number};
+                var references = [_]ref i32{raw number};
                 for _ in references { move(references); }
             }""",
-            "move_during_index": """func take(items: [1]&const i32) usize { 0 }
+            "move_during_index": """func take(items: [1]ref i32) usize { 0 }
                 func bad() i32 {
                     var number = 42;
-                    var references = [_]&const i32{&number};
+                    var references = [_]ref i32{raw number};
                     *references[take(move(references))]
                 }""",
             "mutable_reference": """func bad() void {
                 var number = 42;
-                var values = [_]&i32{&number};
+                var values = [_]ref mut i32{raw number};
             }""",
             "raw_slice": """func bad() void {
                 var number = 42;
-                var values = [_]&const i32{&number};
+                var values = [_]ref i32{raw number};
                 var slice = values[:];
             }""",
             "index_side_effect": """class Owner { #copy: disabled; pub var number: i32; }
                 func take(value: Owner) usize { 0 }
                 func bad() void {
                     var owner = Owner{number: 42};
-                    ([_]&const Owner{&owner})[take(move(owner))];
+                    ([_]ref Owner{raw owner})[take(move(owner))];
                 }""",
         }
         for name, text in cases.items():
@@ -1960,9 +2439,9 @@ class Acceptance(CompilerCase):
             enum Hit {
                 #borrowed: scoped
                 Empty = 7,
-                Match(&const i32, i32),
+                Match(ref i32, i32),
             }
-            func find(value: &const i32, found: bool) Hit {
+            func find(value: ref i32, found: bool) Hit {
                 var empty = Hit.Empty;
                 if found { Hit.Match(value, 3) } else { empty }
             }
@@ -1984,26 +2463,26 @@ class Acceptance(CompilerCase):
             }
             func main() !void {
                 var number = 40;
-                var view: &const i32 = &number;
+                var view: ref i32 = raw number;
                 print(increment(find(view, true)))!;
                 print(increment(find(view, false)))!;
                 print(fallback(some(Hit.Match(view, 3))))!;
             }
         """, "44\nempty\n43\n")
         cases = [
-            """enum Hit { #borrowed: scoped; Empty, Match(&const i32), }
+            """enum Hit { #borrowed: scoped; Empty, Match(ref i32), }
                func bad() i32 {
                    var number = 42;
-                   var selected = Hit.Match(&number);
+                   var selected = Hit.Match(raw number);
                    number++;
                    switch selected { Hit.Empty => 0, Hit.Match(&result) => result, }
                }""",
-            """enum Hit { #borrowed: scoped; Empty, Match(&const i32), }
-               func bad(source: &const i32) Hit {
+            """enum Hit { #borrowed: scoped; Empty, Match(ref i32), }
+               func bad(source: ref i32) Hit {
                    var number = 42;
-                   Hit.Match(&number)
+                   Hit.Match(raw number)
                }""",
-            """enum Hit { #borrowed: scoped; Match(&i32), }""",
+            """enum Hit { #borrowed: scoped; Match(ref mut i32), }""",
         ]
         for index, text in enumerate(cases):
             with self.subTest(index=index):
@@ -2020,14 +2499,14 @@ class Acceptance(CompilerCase):
                 var number = 42;
                 var first = 7;
                 var call: Pick = pick;
-                var left: &const i32 = &first;
-                var right: &const i32 = &number;
-                var checked: &const i32 = forward(call, left, right);
+                var left: ref i32 = raw first;
+                var right: ref i32 = raw number;
+                var checked: ref i32 = forward(call, left, right);
                 io.println(checked)!;
-                var identity = [](value: &const i32) &const i32 => value;
+                var identity = [](value: ref i32) ref i32 => value;
                 io.println(*identity(checked))!;
                 var bias = 1;
-                var closure = [bias](value: &const i32) &const i32 => {
+                var closure = [bias](value: ref i32) ref i32 => {
                     if bias == 1 { return value; }
                     value
                 };
@@ -2041,11 +2520,11 @@ class Acceptance(CompilerCase):
         """)
         self.process(VAQC, "check", mismatched, good=False)
         escapes = self.source("escapes.vqr", r"""
-            func identity(value: &const i32) &const i32 { value }
-            func invalid(other: &const i32) &const i32 {
-                var call: func(&const i32) &const i32 = identity;
+            func identity(value: ref i32) ref i32 { value }
+            func invalid(other: ref i32) ref i32 {
+                var call: func(ref i32) ref i32 = identity;
                 var value = 42;
-                var loan: &const i32 = &value;
+                var loan: ref i32 = raw value;
                 call(loan)
             }
         """)
@@ -2064,12 +2543,12 @@ class Acceptance(CompilerCase):
             }
             func read(value: in Large) i32 { value.values[3] }
             interface Reader {
-                const func get() &const i32 from self;
+                const func get() ref i32 from self;
                 const func read(value: in Large) i32;
             }
             class Impl {
                 #implements: Reader
-                pub const func get() &const i32 from self { var result: &const i32 = id; result }
+                pub const func get() ref i32 from self { var result: ref i32 = id; result }
                 pub var id: i32;
                 pub const func read(value: in Large) i32 { value.values[2] }
             }
@@ -2078,9 +2557,9 @@ class Acceptance(CompilerCase):
                 var owned = Large();
                 io.println(read(owned) + read(Large()))!;
                 var impl = Impl{id: 7};
-                var reader: *const Reader = &impl;
+                var reader: *const Reader = raw impl;
                 io.println(reader.read(owned))!;
-                var checked: &const Reader = &impl;
+                var checked: ref Reader = raw impl;
                 io.println(checked.read(owned))!;
                 var value = checked.get();
                 io.println(*second(value, value))!;
@@ -2099,12 +2578,15 @@ class Acceptance(CompilerCase):
             }
             func main() !void {
                 for &value in Items() { value++; io.println(value)!; }
-                key, &value := (7, new i32(34)!);
-                value++;
-                io.println(key + value)!;
+                key, owner := (7, new i32(34)!);
+                {
+                    ref mut value = *owner;
+                    value++;
+                    io.println(key + value)!;
+                }
                 var item: ?i32 = some(41);
                 {
-                    var slot: &?i32 = &item;
+                    var slot: ref mut ?i32 = raw item;
                     switch opt.asMutRef(slot) { some(&n) => { n++; }, null => {} }
                 }
                 switch opt.asRef(item) { some(&n) => { io.println(n)!; }, null => {} }
@@ -2129,14 +2611,14 @@ class Acceptance(CompilerCase):
             }
         """, "101\n1\n2\n3\n")
         for code, diagnostic in [
-            ("func f(r: &i32) void {} func g() void { var n = 0; f(n); }", "no accessible overload"),
-            ("func f(r: &const i32) void {} func g() void { var n = 0; f(&n); }", "no accessible overload"),
-            ("func f(r: &const i32) void { var p: &i32 = r; }", "read-only"),
-            ("func f() void { var n = 0; var p: &i32 = &n; var q: &i32 = &n; }", "active borrow"),
-            ("func f(x: &const i32) &const i32 { var n = 0; var r: &const i32 = &n; return r; }",
+            ("func f(r: ref mut i32) void {} func g() void { var n = 0; f(n); }", "no accessible overload"),
+            ("func f(r: ref i32) void {} func g() void { var n = 0; f(raw n); }", "no accessible overload"),
+            ("func f(r: ref i32) void { var p: ref mut i32 = r; }", "read-only"),
+            ("func f() void { var n = 0; var p: ref mut i32 = raw n; var q: ref mut i32 = raw n; }", "active borrow"),
+            ("func f(x: ref i32) ref i32 { var n = 0; var r: ref i32 = raw n; return r; }",
              "declared source"),
-            ("func get(x: in i32) &const i32 { x } func f() void { var r = get(7); }", "temporary"),
-            ("func f() !void { var b = new i32(7)!; var r: &const i32 = b; var next = move(b); }",
+            ("func get(x: in i32) ref i32 { x } func f() void { var r = get(7); }", "temporary"),
+            ("func f() !void { var b = new i32(7)!; var r: ref i32 = b; var next = move(b); }",
              "active borrow"),
             ("func f() !void { var v = coll.Vec<i32>(); v.push(7)!; var r = v.get(0); v.push(8)!; }",
              "active borrow"),
@@ -2144,26 +2626,26 @@ class Acceptance(CompilerCase):
             ("func f() void { var r: in i32; }", "only permitted in parameter"),
             ("func f() in i32 { return 0; }", "only permitted in parameter"),
             ("func f(r: in &i32) void {}", "write the data type"),
-            ("func f(r: &&i32) void {}", "indirect storage"),
+            ("func f(r: ref mut ref mut i32) void {}", "indirect storage"),
             ("func f(r: i32) void {} func f(r: in i32) void {}", "duplicate overload"),
-            ("func f(a, b: &i32) void {} func g() void { var n = 0; var r: &i32 = &n; f(r, r); }",
+            ("func f(a, b: ref mut i32) void {} func g() void { var n = 0; var r: ref mut i32 = raw n; f(r, r); }",
              "active borrow"),
             ("func f(obj: ?i32) void { switch obj { some(&x) => {}, null => {}, } }",
              "requires a pointer, reference or Box"),
-            ("func f(r: in i32) void {} func g() void { var n = 0; var p = &n; var pp = &p; f(pp); }",
+            ("func f(r: in i32) void {} func g() void { var n = 0; var p = raw n; var pp = raw p; f(pp); }",
              "no accessible overload"),
             ("func f() !void { var v = coll.Vec<i32>(); v.push(7)!; var opt = v.getMut(0);"
              " switch opt { some(value) => { value++; }, null => {}, } }", "cannot copy"),
-            ("func f() void { var n = 0; var b = 1; var p = &n; var pp = &p;"
-             " *pp = &b; var r: &i32 = p; }", "source is unproven"),
-            ("func set(p: *i32) void { *p = 18; } func f() void { var n = 0; var p = &n;"
-             " var r: &const i32 = p; set(p); }", "active borrow"),
-            ("func f(use: bool) void { var n = 0; var b = 1; var p: ?*i32 = some(&n);"
-             " var address = p ?? &b; var r: &i32 = address; }", "source is unproven"),
+            ("func f() void { var n = 0; var b = 1; var p = raw n; var pp = raw p;"
+             " *pp = raw b; var r: ref mut i32 = p; }", "source is unproven"),
+            ("func set(p: *i32) void { *p = 18; } func f() void { var n = 0; var p = raw n;"
+             " var r: ref i32 = p; set(p); }", "active borrow"),
+            ("func f(use: bool) void { var n = 0; var b = 1; var p: ?*i32 = some(raw n);"
+             " var address = p ?? raw b; var r: ref mut i32 = address; }", "source is unproven"),
             ("func f() !void { var box = new i32(1)!; var p = box.asPtr();"
-             " box = new i32(2)!; var r: &const i32 = p; }", "source is unproven"),
-            ("func f() void { var n = 0; var b = 1; var p = &n;"
-             " for i in 0..2 { var r: &const i32 = p; p = &b; } }", "source is unproven"),
+             " box = new i32(2)!; var r: ref i32 = p; }", "source is unproven"),
+            ("func f() void { var n = 0; var b = 1; var p = raw n;"
+             " for i in 0..2 { var r: ref i32 = p; p = raw b; } }", "source is unproven"),
         ]:
             with self.subTest(code=code):
                 bad = self.source("bad-reference.vqr", "import (coll)\n" + code)
@@ -2180,23 +2662,23 @@ class Acceptance(CompilerCase):
             func wouldTrap() i32 { unsafe { core.unreachableUnchecked() } }
             func main() !void {
                 a := 18; b := 2;
-                core.swap(&a, &b); core.swap(&a, &a);
-                io.println(core.replace(&b, core.identity(a)))!;
+                core.swap(raw a, raw b); core.swap(raw a, raw a);
+                io.println(core.replace(raw b, core.identity(a)))!;
                 core.drop(b);
                 var o: ?i32 = null;
-                io.println(opt.isNone(&o))!;
-                var value = opt.getOrInsert(&o, 3);
+                io.println(opt.isNone(raw o))!;
+                var value = opt.getOrInsert(raw o, 3);
                 *value += 2;
-                opt.getOrInsertWith(&o, seven);
-                io.println(*opt.asPtr(&o).unwrap())!;
-                io.println(opt.replace(&o, 8).unwrap())!;
-                io.println(opt.take(&o).unwrap())!;
-                io.println(opt.isNone(&o))!;
-                var newValue = opt.insert(&o, 9);
+                opt.getOrInsertWith(raw o, seven);
+                io.println(*opt.asPtr(raw o).unwrap())!;
+                io.println(opt.replace(raw o, 8).unwrap())!;
+                io.println(opt.take(raw o).unwrap())!;
+                io.println(opt.isNone(raw o))!;
+                var newValue = opt.insert(raw o, 9);
                 (*newValue)--;
-                io.println(opt.contains(&o, newValue))!;
+                io.println(opt.contains(raw o, newValue))!;
                 seed := 3;
-                transform := [seed](n: i32) ?i32 => { if (n > seed) some(n) else null };
+                transform := [seed](n: i32) ?i32 => { if n > seed { some(n) } else { null } };
                 io.println(opt.andThen<i32, i32>(o, move(transform)).unwrap())!;
                 filtered := opt.filter(o, bumped);
                 seen := 0;
@@ -2214,23 +2696,23 @@ class Acceptance(CompilerCase):
                 io.println(opt.transpose(nested)!.unwrap())!;
                 var items = opt.toVec(o)!;
                 items.push(9)!; items.push(10)!;
-                for (index, &item in enumerate(items.iterMut())) {
+                for index, &item in enumerate(items.iterMut()) {
                     item += i32(index)!;
                 }
                 var cursor = items.iterRef();
                 io.println(*cursor.nextBack().unwrap())!;
                 io.println(cursor.remaining())!;
                 io.println(*cursor.next().unwrap())!;
-                var once = opt.intoIter<i32>(opt.take(&o));
+                var once = opt.intoIter<i32>(opt.take(raw o));
                 io.println(once.next().unwrap())!;
-                var exhausted = once.next(); io.println(opt.isNone(&exhausted))!;
+                var exhausted = once.next(); io.println(opt.isNone(raw exhausted))!;
                 var listed = iter.iter(items.asConstSlice());
                 io.println(listed.sizeHint().lower)!;
                 for index, &count in iter.enumerate<iter.SliceIterMut<i32>, *i32>(items.iterMut()) {
                     count += i32(index)!;
                 }
                 io.println(*items.last().unwrap())!;
-                io.println(core.isNone(&o))!;
+                io.println(core.isNone(raw o))!;
             }
         """, "18\ntrue\n5\n5\n8\ntrue\ntrue\n8\n8\n12\n8\n2\n8\n23\n11\n12\n2\n8\n8\ntrue\n3\n14\ntrue\n")
 
@@ -2240,15 +2722,15 @@ class Acceptance(CompilerCase):
             error Problem { Missing }
             func plus(x: i32) i32 { x + 1 }
             func twice(x: i32) !i32 { x * 2 }
-            func recover(e: ErrorId) !i32 { if (e == Problem.Missing) 10 else 0 }
-            func recoverValue(e: ErrorId) i32 { if (e == Problem.Missing) 11 else 0 }
+            func recover(e: ErrorId) !i32 { if e == Problem.Missing { 10 } else { 0 } }
+            func recoverValue(e: ErrorId) i32 { if e == Problem.Missing { 11 } else { 0 } }
             func main() !void {
                 var original: !i32 = 2;
                 var failed: !i32 = Problem.Missing;
-                io.println(result.isOk(&original))!;
-                io.println(result.isErr(&failed))!;
-                io.println(result.errorOf(&failed).unwrap() == Problem.Missing)!;
-                io.println(*result.okValue(&original).unwrap())!;
+                io.println(result.isOk(raw original))!;
+                io.println(result.isErr(raw failed))!;
+                io.println(result.errorOf(raw failed).unwrap() == Problem.Missing)!;
+                io.println(*result.okValue(raw original).unwrap())!;
                 io.println(result.map<i32, i32>(original, plus)!)!;
                 io.println(result.andThen<i32, i32>(original, twice)!)!;
                 io.println(result.orElse(failed, recover)!)!;
@@ -2260,11 +2742,11 @@ class Acceptance(CompilerCase):
                 onError := [&seen](e: ErrorId) void => { if e == Problem.Missing { seen += 7; } };
                 result.inspect(original, move(observe))!;
                 var checked = result.inspectErr(failed, move(onError));
-                io.println(result.isErr(&checked))!;
+                io.println(result.isErr(raw checked))!;
                 io.println(seen)!;
                 var missing: !?i32 = null;
                 var absent = result.transpose(missing);
-                io.println(core.isNone(&absent))!;
+                io.println(core.isNone(raw absent))!;
                 var present: !?i32 = some(9);
                 io.println(result.transpose(present).unwrap()!)!;
                 var rejected: !?i32 = Problem.Missing;
@@ -2291,15 +2773,15 @@ class Acceptance(CompilerCase):
                 io.println(meta.isMovable<coll.Vec<i32>>())!;
                 io.println(meta.isZeroSized<[0]u8>())!;
                 a := -0.0f64; b := 0.0f64;
-                io.println(cmp.totalCmp(&a, &b) == cmp.Ordering.Less)!;
+                io.println(cmp.totalCmp(raw a, raw b) == cmp.Ordering.Less)!;
                 c := bitCast<f64>(0x7ff8000000000001u64);
-                var unordered = cmp.partialCmp(&b, &c);
-                io.println(core.isNone(&unordered))!;
-                io.println(cmp.totalCmp(&b, &c) == cmp.Ordering.Less)!;
+                var unordered = cmp.partialCmp(raw b, raw c);
+                io.println(core.isNone(raw unordered))!;
+                io.println(cmp.totalCmp(raw b, raw c) == cmp.Ordering.Less)!;
                 io.println(cmp.minBy(3, 2, shorter))!;
                 io.println(cmp.clamp(8, 2, 5))!;
                 var input = [_]i32{1, 2, 3};
-                io.println(meta.arrayLen(&input))!;
+                io.println(meta.arrayLen(raw input))!;
                 var v = coll.Vec<i32>.fromSlice(input[:])!;
                 v.reserveAdditional(5)!;
                 v.insert(1, 9)!;
@@ -2341,7 +2823,7 @@ class Acceptance(CompilerCase):
                 io.println(bits.firstSet(128u8).unwrap())!;
                 io.println(bits.lastSet(130u8).unwrap())!;
                 var empty = bits.firstSet(0u8);
-                io.println(core.isNone(&empty))!;
+                io.println(core.isNone(raw empty))!;
                 io.println(bits.clearBit(128u8, 7))!;
                 io.println(bits.toggleBit(0u8, 7))!;
                 io.println(bits.testBit(128u8, 7))!;
@@ -2358,7 +2840,7 @@ class Acceptance(CompilerCase):
                 var writer = bits.BitWriter(data[:], bits.BitOrder.MsbFirst);
                 writer.writeBits(5, 3)!;
                 var failed = writer.writeBits(0, 14);
-                io.println(core.isErr(&failed))!;
+                io.println(core.isErr(raw failed))!;
                 writer.alignByte(true)!;
                 writer.writeBits(1, 8)!;
                 io.println(writer.writtenBytes())!;
@@ -2370,7 +2852,7 @@ class Acceptance(CompilerCase):
                 reader.alignByte();
                 io.println(reader.readBits(8)!.unwrap())!;
                 var eof = reader.readBits(1)!;
-                io.println(core.isNone(&eof))!;
+                io.println(core.isNone(raw eof))!;
                 var little = bits.BitReader(data[:], bits.BitOrder.LsbFirst);
                 io.println(little.readBits(3)!.unwrap())!;
             }
@@ -2389,12 +2871,12 @@ class Acceptance(CompilerCase):
                 io.println(algo.anyOf(values[:], positive))!;
                 io.println(algo.noneOf(values[:], positive))!;
                 io.println(algo.countIf(values[:], positive))!;
-                io.println(algo.count(values[:], &key))!;
-                io.println(algo.find(values[:], &key).unwrap())!;
-                io.println(algo.findLast(values[:], &key).unwrap())!;
+                io.println(algo.count(values[:], raw key))!;
+                io.println(algo.find(values[:], raw key).unwrap())!;
+                io.println(algo.findLast(values[:], raw key).unwrap())!;
                 io.println(algo.findIf(values[:], positive).unwrap())!;
                 var missing = algo.findIfNot(values[:], positive);
-                io.println(core.isNone(&missing))!;
+                io.println(core.isNone(raw missing))!;
                 algo.heapify(values[:], less);
                 io.println(algo.isHeap(values[:], less))!;
                 algo.popHeap(values[:], less);
@@ -2403,11 +2885,11 @@ class Acceptance(CompilerCase):
                 io.println(values[0])!;
                 algo.sortHeap(values[:], less);
                 io.println(algo.isSorted(values[:], less))!;
-                lo, hi := algo.equalRange(values[:], &key, less);
+                lo, hi := algo.equalRange(values[:], raw key, less);
                 io.println(lo)!; io.println(hi)!;
-                io.println(algo.lowerBound(values[:], &key, less))!;
-                io.println(algo.upperBound(values[:], &key, less))!;
-                io.println(algo.binarySearch(values[:], &key, less).unwrap())!;
+                io.println(algo.lowerBound(values[:], raw key, less))!;
+                io.println(algo.upperBound(values[:], raw key, less))!;
+                io.println(algo.binarySearch(values[:], raw key, less).unwrap())!;
                 io.println(algo.adjacentFind(values[:], equal).unwrap())!;
                 algo.rotate(values[:], 2);
                 io.println(values[4])!;
@@ -2449,10 +2931,10 @@ class Acceptance(CompilerCase):
                 io.println(flag.test(atomic.Order.Acquire))!;
                 n := 19;
                 var slot = atomic.AtomicPtr<i32>.new(null);
-                var empty = slot.swap(&n);
-                io.println(core.isNone(&empty))!;
+                var empty = slot.swap(raw n);
+                io.println(core.isNone(raw empty))!;
                 io.println(*slot.load().unwrap())!;
-                var removed = slot.compareExchange(&n, null);
+                var removed = slot.compareExchange(raw n, null);
                 io.println(*removed.old.unwrap())!; io.println(removed.exchanged)!;
                 atomic.compilerFence(atomic.Order.Acquire);
                 atomic.fence(atomic.Order.SeqCst);
@@ -2507,21 +2989,21 @@ class Acceptance(CompilerCase):
                 io.println(reader.readVarUint()!)!;
                 io.println(reader.readVarInt()!)!;
                 var rejected = reader.readLengthPrefixed(2);
-                io.println(core.isErr(&rejected))!;
+                io.println(core.isErr(raw rejected))!;
                 io.println(reader.position())!;
                 var payloadRead = reader.readLengthPrefixed(3)!;
                 io.println(payloadRead[2])!;
                 var end = reader.readU8();
-                io.println(core.isErr(&end))!;
+                io.println(core.isErr(raw end))!;
                 reader.seek(0)!;
                 io.println(reader.readI8()!)!;
                 var small = [_]u8{8};
                 var failedWrite = binary.writeVarUint(300, small[:]);
-                io.println(core.isErr(&failedWrite))!;
+                io.println(core.isErr(raw failedWrite))!;
                 io.println(small[0])!;
                 var invalid = [_]u8{128, 0};
                 var bad = binary.readVarUint(invalid[:]);
-                io.println(core.isErr(&bad))!;
+                io.println(core.isErr(raw bad))!;
                 var value = binary.u32ToBytes(0x01020304u32, binary.Endian.Little);
                 io.println(value[0])!;
                 io.println(binary.readU32(value[:], binary.Endian.Little)!)!;
@@ -2564,7 +3046,7 @@ class Acceptance(CompilerCase):
                 var one = Sized<i32, size>([_]i32{1, 2, 3});
                 var two = Sized<i32, (1 + 2)>([_]i32{6, 7, 8});
                 one = move(two);
-                io.println(length(&one))!;
+                io.println(length(raw one))!;
                 io.println(one.len())!;
                 io.println(one.marker())!;
                 io.println(one.tail()[0])!;
@@ -2572,8 +3054,8 @@ class Acceptance(CompilerCase):
                 io.println(Selection<false>.selected())!;
                 var code = Code<4>.fromInt(5);
                 var missing = Code<4>.fromInt(6);
-                io.println(core.isSome(&code))!;
-                io.println(core.isNone(&missing))!;
+                io.println(core.isSome(raw code))!;
+                io.println(core.isNone(raw missing))!;
             }
         """, "3\n3\n3\n8\n10\n20\ntrue\ntrue\n")
 
@@ -2611,7 +3093,7 @@ class Acceptance(CompilerCase):
                 io.println(cursor.next().unwrap())!;
                 io.println(cursor.next().unwrap())!;
                 var end = cursor.next();
-                io.println(core.isNone(&end))!;
+                io.println(core.isNone(raw end))!;
                 {
                     var probes = coll.FixedVec<Probe, 2>();
                     probes.push(Probe(11)); probes.push(Probe(12));
@@ -2654,9 +3136,9 @@ class Acceptance(CompilerCase):
                 var empty = mem.Layout.array<u64>(0)!;
                 io.println(empty.size())!;
                 var wrong = mem.Layout.fromSizeAlign(6, 3);
-                io.println(core.isErr(&wrong))!;
+                io.println(core.isErr(raw wrong))!;
                 var overflow = mem.Layout.array<u64>(~usize(0));
-                io.println(core.isErr(&overflow))!;
+                io.println(core.isErr(raw overflow))!;
                 var bytes = [_]u8{1, 2, 3, 4, 5, 6};
                 mem.moveBytes(bytes[0..4], bytes[1..5])!;
                 io.println(bytes[1])!;
@@ -2673,15 +3155,15 @@ class Acceptance(CompilerCase):
                 io.println(meta.isSendable<coll.Vec<*i32>>())!;
                 io.println(meta.isShareable<str>())!;
                 var word: u32 = 3;
-                var lhs = mmio.MmioRegion.new(mmio.addressOf(&word), 4);
+                var lhs = mmio.MmioRegion.new(mmio.addressOf(raw word), 4);
                 unsafe {
                     var reg = lhs.registerAt<u32>(0)!;
                     reg.setBits(4);
                     reg.clearBits(2);
                     io.println(reg.read())!;
                     var invalid = lhs.registerAt<u32>(1);
-                    io.println(core.isErr(&invalid))!;
-                    var flag = mmio.Volatile<u32>.new(&word);
+                    io.println(core.isErr(raw invalid))!;
+                    var flag = mmio.Volatile<u32>.new(raw word);
                     flag.store(9);
                     io.println(flag.load())!;
                 }
@@ -2751,8 +3233,8 @@ class Acceptance(CompilerCase):
             func main() !void {
                 var direct = Identity{};
                 var embedded = Forward{inner: Identity{}};
-                use(&direct)!;
-                use(&embedded)!;
+                use(raw direct)!;
+                use(raw embedded)!;
             }
         """, "13\ntrue\n5\n1\n13\ntrue\n5\n2\n")
         invalid = self.source("bad-generic-interface.vqr", """
@@ -2763,6 +3245,23 @@ class Acceptance(CompilerCase):
             }
         """)
         failure = self.process(VAQC, "check", invalid, good=False)
+        self.assertIn(b"one public implementation", failure.stderr)
+
+    def test_generic_interface_preserves_nested_function_move_modes(self):
+        source = """
+            interface Runner {
+                const func run<T: Copyable>(callback: func(move ^i32, T) i32, value: T) i32;
+            }
+            class Implementation {
+                #implements: Runner
+                pub const func run<U: Copyable>(callback: func(MODE ^i32, U) i32, value: U) i32 { 0 }
+            }
+            func main() void { var implementation = Implementation{}; }
+        """
+        self.process(VAQC, "check", self.source("matching.vqr", source.replace("MODE", "move")))
+        failure = self.process(
+            VAQC, "check", self.source("mismatched.vqr", source.replace("MODE", "")), good=False,
+        )
         self.assertIn(b"one public implementation", failure.stderr)
 
     def test_interfaces_and_embedded_receivers(self):
@@ -2784,7 +3283,7 @@ class Acceptance(CompilerCase):
                 pub embed cell: Cell;
                 pub func init(n: i32) : cell(Cell(n)) {}
                 pub const func read() i32 { cell.read() + 1 }
-                pub func write(flag: bool) void { cell.write(if (flag) 1 else 0); }
+                pub func write(flag: bool) void { cell.write(if flag { 1 } else { 0 }); }
             }
             class Outer {
                 #implements: Readable<i32>
@@ -2800,27 +3299,27 @@ class Acceptance(CompilerCase):
             func dynamically(target: *const Readable<i32>) i32 {
                 var restored = target;
                 var call = [target]() i32 => target.read();
-                if (target == restored) call() else 0
+                if target == restored { call() } else { 0 }
             }
             func mutate(target: *Writable) void { target.write(88); }
             func main() !void {
                 var wrapper = Wrapper(11);
-                io.println(statically(&wrapper))!;
-                io.println(dynamically(&wrapper))!;
+                io.println(statically(raw wrapper))!;
+                io.println(dynamically(raw wrapper))!;
                 wrapper.write(44);
                 io.println(wrapper.cell.read())!;
                 wrapper.write(false);
                 io.println(wrapper.read())!;
-                mutate(&wrapper);
+                mutate(raw wrapper);
                 io.println(wrapper.read())!;
                 var outer = Outer(31);
                 io.println(outer.read())!;
-                io.println(dynamically(&outer))!;
+                io.println(dynamically(raw outer))!;
                 var secret = Private(9);
                 io.println(secret.inside())!;
                 var a = Cell(5);
                 var b = Cell(5);
-                io.println(a.same(&b))!;
+                io.println(a.same(raw b))!;
                 io.println(meta.hasInterface<Outer, Readable<i32>>())!;
                 io.println(meta.hasInterface<Private, Readable<i32>>())!;
             }
@@ -2888,10 +3387,10 @@ class Acceptance(CompilerCase):
                     io.println(heap.releases)!;
                 }
                 io.println(heap.releases)!;
-                var failed = new(&heap) Guarded(-1);
-                io.println(core.isErr(&failed))!;
+                var failed = new(raw heap) Guarded(-1);
+                io.println(core.isErr(raw failed))!;
                 io.println(heap.releases)!;
-                io.println(check(&heap)!)!;
+                io.println(check(raw heap)!)!;
                 io.println(heap.releases)!;
                 {
                     var boxed = new(heap) Guarded(41)!;
@@ -2952,14 +3451,14 @@ class Acceptance(CompilerCase):
                 io.println(gathered.extract(1))!;
                 var badIndices = [4]usize{1, 0, 2, 4};
                 var rejected = simd.scatter(input[:], badIndices, gathered);
-                io.println(core.isErr(&rejected))!;
+                io.println(core.isErr(raw rejected))!;
                 io.println(input[1])!;
                 simd.store(input[:], gathered)!;
                 io.println(input[0])!;
                 io.println(simd.horizontalSum(input[:]))!;
                 var bytes = [_]u8{0, 0, 0, 0, 0};
                 unsafe {
-                    var address = ptrCast<*u16>(&bytes[1]);
+                    var address = ptrCast<*u16>(raw bytes[1]);
                     simd.storeUnaligned<u16, 2>(address, simd.Simd<u16, 2>.splat(1000));
                     io.println(simd.loadUnaligned<u16, 2>(address).reduceAdd())!;
                 }
@@ -2998,48 +3497,48 @@ class Acceptance(CompilerCase):
                 var scratch = [_]u8{0, 0, 0, 0};
                 var reader = io.MemoryReader(source[:]);
                 io.println(reader.seek(-2, io.SeekOrigin.End)!)!;
-                var progress = io.readExactProgress(&reader, scratch[:])!;
+                var progress = io.readExactProgress(raw reader, scratch[:])!;
                 io.println(progress.processed)!;
                 io.println(progress.status == io.ReadStatus.Eof)!;
                 io.println(scratch[1])!;
                 reader.seek(0, io.SeekOrigin.Start)!;
-                var limited = io.limit(&reader, 3);
-                var counted = io.CountingReader(&limited);
-                io.println(io.readAtLeast(&counted, scratch[:], 2)!)!;
+                var limited = io.limit(raw reader, 3);
+                var counted = io.CountingReader(raw limited);
+                io.println(io.readAtLeast(raw counted, scratch[:], 2)!)!;
                 io.println(counted.count())!;
                 io.println(limited.remaining())!;
-                io.println(io.read(&limited, scratch[:])!)!;
+                io.println(io.read(raw limited, scratch[:])!)!;
                 var fixed = io.FixedWriter(scratch[0..2]);
-                io.println(io.write(&fixed, source[:])!)!;
-                var full = io.write(&fixed, source[:]);
-                io.println(core.isErr(&full))!;
+                io.println(io.write(raw fixed, source[:])!)!;
+                var full = io.write(raw fixed, source[:]);
+                io.println(core.isErr(raw full))!;
                 io.println(fixed.written()[1])!;
                 var short = ShortReader();
-                var partial = io.readExactProgress(&short, scratch[:])!;
+                var partial = io.readExactProgress(raw short, scratch[:])!;
                 io.println(partial.processed)!;
                 io.println(partial.status == io.ReadStatus.WouldBlock)!;
                 var narrow = ShortWriter();
-                var interrupted = io.writeAllProgress(&narrow, source[:])!;
+                var interrupted = io.writeAllProgress(raw narrow, source[:])!;
                 io.println(interrupted.processed)!;
                 io.println(interrupted.status == io.ReadStatus.Interrupted)!;
                 var first = io.MemoryReader(source[0..2]);
                 var second = io.MemoryReader(source[2..4]);
-                var readers = [2]*io.Reader{&first, &second};
+                var readers = [2]*io.Reader{raw first, raw second};
                 var multi = io.MultiReader(readers[:]);
                 var output = io.MemoryWriter();
-                var writer = io.CountingWriter(&output);
-                io.println(io.copyAll(&multi, &writer)!)!;
+                var writer = io.CountingWriter(raw output);
+                io.println(io.copyAll(raw multi, raw writer)!)!;
                 io.println(writer.count())!;
-                io.writeAll(&output, output.asSlice())!;
+                io.writeAll(raw output, output.asSlice())!;
                 var list = io.MemoryWriter.intoBytes(move(output));
                 io.println(list.len())!;
                 io.println(list[7])!;
                 var tiny = io.MemoryReader(source[:]);
-                var oversize = io.readToEnd(&tiny, 3);
-                io.println(core.isErr(&oversize))!;
+                var oversize = io.readToEnd(raw tiny, 3);
+                io.println(core.isErr(raw oversize))!;
                 var chars = "中文".asBytes();
                 var text = io.MemoryReader(chars);
-                var decoded = io.readToString(&text, 6)!;
+                var decoded = io.readToString(raw text, 6)!;
                 io.println(decoded)!;
             }
         """, "2\n2\ntrue\n9\n3\n3\n0\n0\n2\ntrue\n4\n2\ntrue\n3\ntrue\n4\n4\n8\n9\ntrue\n中文\n")
@@ -3061,20 +3560,20 @@ class Acceptance(CompilerCase):
                 io.println(convert.roundToInt<i32>(half + 1.0)!)!;
                 var nan = convert.bitCast<f64>(0x7ff8000000000001u64);
                 var rejected = convert.floorToInt<i32>(nan);
-                io.println(core.isErr(&rejected))!;
+                io.println(core.isErr(raw rejected))!;
                 var max = 255u32;
                 io.println(convert.narrow<u8>(max)!)!;
                 io.println(convert.widen<u32>(17u8))!;
                 var missing = convert.checkedCast<u8>(max + 1)!;
-                io.println(core.isNone(&missing))!;
+                io.println(core.isNone(raw missing))!;
                 io.println(convert.toFloat<f64>(max) == 255.0)!;
                 io.println(convert.fromChar('中'))!;
                 io.println(convert.toChar(20013)! == '中')!;
                 var surrogate = convert.toChar(0xd800);
-                io.println(core.isErr(&surrogate))!;
+                io.println(core.isErr(raw surrogate))!;
                 io.println(convert.toBool(1)!)!;
                 var invalidBool = convert.toBool(2);
-                io.println(core.isErr(&invalidBool))!;
+                io.println(core.isErr(raw invalidBool))!;
             }
         """, "-6\n-5\n5\n-6\n6\n2\n4\ntrue\n255\n17\ntrue\ntrue\n20013\ntrue\ntrue\ntrue\ntrue\n")
 
@@ -3137,16 +3636,16 @@ class Acceptance(CompilerCase):
                 var decoded = encoding.hexDecode("00Ffff")!;
                 io.println(decoded[1])!;
                 var odd = encoding.hexDecode("aba");
-                io.println(core.isErr(&odd))!;
+                io.println(core.isErr(raw odd))!;
                 var malformed = encoding.hexDecode("0g");
-                io.println(core.isErr(&malformed))!;
+                io.println(core.isErr(raw malformed))!;
                 io.println(encoding.percentEncode("a+/ 😀".asBytes(), "/".asBytes())!)!;
                 var unescaped = encoding.percentDecode("%E4%B8%AD+%2F")!;
                 io.println(text.fromBytes(unescaped.asConstSlice())!)!;
                 var high = [_]u8{0xe9};
                 io.println(encoding.latin1Decode(high[:])!)!;
                 var wrongAscii = encoding.asciiDecode(high[:]);
-                io.println(core.isErr(&wrongAscii))!;
+                io.println(core.isErr(raw wrongAscii))!;
                 var latin = encoding.latin1Encode("é")!;
                 io.println(latin[0])!;
                 var utf16 = encoding.utf16Encode("中😀", meta.Endian.Little)!;
@@ -3158,10 +3657,10 @@ class Acceptance(CompilerCase):
                 io.println(encoding.utf16Decode(big.asConstSlice(), meta.Endian.Big)!)!;
                 var broken = [_]u8{0xd8, 0x00};
                 var rejected = encoding.utf16Decode(broken[:], meta.Endian.Big);
-                io.println(core.isErr(&rejected))!;
+                io.println(core.isErr(raw rejected))!;
                 var overlong = [_]u8{0xc0, 0x80};
                 var invalid = encoding.utf8Validate(overlong[:]);
-                io.println(core.isErr(&invalid))!;
+                io.println(core.isErr(raw invalid))!;
                 var opts = encoding.Base64Options{alphabet: encoding.Base64Alphabet.Standard,
                     padding: true, lineWidth: 0, ignoreWhitespace: false};
                 io.println(encoding.base64EncodedLen(4)!)!;
@@ -3171,7 +3670,7 @@ class Acceptance(CompilerCase):
                 var base = encoding.base64Decode("Zm9v", opts)!;
                 io.println(text.fromBytes(base.asConstSlice())!)!;
                 var noncanonical = encoding.base64Decode("Zh==", opts);
-                io.println(core.isErr(&noncanonical))!;
+                io.println(core.isErr(raw noncanonical))!;
                 opts.alphabet = encoding.Base64Alphabet.UrlSafe;
                 opts.padding = false;
                 opts.lineWidth = 0;
@@ -3184,7 +3683,7 @@ class Acceptance(CompilerCase):
                 var suffix = [_]u8{0xb8, 0xad};
                 streaming.push(leading[:])!;
                 var unfinished = streaming.finish();
-                io.println(core.isErr(&unfinished))!;
+                io.println(core.isErr(raw unfinished))!;
                 streaming.push(suffix[:])!;
                 streaming.finish()!;
                 io.println(streaming.offset())!;
@@ -3264,8 +3763,8 @@ class Acceptance(CompilerCase):
                 pub var number: i32;
                 pub var marker: i32;
             }
-            func view(ptr: *const Pair) *const i32 { &ptr.number }
-            func edit(ptr: *Pair) *i32 { &ptr.number }
+            func view(ptr: *const Pair) *const i32 { raw ptr.number }
+            func edit(ptr: *Pair) *i32 { raw ptr.number }
             func twelve() i32 { 12 }
             func makeLazy<F: Movable>(callback: F) cell.Lazy<i32, F> { cell.Lazy<i32, F>(move(callback)) }
             func main() !void {
@@ -3280,7 +3779,7 @@ class Acceptance(CompilerCase):
                     var leaf = borrowed.map<i32>(view);
                     io.println(*leaf.get())!;
                     var conflict = storage.borrowMut();
-                    io.println(core.isErr(&conflict))!;
+                    io.println(core.isErr(raw conflict))!;
                 }
                 {
                     var borrowed = storage.borrowMut()!;
@@ -3288,7 +3787,7 @@ class Acceptance(CompilerCase):
                     var x = leaf.get();
                     *x = 20;
                     var conflict = storage.tryBorrow();
-                    io.println(core.isNone(&conflict))!;
+                    io.println(core.isNone(raw conflict))!;
                 }
                 var pair = cell.RefCell<Pair>.intoInner(move(storage));
                 io.println(pair.number)!;
@@ -3303,7 +3802,7 @@ class Acceptance(CompilerCase):
                     21
                 };
                 var failed = once.getOrTryInit(callback);
-                io.println(core.isErr(&failed))!;
+                io.println(core.isErr(raw failed))!;
                 io.println(*once.getOrTryInit(callback)!)!;
                 var lazy = makeLazy(move(callback));
                 io.println(*lazy.force()!)!;
@@ -3312,7 +3811,7 @@ class Acceptance(CompilerCase):
                 var locked = cell.OnceLock<i32>.new();
                 var callbackFail = () !i32 => Failure.Once;
                 var lockFailure = locked.getOrTryInit(callbackFail);
-                io.println(core.isErr(&lockFailure))!;
+                io.println(core.isErr(raw lockFailure))!;
                 io.println(*locked.getOrInit(twelve))!;
                 io.println(locked.set(4).unwrap())!;
                 io.println(*locked.get().unwrap())!;
@@ -3395,7 +3894,7 @@ class Acceptance(CompilerCase):
                 var mainId = thread.currentId().value;
                 var worker = [mainId]() !i32 => {
                     if thread.currentId().value == mainId { return WorkError.Rejected; }
-                    for !thread.stopRequested() { thread.yieldNow(); }
+                    while !thread.stopRequested() { thread.yieldNow(); }
                     42
                 };
                 var job = thread.Thread<i32>.spawn(move(worker))!;
@@ -3505,20 +4004,20 @@ class Acceptance(CompilerCase):
                 pub var value: i32;
                 pub var other: i32;
             }
-            func choose(pair: *Pair) *i32 { &pair.other }
+            func choose(pair: *Pair) *i32 { raw pair.other }
             func main() !void {
                 var lock = sync.Mutex<Pair>.new(Pair{value: 13, other: 2});
                 {
                     var first = lock.lock()!;
                     var unavailable = lock.tryLock();
-                    io.println(core.isNone(&unavailable))!;
+                    io.println(core.isNone(raw unavailable))!;
                     var entry = sync.MutexGuard<Pair>.map<i32>(move(first), choose);
                     var number = entry.get();
                     *number *= 4;
                     entry.unlock();
                 }
                 var observe = (pair: *Pair) !void => io.println(pair.other);
-                sync.withLock(&lock, observe)!;
+                sync.withLock(raw lock, observe)!;
                 var value = sync.Mutex<Pair>.intoInner(move(lock));
                 io.println(value.value)!;
                 io.println(meta.isShareable<sync.Mutex<cell.Cell<i32>>>())!;
@@ -3568,7 +4067,7 @@ class Acceptance(CompilerCase):
                 var guard = state.counter.lock() catch { panic("lock failed"); };
                 guard.get().waiting = true;
                 var threshold = (value: *Counter) bool => value.value == 12000;
-                var final = sync.waitUntil(&state.condition, move(guard), threshold)
+                var final = sync.waitUntil(raw state.condition, move(guard), threshold)
                             catch { panic("condition failed"); };
             }
             export "C" func is_waiting(state: *const State) c_int {
@@ -3655,24 +4154,24 @@ class Acceptance(CompilerCase):
                 unique.number = 7;
                 var observer = original.downgrade();
                 var aliased = original.getMut();
-                io.println(core.isNone<*Probe>(&aliased))!;
+                io.println(core.isNone<*Probe>(raw aliased))!;
                 {
                     var duplicate = original;
                     var weakCopy = observer;
-                    io.println(observer.ptrEq(&weakCopy))!;
-                    io.println(duplicate.ptrEq(&original))!;
+                    io.println(observer.ptrEq(raw weakCopy))!;
+                    io.println(duplicate.ptrEq(raw original))!;
                     io.println(duplicate.strongCount())!;
                     io.println(duplicate.weakCount())!;
                     var upgraded = observer.upgrade();
                     io.println(original.strongCount())!;
                     var failure = mem.Shared<Probe>.tryUnwrap(move(duplicate));
-                    io.println(core.isErr<Probe>(&failure))!;
+                    io.println(core.isErr<Probe>(raw failure))!;
                 }
                 {
                     var final = mem.Shared<Probe>.tryUnwrap(move(original))!;
                     io.println(final.number)!;
                     var dead = observer.upgrade();
-                    io.println(core.isNone<mem.Shared<Probe>>(&dead))!;
+                    io.println(core.isNone<mem.Shared<Probe>>(raw dead))!;
                     io.println(observer.weakCount())!;
                 }
                 var common = mem.Shared<sync.Mutex<u32>>.new(sync.Mutex<u32>.new(5))!;
@@ -3708,9 +4207,9 @@ class Acceptance(CompilerCase):
                 io.println(negative.mul(-3)!.div(2)!.toNanos()!)!;
                 var large = time.Duration.fromSeconds(9223372036854775807i64);
                 var overflow = large.mul(2);
-                io.println(core.isErr<time.Duration>(&overflow))!;
+                io.println(core.isErr<time.Duration>(raw overflow))!;
                 var underflow = time.Duration.fromSeconds(-9223372036854775807i64 - 1).abs();
-                io.println(core.isErr<time.Duration>(&underflow))!;
+                io.println(core.isErr<time.Duration>(raw underflow))!;
                 io.println(time.Duration.fromDays(9223372036854775807i64).seconds())!;
 
                 var epoch = time.Date.new(1970, 1, 1)!;
@@ -3724,12 +4223,12 @@ class Acceptance(CompilerCase):
                 io.println(leap.dayOfYear())!;
                 io.println(leap.isLeapYear())!;
                 var skippedLeap = time.Date.new(1900, 2, 29);
-                io.println(core.isErr<time.Date>(&skippedLeap))!;
+                io.println(core.isErr<time.Date>(raw skippedLeap))!;
                 var early = time.Date.new(-400, 2, 29)!;
                 io.println(time.Date.fromOrdinal(early.toOrdinal())!.year())!;
                 var extreme = time.Date.new(2147483647, 12, 31)!;
                 var impossible = extreme.addDays(1);
-                io.println(core.isErr<time.Date>(&impossible))!;
+                io.println(core.isErr<time.Date>(raw impossible))!;
                 var end = time.Date.new(2023, 1, 31)!;
                 io.println(end.addMonths(1, time.MonthPolicy.Clamp)!.day())!;
                 io.println(end.addMonths(1, time.MonthPolicy.Carry)!.month())!;
@@ -3758,7 +4257,7 @@ class Acceptance(CompilerCase):
                 var timer = time.Timer.after(time.Duration.zero())!;
                 timer.cancel();
                 var cancelled = timer.wait();
-                io.println(core.isErr<void>(&cancelled))!;
+                io.println(core.isErr<void>(raw cancelled))!;
                 timer.reset(time.Duration.zero())!;
                 timer.wait()!;
                 var ticker = time.Ticker.every(time.Duration.fromMillis(1))!;
@@ -3793,17 +4292,17 @@ class Acceptance(CompilerCase):
                 }
                 for item in rx.drain() { io.println(item.marker)!; }
                 var empty = rx.recv()!;
-                io.println(core.isNone<Probe>(&empty))!;
+                io.println(core.isNone<Probe>(raw empty))!;
 
                 inner, outer := channel.Channel<?i32>.bounded(1)!;
                 inner.send(null)!;
                 inner.close();
                 var nested = outer.recv()!;
                 var payload = nested.unwrap();
-                io.println(core.isSome<?i32>(&nested))!;
-                io.println(core.isNone<i32>(&payload))!;
+                io.println(core.isSome<?i32>(raw nested))!;
+                io.println(core.isNone<i32>(raw payload))!;
                 var terminal = outer.recv()!;
-                io.println(core.isNone<?i32>(&terminal))!;
+                io.println(core.isNone<?i32>(raw terminal))!;
 
                 fast, slow := channel.unbounded<i32>()!;
                 for n in 0..4 { fast.send(n)!; }
@@ -3812,7 +4311,7 @@ class Acceptance(CompilerCase):
                 core.drop<channel.Sender<i32>>(move(fast));
                 for n in 2..100 { if slow.recv()!.unwrap() != n { panic("growing queue order"); } }
                 var end = slow.recv()!;
-                io.println(core.isNone<i32>(&end))!;
+                io.println(core.isNone<i32>(raw end))!;
                 io.println(meta.isSendable<channel.Receiver<i32>>())!;
                 io.println(meta.isShareable<channel.Receiver<i32>>())!;
             }
@@ -3838,10 +4337,10 @@ class Acceptance(CompilerCase):
                 }
                 var producer = [move(tx)]() !i32 => { tx.send(15)!; 17 };
                 var worker = thread.Thread<i32>.spawn(move(producer))!;
-                io.println(receiveReady(&rx))!;
+                io.println(receiveReady(raw rx))!;
                 io.println(worker.join()!)!;
                 var finished = rx.recv()!;
-                io.println(core.isNone<i32>(&finished))!;
+                io.println(core.isNone<i32>(raw finished))!;
 
                 out, incoming := channel.bounded<i32>(0)!;
                 var consumer = [move(incoming)]() !i32 => {
@@ -3850,7 +4349,7 @@ class Acceptance(CompilerCase):
                 };
                 var partner = thread.Thread<i32>.spawn(move(consumer))!;
                 var sent = false;
-                for !sent {
+                while !sent {
                     switch out.trySend(28) {
                         channel.TrySendResult.Sent => { sent = true; },
                         channel.TrySendResult.Full(item) => { thread.yieldNow(); },
@@ -4090,7 +4589,7 @@ class Acceptance(CompilerCase):
                 fence.join()!;
                 waiting.cancel();
                 var outcome = waiting.join();
-                io.println(result.errorOf(&outcome).unwrap() == channel.ChannelError.Cancelled)!;
+                io.println(result.errorOf(raw outcome).unwrap() == channel.ChannelError.Cancelled)!;
             }
         """, "48\n52\n63\ntrue\n")
 
@@ -4229,8 +4728,8 @@ class Acceptance(CompilerCase):
                 var other = definite.clone();
                 var waitForOther = [move(other)]() !i32 => {
                     var id = task.currentId();
-                    if core.isNone<task.TaskId>(&id) { panic("missing task ID"); }
-                    for other.asPtr().load(atomic.Order.Acquire) < 1 { task.yieldNow()!; }
+                    if core.isNone<task.TaskId>(raw id) { panic("missing task ID"); }
+                    while other.asPtr().load(atomic.Order.Acquire) < 1 { task.yieldNow()!; }
                     44
                 };
                 var first = group.spawn<i32>(move(waitForOther))!;
@@ -4250,7 +4749,7 @@ class Acceptance(CompilerCase):
                 var waiting = () !i32 => { task.sleep(time.Duration.fromSeconds(30))!; 0 };
                 var sleeper = group.spawn<i32>(waiting)!;
                 var available = sleeper.tryJoin()!;
-                io.println(core.isNone<i32>(&available))!;
+                io.println(core.isNone<i32>(raw available))!;
                 sleeper.cancel();
                 io.println(sleeper.join() catch (reason) {
                     if reason == task.TaskError.Cancelled { 2 } else { -2 }

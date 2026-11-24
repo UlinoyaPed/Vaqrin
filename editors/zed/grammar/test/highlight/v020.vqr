@@ -1,0 +1,50 @@
+import (net/http as http);
+   //   ^ variable.special
+              // ^ keyword
+                 // ^ variable.special
+pub func inspect(x: mut i32) ref i32 from x {
+                 // ^ keyword
+                          // ^ keyword
+                                  // ^ keyword
+    defer log();
+ // ^ keyword
+    ref mut alias = x;
+ // ^ keyword
+     // ^ keyword
+    while true { break; }
+ // ^ keyword
+    outer: while !stop() { break outer; }
+        // ^ keyword
+    unsafe { var p = raw *alias; }
+                  // ^ keyword
+    log.raw();
+     // ^ function.method
+    log.ref();
+     // ^ function.method
+    log.mut();
+     // ^ function.method
+    log.from();
+     // ^ function.method
+    log.while();
+     // ^ function.method
+    var raw = 0;
+     // ^ variable
+    var ref = 0;
+     // ^ variable
+    var mut = 0;
+     // ^ variable
+    var from = 0;
+     // ^ variable
+    var while = 0;
+     // ^ variable
+    whole +|= amount;
+       // ^ operator
+    whole <<|= count;
+       // ^ operator
+}
+class Legacy {
+    private:
+ // ^ variable
+    public:
+ // ^ variable
+}

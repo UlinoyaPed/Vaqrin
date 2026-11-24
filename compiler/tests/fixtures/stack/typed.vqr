@@ -8,7 +8,7 @@ func require(ok: bool) !void { if !ok { return TestError.Unexpected; } }
 func inputs() !void {
     var original = fs.readFile("generated-input.bin", 4096)!;
     var codec = types.Codec_Input{};
-    var input = protobuf.decode<types.Msg_Input>(original.asConstSlice(), &codec, protobuf.DecodeLimits())!;
+    var input = protobuf.decode<types.Msg_Input>(original.asConstSlice(), raw codec, protobuf.DecodeLimits())!;
     require(input.f_count.unwrap() == 0)!;
     require(input.f_numbers.len() == 3 && input.f_numbers[0] == -1 && input.f_numbers[2] == 40)!;
     require(input.f_scores.len() == 1)!;
@@ -34,7 +34,7 @@ func inputs() !void {
         some(ref data) => { require(data.len() == 0)!; },
         null => { return TestError.Unexpected; },
     };
-    var encoded = protobuf.encode<types.Msg_Input>(&input, &codec, 4096)!;
+    var encoded = protobuf.encode<types.Msg_Input>(raw input, raw codec, 4096)!;
     fs.writeFile("generated-output.bin", encoded.asConstSlice())
 }
 
@@ -49,7 +49,7 @@ class Handler {
         var request = stream.recv()! ?? { return TestError.Unexpected; };
         var value = interop.Msg_Child();
         value.f_left = request.f_count ?? 0;
-        stream.send(&value)!;
+        stream.send(raw value)!;
         grpc.status(grpc.StatusCode.Ok, "")
     }
     pub func rpc_Sum(stream: *types.Stream_Echo_Sum) !grpc.Status {
@@ -58,7 +58,7 @@ class Handler {
             var request = stream.recv()! ?? { break; };
             value.f_left += request.f_count ?? 0;
         }
-        stream.send(&value)!;
+        stream.send(raw value)!;
         grpc.status(grpc.StatusCode.Ok, "")
     }
     pub func rpc_Mirror(stream: *types.Stream_Echo_Mirror) !grpc.Status {
@@ -66,7 +66,7 @@ class Handler {
             var request = stream.recv()! ?? { break; };
             var value = interop.Msg_Child();
             value.f_left = request.f_count ?? 0;
-            stream.send(&value)!;
+            stream.send(raw value)!;
         }
         grpc.status(grpc.StatusCode.Ok, "")
     }
@@ -84,12 +84,12 @@ func server() !void {
     io.print(port)!;
     io.print("\n")!;
     var handler = Handler{};
-    var adapter = types.EchoServer(&handler);
+    var adapter = types.EchoServer(raw handler);
     var host = grpc.Server();
-    adapter.register(&host)!;
+    adapter.register(raw host)!;
     var options = grpc.ServeOptions();
     options.timeout = time.Duration.fromSeconds(5);
-    host.acceptTls(&listener, &acceptor, options)
+    host.acceptTls(raw listener, raw acceptor, options)
 }
 
 func client() !void {
@@ -100,38 +100,38 @@ func client() !void {
     dial.timeout = time.Duration.fromSeconds(5);
     dial.trustedRoots = some(root);
     var connection = grpc.dial(address, dial)!;
-    var stub = types.EchoClient(&connection);
+    var stub = types.EchoClient(raw connection);
     var options = grpc.CallOptions();
     var message = types.Msg_Input();
     message.f_count = some(16);
-    var reply = stub.rpc_Double(&message, &options)!;
+    var reply = stub.rpc_Double(raw message, raw options)!;
     require(reply.status.isOk())!;
     switch reply.message {
         some(ref answer) => { require(answer.f_left == 32)!; },
         null => { return TestError.Unexpected; },
     };
 
-    var broadcast = stub.rpc_Broadcast(&message, &options)!;
+    var broadcast = stub.rpc_Broadcast(raw message, raw options)!;
     var part = broadcast.recv()! ?? { return TestError.Unexpected; };
     require(part.f_left == 16 && broadcast.recv()! == null)!;
     var broadcastStatus = broadcast.complete()!;
     require(broadcastStatus.status.isOk())!;
 
-    var sum = stub.rpc_Sum(&options)!;
-    sum.send(&message)!;
-    sum.send(&message)!;
+    var sum = stub.rpc_Sum(raw options)!;
+    sum.send(raw message)!;
+    sum.send(raw message)!;
     sum.finishSend()!;
     var total = sum.recv()! ?? { return TestError.Unexpected; };
     require(total.f_left == 32 && sum.recv()! == null)!;
     var sumStatus = sum.complete()!;
     require(sumStatus.status.isOk())!;
 
-    var mirror = stub.rpc_Mirror(&options)!;
-    mirror.send(&message)!;
+    var mirror = stub.rpc_Mirror(raw options)!;
+    mirror.send(raw message)!;
     var first = mirror.recv()! ?? { return TestError.Unexpected; };
     require(first.f_left == 16)!;
     message.f_count = some(19);
-    mirror.send(&message)!;
+    mirror.send(raw message)!;
     var second = mirror.recv()! ?? { return TestError.Unexpected; };
     require(second.f_left == 19)!;
     mirror.finishSend()!;

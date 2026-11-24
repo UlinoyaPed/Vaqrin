@@ -118,7 +118,7 @@ pub class Report {
     pub const func formatString() !string {
         var writer = io.MemoryWriter();
         formatNode(messageValue, errorValue, frames.asConstSlice(),
-            children.asConstSlice(), &writer, 0)!;
+            children.asConstSlice(), raw writer, 0)!;
         var bytes = io.MemoryWriter.intoBytes(move(writer));
         text.fromBytes(bytes.asConstSlice())
     }
@@ -133,7 +133,7 @@ pub class ReportCauseIter {
     pub func init(values: []const Report) : values(values), index(0) {}
     pub func next() ?*const Report {
         if index >= values.len() { return null; }
-        var item = &values[index];
+        var item = raw values[index];
         index++;
         some(item)
     }
@@ -172,7 +172,7 @@ func formatNode(message: str, cause: ?ErrorId, frames: []const Frame,
         }
         for &attr in iterator.SliceIterRef<log.Attr>(frame.attrs()) {
             io.writeString(writer, " ")!;
-            var attribute = log.formatAttr(&attr)!;
+            var attribute = log.formatAttr(attr.toRaw())!;
             io.writeString(writer, attribute)!;
         }
         io.writeString(writer, "\n")!;
@@ -187,14 +187,14 @@ func formatU32(value: u32) !string {
     var digits = [10]u8{0,0,0,0,0,0,0,0,0,0};
     var count: usize = 0;
     var number = value;
-    for number > 0 {
+    while number > 0 {
         digits[count] = u8(48 + number % 10)!;
         count++;
         number /= 10;
     }
     var output = text.StringBuilder();
     if count == 0 { output.append("0")!; }
-    for count > 0 {
+    while count > 0 {
         count--;
         var one = [1]u8{digits[count]};
         var part = text.fromBytes(one[:])!;
@@ -211,7 +211,7 @@ pub class ErrorSink {
     pub const func isEmpty() bool { reports.isEmpty() }
     pub func clear() void { reports.clear(); }
     pub func drain() ReportDrain {
-        var owned = mem.replace<coll.Vec<Report>>(&reports, coll.Vec<Report>());
+        var owned = mem.replace<coll.Vec<Report>>(raw reports, coll.Vec<Report>());
         owned.reverse();
         ReportDrain(move(owned))
     }
@@ -220,7 +220,7 @@ pub class ErrorSink {
         if reports.len() == 1 { return reports.pop().unwrap(); }
         var result = Report.new("multiple errors")!;
         result.reserveCauses(reports.len())!;
-        for reports.len() > 0 {
+        while reports.len() > 0 {
             var item = reports.remove(0).unwrap();
             result.addCause(move(item))!;
         }

@@ -85,7 +85,7 @@ func charBytes(value: char, output: *[4]u8) usize {
 
 func writeCharRaw(writer: *io.Writer, value: char) !void {
     var bytes = mem.zeroedBytes<4>();
-    var count = charBytes(value, &bytes);
+    var count = charBytes(value, raw bytes);
     io.writeAll(writer, bytes[0..count])!
 }
 func writeFill(writer: *io.Writer, value: char, count: usize) !void {
@@ -113,7 +113,7 @@ pub func writeBool(writer: *io.Writer, value: bool, options: FormatOptions) !voi
 }
 pub func writeChar(writer: *io.Writer, value: char, options: FormatOptions) !void {
     var bytes = mem.zeroedBytes<4>();
-    var count = charBytes(value, &bytes);
+    var count = charBytes(value, raw bytes);
     var valueText = text.fromBytes(bytes[0..count])!;
     writeString(writer, unsafe { __vqr_text_borrow_utf8(valueText.asBytes()) }, options)
 }
@@ -123,7 +123,7 @@ extern "C" func __vqr_decimal_format_f64(value: f64, buffer: *u8, capacity: usiz
 
 pub func formatShortestScientific(value: f64) !string {
     var buffer = mem.zeroedBytes<32>();
-    var length = unsafe { __vqr_decimal_format_f64(value, &buffer[0], buffer.len()) };
+    var length = unsafe { __vqr_decimal_format_f64(value, raw buffer[0], buffer.len()) };
     if length == 0 { return FormatError.InvalidFormat; }
     text.fromBytes(buffer[0..length])
 }
@@ -145,7 +145,7 @@ pub func formatFloat(value: f64, style: FloatStyle, precision: ?usize) !string {
     var buffer = mem.zeroedBytes<512>();
     var length: usize = 0;
     var errorCode: i32 = 0;
-    if unsafe { __vqr_io_format_float(value, styleCode, digits, &buffer[0], buffer.len(), &length, &errorCode) } != 0 {
+    if unsafe { __vqr_io_format_float(value, styleCode, digits, raw buffer[0], buffer.len(), raw length, raw errorCode) } != 0 {
         return io.systemError(errorCode);
     }
     text.fromBytes(buffer[0..length])
@@ -248,7 +248,7 @@ func parseSpec(value: str) !FormatOptions {
         index++;
     }
     if index < bytes.len() && bytes[index] == 48u8 { options.fill = '0'; }
-    for index < bytes.len() && 48 <= bytes[index] && bytes[index] <= 57 {
+    while index < bytes.len() && 48 <= bytes[index] && bytes[index] <= 57 {
         var digit = usize(bytes[index]) - 48;
         if options.width > (~usize(0) - digit) / 10 { return FormatError.WidthTooLarge; }
         options.width = options.width * 10 + digit;
@@ -259,7 +259,7 @@ func parseSpec(value: str) !FormatOptions {
         if index == bytes.len() { return FormatError.InvalidPrecision; }
         var precision: usize = 0;
         var firstDigit = index;
-        for index < bytes.len() && 48 <= bytes[index] && bytes[index] <= 57 {
+        while index < bytes.len() && 48 <= bytes[index] && bytes[index] <= 57 {
             var digit = usize(bytes[index]) - 48;
             if precision > (64 - digit) / 10 { return FormatError.InvalidPrecision; }
             precision = precision * 10 + digit;
@@ -292,7 +292,7 @@ pub func writeTo(writer: *io.Writer, pattern: str, args: []const FormatArg) !voi
     var literal: usize = 0;
     var argument: usize = 0;
     var indexed = false;
-    for index < bytes.len() {
+    while index < bytes.len() {
         if bytes[index] == 123u8 {
             if index + 1 < bytes.len() && bytes[index + 1] == 123u8 {
                 if index > literal { io.writeAll(writer, bytes[literal..index])!; }
@@ -303,12 +303,12 @@ pub func writeTo(writer: *io.Writer, pattern: str, args: []const FormatArg) !voi
             }
             if index > literal { io.writeAll(writer, bytes[literal..index])!; }
             var end = index + 1;
-            for end < bytes.len() && bytes[end] != 125u8 { end++; }
+            while end < bytes.len() && bytes[end] != 125u8 { end++; }
             if end == bytes.len() { return FormatError.InvalidFormat; }
             var start = index + 1;
             var cursor = start;
             var selected: usize = 0;
-            for cursor < end && 48 <= bytes[cursor] && bytes[cursor] <= 57 {
+            while cursor < end && 48 <= bytes[cursor] && bytes[cursor] <= 57 {
                 var digit = usize(bytes[cursor]) - 48;
                 if selected > (~usize(0) - digit) / 10 { return FormatError.InvalidFormat; }
                 selected = selected * 10 + digit;
@@ -351,7 +351,7 @@ pub func writeTo(writer: *io.Writer, pattern: str, args: []const FormatArg) !voi
 
 pub func format(pattern: str, args: []const FormatArg) !string {
     var writer = io.MemoryWriter();
-    writeTo(&writer, pattern, args)!;
+    writeTo(raw writer, pattern, args)!;
     text.fromBytes(writer.asSlice())
 }
 pub func format(value: str) !string { text.fromBytes(value.asBytes()) }
@@ -359,46 +359,46 @@ pub func writeTo(writer: *io.Writer, value: str) !void { io.writeString(writer, 
 
 pub func print(value: FormatArg) !void {
     var output = io.stdout();
-    writeArg(&output, value, FormatOptions())!;
+    writeArg(raw output, value, FormatOptions())!;
     output.flush()
 }
 pub func println(value: FormatArg) !void {
     var output = io.stdout();
-    writeArg(&output, value, FormatOptions())!;
-    io.writeString(&output, "\n")!;
+    writeArg(raw output, value, FormatOptions())!;
+    io.writeString(raw output, "\n")!;
     output.flush()
 }
 pub func eprint(value: FormatArg) !void {
     var output = io.stderr();
-    writeArg(&output, value, FormatOptions())!;
+    writeArg(raw output, value, FormatOptions())!;
     output.flush()
 }
 pub func eprintln(value: FormatArg) !void {
     var output = io.stderr();
-    writeArg(&output, value, FormatOptions())!;
-    io.writeString(&output, "\n")!;
+    writeArg(raw output, value, FormatOptions())!;
+    io.writeString(raw output, "\n")!;
     output.flush()
 }
 
 pub func print(value: str) !void {
     var output = io.stdout();
-    writeString(&output, value)!;
+    writeString(raw output, value)!;
     output.flush()
 }
 pub func println(value: str) !void {
     var output = io.stdout();
-    writeString(&output, value)!;
-    writeString(&output, "\n")!;
+    writeString(raw output, value)!;
+    writeString(raw output, "\n")!;
     output.flush()
 }
 pub func eprint(value: str) !void {
     var output = io.stderr();
-    writeString(&output, value)!;
+    writeString(raw output, value)!;
     output.flush()
 }
 pub func eprintln(value: str) !void {
     var output = io.stderr();
-    writeString(&output, value)!;
-    writeString(&output, "\n")!;
+    writeString(raw output, value)!;
+    writeString(raw output, "\n")!;
     output.flush()
 }

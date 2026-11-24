@@ -8,7 +8,7 @@ calls with the low-level API. Each active stream has its own message decoder.
 `DialOptions.maxConcurrentCalls` bounds the number of active calls. Read or
 cancel each call to release its slot.
 
-`ClientConn.unary(path, requestBytes, &callOptions)` sends one message. The
+`ClientConn.unary(path, requestBytes, raw callOptions)` sends one message. The
 path uses the fully qualified service and method, such as
 `/example.Greeter/SayHello`. `UnaryResponse` contains the server status,
 initial metadata, trailers and optional body. Encode and decode the body with
@@ -25,7 +25,7 @@ call API provides `start`, `sendMessage`, `finishSend`, `recvMessage`,
 
 On the server, create `grpc.Server()` and register each path with a
 `UnaryHandler`. Keep each handler alive for the duration of registration and
-processing. Use `acceptTls(&listener, &acceptor, options)` or pass a connected
+processing. Use `acceptTls(raw listener, raw acceptor, options)` or pass a connected
 stream to `serveTls` or `serveH2c`. The server decodes each request envelope,
 passes metadata and deadline to the handler, and encodes one response message
 or an error status. Both roles use the five-byte gRPC envelope and accept

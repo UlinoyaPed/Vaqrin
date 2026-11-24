@@ -143,8 +143,8 @@ pub func dial(endpoint: str, options: DialOptions) !ClientConn {
         config.requireProtocol = true;
         config.addProtocol("h2".asBytes())!;
         if options.trustedRoots != null { config.setRootFile(options.trustedRoots.unwrap())!; }
-        var tlsStream = tls.TlsStream.connect(move(socket), host, &config)!;
-        var h2 = http2.openTls(http2.Role.Client, &tlsStream, http2.Settings())!;
+        var tlsStream = tls.TlsStream.connect(move(socket), host, raw config)!;
+        var h2 = http2.openTls(http2.Role.Client, raw tlsStream, http2.Settings())!;
         return ClientConn(Transport(StreamSocket.Secure(move(tlsStream))), move(h2), move(name), true, options);
     }
     var h2 = http2.Connection.open(http2.Role.Client, http2.Settings())!;

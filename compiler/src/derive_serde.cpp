@@ -95,7 +95,7 @@ void generate(Decl &record, const std::string &serde, Span origin) {
     const auto type = "VaqrinSerdeFieldType" + std::to_string(i);
     code += "vaqrinOutput.writeKey(" + field.key + ")!;\n";
     code += serde + (field.optional ? ".encodeOptional<" : ".encodeValue<") + type +
-            ">(&self." + field.declaration->name + ", vaqrinOutput)!;\n";
+            ">(raw self." + field.declaration->name + ", vaqrinOutput)!;\n";
   }
   code += "vaqrinOutput.endMap() }\n"
           "pub static func decodeSerde(vaqrinInput: *" + serde + ".Deserializer) !Self {\n"

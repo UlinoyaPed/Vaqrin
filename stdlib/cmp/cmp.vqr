@@ -42,15 +42,15 @@ pub func reverse(order: Ordering) Ordering {
     }
 }
 
-pub func min<T: Movable>(a: T, b: T) T { if (compare(&a, &b) == Ordering.Greater) move(b) else move(a) }
-pub func max<T: Movable>(a: T, b: T) T { if (compare(&a, &b) == Ordering.Less) move(b) else move(a) }
-pub func minBy<T: Movable, F: Movable>(a: T, b: T, less: F) T { if (less(&b, &a)) move(b) else move(a) }
-pub func maxBy<T: Movable, F: Movable>(a: T, b: T, less: F) T { if (less(&a, &b)) move(b) else move(a) }
+pub func min<T: Movable>(a: T, b: T) T { if compare(raw a, raw b) == Ordering.Greater { move(b) } else { move(a) } }
+pub func max<T: Movable>(a: T, b: T) T { if compare(raw a, raw b) == Ordering.Less { move(b) } else { move(a) } }
+pub func minBy<T: Movable, F: Movable>(a: T, b: T, less: F) T { if less(raw b, raw a) { move(b) } else { move(a) } }
+pub func maxBy<T: Movable, F: Movable>(a: T, b: T, less: F) T { if less(raw a, raw b) { move(b) } else { move(a) } }
 
 pub func clamp<T: Movable>(value: T, low: T, high: T) T {
-    if compare(&low, &high) == Ordering.Greater { panic("inverted clamp interval"); }
-    if compare(&value, &low) == Ordering.Less { return move(low); }
-    if compare(&value, &high) == Ordering.Greater { return move(high); }
+    if compare(raw low, raw high) == Ordering.Greater { panic("inverted clamp interval"); }
+    if compare(raw value, raw low) == Ordering.Less { return move(low); }
+    if compare(raw value, raw high) == Ordering.Greater { return move(high); }
     move(value)
 }
 

@@ -52,11 +52,11 @@ Type *Body::hint(const Ast &n) {
     if (n->text == "post!") return t->kind == Kind::Result ? t->parts[0] : nullptr;
     if (n->text == "post?") return t->kind == Kind::Optional ? t->parts[0] : nullptr;
     if (n->text == "ref" || n->text == "ref mut") return p.reference(t, n->text == "ref");
-    if ((n->text == "&" || n->text == "raw") && n->children[0]->kind == NodeKind::Name) {
+    if (n->text == "raw" && n->children[0]->kind == NodeKind::Name) {
       int i = findLocal(n->children[0]->text);
       if (i >= 0) return p.pointer(t, !locals[i].writable);
     }
-    return n->text == "&" || n->text == "raw" ? nullptr : t;
+    return n->text == "raw" ? nullptr : t;
   }
   case NodeKind::Compare:
     return p.boolTy;
@@ -221,9 +221,14 @@ ValueAt Body::name(const Ast &n) {
       if (constructing && !constructed.contains(f.index))
         fail(n->span, "field is not initialized yet", "E230");
       indexField(n->span, owner, *f.decl);
+      Value *receiver = nullptr;
+      if (deferredCleanup)
+        receiver = ir.CreateLoad(p.storage(locals[self].type), locals[self].slot);
+      else
+        receiver = fn->getArg(0);
       return {f.type,
               nullptr,
-              ir.CreateStructGEP(owner->ir, fn->getArg(0), f.index),
+              ir.CreateStructGEP(owner->ir, receiver, f.index),
               !locals[self].type->readOnly && !f.decl->readOnly,
               -1,
               true,
@@ -425,6 +430,10 @@ ValueAt Body::index(const Ast &n) {
     call->kind = NodeKind::Call;
     call->span = n->span;
     call->children = {nullptr};
+    // Vec subscripting uses an asSlice overload. During argument
+    // evaluation a reserved Vec is still readable, but cannot produce a
+    // mutable slice while its receiver reservation is pending.
+    if (v.writable && hasReceiverReservation(v)) v.writable = false;
     v = invoke(call, p.methods(t, "asSlice", false), {}, v, t);
     t = v.type;
   }
@@ -513,8 +522,8 @@ ValueAt Body::unary(const Ast &n, Type *expected) {
   }
   auto v = expression(n->children[0], op == "!" ? p.boolTy : nullptr);
   if (v.type == p.neverTy) return v;
-  if (op == "&" || op == "raw") {
-    auto *reference = op == "raw" ? referenceHint(n->children[0]) : nullptr;
+  if (op == "raw") {
+    auto *reference = referenceHint(n->children[0]);
     if (reference && reference->kind == Kind::Reference)
       fail(n->span, "use toRaw() to convert a safe reference", "E230");
     if (!v.address) fail(n->span, "address-of requires an existing storage location");
@@ -524,6 +533,8 @@ ValueAt Body::unary(const Ast &n, Type *expected) {
     return dereference(v, n->span);
   }
   if (op == "post!" || op == "post?") {
+    if (deferredCleanup)
+      fail(n->span, "deferred cleanup cannot propagate; handle the result or absence locally", "E231");
     const bool optional = op == "post?";
     Type *emptyChannel = nullptr;
     if (optional) {
@@ -776,6 +787,10 @@ ValueAt Body::chain(const Ast &n) {
 ValueAt Body::fallback(const Ast &n, Type *expected) {
   (void)expected;
   bool caught = n->text == "catch";
+  const auto &handler = n->children[1];
+  if (deferredCleanup && caught && handler->kind == NodeKind::Block &&
+      handler->children.empty() && !handler->tail)
+    fail(handler->span, "deferred cleanup must explicitly handle errors; empty catch discards them", "E231");
   auto v = expression(n->children[0]);
   if (v.type == p.neverTy) return v;
   if (v.type->kind != (caught ? Kind::Result : Kind::Optional))
@@ -1098,7 +1113,7 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
                  parameterMode(pattern) == ParameterMode::Mut)
           recurse(recurse, pattern->children[0], actual->kind == Kind::Reference ? actual->parts[0] : actual);
         else if (!actual->parts.empty() && (((op == "*" || op == "*const") && actual->kind == Kind::Pointer) ||
-                 ((op == "&" || op == "&const" || op == "ref" || op == "ref mut") &&
+                 ((op == "ref" || op == "ref mut") &&
                   actual->kind == Kind::Reference) ||
                  ((op == "[]" || op == "[]const") && actual->kind == Kind::Slice) ||
                  (op == "?" && actual->kind == Kind::Optional) ||
@@ -1184,7 +1199,7 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
         valid = false;
         break;
       }
-      if (!from && a->kind == NodeKind::Unary && (a->text == "&" || a->text == "raw")) {
+      if (!from && a->kind == NodeKind::Unary && a->text == "raw") {
         // Address-of always produces a pointer, even when the pointee type
         // cannot be inferred before selecting the overload.
         auto *target = t;
@@ -1352,7 +1367,20 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
   std::vector<int> transfers;
   bool temporaryBorrow = receiver && receiver->temporaryBorrow;
   std::vector<int> deferredLoans;
+  int receiverReservation = -1;
   enter();
+  if (receiver && !defer) {
+    // The receiver has already been evaluated. Keep its storage alive while
+    // arguments are evaluated, but allow nested reads until the call starts.
+    auto loan = *receiver;
+    if (loan.origin.root < 0) loan.origin.root = loan.local;
+    if (loan.origin.root >= 0) {
+      loan.type = p.reference(loan.type, true);
+      loan.temporaryBorrow = false; // The reservation ends within this full expression.
+      receiverReservation = pinBorrow(loan, n->span, scopes.size() - 1);
+      locals[receiverReservation].receiverReservation = true;
+    }
+  }
   if (defer && receiver) {
     // An argument could replace a Box (or another owning receiver) after
     // evaluating its address. Reserve the receiver before evaluating arguments,
@@ -1391,6 +1419,9 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
     }
   }
   if (receiver) {
+    // Activate the real receiver access. Any loans held by the arguments
+    // still participate in this check; only our own reservation is released.
+    if (receiverReservation >= 0) initialized[receiverReservation] = false;
     if (!defer) checkAccess(*receiver, !d.readOnly, n->span);
     if (!d.readOnly) invalidateOwnedAddresses(*receiver);
   }
@@ -1419,7 +1450,7 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
     called->setAttributes(entry->ir->getAttributes());
   }
   if (defer) {
-    for (auto i : deferredLoans) retainDeferredLoan(i, defer->scope);
+    for (auto i : deferredLoans) retainDeferredLocal(i, defer->scope);
     registerDefer(called, n->span, *defer);
     leave();
     return voidValue();
@@ -1652,8 +1683,12 @@ ValueAt Body::lambda(const Ast &n, Type *expected) {
   Borrow origin{};
   for (unsigned i = 0; i < captures.size(); ++i) {
     const auto &capture = captures[i];
-    auto v = capture.safeAlias ? referenceName(findLocal(capture.name), n->children[i]->span)
-                               : expression(n->children[i]);
+    const auto &item = n->children[i];
+    // Legacy capture syntax is not an address expression. Lower its selected
+    // location directly so removing unary '&' does not change capture semantics.
+    auto v = capture.safeAlias ? referenceName(findLocal(capture.name), item->span)
+             : capture.reference ? asPointer(this->name(item->children.front()), item->span)
+                                 : expression(item);
     if (!live()) {
       leave();
       return neverValue();
@@ -2006,6 +2041,9 @@ ValueAt Body::call(const Ast &n, Type *expected, DeferRegistration *defer) {
         auto *address = ir.CreateExtractValue(box, 0);
         auto *value = inner == p.voidTy ? nullptr : ir.CreateLoad(p.storage(inner), address);
         if (v.borrowed) {
+          // This is an ownership transfer just like move(capture). Mark
+          // the closure consuming before clearing the captured Box's slot.
+          if (locals[v.local].captureFlag) closure->consuming = true;
           invalidateOwnedAddresses(v);
           setAlive(v.local, false);
         }
@@ -2094,27 +2132,48 @@ ValueAt Body::call(const Ast &n, Type *expected, DeferRegistration *defer) {
   if (parts.size() != n->children.size()) fail(n->span, "wrong argument count");
   if (defer && parts.back() != p.voidTy)
     fail(n->span, "defer requires a runtime void call; handle errors within the deferred function", "E231");
-  if (defer && (closureCall || target.type->cAbi))
-    fail(n->span, "deferred indirect calls currently require a non-capturing Vaqrin function value", "E290");
+  if (defer && target.type->cAbi)
+    fail(n->span, "deferred indirect calls currently require a Vaqrin function value", "E290");
   std::vector<Value *> values;
   std::vector<llvm::Type *> irTypes;
+  std::vector<int> drops, deferredLoans;
+  int deferredEnvironment = -1;
   enter();
   if (closureCall) {
     requireInit(target, n->span);
+    const bool writableEnvironment = std::ranges::any_of(target.type->captures, [](const auto &c) {
+      return c.writable && !c.reference;
+    });
+    // The payload origin describes the referents captured by the closure.
+    // Invoking it accesses those borrows but writes writable captures in the
+    // environment itself, not through the independent read-only referents.
     checkAccess(target, false, n->span);
+    if (defer) validateDeferredBorrow(target, callee->span, defer->scope);
     Value *env = target.address;
     if (!env) {
       auto i = bind(" <closure>", target.type, true, read(target, n->span), n->span);
       recordBorrow(i, target, n->span);
       env = locals[i].slot;
-    } else if (!target.writable && std::ranges::any_of(target.type->captures, [](const auto &c) {
-                 return c.writable && !c.reference;
-               }))
-      fail(n->span, "closure with writable owned captures requires a writable receiver");
+      if (defer) deferredEnvironment = i;
+    } else {
+      if (!target.writable && writableEnvironment)
+        fail(n->span, "closure with writable owned captures requires a writable receiver");
+      auto environment = target;
+      if (target.local >= 0 && !locals[target.local].reference
+          && (locals[target.local].slot == env || p.hasReference(locals[target.local].type)))
+        environment.origin = {target.local};
+      checkAccess(environment, writableEnvironment, n->span);
+      if (defer) {
+        // The closure's own storage must stay live even when the callable
+        // also carries shared borrows of an independent source.
+        auto loan = borrow(environment, p.reference(target.type, !writableEnvironment), callee->span, false);
+        validateDeferredBorrow(loan, callee->span, defer->scope);
+        deferredLoans.push_back(pinBorrow(loan, callee->span, scopes.size() - 1));
+      }
+    }
     values.push_back(env);
     irTypes.push_back(env->getType());
   }
-  std::vector<int> drops, deferredLoans;
   Borrow returnOrigin{};
   bool returnTemporary = false;
   bool temporaryBorrow = target.temporaryBorrow;
@@ -2166,7 +2225,8 @@ ValueAt Body::call(const Ast &n, Type *expected, DeferRegistration *defer) {
         f->addParamAttr(i, parts[i]->sign ? llvm::Attribute::SExt : llvm::Attribute::ZExt);
   }
   if (defer) {
-    for (auto i : deferredLoans) retainDeferredLoan(i, defer->scope);
+    if (deferredEnvironment >= 0) retainDeferredLocal(deferredEnvironment, defer->scope);
+    for (auto i : deferredLoans) retainDeferredLocal(i, defer->scope);
     registerDefer(f, n->span, *defer);
     leave();
     return voidValue();

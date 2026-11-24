@@ -358,10 +358,10 @@ func sample(value: i32) !i32 {
             source = """func bindings() void {
     a, b := (i16(1), i64(2));
     /* 🚀 */ var total = i16(2);
-    &alias := &total;
+    ref mut alias = total;
     for i in i64(0)..b { alias += a; }
     for j := i16(0); j < a; j++ { alias += j; }
-    var opt: ?*i16 = some(&alias);
+    var opt: ?*i16 = some(alias.toRaw());
     switch opt { some(ptr) => { (*ptr)++; }, null => {}, }
     switch opt { some(ref borrowed) => { (*borrowed)++; }, null => {}, }
 }
@@ -375,13 +375,13 @@ func sample(value: i32) !i32 {
             self.assertEqual(checked["params"]["diagnostics"], [])
             self.assertEqual(result["id"], 5)
             expected = {}
-            short = {1, 3, 5}
+            short = {1, 5}
             for row, name, hint in ((1, "a", "i16"), (1, "b", "i64"), (2, "total", "i16"),
                                     (3, "alias", "ref mut i16"), (4, "i", "i64"), (5, "j", "i16"),
                                     (7, "ptr", "*i16"), (8, "borrowed", "ref *i16")):
                 line = source.splitlines()[row]
                 end = line.index(name, 8 if row == 4 else 0) + len(name)
-                label = hint if row in short else (": " if row == 2 else ":") + hint
+                label = hint if row in short else (": " if row in (2, 3) else ":") + hint
                 expected[row, len(line[:end].encode("utf-16-le")) // 2] = (label, row in short)
             self.assertEqual({(hint["position"]["line"], hint["position"]["character"]):
                               (hint["label"], hint.get("paddingLeft", False))

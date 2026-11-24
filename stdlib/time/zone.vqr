@@ -95,12 +95,12 @@ pub class TimeZone {
 
     pub static func fromTzif(name: str, data: []const u8) !Self {
         var reader = binary.Reader(data, binary.Endian.Big);
-        var header = zoneHeader(&reader)!;
+        var header = zoneHeader(raw reader)!;
         var width = usize(4);
         if header.version != 0 {
             var version = header.version;
             reader.seek(reader.position() + header.size(4))!;
-            header = zoneHeader(&reader)!;
+            header = zoneHeader(raw reader)!;
             if header.version != version { return TimeError.InvalidZone; }
             width = 8;
         }
@@ -158,7 +158,7 @@ pub class TimeZone {
         if recurring != null && (high == 0 || utc > transitions.at(high - 1).at) {
             return recurring.unwrap().offsetAt(utc);
         }
-        for low < high {
+        while low < high {
             var middle = low + (high - low) / 2;
             if transitions.at(middle).at > utc { high = middle; } else { low = middle + 1; }
         }
@@ -213,7 +213,7 @@ pub class ZonedDateTime {
         ZonedDateTime(utc, move(zone))
     }
     pub const func utc() UtcDateTime { instant }
-    pub const func local() !LocalDateTime { toLocal(instant, &location) }
+    pub const func local() !LocalDateTime { toLocal(instant, raw location) }
     pub const func zoneName() str { location.name() }
     pub const func offset() Duration { location.offsetAt(instant) }
     pub const func withZone(zone: TimeZone) Self { ZonedDateTime(instant, move(zone)) }
@@ -240,7 +240,7 @@ pub func tzdbVersion() !string {
         if bytes[i] != prefix[i] { return TimeError.InvalidZone; }
     }
     var end = prefix.len();
-    for end < bytes.len() && bytes[end] != 10 { end++; }
+    while end < bytes.len() && bytes[end] != 10 { end++; }
     if end == prefix.len() { return TimeError.InvalidZone; }
     text.fromBytes(bytes[prefix.len()..end])
 }

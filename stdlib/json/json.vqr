@@ -100,14 +100,14 @@ pub class JsonObject {
     pub const func get(key: str) ?*const Value {
         for index in usize(0)..entries.len() {
             var entry = entries.getPtr(index).unwrap();
-            if entry.key == key { return some(&entry.value); }
+            if entry.key == key { return some(raw entry.value); }
         }
         null
     }
     pub func getMut(key: str) ?*Value {
         for index in usize(0)..entries.len() {
             var entry = entries.getMutPtr(index).unwrap();
-            if entry.key == key { return some(&entry.value); }
+            if entry.key == key { return some(raw entry.value); }
         }
         null
     }
@@ -115,7 +115,7 @@ pub class JsonObject {
         for index in usize(0)..entries.len() {
             var entry = entries.getMutPtr(index).unwrap();
             if entry.key == key {
-                var previous = core.replace<Value>(&entry.value, move(value));
+                var previous = core.replace<Value>(raw entry.value, move(value));
                 return some(move(previous));
             }
         }
@@ -129,7 +129,7 @@ pub class JsonObject {
                 var removed = entries.remove(index);
                 switch move(removed) {
                     null => return null,
-                    some(entry) => { return some(core.replace<Value>(&entry.value, Value.Null)); },
+                    some(entry) => { return some(core.replace<Value>(raw entry.value, Value.Null)); },
                 }
             }
         }
@@ -141,11 +141,11 @@ pub class JsonObject {
     }
     pub const func valueAt(index: usize) ?*const Value {
         if index >= entries.len() { return null; }
-        some(&entries.getPtr(index).unwrap().value)
+        some(raw entries.getPtr(index).unwrap().value)
     }
     pub func valueAtMut(index: usize) ?*Value {
         if index >= entries.len() { return null; }
-        some(&entries.getMutPtr(index).unwrap().value)
+        some(raw entries.getMutPtr(index).unwrap().value)
     }
     pub const func keys() JsonKeyIter { JsonKeyIter(self) }
     pub const func items() JsonItemIter { JsonItemIter(self) }
@@ -183,16 +183,16 @@ pub func asBool(value: *const Value) ?bool {
     switch *value { Value.Bool(item) => some(item), _ => null }
 }
 pub func asNumber(value: *const Value) ?*const JsonNumber {
-    switch *value { Value.Number(ref item) => some(&item), _ => null }
+    switch *value { Value.Number(ref item) => some(item.toRaw()), _ => null }
 }
 pub func asString(value: *const Value) ?str {
     switch *value { Value.String(item) => some(item), _ => null }
 }
 pub func asArray(value: *const Value) ?*const JsonArray {
-    switch *value { Value.Array(ref item) => some(&item), _ => null }
+    switch *value { Value.Array(ref item) => some(item.toRaw()), _ => null }
 }
 pub func asObject(value: *const Value) ?*const JsonObject {
-    switch *value { Value.Object(ref item) => some(&item), _ => null }
+    switch *value { Value.Object(ref item) => some(item.toRaw()), _ => null }
 }
 
 func hasFractionOrExponent(value: []const u8) bool {
@@ -217,19 +217,19 @@ pub func validateNumber(value: str) !void {
         }
     } else {
         if data[position] < 49 || data[position] > 57 { return JsonError.InvalidNumber; }
-        for position < data.len() && 48 <= data[position] && data[position] <= 57 { position++; }
+        while position < data.len() && 48 <= data[position] && data[position] <= 57 { position++; }
     }
     if position < data.len() && data[position] == 46 {
         position++;
         var start = position;
-        for position < data.len() && 48 <= data[position] && data[position] <= 57 { position++; }
+        while position < data.len() && 48 <= data[position] && data[position] <= 57 { position++; }
         if position == start { return JsonError.InvalidNumber; }
     }
     if position < data.len() && (data[position] == 101 || data[position] == 69) {
         position++;
         if position < data.len() && (data[position] == 43 || data[position] == 45) { position++; }
         var start = position;
-        for position < data.len() && 48 <= data[position] && data[position] <= 57 { position++; }
+        while position < data.len() && 48 <= data[position] && data[position] <= 57 { position++; }
         if position == start { return JsonError.InvalidNumber; }
     }
     if position != data.len() { return JsonError.InvalidNumber; }

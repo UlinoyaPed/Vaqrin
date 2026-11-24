@@ -31,14 +31,14 @@ pub class FnvHasher {
 
 pub func hashValue<T: HashKey>(value: *const T) usize {
     var hasher = FnvHasher();
-    value.hash(&hasher);
+    value.hash(raw hasher);
     hasher.finish()
 }
 
 pub func hashValueSeeded<T: HashKey>(value: *const T, seed: u32) usize {
     var hasher = FnvHasher();
     hasher.resetSeeded(seed);
-    value.hash(&hasher);
+    value.hash(raw hasher);
     hasher.finish()
 }
 

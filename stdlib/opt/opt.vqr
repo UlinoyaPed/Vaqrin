@@ -34,7 +34,7 @@ pub func asRef<T>(value: in ?T) ?ref T {
     }
 }
 
-pub func asMutRef<T>(value: &?T) ?&T {
+pub func asMutRef<T>(value: ref mut ?T) ?ref mut T {
     switch value {
         null => { return null; },
         some(ref mut item) => { return item; },
@@ -44,7 +44,7 @@ pub func asMutRef<T>(value: &?T) ?&T {
 pub func filter<T: Movable, F: Movable>(value: ?T, pred: F) ?T {
     switch move(value) {
         null => null,
-        some(item) => if (pred(&item)) some(move(item)) else null,
+        some(item) => if pred(raw item) { some(move(item)) } else { null },
     }
 }
 
@@ -52,7 +52,7 @@ pub func inspect<T: Movable, F: Movable>(value: ?T, observer: F) ?T {
     switch move(value) {
         null => null,
         some(item) => {
-            observer(&item);
+            observer(raw item);
             some(move(item))
         },
     }
@@ -86,8 +86,8 @@ pub func unzip<A: Movable, B: Movable>(value: ?(A, B)) (?A, ?B) {
 }
 
 pub func xor<T: Movable>(a: ?T, b: ?T) ?T {
-    if isSome(&a) == isSome(&b) { return null; }
-    if isSome(&a) { move(a) } else { move(b) }
+    if isSome(raw a) == isSome(raw b) { return null; }
+    if isSome(raw a) { move(a) } else { move(b) }
 }
 
 pub func unwrapOr<T: Movable>(value: ?T, fallback: T) T { move(value) ?? move(fallback) }

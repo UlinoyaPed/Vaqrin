@@ -29,7 +29,7 @@ func hexByte(byte: u8, digits: []const u8, dst: *coll.Vec<u8>) !void {
 pub func hexEncode(data: []const u8) !string {
     var out = coll.Vec<u8>.withCapacity(hexEncodedLen(data.len())!)!;
     var digits = "0123456789abcdef".asBytes();
-    for byte in data { hexByte(byte, digits, &out)!; }
+    for byte in data { hexByte(byte, digits, raw out)!; }
     text.fromBytes(out.asConstSlice())
 }
 
@@ -52,11 +52,11 @@ pub func percentEncode(data: []const u8, safe: []const u8) !string {
                          (48 <= byte && byte <= 57) || byte == 45 || byte == 46 ||
                          byte == 95 || byte == 126;
         var allowed = bytes.find(safe, byte);
-        if unreserved || (byte >= 32 && byte < 127 && byte != 37 && core.isSome(&allowed)) {
+        if unreserved || (byte >= 32 && byte < 127 && byte != 37 && core.isSome(raw allowed)) {
             out.push(byte)!;
         } else {
             out.push(37)!;
-            hexByte(byte, digits, &out)!;
+            hexByte(byte, digits, raw out)!;
         }
     }
     text.fromBytes(out.asConstSlice())
@@ -117,7 +117,7 @@ func appendUtf8(value: u32, dst: *coll.Vec<u8>) !void {
 
 pub func latin1Decode(data: []const u8) !string {
     var out = coll.Vec<u8>();
-    for byte in data { appendUtf8(u32(byte), &out)!; }
+    for byte in data { appendUtf8(u32(byte), raw out)!; }
     text.fromBytes(out.asConstSlice())
 }
 
@@ -134,7 +134,7 @@ pub func latin1Encode(value: str) !coll.Vec<u8> {
 func readUnit(data: []const u8, i: usize, little: bool) u32 {
     var first = u32(data[i]);
     var next = u32(data[i + 1]);
-    if (little) first | (next << 8) else (first << 8) | next
+    if little { first | (next << 8) } else { (first << 8) | next }
 }
 
 pub func utf16Decode(data: []const u8, endian: meta.Endian) !string {
@@ -152,7 +152,7 @@ pub func utf16Decode(data: []const u8, endian: meta.Endian) !string {
         } else if 0xdc00 <= value && value <= 0xdfff {
             return EncodingError.InvalidUtf16;
         }
-        appendUtf8(value, &out)!;
+        appendUtf8(value, raw out)!;
     }
     text.fromBytes(out.asConstSlice())
 }
@@ -173,11 +173,11 @@ pub func utf16Encode(value: str, endian: meta.Endian) !coll.Vec<u8> {
     for char in text.chars(value) {
         var scalar = convert.fromChar(char);
         if scalar < 0x10000 {
-            appendUnit(scalar, little, &out)!;
+            appendUnit(scalar, little, raw out)!;
         } else {
             var data = scalar - 0x10000;
-            appendUnit(0xd800 + (data >> 10), little, &out)!;
-            appendUnit(0xdc00 + (data & 0x3ff), little, &out)!;
+            appendUnit(0xd800 + (data >> 10), little, raw out)!;
+            appendUnit(0xdc00 + (data & 0x3ff), little, raw out)!;
         }
     }
     move(out)

@@ -11,7 +11,7 @@ CHECKER = """
 import (io, toml)
 func main() i32 {
     var input = io.stdin();
-    var document = toml.parseReader(&input, 8 * 1024 * 1024) catch { return 2; };
+    var document = toml.parseReader(raw input, 8 * 1024 * 1024) catch { return 2; };
     0
 }
 """

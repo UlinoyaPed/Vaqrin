@@ -198,7 +198,7 @@ def main() -> int:
           "LinkedList lacks explicit Box ownership tracking", errors)
     check("(*nodes.getMutPtr(ownerIndex).unwrap()).asPtr().ownerIndex = ownerIndex" in linked,
           "LinkedList swap-removal does not repair the moved node index", errors)
-    check("nodes.append(&other.nodes)!" in linked,
+    check("nodes.append(raw other.nodes)!" in linked,
           "LinkedList append does not transfer Box ownership", errors)
 
     check("var less: func(*const T, *const T) bool" in adapters,
@@ -215,7 +215,7 @@ def main() -> int:
           "HashMap iterator must report pointer-index allocation failure", errors)
     check("state = BucketState.Empty;" in hash_map,
           "HashMap clear path does not restore Empty bucket state", errors)
-    check("core.swap<Vec<HashBucket<K, V>>>(&buckets, &next);" in hash_map,
+    check("core.swap<Vec<HashBucket<K, V>>>(raw buckets, raw next);" in hash_map,
           "HashMap rehash does not swap to the fully allocated table", errors)
     check("for i in usize(0)..next.len()" in hash_map,
           "HashMap rehash does not walk the old table after swap", errors)

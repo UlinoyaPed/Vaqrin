@@ -45,15 +45,15 @@ func main() !void {
     var user = User{name: "Ada", age: 37};
     var codec = UserCodec{};
 
-    var jsonText = json.marshal<User>(&user, &codec)!;
+    var jsonText = json.marshal<User>(raw user, raw codec)!;
     io.println(jsonText)!;
-    var fromJson = json.unmarshal<User>(jsonText, &codec)!;
+    var fromJson = json.unmarshal<User>(jsonText, raw codec)!;
     io.println(fromJson.name)!;
     io.println(fromJson.age)!;
 
-    var tomlText = toml.encode<User>(&user, &codec)!;
+    var tomlText = toml.encode<User>(raw user, raw codec)!;
     io.println(tomlText)!;
-    var fromToml = toml.decode<User>(tomlText, &codec)!;
+    var fromToml = toml.decode<User>(tomlText, raw codec)!;
     io.println(fromToml.name)!;
     io.println(fromToml.age)!;
 }

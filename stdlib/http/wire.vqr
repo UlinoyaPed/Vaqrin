@@ -47,12 +47,12 @@ func connectionClose(fields: *const HeaderMap) bool {
         if !sameName(field.0, "Connection") { continue; }
         var value = field.1.asBytes();
         var pos: usize = 0;
-        for pos < value.len() {
+        while pos < value.len() {
             var end = pos + byteAt(value[pos..value.len()], 44);
             var left = pos;
             var right = end;
-            for left < right && (value[left] == 32 || value[left] == 9) { left++; }
-            for right > left && (value[right - 1] == 32 || value[right - 1] == 9) { right--; }
+            while left < right && (value[left] == 32 || value[left] == 9) { left++; }
+            while right > left && (value[right - 1] == 32 || value[right - 1] == 9) { right--; }
             if sameName(unsafe { __vqr_text_borrow_utf8(value[left..right]) }, "close") { return true; }
             if end == value.len() { break; }
             pos = end + 1;
@@ -117,7 +117,7 @@ func inspect(fields: *const HeaderMap) !Framing {
 
 pub func parseRequest(reader: *io.Reader, limits: HttpLimits) !Request {
     request, body := parseRequestStream(reader, limits)!;
-    var bytes = io.readToEnd(&body, limits.maxBodyBytes)!;
+    var bytes = io.readToEnd(raw body, limits.maxBodyBytes)!;
     request.setBody(Body.fromOwned(move(bytes)));
     move(request)
 }
@@ -125,7 +125,7 @@ pub func parseRequest(reader: *io.Reader, limits: HttpLimits) !Request {
 // Keep the input alive while consuming the body.
 pub func parseRequestStream(reader: *io.Reader, limits: HttpLimits) !(Request, BodyReader) {
     var budget = ReadBudget{remaining: limits.maxHeaderBytes};
-    var line = readLine(reader, limits.maxLineBytes, &budget)!;
+    var line = readLine(reader, limits.maxLineBytes, raw budget)!;
     var data = line.asBytes();
     var first = byteAt(data, 32);
     if first == data.len() { return HttpError.InvalidStartLine; }
@@ -136,8 +136,8 @@ pub func parseRequestStream(reader: *io.Reader, limits: HttpLimits) !(Request, B
     var target = unsafe { __vqr_text_borrow_utf8(tail[0..second]) };
     var modern = version(unsafe { __vqr_text_borrow_utf8(tail[second + 1..tail.len()]) })!;
     var request = Request.new(method, target)!;
-    var fields = readFields(reader, limits, &budget)!;
-    var framing = inspect(&fields)!;
+    var fields = readFields(reader, limits, raw budget)!;
+    var framing = inspect(raw fields)!;
     if modern && !framing.host { return HttpError.MissingHost; }
     if !modern && framing.chunked { return HttpError.InvalidFraming; }
     var targetFields = request.headers();
@@ -161,7 +161,7 @@ pub func parseResponseFor(reader: *io.Reader, method: Method, limits: HttpLimits
 
 func parseResponseState(reader: *io.Reader, method: Method, limits: HttpLimits) !(Response, bool) {
     response, body, persistent := parseResponseHead(reader, method, limits)!;
-    var bytes = io.readToEnd(&body, limits.maxBodyBytes)!;
+    var bytes = io.readToEnd(raw body, limits.maxBodyBytes)!;
     response.setBody(Body.fromOwned(move(bytes)));
     (move(response), persistent)
 }
@@ -175,7 +175,7 @@ pub func parseResponseStream(reader: *io.Reader, method: Method, limits: HttpLim
 
 func parseResponseHead(reader: *io.Reader, method: Method, limits: HttpLimits) !(Response, BodyReader, bool) {
     var budget = ReadBudget{remaining: limits.maxHeaderBytes};
-    var line = readLine(reader, limits.maxLineBytes, &budget)!;
+    var line = readLine(reader, limits.maxLineBytes, raw budget)!;
     var data = line.asBytes();
     if data.len() < 13 || data[8] != 32 || data[12] != 32 { return HttpError.InvalidStartLine; }
     var modern = version(unsafe { __vqr_text_borrow_utf8(data[0..8]) })!;
@@ -183,8 +183,8 @@ func parseResponseHead(reader: *io.Reader, method: Method, limits: HttpLimits) !
     validateValue(unsafe { __vqr_text_borrow_utf8(data[13..data.len()]) })!;
     var code = u16(status)!;
     var response = Response.new(code)!;
-    var fields = readFields(reader, limits, &budget)!;
-    var framing = inspect(&fields)!;
+    var fields = readFields(reader, limits, raw budget)!;
+    var framing = inspect(raw fields)!;
     if (code < 200 || code == 204) && (framing.chunked || framing.length != null) {
         return HttpError.InvalidFraming;
     }
@@ -193,7 +193,7 @@ func parseResponseHead(reader: *io.Reader, method: Method, limits: HttpLimits) !
         return HttpError.UnsupportedUpgrade;
     }
     var noBody = suppressBody(code, method);
-    var persistent = modern && (noBody || framing.chunked || framing.length != null) && !connectionClose(&fields);
+    var persistent = modern && (noBody || framing.chunked || framing.length != null) && !connectionClose(raw fields);
     var targetFields = response.headers();
     *targetFields = move(fields);
     var body = BodyReader(reader, framing, limits, budget, noBody, true)!;
@@ -258,7 +258,7 @@ pub func writeRequestStream(writer: *io.Writer, request: *Request, source: *io.R
 
 func writeChunks(writer: *io.Writer, source: *io.Reader, limit: usize) !void {
     var storage = __vqr_uninitialized<[8192]u8>();
-    var buffer = unsafe { (*__vqr_raw_address(&storage))[:] };
+    var buffer = unsafe { (*__vqr_raw_address(raw storage))[:] };
     mem.zeroBytes(buffer);
     var remaining = limit;
     for {

@@ -27,12 +27,12 @@ pub class Cursor {
 
     pub func next() ?char {
         var value = peek();
-        if core.isSome(&value) { advanceScalar(); }
+        if core.isSome(raw value) { advanceScalar(); }
         value
     }
 
     pub func skipWhitespace() void {
-        for !isEnd() && isWhitespace(peek().unwrap()) { advanceScalar(); }
+        while !isEnd() && isWhitespace(peek().unwrap()) { advanceScalar(); }
     }
 
     pub func consumeChar(ch: char) bool {
@@ -50,7 +50,7 @@ pub class Cursor {
 
     pub func takeWhile<F>(pred: F) str {
         var start = position;
-        for !isEnd() && pred(peek().unwrap()) { advanceScalar(); }
+        while !isEnd() && pred(peek().unwrap()) { advanceScalar(); }
         unsafe { __vqr_text_borrow_utf8(source.asBytes()[start..position]) }
     }
 

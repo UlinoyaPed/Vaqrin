@@ -16,16 +16,16 @@ class IoAcceptance(CompilerCase):
             import (bufio, io, parse)
             func main() !void {
                 var input = io.MemoryReader("123 -7\r\n42".asBytes());
-                var scanner = bufio.newScanner(&input)!;
+                var scanner = bufio.newScanner(raw input)!;
                 io.println(parse.parseInt<i32>(scanner.next()!.unwrap().text())!)!;
                 io.println(scanner.readInt<i32>()!)!;
                 io.println(scanner.readInt<i32>()!)!;
                 io.println(scanner.nextInt<i32>()! == null)!;
                 var lines = io.MemoryReader("a\r\n\nb".asBytes());
-                io.println(bufio.readLine(&lines, 10)!.unwrap())!;
-                io.println(bufio.readLine(&lines, 10)!.unwrap())!;
-                io.println(bufio.readLine(&lines, 10)!.unwrap())!;
-                io.println(bufio.readLine(&lines, 10)! == null)!;
+                io.println(bufio.readLine(raw lines, 10)!.unwrap())!;
+                io.println(bufio.readLine(raw lines, 10)!.unwrap())!;
+                io.println(bufio.readLine(raw lines, 10)!.unwrap())!;
+                io.println(bufio.readLine(raw lines, 10)! == null)!;
             }
         ''')
         self.assertEqual(result.stdout, b"123\n-7\n42\ntrue\na\n\nb\ntrue\n")
@@ -96,11 +96,11 @@ class IoAcceptance(CompilerCase):
                 var scanner = bufio.newScanner(move(file))!;
                 io.println(scanner.readInt<i32>()! + scanner.readInt<i32>()!)!;
                 var memory = io.MemoryReader("7".asBytes());
-                scanner.reset(&memory);
+                scanner.reset(raw memory);
                 io.println(scanner.readInt<i32>()!)!;
                 if unsafe { fcntl(descriptor, 1) } >= 0 { panic("reset left owned file open"); }
                 var pair = (io.MemoryReader("8".asBytes()), 0);
-                var borrowed = bufio.newScanner(&pair.0)!;
+                var borrowed = bufio.newScanner(raw pair.0)!;
                 io.println(borrowed.readInt<i32>()!)!;
             }
         ''', input=b"11 22")
@@ -111,7 +111,7 @@ class IoAcceptance(CompilerCase):
             import (io)
             func main() !void {
                 var input = io.stdin();
-                var received = io.readToString(&input, 32)!;
+                var received = io.readToString(raw input, 32)!;
                 input.close()!;
                 io.println("io-stack")!;
                 io.print(received)!;
@@ -133,9 +133,9 @@ class IoAcceptance(CompilerCase):
                 options.write(true);
                 var file = options.open("sequence.txt")!;
                 var result = [3]u8{0, 0, 0};
-                io.readExactAt(&file, 3, result[:])!;
+                io.readExactAt(raw file, 3, result[:])!;
                 if result[0] != 120 || result[2] != 122 { panic("incorrect positioned read"); }
-                io.writeAllAt(&file, 1, "YZ".asBytes())!;
+                io.writeAllAt(raw file, 1, "YZ".asBytes())!;
                 if file.seek(0, io.SeekOrigin.Current)! != 0 { panic("position changed"); }
                 if file.seek(-1, io.SeekOrigin.End)! != 5 { panic("incorrect seek"); }
                 if file.read(result[:])! != 1 || result[0] != 122 { panic("incorrect final byte"); }
@@ -200,21 +200,21 @@ class IoAcceptance(CompilerCase):
             }
             func main() !void {
                 var native = InterruptWriter();
-                var writer = bufio.newWriter(&native, 4)!;
+                var writer = bufio.newWriter(raw native, 4)!;
                 if writer.write("abcde".asBytes())! != 4 { panic("incorrect short progress"); }
                 writer.writeString("e")!;
                 writer.finish()!;
                 var source = io.MemoryReader(native.bytes());
-                io.println(io.readToString(&source)!)!;
+                io.println(io.readToString(raw source)!)!;
                 var words = io.MemoryReader(" a\r\n 中\t last ".asBytes());
-                var scanner = bufio.newScanner(&words)!;
+                var scanner = bufio.newScanner(raw words)!;
                 for index in 0..3 {
                     var token = scanner.next()!.unwrap();
                     io.println(token.text())!;
                 }
                 if scanner.next()! != null { panic("missing scanner EOF"); }
                 var sourceBytes = io.MemoryReader("abcd".asBytes());
-                var buffered = bufio.newReader(&sourceBytes, 2)!;
+                var buffered = bufio.newReader(raw sourceBytes, 2)!;
                 if buffered.readByte()!.unwrap() != 97 { panic("read byte"); }
                 buffered.unreadByte(97)!;
                 if buffered.peek(2)![0] != 97 { panic("peek after unread"); }
@@ -268,7 +268,7 @@ class IoAcceptance(CompilerCase):
                 io.println(fmt.format("{:06d} {:+06d} {:+07.2f}", pattern[:])!)!;
                 var stdout = io.stdout();
                 var bytes = [3]u8{0, 15, 255};
-                fmt.writeHex(&stdout, bytes[:], true)!;
+                fmt.writeHex(raw stdout, bytes[:], true)!;
                 io.println("")!;
                 var nan = bitCast<f64>(0x7ff8000000000000u64);
                 var infinity = bitCast<f64>(0x7ff0000000000000u64);

@@ -18,9 +18,9 @@ func main() !void {
     var count: usize = 0;
     var reset = false;
     var finished = false;
-    for !stopped {
-        connection.flush(&socket)!;
-        if !connection.receive(&socket)! { break; }
+    while !stopped {
+        connection.flush(raw socket)!;
+        if !connection.receive(raw socket)! { break; }
         for {
             var event = connection.next()! ?? { break; };
             switch event.kind {
@@ -39,11 +39,11 @@ func main() !void {
                     var headers = http2.HeaderBlock();
                     headers.add(":status", "200")!;
                     headers.add("x-server", "Vaqrin")!;
-                    connection.respond(event.stream, &headers, false)!;
+                    connection.respond(event.stream, raw headers, false)!;
                     connection.sendData(event.stream, "hello from Vaqrin".asBytes(), false)!;
                     var trailers = http2.HeaderBlock();
                     trailers.add("x-end", "done")!;
-                    connection.sendTrailers(event.stream, &trailers)!;
+                    connection.sendTrailers(event.stream, raw trailers)!;
                 },
                 http2.EventKind.Closed => {
                     if event.code == 8 { reset = true; }

@@ -41,7 +41,7 @@ pub class SliceIterRef<T> {
 
     pub func next() ?*const T {
         if front == back { return null; }
-        var value = &values[front];
+        var value = raw values[front];
         front++;
         some(move(value))
     }
@@ -49,7 +49,7 @@ pub class SliceIterRef<T> {
     pub func nextBack() ?*const T {
         if front == back { return null; }
         back--;
-        some(&values[back])
+        some(raw values[back])
     }
 
     pub const func remaining() usize { back - front }
@@ -65,7 +65,7 @@ pub class SliceIterMut<T> {
 
     pub func next() ?*T {
         if front == back { return null; }
-        var value = &values[front];
+        var value = raw values[front];
         front++;
         some(move(value))
     }
@@ -73,7 +73,7 @@ pub class SliceIterMut<T> {
     pub func nextBack() ?*T {
         if front == back { return null; }
         back--;
-        some(&values[back])
+        some(raw values[back])
     }
 
     pub const func remaining() usize { back - front }

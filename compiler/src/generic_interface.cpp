@@ -31,6 +31,13 @@ struct GenericSignature {
   std::string key(const Ast &node) const {
     if (!node) return "-";
     if (isVariable(node)) return "$" + std::to_string(variables.at(node->text));
+    // Resolving a standalone move parameter yields its data type. Preserve
+    // the mode when recursively matching a dependent function type instead.
+    if (parameterMode(node) == ParameterMode::Move) {
+      auto data = dependent(node) ? key(node->children[0])
+                                  : program.type(node, *definition.file, types, values)->name;
+      return "move(" + data + ')';
+    }
     if (node->kind == NodeKind::Name) {
       if (auto value = values.find(node->text); value != values.end()) {
         std::string key;

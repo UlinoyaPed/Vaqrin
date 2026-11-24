@@ -149,12 +149,12 @@ func emitRecord(handler: *Handler, level: Level, message: str,
     var record = Record.fromOwned(level, message, move(attrs))!;
     switch clock {
         some(source) => {
-            var timestamp: ?time.Instant = some(source.monotonicNow() catch { return handler.handle(&record); });
+            var timestamp: ?time.Instant = some(source.monotonicNow() catch { return handler.handle(raw record); });
             record.setTimestamp(timestamp);
         },
         null => {},
     }
-    handler.handle(&record)
+    handler.handle(raw record)
 }
 
 pub class Logger {
@@ -251,7 +251,7 @@ func writeAttribute(writer: *io.Writer, attr: *const Attr, prefix: str) !void {
     builder.append(attr.key())!;
     var name = builder.build()!;
     if attr.kind() == AttrKind.Group {
-        for &child in iterator.SliceIterRef<Attr>(attr.asGroup()) { writeAttribute(writer, &child, name)!; }
+        for &child in iterator.SliceIterRef<Attr>(attr.asGroup()) { writeAttribute(writer, child.toRaw(), name)!; }
         return;
     }
     io.writeString(writer, " ")!;
@@ -268,7 +268,7 @@ func writeAttribute(writer: *io.Writer, attr: *const Attr, prefix: str) !void {
 
 pub func formatAttr(value: *const Attr) !string {
     var writer = io.MemoryWriter();
-    writeAttribute(&writer, value, "")!;
+    writeAttribute(raw writer, value, "")!;
     var bytes = io.MemoryWriter.intoBytes(move(writer));
     var data = bytes.asConstSlice();
     if data.len() == 0 { return text.fromBytes(data); }
@@ -285,7 +285,7 @@ pub class TextHandler {
         io.writeString(writer, levelText(record.level()))!;
         io.writeString(writer, " ")!;
         writeQuoted(writer, record.message())!;
-        for &attr in iterator.SliceIterRef<Attr>(record.attrs()) { writeAttribute(writer, &attr, "")!; }
+        for &attr in iterator.SliceIterRef<Attr>(record.attrs()) { writeAttribute(writer, attr.toRaw(), "")!; }
         io.writeString(writer, "\n")
     }
     pub func flush() !void { writer.flush() }
@@ -325,13 +325,13 @@ func formatU64(value: u64) !string {
     var digits = [20]u8{0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
     var count: usize = 0;
     var number = value;
-    for number > 0 {
+    while number > 0 {
         digits[count] = u8(48 + number % 10)!;
         count++;
         number /= 10;
     }
     if count == 0 { builder.append("0")!; }
-    for count > 0 {
+    while count > 0 {
         count--;
         var one = [1]u8{digits[count]};
         var digit = text.fromBytes(one[:])!;

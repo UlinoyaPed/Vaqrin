@@ -10,7 +10,7 @@ pub class MemoryReader {
 
     pub func read(dst: []u8) !usize {
         var available = remaining();
-        var count = if (available < dst.len()) available else dst.len();
+        var count = if available < dst.len() { available } else { dst.len() };
         mem.copyBytes(data[position..position + count], dst)!;
         position += count;
         count
@@ -46,7 +46,7 @@ pub class MemoryWriter {
     pub func flush() !void {}
     pub const func asSlice() []const u8 { buffer.asSlice() }
     pub static func intoBytes(value: Self) coll.Vec<u8> {
-        bytes.Buffer.intoVec(mem.replace<bytes.Buffer>(&value.buffer, bytes.Buffer()))
+        bytes.Buffer.intoVec(mem.replace<bytes.Buffer>(raw value.buffer, bytes.Buffer()))
     }
 }
 
@@ -60,7 +60,7 @@ pub class FixedWriter {
         if src.len() == 0 { return 0; }
         var available = remaining();
         if available == 0 { return IoError.NoProgress; }
-        var count = if (available < src.len()) available else src.len();
+        var count = if available < src.len() { available } else { src.len() };
         mem.copyBytes(src[0..count], buffer[position..position + count])!;
         position += count;
         count

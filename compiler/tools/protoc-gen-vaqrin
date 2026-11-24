@@ -173,9 +173,9 @@ class Generator:
         if field.type == Field.TYPE_MESSAGE:
             p.line(f"var nested = {target}.subMessage()!;")
             p.line(f"var codec = {self.codec(field.type_name)}{{}};")
-            pointer = source + ".asPtr()" if boxed(field) else "&" + source
-            p.line(f"codec.encode({pointer}, &nested)!;")
-            p.line(f"{target}.writeMessage({field.number}, &nested)!;")
+            pointer = source + ".asPtr()" if boxed(field) else "raw " + source
+            p.line(f"codec.encode({pointer}, raw nested)!;")
+            p.line(f"{target}.writeMessage({field.number}, raw nested)!;")
         else:
             argument = source + ".asConstSlice()" if field.type == Field.TYPE_BYTES else source
             p.line(f"{target}.write{SCALARS[field.type][1]}({field.number}, {argument})!;")
@@ -207,15 +207,15 @@ class Generator:
                     p.start(f"for item in {source}.iterRef()")
                     p.line(f"packed_{field.name}.write{SCALARS[field.type][1]}(*item)!;")
                     p.end()
-                    p.line(f"writer.writePacked({field.number}, &packed_{field.name})!;")
+                    p.line(f"writer.writePacked({field.number}, raw packed_{field.name})!;")
                 else:
                     p.start(f"for item in {source}.iterRef()")
                     argument = "item" if field.type == Field.TYPE_MESSAGE else "(*item)"
                     if field.type == Field.TYPE_MESSAGE:
                         p.line("var nested = writer.subMessage()!;")
                         p.line(f"var codec = {self.codec(field.type_name)}{{}};")
-                        p.line("codec.encode(item, &nested)!;")
-                        p.line(f"writer.writeMessage({field.number}, &nested)!;")
+                        p.line("codec.encode(item, raw nested)!;")
+                        p.line(f"writer.writeMessage({field.number}, raw nested)!;")
                     else:
                         self.encode_field(field, argument)
                     p.end()
@@ -256,7 +256,7 @@ class Generator:
         p.line(f"var codec = {self.codec(field.type_name)}{{}};")
         if repeated(field):
             p.line(f"var nested = {target}();")
-            p.line(f"protobuf.mergeMessage<{target}>(field, &nested, &codec)!;")
+            p.line(f"protobuf.mergeMessage<{target}>(field, raw nested, raw codec)!;")
             if self.map_entry(field):
                 p.line(f"value.put_{field.name}(move(nested))!;")
             else:
@@ -265,13 +265,13 @@ class Generator:
         pattern = "some" if variant is None else variant
         p.start(f"switch {source}")
         p.start(f"{pattern}(ref mut nested) =>")
-        p.line(f"protobuf.mergeMessage<{target}>(field, nested.asPtr(), &codec)!;")
+        p.line(f"protobuf.mergeMessage<{target}>(field, nested.asPtr(), raw codec)!;")
         p.line("continue;")
         p.end(",")
         p.line("_ => {},")
         p.end(";")
         p.line(f"var nested = new {target}()!;")
-        p.line(f"protobuf.mergeMessage<{target}>(field, nested.asPtr(), &codec)!;")
+        p.line(f"protobuf.mergeMessage<{target}>(field, nested.asPtr(), raw codec)!;")
         p.line(f"{source} = {pattern}(move(nested));")
 
     def merge(self, definition, choices, name):
@@ -291,7 +291,7 @@ class Generator:
             if repeated(field) and packable(field):
                 p.start("if field.wireType() == protobuf.WireType.LengthDelimited")
                 p.line("var packed = field.asPacked()!;")
-                p.start("for packed.remaining() != 0")
+                p.start("while packed.remaining() != 0")
                 p.line(f"{source}.push(packed.read{SCALARS[field.type][1]}()!)!;")
                 p.end()
                 p.line("continue;")
@@ -389,9 +389,9 @@ class Generator:
                 p.start(f"pub func {method_name}(input: *const {input_type}, options: *const grpc.CallOptions) !grpc.TypedResponse<{output_type}>")
                 p.line(f"var encoder = {self.codec(method.input_type)}{{}};")
                 p.line(f"var decoder = {self.codec(method.output_type)}{{}};")
-                p.line(f"var body = protobuf.encode<{input_type}>(input, &encoder, connection.maxMessageBytes())!;")
+                p.line(f"var body = protobuf.encode<{input_type}>(input, raw encoder, connection.maxMessageBytes())!;")
                 p.line(f'var result = connection.unary("{path}", body.asConstSlice(), options)!;')
-                p.line(f"grpc.decodeResponse<{output_type}>(move(result), &decoder, protobuf.DecodeLimits())")
+                p.line(f"grpc.decodeResponse<{output_type}>(move(result), raw decoder, protobuf.DecodeLimits())")
                 p.end()
         p.end()
         p.line()
@@ -436,10 +436,10 @@ class Generator:
             streaming = method.client_streaming or method.server_streaming
             if concurrent:
                 register = "registerConcurrentStreaming" if streaming else "registerConcurrent"
-                p.line(f'unsafe {{ server.{register}<{member_type(method)}>("{self.service_path(service, method)}", &handle_{method.name})!; }}')
+                p.line(f'unsafe {{ server.{register}<{member_type(method)}>("{self.service_path(service, method)}", raw handle_{method.name})!; }}')
             else:
                 register = "registerStreaming" if streaming else "register"
-                p.line(f'server.{register}("{self.service_path(service, method)}", &handle_{method.name})!;')
+                p.line(f'server.{register}("{self.service_path(service, method)}", raw handle_{method.name})!;')
         p.end()
         p.end()
         p.line()
@@ -472,17 +472,17 @@ class Generator:
         if streaming:
             p.start(f"pub {declaration} handle(stream: *{raw}) !grpc.Status")
             p.line(f"var typed = {wrapper}(stream);")
-            p.line(f"{target}.rpc_{method.name}(&typed)")
+            p.line(f"{target}.rpc_{method.name}(raw typed)")
             p.end()
         else:
             p.start(f"pub {declaration} call(request: grpc.UnaryRequest) !grpc.UnaryResponse")
             p.line(f"var decoder = {encoder}{{}};")
             p.line(f"var encoder = {decoder}{{}};")
-            p.line(f"var typed = protobuf.decode<{input_type}>(request.body.asConstSlice(), &decoder, protobuf.DecodeLimits()) catch {{")
+            p.line(f"var typed = protobuf.decode<{input_type}>(request.body.asConstSlice(), raw decoder, protobuf.DecodeLimits()) catch {{")
             p.line('    return grpc.reply(grpc.status(grpc.StatusCode.InvalidArgument, ""));')
             p.line("};")
-            p.line(f"var result = {target}.rpc_{method.name}(move(typed), &request)!;")
-            p.line(f"grpc.encodeResponse<{output_type}>(move(result), &encoder, 4 * 1024 * 1024)")
+            p.line(f"var result = {target}.rpc_{method.name}(move(typed), raw request)!;")
+            p.line(f"grpc.encodeResponse<{output_type}>(move(result), raw encoder, 4 * 1024 * 1024)")
             p.end()
         p.end()
         p.line()
@@ -496,16 +496,16 @@ class Generator:
         p.line("pub func init(connection: *grpc.ClientConn, call: grpc.Call) : connection(connection), call(move(call)) {}")
         p.start(f"pub func send(input: *const {input_type}) !void")
         p.line(f"var codec = {encoder}{{}};")
-        p.line(f"var message = protobuf.encode<{input_type}>(input, &codec, connection.maxMessageBytes())!;")
-        p.line("connection.sendMessage(&call, message.asConstSlice())")
+        p.line(f"var message = protobuf.encode<{input_type}>(input, raw codec, connection.maxMessageBytes())!;")
+        p.line("connection.sendMessage(raw call, message.asConstSlice())")
         p.end()
         p.start(f"pub func recv() !?{output_type}")
-        p.line("var raw = connection.recvMessage(&call)! ?? { return null; };")
+        p.line("var raw = connection.recvMessage(raw call)! ?? { return null; };")
         p.line(f"var codec = {decoder}{{}};")
-        p.line(f"some(protobuf.decode<{output_type}>(raw.asConstSlice(), &codec, protobuf.DecodeLimits())!)")
+        p.line(f"some(protobuf.decode<{output_type}>(raw.asConstSlice(), raw codec, protobuf.DecodeLimits())!)")
         p.end()
-        p.line("pub func finishSend() !void { connection.finishSend(&call) }")
-        p.line("pub func cancel() !void { connection.cancel(&call) }")
+        p.line("pub func finishSend() !void { connection.finishSend(raw call) }")
+        p.line("pub func cancel() !void { connection.cancel(raw call) }")
         p.line("pub func complete() !grpc.UnaryResponse { call.complete() }")
         p.end()
         p.line()
@@ -518,14 +518,14 @@ class Generator:
         p.start(f"pub func recv() !?{input_type}")
         p.line("var bytes = raw.recvMessage()! ?? { return null; };")
         p.line(f"var codec = {encoder}{{}};")
-        p.line(f"var value = protobuf.decode<{input_type}>(bytes.asConstSlice(), &codec, protobuf.DecodeLimits()) catch {{")
+        p.line(f"var value = protobuf.decode<{input_type}>(bytes.asConstSlice(), raw codec, protobuf.DecodeLimits()) catch {{")
         p.line("    return grpc.RpcError.Protocol;")
         p.line("};")
         p.line("some(move(value))")
         p.end()
         p.start(f"pub func send(output: *const {output_type}) !void")
         p.line(f"var codec = {decoder}{{}};")
-        p.line(f"var bytes = protobuf.encode<{output_type}>(output, &codec, raw.maxMessageBytes())!;")
+        p.line(f"var bytes = protobuf.encode<{output_type}>(output, raw codec, raw.maxMessageBytes())!;")
         p.line("raw.sendMessage(bytes.asConstSlice())")
         p.end()
         p.end()

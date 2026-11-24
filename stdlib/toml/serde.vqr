@@ -33,7 +33,7 @@ pub class TomlDomSerializer {
     }
     pub func writeNumber(value: str) !void {
         var options = TomlOptions();
-        var parsed = parseValue(value, 0, &options)!;
+        var parsed = parseValue(value, 0, raw options)!;
         switch move(parsed) {
             Value.Integer(value) => appendValue(Value.Integer(value)),
             Value.Float(value) => appendValue(Value.Float(move(value))),
@@ -49,7 +49,7 @@ pub class TomlDomSerializer {
         if frames.isEmpty() { return TomlSerdeError.InvalidState; }
         var frame = frames.pop().unwrap();
         if frame.mapMode { return TomlSerdeError.InvalidState; }
-        appendValue(Value.Array(core.replace<coll.Vec<Value>>(&frame.array, coll.Vec<Value>())))
+        appendValue(Value.Array(core.replace<coll.Vec<Value>>(raw frame.array, coll.Vec<Value>())))
     }
     pub func beginMap(length: ?usize) !void { frames.push(TomlWriteFrame(true))!; }
     pub func writeKey(value: str) !void {
@@ -62,11 +62,11 @@ pub class TomlDomSerializer {
         if frames.isEmpty() { return TomlSerdeError.InvalidState; }
         var frame = frames.pop().unwrap();
         if !frame.mapMode || frame.pendingKey != null { return TomlSerdeError.InvalidState; }
-        appendValue(Value.Table(core.replace<Document>(&frame.table, Document())))
+        appendValue(Value.Table(core.replace<Document>(raw frame.table, Document())))
     }
     pub func takeValue() !Value {
         if !frames.isEmpty() { return TomlSerdeError.InvalidState; }
-        core.replace<?Value>(&root, null) ?? { return TomlSerdeError.MissingRoot; }
+        core.replace<?Value>(raw root, null) ?? { return TomlSerdeError.MissingRoot; }
     }
     func appendValue(value: Value) !void {
         if frames.isEmpty() {
@@ -76,7 +76,7 @@ pub class TomlDomSerializer {
         }
         var frame = frames.getMutPtr(frames.len() - 1).unwrap();
         if frame.mapMode {
-            var key = opt.take<string>(&frame.pendingKey) ?? { return TomlSerdeError.InvalidState; };
+            var key = opt.take<string>(raw frame.pendingKey) ?? { return TomlSerdeError.InvalidState; };
             frame.table.insertUnique(move(key), move(value))!;
         } else {
             frame.array.push(move(value))!;
@@ -99,7 +99,7 @@ pub class TomlDomDeserializer {
     var frames: coll.Vec<TomlReadFrame>;
     pub func init(value: Value)
         : root(move(value)), current(null), frames(coll.Vec<TomlReadFrame>()) {
-        current = some(&root);
+        current = some(raw root);
     }
     pub func kind() !serde.DataKind {
         var value = current ?? { return serde.SerdeError.InvalidState; };
@@ -220,10 +220,10 @@ pub class TomlDomDeserializer {
 }
 
 func asArray(value: *const Value) ?*const coll.Vec<Value> {
-    switch *value { Value.Array(ref array) => some(&array), _ => null }
+    switch *value { Value.Array(ref array) => some(array.toRaw()), _ => null }
 }
 func asTable(value: *const Value) ?*const Document {
-    switch *value { Value.Table(ref table) => some(&table), _ => null }
+    switch *value { Value.Table(ref table) => some(table.toRaw()), _ => null }
 }
 func serdeIntegerText(value: i64) !string {
     var negative = value < 0;
@@ -243,10 +243,10 @@ func serdeIntegerText(value: i64) !string {
 
 pub func encode<T>(value: *const T, codec: *serde.Codec<T>) !string {
     var serializer = TomlDomSerializer();
-    serde.encode<T>(value, &serializer, codec)!;
+    serde.encode<T>(value, raw serializer, codec)!;
     var root = serializer.takeValue()!;
     switch move(root) {
-        Value.Table(document) => stringify(&document),
+        Value.Table(document) => stringify(raw document),
         _ => TomlError.TypeMismatch,
     }
 }
@@ -255,7 +255,7 @@ pub func decode<T>(value: str, codec: *serde.Codec<T>) !T {
     var document = parse(value)!;
     var root = Value.Table(move(document));
     var deserializer = TomlDomDeserializer(move(root));
-    var result = serde.decode<T>(&deserializer, codec)!;
+    var result = serde.decode<T>(raw deserializer, codec)!;
     deserializer.finish()!;
     move(result)
 }

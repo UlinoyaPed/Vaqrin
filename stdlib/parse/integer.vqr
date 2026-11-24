@@ -34,7 +34,7 @@ func scanInteger<T>(source: []const u8, radix: u8, allowNegative: bool, allowPre
     var quotient = __vqr_parse_quotient<T>(limit, radix);
     var remainder = __vqr_parse_remainder<T>(limit, radix);
     var magnitude: u128 = 0;
-    for position < source.len() {
+    while position < source.len() {
         var value = digit(source[position]);
         if value >= u32(radix) { break; }
         var wide = u128(value);
@@ -85,7 +85,7 @@ pub func parseChar(value: str) !char {
     var cursor = text.chars(value);
     var first = cursor.next();
     var rest = cursor.next();
-    if core.isNone(&first) || core.isSome(&rest) { return ParseError.InvalidSyntax; }
+    if core.isNone(raw first) || core.isSome(raw rest) { return ParseError.InvalidSyntax; }
     first.unwrap()
 }
 

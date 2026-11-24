@@ -67,10 +67,10 @@ pub class Arena {
             return;
         }
         var scan = first;
-        for scan != null && scan.unwrap().serial != mark.block { scan = scan.unwrap().next; }
+        while scan != null && scan.unwrap().serial != mark.block { scan = scan.unwrap().next; }
         var target = scan ?? { panic("arena mark is no longer live"); };
         if mark.cursor < target.start || mark.cursor > target.cursor { panic("invalid arena mark cursor"); }
-        for first.unwrap() != target { releaseFirst(); }
+        while first.unwrap() != target { releaseFirst(); }
         occupied -= target.cursor - mark.cursor;
         target.cursor = mark.cursor;
     }
@@ -102,6 +102,6 @@ pub class Arena {
     }
 
     func clearBlocks() void {
-        for first != null { releaseFirst(); }
+        while first != null { releaseFirst(); }
     }
 }

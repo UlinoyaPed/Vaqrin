@@ -108,9 +108,9 @@ func validateIpv6(value: []const u8) !void {
         compressed = true;
         i = 2;
     }
-    for i < value.len() {
+    while i < value.len() {
         var start = i;
-        for i < value.len() && value[i] != 58 { i++; }
+        while i < value.len() && value[i] != 58 { i++; }
         if start == i { return UrlError.InvalidIpv6; }
         var hasDot = false;
         for j := start; j < i; j++ { if value[j] == 46 { hasDot = true; } }
@@ -186,15 +186,15 @@ func normalizePercent(value: str) !string {
     var out = text.StringBuilder();
     for i := usize(0); i < data.len(); i++ {
         if data[i] != 37 {
-            appendAscii(&out, data[i])!;
+            appendAscii(raw out, data[i])!;
         } else {
             var decoded = (hexValue(data[i + 1]) << 4) | hexValue(data[i + 2]);
             if isUnreserved(decoded) {
-                appendAscii(&out, decoded)!;
+                appendAscii(raw out, decoded)!;
             } else {
-                appendAscii(&out, 37)!;
-                appendAscii(&out, hexDigit(hexValue(data[i + 1])))!;
-                appendAscii(&out, hexDigit(hexValue(data[i + 2])))!;
+                appendAscii(raw out, 37)!;
+                appendAscii(raw out, hexDigit(hexValue(data[i + 1])))!;
+                appendAscii(raw out, hexDigit(hexValue(data[i + 2])))!;
             }
             i += 2;
         }
@@ -202,7 +202,7 @@ func normalizePercent(value: str) !string {
     out.build()
 }
 func removeLastSegment(output: *coll.Vec<u8>) void {
-    for output.len() > 0 {
+    while output.len() > 0 {
         if output.asSlice()[output.len() - 1] == 47 { break; }
         var ignored = output.pop();
     }
@@ -214,7 +214,7 @@ func removeDotSegments(path: str) !string {
     var input = path.asBytes();
     var output = coll.Vec<u8>();
     var i: usize = 0;
-    for i < input.len() {
+    while i < input.len() {
         if startsWithAt(input, i, "../") { i += 3; continue; }
         if startsWithAt(input, i, "./") { i += 2; continue; }
         if startsWithAt(input, i, "/./") { i += 2; continue; }
@@ -225,12 +225,12 @@ func removeDotSegments(path: str) !string {
         }
         if startsWithAt(input, i, "/../") {
             i += 3;
-            removeLastSegment(&output);
+            removeLastSegment(raw output);
             continue;
         }
         if i + 3 == input.len() && startsWithAt(input, i, "/..") {
             i = input.len();
-            removeLastSegment(&output);
+            removeLastSegment(raw output);
             output.push(47)!;
             continue;
         }
@@ -238,7 +238,7 @@ func removeDotSegments(path: str) !string {
         if startsWithAt(input, i, "..") && i + 2 == input.len() { i += 2; continue; }
         var start = i;
         if input[i] == 47 { i++; }
-        for i < input.len() && input[i] != 47 { i++; }
+        while i < input.len() && input[i] != 47 { i++; }
         for j := start; j < i; j++ { output.push(input[j])!; }
     }
     text.fromBytes(output.asConstSlice())
@@ -471,7 +471,7 @@ pub class Url {
             }
             if hasPort {
                 output.append(":")!;
-                if !portEmpty { appendU16(&output, portValue)!; }
+                if !portEmpty { appendU16(raw output, portValue)!; }
             }
         }
         output.append(pathValue)!;
@@ -555,13 +555,13 @@ func appendU16(builder: *text.StringBuilder, value: u16) !void {
     var digits = [5]u8{0, 0, 0, 0, 0};
     var count: usize = 0;
     var number = u32(value);
-    for number > 0 {
+    while number > 0 {
         digits[count] = u8(48 + number % 10)!;
         number /= 10;
         count++;
     }
     if count == 0 { appendAscii(builder, 48)!; return; }
-    for count > 0 {
+    while count > 0 {
         count--;
         appendAscii(builder, digits[count])!;
     }
@@ -642,7 +642,7 @@ pub class UrlBuilder {
                     output.append("]")!;
                 } else { output.append(hostValue)!; }
             }
-            if hasPort { output.append(":")!; appendU16(&output, portValue)!; }
+            if hasPort { output.append(":")!; appendU16(raw output, portValue)!; }
         }
         output.append(pathValue)!;
         if hasQuery { output.append("?")!; output.append(queryValue)!; }

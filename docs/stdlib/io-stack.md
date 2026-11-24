@@ -181,8 +181,8 @@ in one executable. x86-64 is the executed host target in this integration.
 
 宿主程序可以直接使用 `var scan = bufio.newScanner(io.stdin())!;`。
 这个重载按值接收 `io.HostFile`。传入已有文件时写 `bufio.newScanner(move(file))!`。
-扫描器销毁或改用 `reset(&reader)` 时释放所持文件，标准输入的系统描述符仍由进程持有。
-传入 `&reader` 的重载继续借用输入流，调用方负责保证它在扫描期间有效。
+扫描器销毁或改用 `reset(raw reader)` 时释放所持文件，标准输入的系统描述符仍由进程持有。
+传入 `raw reader` 的重载继续借用输入流，调用方负责保证它在扫描期间有效。
 
 ## Recoverable transfers and file identity
 

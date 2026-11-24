@@ -55,7 +55,7 @@ pub class RefCell<T: Movable> {
         if count < 0 { return null; }
         count++;
         unsafe {
-            some(BorrowRef<T>(opt.asPtr<T>(&value).unwrap(), &count))
+            some(BorrowRef<T>(opt.asPtr<T>(raw value).unwrap(), raw count))
         }
     }
 
@@ -70,7 +70,7 @@ pub class RefCell<T: Movable> {
         if count != 0 { return null; }
         count = -1;
         unsafe {
-            some(BorrowMut<T>(opt.asMutPtr<T>(&value).unwrap(), &count))
+            some(BorrowMut<T>(opt.asMutPtr<T>(raw value).unwrap(), raw count))
         }
     }
 
@@ -83,11 +83,11 @@ pub class RefCell<T: Movable> {
 
     pub func replace(replacement: T) !T {
         if count != 0 { return CellError.Borrowed; }
-        opt.replace<T>(&value, move(replacement)).unwrap()
+        opt.replace<T>(raw value, move(replacement)).unwrap()
     }
 
     pub static func intoInner(inner: Self) T {
         if inner.count != 0 { panic("ref cell still borrowed"); }
-        opt.take<T>(&inner.value).unwrap()
+        opt.take<T>(raw inner.value).unwrap()
     }
 }

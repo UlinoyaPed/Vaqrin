@@ -43,7 +43,7 @@ func nextValue(input: *bufio.Scanner) !string {
 
 func drain(normalizer: *unicode.StreamingNormalizer, output: *coll.Vec<u8>) !void {
     var scratch = [3]u8{0,0,0};
-    for normalizer.available() != 0 {
+    while normalizer.available() != 0 {
         var count = normalizer.readOutput(scratch[:]);
         for byte in scratch[0..count] { output.push(byte)!; }
     }
@@ -54,10 +54,10 @@ func streaming(source: str, form: unicode.NormalForm) !string {
     var output = coll.Vec<u8>();
     for scalar in text.chars(source) {
         normalizer.push(scalar)!;
-        drain(&normalizer, &output)!;
+        drain(raw normalizer, raw output)!;
     }
     normalizer.finish()!;
-    drain(&normalizer, &output)!;
+    drain(raw normalizer, raw output)!;
     text.fromBytes(output.asConstSlice())
 }
 
@@ -104,11 +104,11 @@ func grapheme(input: *bufio.Scanner) !bool {
 
 func main() !i32 {
     var source = io.stdin();
-    var input = bufio.Scanner(&source)!;
+    var input = bufio.Scanner(raw source)!;
     for {
         var kind = input.nextString()! ?? { return 0; };
         var line = input.readInt<usize>()!;
-        var good = if kind == "n" { normalization(&input)! } else { grapheme(&input)! };
+        var good = if kind == "n" { normalization(raw input)! } else { grapheme(raw input)! };
         if !good {
             io.println(kind)!;
             io.println(line)!;

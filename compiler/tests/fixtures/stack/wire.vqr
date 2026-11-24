@@ -49,17 +49,17 @@ func emit() !void {
     writer.writeBytes(16, "vaqrin".asBytes())!;
     var child = Child{left: 5, right: 7};
     var codec = ChildCodec{};
-    var nested = protobuf.encode<Child>(&child, &codec, 128)!;
+    var nested = protobuf.encode<Child>(raw child, raw codec, 128)!;
     writer.writeBytes(17, nested.asConstSlice())!;
     var packed = protobuf.PackedWriter(20);
     packed.writeSint32(-1)!;
     packed.writeSint32(0)!;
     packed.writeSint32(1)!;
-    writer.writePacked(18, &packed)!;
+    writer.writePacked(18, raw packed)!;
     var mapEntry = protobuf.Writer(64);
     mapEntry.writeString(1, "key")!;
     mapEntry.writeInt32(2, -6)!;
-    writer.writeMessage(19, &mapEntry)!;
+    writer.writeMessage(19, raw mapEntry)!;
     writer.writeInt64(21, -1)!;
     writer.writeInt32(22, 0)!;
     fs.writeFile("vaqrin.bin", writer.written())
@@ -95,11 +95,11 @@ func consume() !void {
             14 => { require(field.asDouble()! == -2.5)!; },
             15 => { require(field.asString()! == "互操作")!; },
             16 => { require(bytes.equal(field.asBytes()!, "vaqrin".asBytes()))!; },
-            17 => { protobuf.mergeMessage<Child>(field, &child, &codec)!; },
+            17 => { protobuf.mergeMessage<Child>(field, raw child, raw codec)!; },
             18 => {
                 if field.wireType() == protobuf.WireType.LengthDelimited {
                     var packed = field.asPacked()!;
-                    for packed.remaining() != 0 { values.push(packed.readSint32()!)!; }
+                    while packed.remaining() != 0 { values.push(packed.readSint32()!)!; }
                 } else {
                     values.push(field.asSint32()!)!;
                 }
@@ -129,21 +129,21 @@ func boundaries() !void {
     var raw = [2]u8{0x08, 0x80};
     var reader = protobuf.Reader.open(raw[:], protobuf.DecodeLimits())!;
     var invalid = reader.next();
-    require(result.errorOf(&invalid).unwrap() == protobuf.DecodeError.Truncated)!;
+    require(result.errorOf(raw invalid).unwrap() == protobuf.DecodeError.Truncated)!;
     var long = [11]u8{0x08, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 2};
     var invalidLong = protobuf.Reader.open(long[:], protobuf.DecodeLimits())!;
     var overflow = invalidLong.next();
-    require(result.errorOf(&overflow).unwrap() == protobuf.DecodeError.InvalidVarint)!;
+    require(result.errorOf(raw overflow).unwrap() == protobuf.DecodeError.InvalidVarint)!;
     var tags = [3]u8{0x00, 0x0e, 0x0f};
     for index in usize(0)..3 {
         var tagReader = protobuf.Reader.open(tags[index..index + 1], protobuf.DecodeLimits())!;
         var wrong = tagReader.next();
-        require(result.errorOf(&wrong).unwrap() == protobuf.DecodeError.InvalidTag)!;
+        require(result.errorOf(raw wrong).unwrap() == protobuf.DecodeError.InvalidTag)!;
     }
     var invalidGroup = [2]u8{0x0b, 0x14};
     var groupReader = protobuf.Reader.open(invalidGroup[:], protobuf.DecodeLimits())!;
     var unmatched = groupReader.next();
-    require(result.errorOf(&unmatched).unwrap() == protobuf.DecodeError.InvalidGroup)!;
+    require(result.errorOf(raw unmatched).unwrap() == protobuf.DecodeError.InvalidGroup)!;
     var valid = [4]u8{0x08, 0x81, 0x00, 0x00};
     var nonMinimal = protobuf.Reader.open(valid[0..3], protobuf.DecodeLimits())!;
     var overlong = nonMinimal.next()!.unwrap();
@@ -154,18 +154,18 @@ func boundaries() !void {
     var shallow = protobuf.Reader.open(nested[:], limits)!;
     var child = shallow.next()!.unwrap();
     var deep = child.asMessage();
-    require(result.errorOf(&deep).unwrap() == protobuf.DecodeError.DepthLimit)!;
+    require(result.errorOf(raw deep).unwrap() == protobuf.DecodeError.DepthLimit)!;
     limits.maxBytes = 1;
     var big = protobuf.Reader.open(nested[:], limits);
-    require(result.errorOf(&big).unwrap() == protobuf.DecodeError.SizeLimit)!;
+    require(result.errorOf(raw big).unwrap() == protobuf.DecodeError.SizeLimit)!;
     var limited = protobuf.Writer(2);
     var noRoom = limited.writeString(1, "x");
-    require(result.errorOf(&noRoom).unwrap() == protobuf.EncodeError.SizeLimit && limited.written().len() == 0)!;
+    require(result.errorOf(raw noRoom).unwrap() == protobuf.EncodeError.SizeLimit && limited.written().len() == 0)!;
     var malformed = [3]u8{0x0a, 0x01, 0xff};
     var strings = protobuf.Reader.open(malformed[:], protobuf.DecodeLimits())!;
     var field = strings.next()!.unwrap();
     var invalidUtf8 = field.asString();
-    require(result.errorOf(&invalidUtf8).unwrap() == protobuf.DecodeError.InvalidUtf8)!;
+    require(result.errorOf(raw invalidUtf8).unwrap() == protobuf.DecodeError.InvalidUtf8)!;
 }
 
 func main() !void {

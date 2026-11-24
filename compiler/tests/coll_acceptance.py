@@ -10,6 +10,42 @@ class ContainerAcceptance(CompilerCase):
         self.process(VAQC, "build", entry, "-O2", "-o", "containers")
         return self.process("./containers").stdout.decode().splitlines()
 
+    def test_conditional_vec_methods_do_not_force_recursive_layout(self):
+        self.assertEqual(self.run_container(r"""
+            import (meta)
+            class Tree { pub var children: coll.Vec<Tree>; }
+            enum Value { Leaf(i32), List(coll.Vec<Value>) }
+            func main() !void {
+                var children = coll.Vec<Tree>();
+                var child = Tree{children: coll.Vec<Tree>()};
+                children.push(move(child))!;
+                if children.len() != 1 { panic("recursive class element was not stored"); }
+
+                var values = coll.Vec<Value>();
+                var leaf = Value.Leaf(7);
+                values.push(move(leaf))!;
+                values.push(Value.List(coll.Vec<Value>()))!;
+                if values.len() != 2 { panic("recursive enum elements were not stored"); }
+                if meta.isCopyable<Tree>() || meta.isCopyable<Value>() {
+                    panic("owning Vec elements must not be Copyable");
+                }
+            }
+        """), [])
+        direct = self.source("inline-cycle.vqr", "class Loop { var child: Loop; }")
+        diagnostic = self.process(VAQC, "check", direct, good=False).stderr
+        self.assertIn(b"recursive by-value layout", diagnostic)
+        implicit = self.source("implicit-move.vqr", """
+            import (coll)
+            class Tree { pub var children: coll.Vec<Tree>; }
+            func main() !void {
+                var children = coll.Vec<Tree>();
+                var child = Tree{children: coll.Vec<Tree>()};
+                children.push(child)!;
+            }
+        """)
+        diagnostic = self.process(VAQC, "check", implicit, good=False).stderr
+        self.assertIn(b"move parameter requires move(object)", diagnostic)
+
     def test_map_entry_lazy_insert_and_remove(self):
         output = self.run_container(r"""
             func main() !void {
@@ -54,6 +90,45 @@ class ContainerAcceptance(CompilerCase):
         """)
         self.assertEqual(sorted(output), ["1", "2", "3", "4", "5"])
 
+    def test_vec_push_selects_copy_or_move(self):
+        self.assertEqual(self.run_container(r"""
+            class Item { #copy: disabled; pub var value: i32; }
+            func main() !void {
+                var numbers = coll.Vec<i32>();
+                var number = 12;
+                numbers.push(number)!;
+                switch numbers.pushPreserving(number + 1) {
+                    coll.PushResult.Stored => {},
+                    _ => panic("the copied item was not stored"),
+                }
+                if number != 12 || numbers.pop().unwrap() != 13 || numbers.pop().unwrap() != 12 {
+                    panic("copying into Vec changed the source value");
+                }
+                var items = coll.Vec<Item>();
+                var first = Item{value: 19};
+                items.push(move(first))!;
+                switch items.pushPreserving(Item{value: 20}) {
+                    coll.PushResult.Stored => {},
+                    _ => panic("the transferred item was not stored"),
+                }
+                if items.pop().unwrap().value != 20 || items.pop().unwrap().value != 19 {
+                    panic("moving into Vec lost an item");
+                }
+            }
+        """), [])
+        for method, suffix in (("push", "!"), ("pushPreserving", "")):
+            entry = self.source("unmoved.vqr", f"""
+                import (coll)
+                class Item {{ #copy: disabled; pub var value: i32; }}
+                func main() !void {{
+                    var items = coll.Vec<Item>();
+                    var item = Item{{value: 19}};
+                    items.{method}(item){suffix};
+                }}
+            """)
+            diagnostic = self.process(VAQC, "check", entry, good=False).stderr
+            self.assertIn(b"move parameter requires move(object)", diagnostic)
+
     def test_stable_sort_ranges_and_map_projections(self):
         output = self.run_container(r"""
             import (algo)
@@ -77,7 +152,7 @@ class ContainerAcceptance(CompilerCase):
                 for i in 0..48 { var previous = tree.insert(i * 2, i)!; }
                 var start = 11;
                 var end = 27;
-                var range = tree.range(some(&start), some(&end));
+                var range = tree.range(some(raw start), some(raw end));
                 var counter = 6;
                 for key, value in move(range) {
                     if *key != counter * 2 || *value != counter { panic("range cursor mismatch"); }
@@ -109,11 +184,11 @@ class ContainerAcceptance(CompilerCase):
                 io.println(existing == 700)!;
                 var pair = (5, 10);
                 var pointers = coll.Vec<(*const i32, *const i32)>();
-                pointers.push((&pair.0, &pair.1))!;
+                pointers.push((raw pair.0, raw pair.1))!;
                 var old = coll.MapIterRef<i32, i32>(move(pointers), 1);
                 var valuesFromOld = old.nextBack().unwrap();
                 var treePointers = coll.Vec<*const (i32, i32)>();
-                treePointers.push(&pair)!;
+                treePointers.push(raw pair)!;
                 var oldTree = coll.BTreeIterRef<i32, i32>(move(treePointers), 1);
                 io.println(*valuesFromOld.1 == 10 && *oldTree.next().unwrap().0 == 5)!;
             }
@@ -166,7 +241,7 @@ class ContainerAcceptance(CompilerCase):
                     panic("ring traversal order");
                 }
                 var suffix = ring.splitOff(2)!;
-                ring.append(&suffix)!;
+                ring.append(raw suffix)!;
                 var out = ring.remove(1);
                 var removed = move(out).unwrap();
                 if removed.id != 4 { panic("wrapped remove"); }
@@ -196,7 +271,7 @@ class ContainerAcceptance(CompilerCase):
                 var tail = list.splitOff(2)!;
                 if tail.getMut(1).unwrap() != stable { panic("node moved"); }
                 tail.reverse();
-                list.append(&tail)!;
+                list.append(raw tail)!;
                 if list.remove(2).unwrap() != 5 || list.getMut(2).unwrap() != stable {
                     panic("list splice order");
                 }
@@ -266,14 +341,14 @@ class ContainerAcceptance(CompilerCase):
                 if hash.hashBytes("hello".asBytes()) != usize(1335831723) { panic("FNV-1a"); }
                 var signed: i16 = -1;
                 var unsigned = 65535u16;
-                if hash.hashI16(&signed, 17) != hash.hashU16(&unsigned, 17) {
+                if hash.hashI16(raw signed, 17) != hash.hashU16(raw unsigned, 17) {
                     panic("16-bit byte order or signed representation");
                 }
                 var first = Key{tag: 61};
                 var other = Key{tag: 61};
                 var bytes = [1]u8{61};
-                if !hash.equalKey<Key>(&first, &other) ||
-                   hash.hashValue<Key>(&first) != hash.hashBytes(bytes[:]) {
+                if !hash.equalKey<Key>(raw first, raw other) ||
+                   hash.hashValue<Key>(raw first) != hash.hashBytes(bytes[:]) {
                     panic("HashKey conformance");
                 }
             }
@@ -295,7 +370,7 @@ class ContainerAcceptance(CompilerCase):
                     var previous = tree.insert(id, Probe{id: id})!;
                 }
                 var k = 65;
-                if *tree.lowerBound(&k).unwrap() != 65 || *tree.upperBound(&k).unwrap() != 66 {
+                if *tree.lowerBound(raw k).unwrap() != 65 || *tree.upperBound(raw k).unwrap() != 66 {
                     panic("bound lookup failed");
                 }
                 {
@@ -333,7 +408,7 @@ class ContainerAcceptance(CompilerCase):
                 for step in 0..129 {
                     var id = (step * 107) % 129;
                     var query = Key{id: id};
-                    var borrowed = tree.lowerBound(&query).unwrap();
+                    var borrowed = tree.lowerBound(raw query).unwrap();
                     if borrowed.id != id { panic("borrowed key lookup"); }
                     var entry = tree.removeEntry(query).unwrap();
                     if entry.0.id != id || entry.1 != id || tree.containsKey(query) {
@@ -379,7 +454,7 @@ class ContainerAcceptance(CompilerCase):
             func main() !void {
                 var allocator = Allocator();
                 {
-                    var values = coll.Vec<Probe>.withCapacityAndAllocator(1, &allocator)!;
+                    var values = coll.Vec<Probe>.withCapacityAndAllocator(1, raw allocator)!;
                     values.push(Probe{id: 7})!;
                     allocator.fail = true;
                     switch values.pushPreserving(Probe{id: 8}) {
@@ -397,7 +472,7 @@ class ContainerAcceptance(CompilerCase):
                 }
                 if allocator.live != 0 { panic("allocation/free layouts differed"); }
                 {
-                    var map = coll.HashMap<i32, Probe>.withAllocator(hash.hashI32, hash.eqI32, &allocator);
+                    var map = coll.HashMap<i32, Probe>.withAllocator(hash.hashI32, hash.eqI32, raw allocator);
                     allocator.fail = true;
                     switch map.insertPreserving(1, Probe{id: 2}) {
                         coll.InsertResult.Failed(reason, key, item) => {

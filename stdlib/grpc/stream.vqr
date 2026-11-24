@@ -52,7 +52,7 @@ pub class ServerStream {
     pub var initial: Metadata;
     pub var trailing: Metadata;
     pub func init(socket: *Transport, session: *http2.Connection, deferred: *DeferredEvents,
-              id: i32, request: HeaderInfo, options: ServeOptions)
+              id: i32, request: move HeaderInfo, options: ServeOptions)
         : socket(socket), session(session), deferred(deferred), id(id),
           decoder(MessageReader(options.maxMessageBytes)), limit(options.maxMessageBytes),
           compression(if request.acceptsCompressed && options.compressResponses {
@@ -163,7 +163,7 @@ pub class ServerStream {
 }
 
 func performStream(handler: *StreamingHandler, wire: *Transport, connection: *http2.Connection,
-                   deferred: *DeferredEvents, id: i32, head: HeaderInfo, options: ServeOptions) !void {
+                   deferred: *DeferredEvents, id: i32, head: move HeaderInfo, options: ServeOptions) !void {
     var stream = ServerStream(wire, connection, deferred, id, move(head), options);
     var outcome = handler.handle(raw stream) catch (reason) {
         if reason == RpcError.Cancelled { return; }

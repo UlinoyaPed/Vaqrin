@@ -5,7 +5,7 @@ class ConcurrentInput {
     #copy: disabled
     var handler: *const ConcurrentUnaryHandler;
     var request: UnaryRequest;
-    pub func init(handler: *const ConcurrentUnaryHandler, request: UnaryRequest)
+    pub func init(handler: *const ConcurrentUnaryHandler, request: move UnaryRequest)
         : handler(handler), request(move(request)) {}
     pub func run(limit: usize) !ConcurrentOutput {
         var input = core.Exchange<UnaryRequest>.replace(request,
@@ -54,7 +54,7 @@ class PendingCall {
     pub var job: task.Task<ConcurrentOutput>;
     pub var compression: Compression;
     pub var replyable: bool;
-    pub func init(stream: i32, deadline: ?time.Deadline, job: task.Task<ConcurrentOutput>, compression: Compression)
+    pub func init(stream: i32, deadline: ?time.Deadline, job: move task.Task<ConcurrentOutput>, compression: Compression)
         : stream(stream), deadline(deadline), job(move(job)), compression(compression), replyable(true) {}
 }
 
@@ -111,7 +111,7 @@ class ConcurrentCalls {
         }
         first
     }
-    pub func start(stream: i32, handler: *const ConcurrentUnaryHandler, request: UnaryRequest,
+    pub func start(stream: i32, handler: *const ConcurrentUnaryHandler, request: move UnaryRequest,
                    compression: Compression, limit: usize) !void {
         running.reserve(running.len() + 1)!;
         var deadline = request.deadline;
@@ -124,7 +124,7 @@ class ConcurrentCalls {
         running.push(PendingCall(stream, deadline, move(job), compression))
     }
 
-    pub func startStream(id: i32, handler: *const ConcurrentStreamingHandler, request: HeaderInfo,
+    pub func startStream(id: i32, handler: *const ConcurrentStreamingHandler, request: move HeaderInfo,
                          options: ServeOptions) !void {
         streaming.reserve(streaming.len() + 1)!;
         var alarm = request.deadline;

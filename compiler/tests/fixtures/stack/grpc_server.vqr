@@ -5,7 +5,7 @@ error TestError { Unexpected }
 
 class Twice {
     #implements: grpc.UnaryHandler
-    pub func call(request: grpc.UnaryRequest) !grpc.UnaryResponse {
+    pub func call(request: move grpc.UnaryRequest) !grpc.UnaryResponse {
         if request.deadline == null { return TestError.Unexpected; }
         if !bytes.equal(request.metadata.get("proof-bin").unwrap(), "binary\u{0}".asBytes()) {
             return TestError.Unexpected;
@@ -23,7 +23,7 @@ class Twice {
 
 class Missing {
     #implements: grpc.UnaryHandler
-    pub func call(request: grpc.UnaryRequest) !grpc.UnaryResponse {
+    pub func call(request: move grpc.UnaryRequest) !grpc.UnaryResponse {
         var status = grpc.status(grpc.StatusCode.NotFound, "缺失 % field");
         for byte in "details".asBytes() { status.details.push(byte)!; }
         var reply = grpc.reply(move(status));
@@ -34,7 +34,7 @@ class Missing {
 
 class Sleep {
     #implements: grpc.UnaryHandler
-    pub func call(request: grpc.UnaryRequest) !grpc.UnaryResponse {
+    pub func call(request: move grpc.UnaryRequest) !grpc.UnaryResponse {
         time.sleep(time.Duration.fromMillis(10))!;
         grpc.reply(grpc.status(grpc.StatusCode.DeadlineExceeded, ""))
     }

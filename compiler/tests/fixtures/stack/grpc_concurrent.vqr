@@ -3,7 +3,7 @@ import (bytes, coll, env, grpc, io, mem, net, task, time, tls)
 
 class Handler {
     #implements: grpc.ConcurrentUnaryHandler
-    pub const func call(request: grpc.UnaryRequest) !grpc.UnaryResponse {
+    pub const func call(request: move grpc.UnaryRequest) !grpc.UnaryResponse {
         if request.path == "/interop.Concurrent/Wait" {
             io.println("waiting")!;
             task.sleep(time.Duration.fromSeconds(2)) catch (reason) {
@@ -45,7 +45,7 @@ class StopHandler {
     #implements: grpc.ConcurrentUnaryHandler
     var signal: mem.Shared<grpc.Shutdown>;
     pub func init(signal: mem.Shared<grpc.Shutdown>) : signal(move(signal)) {}
-    pub const func call(request: grpc.UnaryRequest) !grpc.UnaryResponse {
+    pub const func call(request: move grpc.UnaryRequest) !grpc.UnaryResponse {
         signal.asPtr().request()!;
         grpc.response(coll.Vec<u8>.fromSlice(request.body.asConstSlice())!)
     }

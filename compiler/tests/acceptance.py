@@ -261,6 +261,33 @@ class Acceptance(CompilerCase):
         source = self.source("bad_move.vqr", "func f(n: move i32) void {}")
         self.assertIn(b"non-Copyable", self.process(VAQC, "check", source, good=False).stderr)
 
+    def test_v020_generic_call_infers_explicit_standalone_lambda(self):
+        self.hosted("""
+            func traced(value: i32) i32 { io.println(value) catch {}; value }
+            func run<F: Copyable>(left: i32, callback: F, right: i32) i32 {
+                callback(left + right)
+            }
+            func run(left: i32, callback: func(i64) i64, right: i32) i32 { 99 }
+            func through<T: Copyable>(callback: func(T) T, value: T) T { callback(value) }
+            func consuming<F: Copyable>(callback: F, value: move ^i32) i32 { callback(move(value)) }
+            func main() !void {
+                io.println(run(traced(2), (value: i32) i32 => traced(value * 2), traced(3)))!;
+                io.println(through((value: u16) u16 => value + 1u16, 7u16))!;
+                io.println(consuming((owner: move ^i32) i32 => owner.intoInner(), new i32(21)!))!;
+            }
+        """, "2\n3\n10\n10\n8\n21\n")
+        prelude = "func use<F: Copyable>(callback: F) i32 { 0 }\n"
+        for name, arg in {
+            "missing_parameter_type": "value => value + 1",
+            "missing_return_type": "(value: i32) => value + 1",
+            "capturing_environment": "[local](value: i32) i32 => local + value",
+        }.items():
+            with self.subTest(name=name):
+                source = self.source(name + "/main.vqr", prelude +
+                    "func main() i32 { var local = 3; use(" + arg + ") }")
+                result = self.process(VAQC, "check", source, good=False)
+                self.assertIn(b"no accessible overload", result.stderr)
+
     def test_v020_consuming_captured_box_requires_moving_the_closure(self):
         setup = """
             var owner = new i32(9)!;
@@ -3469,6 +3496,31 @@ class Acceptance(CompilerCase):
                 failure = self.process(VAQC, "check", source, good=False)
                 self.assertIn(f"unknown value '{package}'".encode(), failure.stderr)
 
+    def test_core_drop_consumes_the_complete_owner(self):
+        self.hosted("""
+            import (core)
+            class Owned {
+                #copy: disabled
+                pub func init() {}
+                pub func deinit() void { io.println(17) catch {}; }
+            }
+            func main() !void {
+                var owner = Owned();
+                core.drop(move(owner));
+                io.println(core.identity(23))!;
+            }
+        """, "17\n23\n")
+        for line in ("core.drop(owner);", "core.drop(23);"):
+            with self.subTest(line=line):
+                source = self.source("wrong_drop.vqr", """
+                    import (core)
+                    func main() !void {
+                        var owner = new i32(17)!;
+                        """ + line + """
+                    }
+                """)
+                self.process(VAQC, "check", source, good=False)
+
     def test_optional_core_and_iterator_contracts(self):
         self.hosted("""
             import (core, opt, iter, coll)
@@ -3482,7 +3534,6 @@ class Acceptance(CompilerCase):
                 a := 18; b := 2;
                 core.swap(raw a, raw b); core.swap(raw a, raw a);
                 io.println(core.Exchange<i32>.replace(b, core.identity(a)))!;
-                core.drop(b);
                 var o: ?i32 = null;
                 io.println(opt.isNone(raw o))!;
                 var value = opt.getOrInsert(raw o, 3);
@@ -5004,7 +5055,7 @@ class Acceptance(CompilerCase):
                 io.println(job.join() catch i32(-2))!;
                 var transfer = Record{value: 17};
                 var owner = [move(transfer)]() Record => move(transfer);
-                var ownership = thread.Thread<Record>.spawn(move(owner))!;
+                var ownership = thread.Thread<Record>.spawnOwned(move(owner))!;
                 var result = ownership.join()!;
                 io.println(result.value)!;
                 var fail = () !i32 => WorkError.Rejected;
@@ -5032,6 +5083,16 @@ class Acceptance(CompilerCase):
         ''')
         result = self.process(VAQC, "check", source, good=False)
         self.assertIn(b"error[E202]: no accessible overload", result.stderr)
+        source = self.source("thread-named-owner.vqr", """
+            import (thread)
+            func launch() !void {
+                var state = new i32(1)!;
+                var callback = [move(state)]() i32 => state.intoInner();
+                var worker = thread.Thread<i32>.spawnOwned(callback)!;
+            }
+        """)
+        result = self.process(VAQC, "check", source, good=False)
+        self.assertIn(b"candidate spawnOwned(callback: move)", result.stderr)
         source = self.source("no-host.vqr", '''
             import (thread)
             func run() void { thread.yieldNow(); }
@@ -5055,7 +5116,7 @@ class Acceptance(CompilerCase):
                     unsafe { await_permission(); }
                     move(resource)
                 };
-                var threadHandle = thread.Thread<Probe>.spawn(move(callback)) catch (reason) {
+                var threadHandle = thread.Thread<Probe>.spawnOwned(move(callback)) catch (reason) {
                     if reason == thread.ThreadError.StartFailed { return 1; }
                     return 2;
                 };
@@ -5677,7 +5738,7 @@ class Acceptance(CompilerCase):
                 for n in 0..4 { fast.send(n)!; }
                 for n in 0..2 { if slow.recv()!.unwrap() != n { panic("initial order"); } }
                 for n in 4..100 { fast.send(n)!; }
-                core.drop<channel.Sender<i32>>(move(fast));
+                { var released = move(fast); }
                 for n in 2..100 { if slow.recv()!.unwrap() != n { panic("growing queue order"); } }
                 var end = slow.recv()!;
                 io.println(core.isNone<i32>(raw end))!;
@@ -5716,7 +5777,7 @@ class Acceptance(CompilerCase):
                     var reader = move(incoming);
                     reader.recv()!.unwrap()
                 };
-                var partner = thread.Thread<i32>.spawn(move(consumer))!;
+                var partner = thread.Thread<i32>.spawnOwned(move(consumer))!;
                 var sent = false;
                 while !sent {
                     switch out.trySend(28) {

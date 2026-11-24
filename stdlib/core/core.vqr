@@ -48,7 +48,7 @@ pub class Exchange<T: Movable> {
     }
 }
 
-pub func identity<T: Movable>(value: T) T { move(value) }
-pub func drop<T: Movable>(value: T) void {}
+pub func identity<T: Copyable + Movable>(value: T) T { move(value) }
+pub func drop<T: Movable>(value: move T) void {}
 pub func unreachable() never { panic("unreachable") }
 pub unsafe func unreachableUnchecked() never { unsafe { __vqr_unreachable() } }

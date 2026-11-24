@@ -842,6 +842,18 @@ class ProtocolAcceptance(CompilerCase):
                 if server.poll() is None:
                     server.kill()
 
+    def test_grpc_unary_handlers_require_request_transfer(self):
+        for handler in ("*grpc.UnaryHandler", "*const grpc.ConcurrentUnaryHandler"):
+            with self.subTest(handler=handler):
+                source = self.source("grpc_unary_owner.vqr", f"""
+                    import (grpc)
+                    func invalid(handler: {handler}, request: move grpc.UnaryRequest) !grpc.UnaryResponse {{
+                        handler.call(request)
+                    }}
+                """)
+                result = self.process(VAQC, "check", source, good=False)
+                self.assertIn(b"move parameter requires move(object) or an owning temporary", result.stderr)
+
     def test_grpc_vaqrin_to_vaqrin(self):
         cert, key = self.make_certificate()
         self.compile_fixture("grpc_server.vqr", "server")

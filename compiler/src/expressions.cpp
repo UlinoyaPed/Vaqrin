@@ -4,6 +4,49 @@
 
 namespace vqr::detail {
 
+// Parsing an annotation does not lower the lambda body or evaluate a
+// capture. Inference and final lowering must agree on this same signature.
+struct LambdaAnnotations {
+  std::vector<Type *> parameters;
+  std::vector<unsigned> moves;
+  Type *result;
+};
+
+template <typename Resolve>
+LambdaAnnotations lambdaAnnotations(const Ast &n, Type *expected, Resolve resolve) {
+  if (expected && (expected->cAbi || expected->parts.size() != n->parameters.size() + 1))
+    fail(n->span, "lambda signature does not match its context");
+  LambdaAnnotations signature{{}, {}, n->type ? resolve(n->type) : expected ? expected->parts.back() : nullptr};
+  for (unsigned i = 0; i < n->parameters.size(); ++i) {
+    const auto &param = n->parameters[i];
+    auto *t = param.type ? resolve(param.type) : expected ? expected->parts[i] : nullptr;
+    if (!t) fail(param.span, "lambda parameter requires a type or a function type context");
+    if (expected && t != expected->parts[i])
+      fail(param.span, "lambda parameter does not match its context", "E201");
+    signature.parameters.push_back(t);
+    if (parameterMode(param.type) == ParameterMode::Move ||
+        (!param.type && expected &&
+         std::ranges::find(expected->moveParameters, i) != expected->moveParameters.end()))
+      signature.moves.push_back(i);
+  }
+  if (expected && expected->moveParameters != signature.moves)
+    fail(n->span, "lambda ownership parameter mode does not match its context", "E201");
+  return signature;
+}
+
+template <typename Resolve>
+Type *standaloneLambdaType(Program &p, const Ast &n, Resolve resolve) {
+  if (n->kind != NodeKind::Lambda || !n->children.empty() || !n->type ||
+      !std::ranges::all_of(n->parameters, [](const auto &param) { return bool(param.type); }))
+    return nullptr;
+  auto signature = lambdaAnnotations(n, nullptr, resolve);
+  // Borrow-return contracts can depend on the expected callable. Do
+  // not guess a source or an environment-backed closure type.
+  if (p.hasReference(signature.result) || p.readonlyView(signature.result)) return nullptr;
+  signature.parameters.push_back(signature.result);
+  return p.aggregate(Kind::Function, signature.parameters, 0, false, std::move(signature.moves));
+}
+
 Type *Body::referenceHint(const Ast &n) {
   if (n->kind == NodeKind::Name) {
     auto id = findLocal(n->text);
@@ -1165,8 +1208,11 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
       for (unsigned j = 0; j < d.params.size(); ++j) {
         auto node = n->children[j + 1];
         auto parameter = d.params[j].type;
-        if (auto *t = referenceHint(node)) {
-          infer(infer, parameter, t);
+        auto *actual = referenceHint(node);
+        if (!actual)
+          actual = standaloneLambdaType(p, node, [&](const Ast &type) { return parseType(type); });
+        if (actual) {
+          infer(infer, parameter, actual);
         } else if (mathInteger(node)) {
           untyped.emplace_back(parameter, p.integer(32, true));
         } else {
@@ -1229,6 +1275,8 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
       auto *t = c.parameters[offset + i];
       auto a = n->children[i + 1];
       auto *from = t->kind == Kind::Reference ? referenceHint(a) : hint(a);
+      if (!from)
+        from = standaloneLambdaType(p, a, [&](const Ast &type) { return parseType(type); });
       if (t->parameterMode != ParameterMode::Value) {
         if (!from || from == t->parts[0] ||
             (from->kind == Kind::Reference && from->parts == t->parts && (t->readOnly || !from->readOnly)) ||
@@ -1610,28 +1658,17 @@ void Body::bindCapture(const Capture &capture, Value *environment, Span span) {
 
 ValueAt Body::lambda(const Ast &n, Type *expected) {
   if (expected && expected->kind != Kind::Function) expected = nullptr;
-  if (expected && (expected->cAbi || expected->parts.size() != n->parameters.size() + 1))
-    fail(n->span, "lambda signature does not match its context");
-  bool hasCaptures = !n->children.empty();
-  std::vector<Type *> signature;
-  std::vector<unsigned> moveParameters;
-  auto *result = n->type ? parseType(n->type) : expected ? expected->parts.back() : nullptr;
+  const bool hasCaptures = !n->children.empty();
+  auto annotations = lambdaAnnotations(n, expected, [&](const Ast &type) { return parseType(type); });
+  auto &signature = annotations.parameters;
+  auto &moveParameters = annotations.moves;
+  auto *result = annotations.result;
   std::vector<llvm::Type *> irArgs;
   if (hasCaptures) irArgs.push_back(PointerType::getUnqual(p.context));
-  for (unsigned i = 0; i < n->parameters.size(); ++i) {
-    const auto &param = n->parameters[i];
-    auto *t = param.type ? parseType(param.type) : expected ? expected->parts[i] : nullptr;
-    if (!t) fail(param.span, "lambda parameter requires a type or a function type context");
-    p.ensureSized(t, param.span);
-    signature.push_back(t);
-    if (parameterMode(param.type) == ParameterMode::Move ||
-        (!param.type && expected && std::ranges::find(expected->moveParameters, i) != expected->moveParameters.end()))
-      moveParameters.push_back(i);
-    if (expected && t != expected->parts[i]) fail(param.span, "lambda parameter does not match its context", "E201");
-    irArgs.push_back(p.storage(t));
+  for (unsigned i = 0; i < signature.size(); ++i) {
+    p.ensureSized(signature[i], n->parameters[i].span);
+    irArgs.push_back(p.storage(signature[i]));
   }
-  if (expected && expected->moveParameters != moveParameters)
-    fail(n->span, "lambda ownership parameter mode does not match its context", "E201");
   auto name = "vqr.lambda." + std::to_string(p.lambdaCount++);
   Type *t = nullptr;
   std::vector<Capture> captures;

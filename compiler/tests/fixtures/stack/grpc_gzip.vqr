@@ -5,7 +5,7 @@ error TestError { Unexpected }
 
 class Echo {
     #implements: grpc.UnaryHandler
-    pub func call(request: grpc.UnaryRequest) !grpc.UnaryResponse {
+    pub func call(request: move grpc.UnaryRequest) !grpc.UnaryResponse {
         grpc.response(coll.Vec<u8>.fromSlice(request.body.asConstSlice())!)
     }
 }

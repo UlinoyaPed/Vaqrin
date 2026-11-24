@@ -96,7 +96,7 @@ class Adapter_Greeter_SayHello {
     #implements: grpc.UnaryHandler
     var service: *GreeterService;
     pub func init(service: *GreeterService) : service(service) {}
-    pub func call(request: grpc.UnaryRequest) !grpc.UnaryResponse {
+    pub func call(request: move grpc.UnaryRequest) !grpc.UnaryResponse {
         var decoder = Codec_HelloRequest();
         var encoder = Codec_HelloReply();
         var typed = protobuf.decode<Msg_HelloRequest>(request.body.asConstSlice(), raw decoder, protobuf.DecodeLimits()) catch {
@@ -124,7 +124,7 @@ class ConcurrentAdapter_Greeter_SayHello<H: ConcurrentService_Greeter + Shareabl
     #implements: grpc.ConcurrentUnaryHandler
     var service: mem.Shared<H>;
     pub func init(service: mem.Shared<H>) : service(move(service)) {}
-    pub const func call(request: grpc.UnaryRequest) !grpc.UnaryResponse {
+    pub const func call(request: move grpc.UnaryRequest) !grpc.UnaryResponse {
         var decoder = Codec_HelloRequest();
         var encoder = Codec_HelloReply();
         var typed = protobuf.decode<Msg_HelloRequest>(request.body.asConstSlice(), raw decoder, protobuf.DecodeLimits()) catch {

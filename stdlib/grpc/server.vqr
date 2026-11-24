@@ -12,8 +12,8 @@ pub class UnaryRequest {
         : path(move(path)), metadata(move(metadata)), deadline(deadline), body(move(body)) {}
 }
 
-pub interface UnaryHandler { func call(request: UnaryRequest) !UnaryResponse; }
-pub interface ConcurrentUnaryHandler { const func call(request: UnaryRequest) !UnaryResponse; }
+pub interface UnaryHandler { func call(request: move UnaryRequest) !UnaryResponse; }
+pub interface ConcurrentUnaryHandler { const func call(request: move UnaryRequest) !UnaryResponse; }
 
 enum UnaryRoute { Synchronous(*UnaryHandler), Concurrent(*const ConcurrentUnaryHandler) }
 
@@ -57,7 +57,7 @@ class Incoming {
     pub var route: UnaryRoute;
     pub var decoder: MessageReader;
     pub var head: HeaderInfo;
-    pub func init(stream: i32, route: UnaryRoute, incoming: HeaderInfo, limit: usize)
+    pub func init(stream: i32, route: UnaryRoute, incoming: move HeaderInfo, limit: usize)
         : stream(stream), route(route), decoder(MessageReader(limit)), head(move(incoming)) {
         if (head.encoding ?? MessageEncoding.Identity) == MessageEncoding.Gzip { decoder.useCompression(Compression.Gzip); }
     }

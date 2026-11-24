@@ -476,7 +476,7 @@ class Generator:
             p.line(f"{target}.rpc_{method.name}(raw typed)")
             p.end()
         else:
-            p.start(f"pub {declaration} call(request: grpc.UnaryRequest) !grpc.UnaryResponse")
+            p.start(f"pub {declaration} call(request: move grpc.UnaryRequest) !grpc.UnaryResponse")
             p.line(f"var decoder = {encoder}();")
             p.line(f"var encoder = {decoder}();")
             p.line(f"var typed = protobuf.decode<{input_type}>(request.body.asConstSlice(), raw decoder, protobuf.DecodeLimits()) catch {{")

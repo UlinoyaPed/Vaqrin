@@ -28,7 +28,7 @@ func release<T: Movable + Sendable>(state: *State<T>) void {
 class Work<T: Movable + Sendable, F: Movable + Sendable> {
     var state: *State<T>;
     var callback: ?F;
-    pub func init(state: *State<T>, callback: F) : state(state), callback(some(move(callback))) {}
+    pub func init(state: *State<T>, pending: mut ?F) : state(state), callback(opt.take<F>(pending)) {}
 
     pub func run() void {
         var owned = unsafe { Box<Work<T, F>>.fromRaw(self) };
@@ -50,9 +50,21 @@ pub class Thread<T: Movable + Sendable> {
     var identity: usize;
     var state: ?*State<T>;
     func init(handle: usize, id: usize, state: *State<T>) : handle(handle), identity(id), state(some(state)) {}
-    pub static func spawn<F: Movable + Sendable>(callback: F) !Self {
+    pub static func spawn<F: Copyable + Movable + Sendable>(callback: F) !Self {
+        var pending: ?F = some(move(callback));
+        Self.start<F>(pending)
+    }
+
+    pub static func spawnOwned<F: Movable + Sendable>(callback: move F) !Self {
+        var pending: ?F = some(move(callback));
+        Self.start<F>(pending)
+    }
+
+    // The new Work takes the callback from the caller's slot before the
+    // native worker starts; it never retains the slot borrow.
+    static func start<F: Movable + Sendable>(pending: mut ?F) !Self {
         var completion = (new State<T>())!;
-        var work = (new Work<T, F>(completion.asPtr(), move(callback)))!;
+        var work = (new Work<T, F>(completion.asPtr(), pending))!;
         var rawState = Box.intoRaw(move(completion));
         var rawWork = Box.intoRaw(move(work));
         var native: usize = 0;
@@ -106,7 +118,7 @@ pub class Thread<T: Movable + Sendable> {
     pub func deinit() void { detach(); }
 }
 
-pub func spawn<T: Movable + Sendable, F: Movable + Sendable>(callback: F) !Thread<T> {
+pub func spawn<T: Movable + Sendable, F: Copyable + Movable + Sendable>(callback: F) !Thread<T> {
     Thread<T>.spawn<F>(move(callback))
 }
 

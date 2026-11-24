@@ -41,7 +41,7 @@ pub class ConcurrentServerStream {
     pub var trailing: Metadata;
 
     pub func init(requests: channel.Sender<StreamCommand>, replies: channel.Receiver<StreamReply>,
-              descriptor: i32, head: HeaderInfo, options: ServeOptions)
+              descriptor: i32, head: move HeaderInfo, options: ServeOptions)
         : requests(move(requests)), replies(move(replies)), descriptor(descriptor),
           limit(options.maxMessageBytes),
           compression(if head.acceptsCompressed && options.compressResponses {

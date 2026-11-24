@@ -452,7 +452,16 @@ Ast Parser::type(bool inferArray) {
     auto key = start.text == "??" ? "?" : start.text == "&&" ? "&" : start.text;
     if (key == "*" && eat("const")) key = "*const";
     if (key == "&" && eat("const")) key = "&const";
-    return make(NodeKind::TypePrefix, start.span, key, {type()});
+    auto inner = type();
+    const auto isWrapper = [](const Ast &node) {
+      return node->kind == NodeKind::TypePrefix && (node->text == "?" || node->text == "!");
+    };
+    // Grouping parentheses have already been removed by type(). A named
+    // alias, unlike parentheses, stops the directly written wrapper chain.
+    if ((key == "?" || key == "!") && isWrapper(inner) && isWrapper(inner->children.front()))
+      fail(inner->children.front()->span, "at most two consecutive type wrappers; use a type alias for deeper nesting",
+           "E110");
+    return make(NodeKind::TypePrefix, start.span, key, {inner});
   }
   if (eat("[")) {
     if (eat("]")) {

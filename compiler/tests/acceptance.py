@@ -573,7 +573,8 @@ class Acceptance(CompilerCase):
         source = self.source("root/main.vqr", '''
             package main
             import (geometry as g, io)
-            type Nested = !??i32;
+            type NestedOptional = ??i32;
+            type Nested = !NestedOptional;
             func id<T: Copyable>(x: T) T { x }
             func main() !void {
                 café := [_]i32{g.twice(3), id<i32>(4),};
@@ -602,6 +603,43 @@ class Acceptance(CompilerCase):
                 bad = self.source("bad.vqr", "package t\n" + snippet)
                 result = self.process(VAQC, "check", bad, good=False)
                 self.assertIn(diagnostic, result.stderr.decode())
+
+    def test_v020_direct_wrapper_limit_and_alias_composition(self):
+        self.hosted('''
+            type NestedOptional = ??i32;
+            type DeepResult = !NestedOptional;
+            type NestedResult = !!i32;
+            type WrapperOnEitherSideOfPointer = !?*??i32;
+            type GroupedPair = !(?i32);
+
+            func mixed() !?i32 { some(42) }
+            func bump() !?i32 { mixed()!? + 1 }
+            func main() !void {
+                var nested: DeepResult = ok(some(some(40)));
+                var outside: ?!i32 = some(ok(41));
+                var errors: NestedResult = ok(ok(42));
+                io.println(nested!.unwrap().unwrap())!;
+                io.println(outside.unwrap()!)!;
+                io.println(errors!!)!;
+                io.println(bump()! ?? 0)!;
+            }
+        ''', "40\n41\n42\n43\n")
+
+        for code in [
+            *(f"type Bad = {outer}{middle}{inner}i32;"
+              for outer in "?!" for middle in "?!" for inner in "?!"),
+            "type Bad = ? ! ? i32;",
+            "type Bad = ?(!(?i32));",
+            "func bad(value: !??i32) void {}",
+            "func bad() void { var value: ?!!i32; }",
+            "type Bad = (?i32, !??i32);",
+            "type Bad = Box<!!?i32>;",
+        ]:
+            with self.subTest(code=code):
+                source = self.source("bad_wrapper.vqr", code)
+                result = self.process(VAQC, "check", source, good=False)
+                self.assertIn(b"error[E110]", result.stderr)
+                self.assertIn(b"at most two consecutive type wrappers", result.stderr)
 
     def test_v020_integer_width_and_overflow(self):
         for level in ("-O0", "-O2"):
@@ -762,7 +800,8 @@ class Acceptance(CompilerCase):
         self.hosted('''
             enum Item { Unit, Num(i32), }
             error Lookup { Unavailable }
-            func lookup(i: i32) !??Item {
+            type NestedItem = ??Item;
+            func lookup(i: i32) !NestedItem {
                 if i < 0 { return Lookup.Unavailable; }
                 if i == 0 { return null; }
                 if i == 1 { return some(null); }
@@ -1466,7 +1505,7 @@ class Acceptance(CompilerCase):
             ("func f() ?i32 { 2? }", "requires an Optional operand"),
             ("func f(v: ?i32) i32 { v? }", "requires an Optional return channel"),
             ("func f(v: ?i32) !i32 { v? }", "LookupError.NotFound"),
-            ("func f(v: ?i32) !!?i32 { v? }", "requires '?U' or '!?U'"),
+            ("type Maybe = ?i32; func f(v: ?i32) !!Maybe { v? }", "requires '?U' or '!?U'"),
             ("func f(v: ?^i32) ?^i32 { v? }", "move(value)?"),
             ("comptime const n = some(2)?;", "error[E220]"),
             ("func read(x: in i32) ?&const i32 { x } "

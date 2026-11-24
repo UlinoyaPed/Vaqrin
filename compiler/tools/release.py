@@ -21,13 +21,14 @@ func heapWorks() !bool {
     var layout = mem.Layout.fromSizeAlign(31, 64)!;
     var block = allocator.alloc(layout)!.unwrap();
     var aligned = mem.isAligned(block, 64);
-    allocator.free(block, layout);
+    // Return the live block to the same allocator with its original layout.
+    unsafe { allocator.free(block, layout); }
     var items = coll.Vec<u64>();
     for value in u64(0)..u64(96) { items.push(value)!; }
     var boxed = new u64(23)!;
     var owned = text.fromBytes("Windows heap".asBytes())!;
     var copy = owned;
-    return aligned && items[95] == 95 && *boxed.asPtr() == 23 && copy == "Windows heap";
+    return aligned && items[95] == 95 && *boxed == 23 && copy == "Windows heap";
 }
 
 func clocksWork() !bool {

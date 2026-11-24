@@ -5,17 +5,17 @@ pub enum Rounding { TowardZero, Floor, Ceil, NearestEven, AwayFromZero }
 pub enum OverflowMode { Checked, Wrap, Saturate }
 pub error NumericError { OutOfRange, InvalidScalar, InvalidBoolean }
 
-pub func narrow<T, U>(value: U) !T { T(value) }
-pub func widen<T, U>(value: U) T { T(value) }
-pub func truncBits<T, U>(value: U) T { __vqr_convert_trunc_bits<T>(value) }
+pub func narrow<T, U: Copyable>(value: U) !T { T(value) }
+pub func widen<T, U: Copyable>(value: U) T { T(value) }
+pub func truncBits<T, U: Copyable>(value: U) T { __vqr_convert_trunc_bits<T>(value) }
 
-pub func truncToInt<T, F>(value: F) !T { __vqr_convert_trunc<T>(value) }
-pub func floorToInt<T, F>(value: F) !T { __vqr_convert_floor<T>(value) }
-pub func ceilToInt<T, F>(value: F) !T { __vqr_convert_ceil<T>(value) }
-pub func roundToInt<T, F>(value: F) !T { __vqr_convert_round<T>(value) }
+pub func truncToInt<T, F: Copyable>(value: F) !T { __vqr_convert_trunc<T>(value) }
+pub func floorToInt<T, F: Copyable>(value: F) !T { __vqr_convert_floor<T>(value) }
+pub func ceilToInt<T, F: Copyable>(value: F) !T { __vqr_convert_ceil<T>(value) }
+pub func roundToInt<T, F: Copyable>(value: F) !T { __vqr_convert_round<T>(value) }
 
-pub func toFloat<T, U>(value: U) T { __vqr_convert_float<T>(value) }
-pub func bitCast<T, U>(value: U) T { __vqr_convert_bit_cast<T>(value) }
+pub func toFloat<T, U: Copyable>(value: U) T { __vqr_convert_float<T>(value) }
+pub func bitCast<T, U: Copyable>(value: U) T { __vqr_convert_bit_cast<T>(value) }
 
 pub func checkedCast<T, U: Copyable>(value: U) core.ResultOptional<T> {
     var converted: !T = T(value);

@@ -5249,6 +5249,44 @@ class Acceptance(CompilerCase):
             }
         """, "2\n2\ntrue\n9\n3\n3\n0\n0\n2\ntrue\n4\n2\ntrue\n3\ntrue\n4\n4\n8\n9\ntrue\n中文\n")
 
+    def test_conversion_facade_declares_only_copyable_sources(self):
+        source = self.source("main.vqr", """
+            package main
+            import (std/convert, std/core)
+            type Narrow = u24;
+            type Single = f32;
+            func exercise<F: Copyable, U: Copyable>(fraction: F, value: U) !void {
+                if convert.truncToInt<i32>(fraction)! != -2 ||
+                   convert.floorToInt<i32>(fraction)! != -3 ||
+                   convert.ceilToInt<i32>(fraction)! != -2 ||
+                   convert.roundToInt<i32>(fraction)! != -2 {
+                    panic("float-to-integer rounding changed");
+                }
+                if convert.narrow<u8>(value)! != 42 || convert.widen<u64>(value) != 42u64 ||
+                   convert.truncBits<u8>(value) != 42 || convert.toFloat<f32>(value) != 42.0f32 {
+                    panic("integer conversion changed");
+                }
+            }
+            func replay<T, U: Copyable>(source: U) !T {
+                convert.checkedCast<T, U>(source)!.unwrap()
+            }
+            func main() !void {
+                var word: Narrow = 42;
+                var fraction: Single = -2.25f32;
+                exercise<Single, Narrow>(fraction, word)!;
+                exercise<f64, u64>(-2.25f64, 42u64)!;
+                if word != 42 || fraction != -2.25f32 { panic("source was changed"); }
+                if convert.bitCast<u32>(1.0f32) != 0x3f800000u32 ||
+                   convert.bitCast<f64>(0x3ff0000000000000u64) != 1.0 ||
+                   replay<i16, i8>(-7i8)! != -7 { panic("representation changed"); }
+                var tooWide: u32 = 256;
+                var absent = convert.checkedCast<u8>(tooWide)!;
+                if !core.isNone(raw absent) || tooWide != 256 { panic("checked failure changed"); }
+            }
+        """)
+        self.process(VAQC, "build", source, "-o", "convert-probe")
+        self.process("./convert-probe")
+
     def test_numeric_conversion_facade(self):
         self.hosted("""
             import (convert, core)

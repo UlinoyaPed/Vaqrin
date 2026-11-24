@@ -9,7 +9,7 @@
 | `opt` 映射 | 自由函数 `map`、`andThen` 复制可复制的输入和回调；`Transform<T>.map/andThen` 依 T 选取复制或转移输入。`mapOwned/andThenOwned` 额外接管不可复制的回调。空可选值不执行回调，但仍正常回收已取得的回调。带可写作用域引用捕获的闭包不走拥有型转换入口；`filter` 未迁移。 | [opt.vqr](../../stdlib/opt/opt.vqr) |
 | `opt.inspectMut` | 将具名观察回调作为 `mut F` 借给即时调用，不复制或消费它。原捕获的借用仍持续到回调绑定离开作用域；仅在可选值存在时将载荷作为共享借用交给 `in T` 回调，并返回原取得的可选值。已有 `opt.inspect` 及其裸指针回调合同不变，尚需单独迁移。 | [opt.vqr](../../stdlib/opt/opt.vqr) |
 | `cell.OnceCell` | `getOrTryInitMut(factory)` 借用具名工厂回调；已初始化时不执行它，失败后仍可重试，递归初始化仍返回错误。已有按值工厂接口和发布地址的裸指针约定不变；这不是并发 `OnceLock` 的迁移。 | [once.vqr](../../stdlib/cell/once.vqr) |
-| `convert.checkedCast` 与 `math` 浮点转换辅助 | `checkedCast<T, U: Copyable>(value: U)` 只约束按值来源；内部 `toF32/toF64` 亦声明复制来源的约束。目标类型参数、已有显式转换与失败处理、`fromF32/fromF64` 和常量构造器不变。 | [convert.vqr](../../stdlib/convert/convert.vqr)、[math.vqr](../../stdlib/math/math.vqr) |
+| `convert.checkedCast` 与 `math` 浮点转换辅助 | `checkedCast<T, U: Copyable>(value: U)` 只约束按值来源；内部 `toF32/toF64` 亦声明复制来源的约束。九个其他按值转换入口也只约束来源类型（包括浮点到整数取整及位转换）。目标类型参数、已有显式转换与失败处理、`fromF32/fromF64` 和常量构造器不变。 | [convert.vqr](../../stdlib/convert/convert.vqr)、[math.vqr](../../stdlib/math/math.vqr) |
 | `math` 浮点舍入 | `floor`、`ceil`、`trunc`、`round`、`roundEven` 和 `fract` 的按值输入明确需要 `T: Copyable`。仍只支持走原有浮点转换路径的类型（`f32`、`f64` 及其别名）；此处不增加整数或自定义数值类型支持，不改变共享转换入口或常量构造器。 | [math.vqr](../../stdlib/math/math.vqr) |
 | `bits` 字操作 | 按值接收泛型整数操作数的 19 个入口明确声明 `T: Copyable`；整数和位宽限制仍由原有内建操作检查。仅将 `T` 用作结果的 `maskLow<T>(count: usize) T` 不额外加界。位流接口未改变。 | [word.vqr](../../stdlib/bits/word.vqr) |
 | `bufio` | `Token.text() str from self`。文本视图受 Token 来源限制；这不等于 `ByteToken.bytes()` 或一般切片都已有相同契约。 | [bufio.vqr](../../stdlib/bufio/bufio.vqr) |

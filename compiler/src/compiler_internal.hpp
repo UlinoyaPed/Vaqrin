@@ -302,6 +302,7 @@ private:
   ValueAt dereference(ValueAt v, Span span);
   void checkUnwrap(Value *present, Span span);
   ValueAt borrow(ValueAt v, Type *t, Span span, bool materialize);
+  void validateScopedCallArgument(const Ast &arg, Type *parameter);
   ValueAt argument(const Ast &n, Type *t, bool transfersOwnership = false);
   ValueAt referenceName(int local, Span span);
   Type *referenceHint(const Ast &n);
@@ -455,6 +456,7 @@ public:
   GlobalVariable *interfaceTable(Type *type, Type *interface, Span span);
   void ensureSized(Type *t, Span span);
   bool copyable(Type *t);
+  void verifyValueParameter(Type *t, ParameterMode mode, Span span);
   bool satisfies(Type *t, const Ast &constraint, const File &file, const Types &generics = {},
                  const Constants &values = {});
   bool movable(Type *t);
@@ -521,6 +523,8 @@ public:
       if (!g.comptime) out[g.name] = t->parts[i++];
     return out;
   }
+private:
+  std::deque<std::pair<Type *, Span>> pendingValueParameters;
 };
 
 std::string path(const Ast &node);

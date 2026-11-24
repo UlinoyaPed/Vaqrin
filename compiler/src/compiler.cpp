@@ -474,6 +474,8 @@ Type *Program::type(const Ast &n, const File &file, const Types &generics, const
       if (scopedCallableInput(part) && mode != ParameterMode::Mut)
         fail(a->span, "a scoped callable loan requires an explicit 'mut' parameter", "E230");
       parts.push_back(part);
+      if (n->kind == NodeKind::TypeFunction && mode == ParameterMode::Value)
+        pendingValueParameters.emplace_back(part, a->span);
     }
     if (n->type) {
       parts.push_back(type(n->type, file, generics, values));
@@ -939,6 +941,14 @@ bool Program::satisfies(Type *t, const Ast &constraint, const File &file, const 
   return true;
 }
 
+void Program::verifyValueParameter(Type *t, ParameterMode mode, Span span) {
+  if (mode != ParameterMode::Value) return;
+  if (t->kind != Kind::Interface) ensureSized(t, span);
+  if (!copyable(t))
+    fail(span, "Value parameter requires a Copyable type, but '" + t->name +
+                   "' is not Copyable; use in, mut, or move as appropriate", "E230");
+}
+
 bool Program::copyable(Type *t) {
   if (t->kind == Kind::Reference) return t->readOnly;
   if (t->kind == Kind::Interface) return false;
@@ -1261,6 +1271,9 @@ FunctionEntry &Program::function(Definition d, Types substitutions, Type *owner,
   auto &decl = *d.decl;
   if (owner) values.insert(owner->comptimeArguments.begin(), owner->comptimeArguments.end());
   auto params = parameters(d, substitutions, owner, values);
+  const unsigned receiverOffset = owner && !decl.associated;
+  for (unsigned i = 0; i < decl.params.size(); ++i)
+    verifyValueParameter(params[receiverOffset + i], parameterMode(decl.params[i].type), decl.params[i].span);
   std::string id = owner ? owner->name + "." + decl.name : key(d);
   std::vector<Type *> genericTypes;
   for (const auto &g : decl.generics)
@@ -1447,6 +1460,14 @@ std::unique_ptr<Module> Program::build() {
       for (auto &[_, entry] : functions) lower(entry);
     }
     prepareGenericInterfaces();
+    // A function pointer is fixed-size even when its parameter names an
+    // enclosing record. Do not force that record's layout while resolving
+    // its fields or an alias to the function pointer.
+    while (!pendingValueParameters.empty()) {
+      auto [parameter, span] = pendingValueParameters.front();
+      pendingValueParameters.pop_front();
+      verifyValueParameter(parameter, ParameterMode::Value, span);
+    }
   } while (checked < files.size());
   emitGenericInterfaces();
   if (!options.check && options.emit == "exe" && options.profile == "hosted") {

@@ -495,7 +495,7 @@ class Generator:
         p.line("#copy: disabled")
         p.line("var connection: *grpc.ClientConn;")
         p.line("var call: grpc.Call;")
-        p.line("pub func init(connection: *grpc.ClientConn, call: grpc.Call) : connection(connection), call(move(call)) {}")
+        p.line("pub func init(connection: *grpc.ClientConn, call: move grpc.Call) : connection(connection), call(move(call)) {}")
         p.start(f"pub func send(input: *const {input_type}) !void")
         p.line(f"var codec = {encoder}();")
         p.line(f"var message = protobuf.encode<{input_type}>(input, raw codec, connection.maxMessageBytes())!;")

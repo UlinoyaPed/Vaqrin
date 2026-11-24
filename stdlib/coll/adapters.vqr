@@ -145,8 +145,19 @@ pub class BinaryHeap<T: Movable> {
         move(result)
     }
 
-    pub static func fromIter<I: Movable>(
+    // Advance an acquired copy without consuming the caller's iterator.
+    pub static func fromIter<I: Copyable + Movable>(
         items: I, less: func(*const T, *const T) bool, order: HeapOrder
+    ) !Self {
+        var result = BinaryHeap<T>.withComparator(less, order);
+        for item in move(items) { result.values.push(move(item))!; }
+        result.heapify();
+        move(result)
+    }
+
+    // Drain an owning iterator, preserving exact transfer and cleanup on error.
+    pub static func fromOwnedIter<I: Movable>(
+        items: move I, less: func(*const T, *const T) bool, order: HeapOrder
     ) !Self {
         var result = BinaryHeap<T>.withComparator(less, order);
         for item in move(items) { result.values.push(move(item))!; }
@@ -159,19 +170,83 @@ pub class BinaryHeap<T: Movable> {
     pub const func isEmpty() bool { values.isEmpty() }
     pub const func peek() ?*const T { values.first() }
 
-    pub func push(value: T) !void {
-        values.push(move(value))!;
-        siftUp(values.len() - 1);
-    }
+    comptime if meta.isCopyable<T>() {
+        pub func push(value: T) !void {
+            values.push(move(value))!;
+            siftUp(values.len() - 1);
+        }
 
-    pub func pushPreserving(value: T) PushResult<T> {
-        switch values.pushPreserving(move(value)) {
-            PushResult.Stored => {
-                siftUp(values.len() - 1);
-                PushResult.Stored()
-            },
-            PushResult.Full(item) => PushResult.Full(move(item)),
-            PushResult.Failed(reason, item) => PushResult.Failed(reason, move(item)),
+        pub func pushPreserving(value: T) PushResult<T> {
+            switch values.pushPreserving(move(value)) {
+                PushResult.Stored => {
+                    siftUp(values.len() - 1);
+                    PushResult<T>.Stored()
+                },
+                PushResult.Full(item) => PushResult<T>.Full(move(item)),
+                PushResult.Failed(reason, item) => PushResult<T>.Failed(reason, move(item)),
+            }
+        }
+
+        pub func replaceTop(value: T) core.ResultOptional<T> {
+            if values.isEmpty() {
+                values.push(move(value))!;
+                return null;
+            }
+            var previous = values.replace(0, move(value)).unwrap();
+            siftDown(0);
+            some(move(previous))
+        }
+
+        pub func pushPop(value: T) T {
+            if values.isEmpty() { return move(value); }
+            var root = values.at(0);
+            var replaceRoot = if order == HeapOrder.Max { less(raw value, root) } else { less(root, raw value) };
+            if replaceRoot {
+                var previous = values.replace(0, move(value)).unwrap();
+                siftDown(0);
+                move(previous)
+            } else {
+                move(value)
+            }
+        }
+    } else {
+        pub func push(value: move T) !void {
+            values.push(move(value))!;
+            siftUp(values.len() - 1);
+        }
+
+        pub func pushPreserving(value: move T) PushResult<T> {
+            switch values.pushPreserving(move(value)) {
+                PushResult.Stored => {
+                    siftUp(values.len() - 1);
+                    PushResult<T>.Stored()
+                },
+                PushResult.Full(item) => PushResult<T>.Full(move(item)),
+                PushResult.Failed(reason, item) => PushResult<T>.Failed(reason, move(item)),
+            }
+        }
+
+        pub func replaceTop(value: move T) core.ResultOptional<T> {
+            if values.isEmpty() {
+                values.push(move(value))!;
+                return null;
+            }
+            var previous = values.replace(0, move(value)).unwrap();
+            siftDown(0);
+            some(move(previous))
+        }
+
+        pub func pushPop(value: move T) T {
+            if values.isEmpty() { return move(value); }
+            var root = values.at(0);
+            var replaceRoot = if order == HeapOrder.Max { less(raw value, root) } else { less(root, raw value) };
+            if replaceRoot {
+                var previous = values.replace(0, move(value)).unwrap();
+                siftDown(0);
+                move(previous)
+            } else {
+                move(value)
+            }
         }
     }
 
@@ -182,29 +257,6 @@ pub class BinaryHeap<T: Movable> {
         var result = values.pop().unwrap();
         siftDown(0);
         some(move(result))
-    }
-
-    pub func replaceTop(value: T) core.ResultOptional<T> {
-        if values.isEmpty() {
-            values.push(move(value))!;
-            return null;
-        }
-        var previous = values.replace(0, move(value)).unwrap();
-        siftDown(0);
-        some(move(previous))
-    }
-
-    pub func pushPop(value: T) T {
-        if values.isEmpty() { return move(value); }
-        var root = values.at(0);
-        var replaceRoot = if order == HeapOrder.Max { less(raw value, root) } else { less(root, raw value) };
-        if replaceRoot {
-            var previous = values.replace(0, move(value)).unwrap();
-            siftDown(0);
-            move(previous)
-        } else {
-            move(value)
-        }
     }
 
     pub func clear() void { values.clear(); }

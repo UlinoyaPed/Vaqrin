@@ -288,6 +288,84 @@ class Acceptance(CompilerCase):
                 result = self.process(VAQC, "check", source, good=False)
                 self.assertIn(b"no accessible overload", result.stderr)
 
+    def test_v020_value_parameters_require_copyable_even_for_temporaries(self):
+        cases = {
+            "signature": "func f(x: ^i32) void {}",
+            "reference_value_signature": "func f(x: ref mut i32) void {}",
+            "generic_temporary": """
+                func f<T: Movable>(x: T) void {}
+                func caller() !void { f<^i32>(new i32(1)!); }
+            """,
+            "generic_explicit_move": """
+                func f<T: Movable>(x: T) void {}
+                func caller() !void { var box = new i32(1)!; f(move(box)); }
+            """,
+            "constructor": """
+                class Owner<T: Movable> {
+                    var payload: T;
+                    pub func init(value: T) : payload(move(value)) {}
+                }
+                func caller() !void { var x = Owner<^i32>(new i32(1)!); }
+            """,
+            "promoted_method": """
+                class Inner {
+                    pub const func use<T: Movable>(value: T) void {}
+                }
+                class Outer { pub embed Inner; pub func init() : Inner(Inner()) {} }
+                func caller() !void { var x = Outer(); x.use<^i32>(new i32(1)!); }
+            """,
+            "dynamic": """
+                interface Receiver { const func use<T: Movable>(value: T) void; }
+                func caller(receiver: in Receiver) !void { receiver.use<^i32>(new i32(1)!); }
+            """,
+            "deferred": """
+                func f<T: Movable>(x: T) void {}
+                func caller() !void { defer f<^i32>(new i32(1)!); }
+            """,
+            "function_type": "type Handler = func(^(i32, i32)) void;",
+            "recursive_function_type": """
+                class Item { var next: ^i32; var callback: Callback; }
+                type Callback = func(Item) void;
+            """,
+            "lambda": "func caller() void { var f = (value: ^i32) void => {}; }",
+            "closure": "func caller() void { var n = 1; var f = [n](value: ^i32) i32 => n; }",
+        }
+        for name, program in cases.items():
+            with self.subTest(case=name):
+                source = self.source(name + "/main.vqr", program)
+                error = self.process(VAQC, "check", source, good=False).stderr
+                self.assertIn(b"Value parameter requires a Copyable type", error)
+
+    def test_v020_value_copy_and_explicit_borrow_move_modes_remain_distinct(self):
+        source = self.source("main.vqr", """
+            class Item { var callback: Callback; }
+            type Callback = func(Item) void;
+            func scalar<T: Copyable>(value: T) T { value }
+            func read(owner: in ^i32) i32 { *owner }
+            func edit(owner: mut ^i32, value: i32) void { *owner = value; }
+            func take(owner: move ^i32) i32 { owner.intoInner() }
+            interface Dispatcher { const func apply<T: Copyable>(value: T) T; }
+            class Dispatch {
+                #implements: Dispatcher
+                pub const func apply<U: Copyable>(value: U) U { value }
+            }
+            func dynamic(dispatch: *const Dispatcher) i32 { dispatch.apply(2) }
+            func main() !i32 {
+                var value = 1;
+                var r: ref i32 = ref value;
+                var borrowCopy: func(ref i32) i32 = (arg: ref i32) i32 => arg;
+                var owner = new i32(read(new i32(3)!) + borrowCopy(r))!;
+                var update: func(mut ^i32, i32) void = edit;
+                update(owner, scalar(5));
+                var consume: func(move ^i32) i32 = take;
+                var dispatch = Dispatch();
+                var sum = dynamic(raw dispatch) + consume(move(owner)) + consume(new i32(7)!);
+                sum - 14
+            }
+        """)
+        self.process(VAQC, "build", "-O2", source, "-o", "program")
+        self.process("./program")
+
     def test_v020_consuming_captured_box_requires_moving_the_closure(self):
         setup = """
             var owner = new i32(9)!;

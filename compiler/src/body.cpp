@@ -425,7 +425,16 @@ ValueAt Body::borrow(ValueAt v, Type *t, Span span, bool materialize) {
   return {t, address, nullptr, false, -1, false, v.temporaryBorrow, v.origin};
 }
 
+void Body::validateScopedCallArgument(const Ast &arg, Type *parameter) {
+  if (arg->kind != NodeKind::Name || scopedCallableInput(parameter)) return;
+  const int local = findLocal(arg->text);
+  if (local >= 0 && scopedCallableInput(locals[local].reference))
+    (void)name(arg); // Use the same invalid-alias diagnostic as other value uses.
+}
+
 ValueAt Body::argument(const Ast &n, Type *t, bool transfersOwnership) {
+  validateScopedCallArgument(n, t);
+  p.verifyValueParameter(t, transfersOwnership ? ParameterMode::Move : t->parameterMode, n->span);
   if (scopedCallableInput(t)) {
     if (deferredCleanup)
       fail(n->span, "a scoped callable cannot be borrowed through a deferred block", "E230");

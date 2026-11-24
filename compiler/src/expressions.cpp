@@ -1392,8 +1392,11 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
   unsigned offset = receiver.has_value();
   for (unsigned i = 0; i < d.params.size(); ++i) {
     const auto &param = d.params[i];
-    if (!param.comptime) continue;
     auto *t = best->parameters[i + offset];
+    // Diagnose an illegal scoped alias use before instantiating a Value
+    // parameter with the callback's concrete environment type.
+    validateScopedCallArgument(n->children[i + 1], t);
+    if (!param.comptime) continue;
     if (t->kind != Kind::Int && t->kind != Kind::Float && t->kind != Kind::Char && t->kind != Kind::Bool)
       fail(param.span, "comptime value parameters currently require scalar types", "E290");
     best->constants[param.name] = p.evaluate(n->children[i + 1], file, t, generics, visibleConstants());
@@ -1675,6 +1678,10 @@ ValueAt Body::lambda(const Ast &n, Type *expected) {
   if (hasCaptures) irArgs.push_back(PointerType::getUnqual(p.context));
   for (unsigned i = 0; i < signature.size(); ++i) {
     p.ensureSized(signature[i], n->parameters[i].span);
+    const auto &param = n->parameters[i];
+    auto mode = param.type ? parameterMode(param.type) : signature[i]->parameterMode;
+    if (std::ranges::find(moveParameters, i) != moveParameters.end()) mode = ParameterMode::Move;
+    p.verifyValueParameter(signature[i], mode, param.span);
     irArgs.push_back(p.storage(signature[i]));
   }
   auto name = "vqr.lambda." + std::to_string(p.lambdaCount++);

@@ -1300,6 +1300,222 @@ class ContainerAcceptance(CompilerCase):
             }
         '''), [])
 
+    def test_heap_iterator_copy_and_ownership_boundary(self):
+        self.assertEqual(self.run_container("""
+            class Cursor {
+                #copy: enable
+                var copies: *i32;
+                var current: i32;
+                pub func init(copies: *i32, at: i32) : copies(copies), current(at) {}
+                pub const func copy() Self {
+                    (*copies)++;
+                    Cursor(copies, current)
+                }
+                pub func next() ?i32 {
+                    if current == 0 { return null; }
+                    var currentValue = current;
+                    current--;
+                    some(currentValue)
+                }
+            }
+            class Owner {
+                #copy: disabled
+                pub var id: i32;
+                var drops: *i32;
+                pub func init(id: i32, drops: *i32) : id(id), drops(drops) {}
+                func deinit() void { (*drops)++; }
+            }
+            func lessInt(a, b: *const i32) bool { *a < *b }
+            func lessOwner(a, b: *const Owner) bool { a.id < b.id }
+            func main() !void {
+                var copies = 0;
+                var cursor = Cursor(raw copies, 4);
+                if cursor.next().unwrap() != 4 { panic("source cursor initialization"); }
+                var heap = coll.PriorityQueue<i32>.fromIter(cursor, lessInt, coll.HeapOrder.Min)!;
+                if cursor.next().unwrap() != 3 || copies != 1 ||
+                   heap.pop().unwrap() != 1 || heap.pop().unwrap() != 2 ||
+                   heap.pop().unwrap() != 3 || !heap.isEmpty() {
+                    panic("fromIter lost cursor position, moved caller, or recopied");
+                }
+
+                var drops = 0;
+                {
+                    var values = coll.Vec<Owner>();
+                    for rank in 1..5 { values.push(Owner(rank, raw drops))!; }
+                    var iterator = coll.Vec<Owner>.intoIter(move(values));
+                    {
+                        var alreadyTaken = iterator.next().unwrap();
+                        if alreadyTaken.id != 1 { panic("wrong prior cursor position"); }
+                    }
+                    var owned = coll.BinaryHeap<Owner>.fromOwnedIter(move(iterator), lessOwner, coll.HeapOrder.Max)!;
+                    if drops != 1 || owned.len() != 3 { panic("iterator prematurely discarded payload"); }
+                    for rank in 2..5 {
+                        var element = owned.pop().unwrap();
+                        if element.id != 6 - rank { panic("wrong transferred priority"); }
+                    }
+                }
+                if drops != 4 { panic("iterator-finished cleanup was not exact"); }
+                {
+                    var values = coll.Vec<Owner>();
+                    values.push(Owner(99, raw drops))!;
+                    var owned = coll.BinaryHeap<Owner>.fromOwnedIter<coll.IntoVecIter<Owner>>(
+                        coll.Vec<Owner>.intoIter(move(values)), lessOwner, coll.HeapOrder.Min)!;
+                    if owned.peek().unwrap().id != 99 { panic("owning iterator temporary lost"); }
+                }
+                if drops != 5 { panic("owning iterator temporary cleanup was not exact"); }
+            }
+        """), [])
+        for expression, diagnostic in (
+            ("coll.BinaryHeap<i32>.fromIter(it, less, coll.HeapOrder.Min)", b"no accessible overload"),
+            ("coll.BinaryHeap<i32>.fromOwnedIter(it, less, coll.HeapOrder.Min)",
+             b"move parameter requires move(object) or an owning temporary"),
+            ("coll.BinaryHeap<i32>.fromOwnedIter(move(copyable), less, coll.HeapOrder.Min)",
+             b"move parameter requires an owning, movable, non-Copyable type"),
+        ):
+            with self.subTest(expression=expression):
+                source = self.source("heap-iter/main.vqr", """
+                    import (coll, iter)
+                    func less(a, b: *const i32) bool { *a < *b }
+                    func main() void {
+                        var values = coll.Vec<i32>();
+                        var it = coll.Vec<i32>.intoIter(move(values));
+                        var copyable = iter.OnceIter<i32>(3);
+                """ + expression + """
+                    }
+                """)
+                self.assertIn(diagnostic, self.process(VAQC, "check", source, good=False).stderr)
+
+    def test_heap_value_acquisition_and_failed_growth(self):
+        self.assertEqual(self.run_container("""
+            error Injected { Capacity }
+            class Allocator {
+                #implements: mem.Allocator
+                var backing: mem.GlobalAllocator;
+                pub var fail: bool;
+                pub var live: usize;
+                pub func init() : backing(mem.GlobalAllocator()), fail(false), live(0) {}
+                pub func alloc(layout: mem.Layout) core.ResultOptional<*u8> {
+                    if fail { return Injected.Capacity; }
+                    var address = backing.alloc(layout)!;
+                    if address != null { live += layout.size(); }
+                    address
+                }
+                pub unsafe func free(address: *u8, layout: mem.Layout) void {
+                    live -= layout.size();
+                    unsafe { backing.free(address, layout); }
+                }
+            }
+            class Counted {
+                #copy: enable
+                var copies: *i32;
+                var drops: *i32;
+                pub var id: i32;
+                pub func init(c: *i32, d: *i32, id: i32) : copies(c), drops(d), id(id) {}
+                pub const func copy() Self {
+                    (*copies)++;
+                    Counted(copies, drops, id)
+                }
+                func deinit() void { (*drops)++; }
+            }
+            class Owner {
+                #copy: disabled
+                var drops: *i32;
+                pub var id: i32;
+                pub func init(d: *i32, id: i32) : drops(d), id(id) {}
+                func deinit() void { (*drops)++; }
+            }
+            func lessCounted(a, b: *const Counted) bool { a.id < b.id }
+            func lessOwner(a, b: *const Owner) bool { a.id < b.id }
+            func main() !void {
+                var allocator = Allocator();
+                var backing = unsafe { mem.AllocatorRef.fromRaw(raw allocator) };
+                var copies = 0;
+                var drops = 0;
+                {
+                    var first = Counted(raw copies, raw drops, 5);
+                    var later = Counted(raw copies, raw drops, 20);
+                    var heap = coll.BinaryHeap<Counted>.withCapacityAndAllocator(
+                        1, lessCounted, coll.HeapOrder.Min, backing)!;
+                    heap.push(first)!;
+                    if copies != 1 || drops != 0 { panic("push did not acquire one copy"); }
+                    allocator.fail = true;
+                    switch heap.pushPreserving(later) {
+                        coll.PushResult.Failed(reason, returned) => {
+                            if reason != Injected.Capacity || returned.id != 20 || copies != 2 || drops != 0 {
+                                panic("preserving failure lost the acquired copy");
+                            }
+                        },
+                        _ => panic("heap growth unexpectedly succeeded"),
+                    }
+                    var firstReturn = heap.pushPop(later);
+                    var secondReturn = heap.replaceTop(first)!.unwrap();
+                    if firstReturn.id != 5 || secondReturn.id != 20 || heap.peek().unwrap().id != 5 ||
+                       later.id != 20 || first.id != 5 || copies != 4 || drops != 1 {
+                        panic("combined heap operations did not transfer their acquired copy exactly once");
+                    }
+                }
+                if drops != 6 || allocator.live != 0 { panic("Copyable heap cleanup is not exact"); }
+
+                var owners = 0;
+                allocator.fail = false;
+                {
+                    var heap = coll.PriorityQueue<Owner>.withCapacityAndAllocator(
+                        1, lessOwner, coll.HeapOrder.Max, backing)!;
+                    var original = Owner(raw owners, 10);
+                    heap.push(move(original))!;
+                    allocator.fail = true;
+                    var rejected = Owner(raw owners, 30);
+                    switch heap.pushPreserving(move(rejected)) {
+                        coll.PushResult.Failed(reason, returned) => {
+                            if reason != Injected.Capacity || returned.id != 30 || owners != 0 {
+                                panic("preserving failure lost the original owner");
+                            }
+                        },
+                        _ => panic("heap growth unexpectedly succeeded"),
+                    }
+                    heap.push(Owner(raw owners, 19)) catch (reason) {
+                        if reason != Injected.Capacity { return reason; }
+                    };
+                    if owners != 2 || heap.peek().unwrap().id != 10 { panic("nonpreserving cleanup damaged heap"); }
+
+                    var higher = Owner(raw owners, 40);
+                    var untouched = heap.pushPop(move(higher));
+                    var previous = heap.pushPop(Owner(raw owners, 1));
+                    var lowest = Owner(raw owners, -5);
+                    var replaced = heap.replaceTop(move(lowest))!.unwrap();
+                    if untouched.id != 40 || previous.id != 10 || replaced.id != 1 ||
+                       heap.peek().unwrap().id != -5 || owners != 2 {
+                        panic("max heap did not preserve exact owners");
+                    }
+                    allocator.fail = false;
+                    var next = Owner(raw owners, 50);
+                    switch heap.pushPreserving(move(next)) {
+                        coll.PushResult.Stored => {},
+                        _ => panic("growth did not recover"),
+                    }
+                    var restoredTop = heap.pop().unwrap();
+                    if restoredTop.id != 50 || heap.peek().unwrap().id != -5 || owners != 2 {
+                        panic("preserving success did not sift the new owner");
+                    }
+                }
+                if owners != 7 || allocator.live != 0 { panic("owned heap cleanup is not exact"); }
+            }
+        """), [])
+        for operation in ("push", "pushPreserving", "replaceTop", "pushPop"):
+            with self.subTest(operation=operation):
+                source = self.source(operation + "/main.vqr", f"""
+                    import (coll)
+                    class Owner {{ #copy: disabled; pub var id: i32; }}
+                    func less(a, b: *const Owner) bool {{ a.id < b.id }}
+                    func main() void {{
+                        var heap = coll.BinaryHeap<Owner>.withMinComparator(less);
+                        var value = Owner{{id: 1}};
+                        heap.{operation}(value);
+                    }}
+                """)
+                self.assertIn(b"move parameter requires move(object) or an owning temporary",
+                              self.process(VAQC, "check", source, good=False).stderr)
+
     def test_hash_collisions_tombstones_and_move_only_rehash(self):
         dropped = self.run_container('''
             class Probe {

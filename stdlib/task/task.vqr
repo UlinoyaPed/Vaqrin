@@ -5,6 +5,9 @@ pub error TaskError { StartFailed, BadWorkerCount, AlreadyJoined, GroupClosed, J
 
 pub class TaskId {
     pub var value: usize;
+
+    pub func init(value: usize)
+        : value(value) {}
 }
 
 extern "C" func __vqr_rt_group_cancel(group: *u8) void;
@@ -61,7 +64,7 @@ pub class Task<T: Movable + Sendable> {
     var handle: *u8;
     var completion: *Completion<T>;
     pub func init(handle: *u8, completion: *Completion<T>) : handle(handle), completion(completion) {}
-    pub const func id() TaskId { TaskId{value: __vqr_pointer_address(handle)} }
+    pub const func id() TaskId { TaskId(__vqr_pointer_address(handle)) }
     pub const func isFinished() bool { unsafe { __vqr_rt_task_finished(handle) } != 0 }
     pub const func cancel() void { unsafe { __vqr_rt_task_cancel(handle); } }
 
@@ -193,7 +196,7 @@ pub class TaskGroup {
 
 pub func currentId() ?TaskId {
     switch __vqr_task_current() {
-        some(handle) => some(TaskId{value: __vqr_pointer_address(handle)}),
+        some(handle) => some(TaskId(__vqr_pointer_address(handle))),
         null => null,
     }
 }

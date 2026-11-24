@@ -10,6 +10,69 @@ class ContainerAcceptance(CompilerCase):
         self.process(VAQC, "build", entry, "-O2", "-o", "containers")
         return self.process("./containers").stdout.decode().splitlines()
 
+    def test_checked_replacement_copies_or_consumes_and_returns_previous_owner(self):
+        definitions = """
+            class Counted {
+                #copy: enable
+                pub var id: i32;
+                pub func init(id: i32) : id(id) {}
+                pub const func copy() Self {
+                    io.println(100 + id) catch {};
+                    Counted(id)
+                }
+                func deinit() void { io.println(id) catch {}; }
+            }
+            class Owned {
+                #copy: disabled
+                pub var id: i32;
+                pub func init(id: i32) : id(id) {}
+                func deinit() void { io.println(id) catch {}; }
+            }
+            error Refusal { NoReplacement }
+            func rejected() !Owned { Refusal.NoReplacement }
+            func tryReplace(target: mut Owned) !void {
+                core.Exchange<Owned>.replace(target, rejected()!);
+            }
+        """
+        result = self.run_container(definitions + """
+            func main() !void {
+                var target = Counted(1);
+                var replacement = Counted(2);
+                var previous = core.Exchange<Counted>.replace(target, replacement);
+                if previous.id != 1 || target.id != 2 || replacement.id != 2 {
+                    panic("wrong Copyable replacement");
+                }
+                var owner = Owned(3);
+                var incoming = Owned(4);
+                var extracted = core.Exchange<Owned>.replace(owner, move(incoming));
+                var again = core.Exchange<Owned>.replace(owner, Owned(5));
+                if extracted.id != 3 || again.id != 4 || owner.id != 5 {
+                    panic("wrong owning replacement");
+                }
+                tryReplace(owner) catch (reason) {
+                    if reason != Refusal.NoReplacement || owner.id != 5 {
+                        panic("failed replacement expression changed the old owner");
+                    }
+                    return;
+                };
+                panic("replacement unexpectedly succeeded");
+            }
+        """)
+        self.assertEqual(sorted(map(int, result)), [1, 2, 2, 3, 4, 5, 102])
+        for body, diagnostic in (
+            ("core.Exchange<Owned>.replace(owner, incoming);", "move parameter requires move(object)"),
+            ("core.Exchange<Owned>.replace(raw owner, move(incoming));", "no accessible overload"),
+            ("var loan = ref owner; core.Exchange<Owned>.replace(owner, move(incoming));", "active borrow"),
+            ("core.Exchange<Owned>.replace(owner, { owner = Owned(6); Owned(7) });", "active borrow"),
+        ):
+            with self.subTest(body=body):
+                entry = self.source("invalid-exchange.vqr", "import (core, io)\n" + definitions + """
+                    func main() void {
+                        var owner = Owned(3);
+                        var incoming = Owned(4);
+                """ + body + "\n}")
+                self.assertIn(diagnostic.encode(), self.process(VAQC, "check", entry, good=False).stderr)
+
     def test_manual_storage_ownership_modes(self):
         definitions = """
             class Counted {

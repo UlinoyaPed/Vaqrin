@@ -1,4 +1,5 @@
 package core
+import (meta)
 
 pub type Box<T> = ^T;
 pub type ResultOptional<T> = !?T;
@@ -28,6 +29,30 @@ pub func replace<T: Movable>(dst: *T, value: T) T {
         var previous = __vqr_slot_take<T>(dst);
         __vqr_slot_write<T>(dst, move(value));
         move(previous)
+    }
+}
+
+// Replace an initialized, exclusively borrowed place and return its former
+// owner. The replacement is already owned before the slot is touched.
+pub class Exchange<T: Movable> {
+    comptime if meta.isCopyable<T>() {
+        pub static func replace(dst: mut T, value: T) T {
+            unsafe {
+                var address = dst.toRaw();
+                var previous = __vqr_slot_take<T>(address);
+                __vqr_slot_write<T>(address, move(value));
+                move(previous)
+            }
+        }
+    } else {
+        pub static func replace(dst: mut T, value: move T) T {
+            unsafe {
+                var address = dst.toRaw();
+                var previous = __vqr_slot_take<T>(address);
+                __vqr_slot_write<T>(address, move(value));
+                move(previous)
+            }
+        }
     }
 }
 

@@ -9,7 +9,8 @@
 | 非 Copy 形参写 `T` | `move T` | 移动具名对象须写 `move(expr)` |
 | `&T`、`&const T` | `ref mut T`、`ref T` | 对于安全位置用 `ref mut place` 或 `ref place` 建立借用 |
 | `&place` | `raw place` | 仅获取原始地址。任何裸指针解引用都须位于 `unsafe` |
-| `var &x = p`、`some(&x)`、`[&x]` | `ref x = *p`、`some(ref x)`、`[ref x]` | 将间接对象与载荷槽分开处理。对载荷槽的旧式可写 `some(ref x)` 改成 `some(ref mut x)` |
+| `var &x = p`、`[&x]` | `ref x = place`、`[ref x]` 或 `[ref mut x]` | 共享与独占借用需显式区分。 |
+| `some(&x)` | 引用载荷用 `some(x)`；Box 用 `some(ref box)`，再显式访问 `*box`；裸指针用 `some(pointer)`，保持裸指针的访问规则 | `some(ref x)` 借用载荷槽，不会自动借用指针指向的对象。独占槽位用 `some(ref mut x)`；非 Copyable 载荷的按值绑定需要消费判别式。 |
 | `#return_borrow`、`borrow(index)` | `from name` | 唯一借用来源可省略 |
 | `T: A & B` | `T: A + B` | Trait 交集与位与分开 |
 | `public:`、`private:` | 声明级 `pub` | 成员默认私有 |

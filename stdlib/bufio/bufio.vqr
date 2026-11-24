@@ -121,7 +121,7 @@ pub class BufferedReader {
             if position == filled { fill()!; }
             if position == filled {
                 if pending.isEmpty() { return null; }
-                return some(core.replace<coll.Vec<u8>>(raw pending, coll.Vec<u8>()));
+                return some(core.Exchange<coll.Vec<u8>>.replace(pending, coll.Vec<u8>()));
             }
             var buffer = data.asConstSlice();
             while position < filled {
@@ -129,7 +129,7 @@ pub class BufferedReader {
                 if byte == delimiter {
                     position++;
                     lastByte = some(byte);
-                    return some(core.replace<coll.Vec<u8>>(raw pending, coll.Vec<u8>()));
+                    return some(core.Exchange<coll.Vec<u8>>.replace(pending, coll.Vec<u8>()));
                 }
                 if pending.len() == maxBytes {
                     pending.clear();
@@ -322,7 +322,7 @@ pub class Scanner {
         }
     }
     func finishToken(end: u64) ByteToken {
-        var bytes = core.replace<coll.Vec<u8>>(raw pending, coll.Vec<u8>());
+        var bytes = core.Exchange<coll.Vec<u8>>.replace(pending, coll.Vec<u8>());
         ByteToken(move(bytes), tokenStart, end)
     }
     pub func next() core.ResultOptional<Token> {

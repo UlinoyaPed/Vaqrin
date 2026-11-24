@@ -72,7 +72,7 @@ pub class Encoder {
         if !root || frames.len() != 0 { return serde.SerdeError.InvalidState; }
         root = false;
         items = 0;
-        core.replace<coll.Vec<u8>>(raw output, coll.Vec<u8>())
+        core.Exchange<coll.Vec<u8>>.replace(output, coll.Vec<u8>())
     }
     func byte(value: u8) !void {
         if output.len() == limits.maxBytes { return serde.SerdeError.ByteLimit; }

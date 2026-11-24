@@ -81,11 +81,11 @@ pub class RegexParser {
         if position != source.byteLen() { return RegexError.UnexpectedToken; }
         ParsedPattern(
             root,
-            core.replace<coll.Vec<AstNode>>(raw nodes, coll.Vec<AstNode>()),
-            core.replace<coll.Vec<CharacterClass>>(raw classes, coll.Vec<CharacterClass>()),
-            core.replace<coll.Vec<CharRange>>(raw ranges, coll.Vec<CharRange>()),
+            core.Exchange<coll.Vec<AstNode>>.replace(nodes, coll.Vec<AstNode>()),
+            core.Exchange<coll.Vec<CharacterClass>>.replace(classes, coll.Vec<CharacterClass>()),
+            core.Exchange<coll.Vec<CharRange>>.replace(ranges, coll.Vec<CharRange>()),
             captureCount,
-            core.replace<coll.Vec<CaptureName>>(raw captureNames, coll.Vec<CaptureName>())
+            core.Exchange<coll.Vec<CaptureName>>.replace(captureNames, coll.Vec<CaptureName>())
         )
     }
 
@@ -408,10 +408,10 @@ pub class NfaCompiler {
     var maxSteps: usize;
     pub func init(parsed: ParsedPattern, maxStates: usize, flags: u8,
               maxInput: usize, maxSteps: usize)
-        : root(parsed.root), nodes(core.replace<coll.Vec<AstNode>>(raw parsed.nodes, coll.Vec<AstNode>())), classes(core.replace<coll.Vec<CharacterClass>>(raw parsed.classes, coll.Vec<CharacterClass>())),
-          ranges(core.replace<coll.Vec<CharRange>>(raw parsed.ranges, coll.Vec<CharRange>())), states(coll.Vec<State>()),
+        : root(parsed.root), nodes(core.Exchange<coll.Vec<AstNode>>.replace(parsed.nodes, coll.Vec<AstNode>())), classes(core.Exchange<coll.Vec<CharacterClass>>.replace(parsed.classes, coll.Vec<CharacterClass>())),
+          ranges(core.Exchange<coll.Vec<CharRange>>.replace(parsed.ranges, coll.Vec<CharRange>())), states(coll.Vec<State>()),
           stateLimit(maxStates), captureCount(parsed.captureCount),
-          captureNames(core.replace<coll.Vec<CaptureName>>(raw parsed.captureNames, coll.Vec<CaptureName>())), flags(flags),
+          captureNames(core.Exchange<coll.Vec<CaptureName>>.replace(parsed.captureNames, coll.Vec<CaptureName>())), flags(flags),
           maxInput(maxInput), maxSteps(maxSteps) {}
 
     pub func compile(pattern: str) !Regex {
@@ -419,11 +419,11 @@ pub class NfaCompiler {
         var matchState = emit(State(Op.Match, 0, -1, -1))!;
         patchAll(raw fragment.outs, matchState);
         var ownedPattern = text.fromBytes(pattern.asBytes())!;
-        Regex(core.replace<coll.Vec<State>>(raw states, coll.Vec<State>()),
-              core.replace<coll.Vec<CharacterClass>>(raw classes, coll.Vec<CharacterClass>()),
-              core.replace<coll.Vec<CharRange>>(raw ranges, coll.Vec<CharRange>()), move(ownedPattern),
+        Regex(core.Exchange<coll.Vec<State>>.replace(states, coll.Vec<State>()),
+              core.Exchange<coll.Vec<CharacterClass>>.replace(classes, coll.Vec<CharacterClass>()),
+              core.Exchange<coll.Vec<CharRange>>.replace(ranges, coll.Vec<CharRange>()), move(ownedPattern),
               flags, maxInput, maxSteps, captureCount, fragment.start,
-              core.replace<coll.Vec<CaptureName>>(raw captureNames, coll.Vec<CaptureName>()))
+              core.Exchange<coll.Vec<CaptureName>>.replace(captureNames, coll.Vec<CaptureName>()))
     }
 
     func emit(state: State) !i32 {
@@ -453,7 +453,7 @@ pub class NfaCompiler {
     func concatenate(left: Fragment, right: Fragment) !Fragment {
         patchAll(raw left.outs, right.start);
         var owned = move(right);
-        Fragment(left.start, core.replace<coll.Vec<Patch>>(raw owned.outs, coll.Vec<Patch>()))
+        Fragment(left.start, core.Exchange<coll.Vec<Patch>>.replace(owned.outs, coll.Vec<Patch>()))
     }
 
     func emptyFragment() !Fragment {
@@ -526,7 +526,7 @@ pub class NfaCompiler {
                 var left = compileNode(node.left, depth + 1)!;
                 var right = compileNode(node.right, depth + 1)!;
                 var split = emit(State(Op.Split, 0, left.start, right.start))!;
-                var outs = core.replace<coll.Vec<Patch>>(raw left.outs, coll.Vec<Patch>());
+                var outs = core.Exchange<coll.Vec<Patch>>.replace(left.outs, coll.Vec<Patch>());
                 appendPatches(raw outs, raw right.outs)!;
                 return Fragment(split, move(outs));
             },

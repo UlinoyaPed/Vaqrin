@@ -9,8 +9,7 @@ struct Constructor {
 
 bool wildcard(const Ast &p) {
   return !p || p->kind == NodeKind::PatternAny || p->kind == NodeKind::PatternName ||
-         p->kind == NodeKind::PatternRef || p->kind == NodeKind::PatternMutRef ||
-         p->kind == NodeKind::PatternIndirect;
+         p->kind == NodeKind::PatternRef || p->kind == NodeKind::PatternMutRef;
 }
 
 std::string patternKey(const Ast &p) {
@@ -134,22 +133,17 @@ void Body::checkPattern(const Ast &pat, ValueAt subject, BasicBlock *failure,
                         std::vector<std::pair<Ast, ValueAt>> &bindings) {
   if (pat->kind == NodeKind::PatternAny) return;
   const bool borrowsSlot = pat->kind == NodeKind::PatternRef || pat->kind == NodeKind::PatternMutRef;
-  if (pat->kind == NodeKind::PatternName || borrowsSlot || pat->kind == NodeKind::PatternIndirect) {
+  if (pat->kind == NodeKind::PatternName || borrowsSlot) {
     if (std::ranges::any_of(bindings, [&](auto &b) { return b.first->text == pat->text; }))
       fail(pat->span, "duplicate pattern binding");
-    if (pat->kind != NodeKind::PatternName) {
-      if (pat->kind == NodeKind::PatternIndirect) {
-        if (subject.type->kind == Kind::Box)
-          fail(pat->span, "bind the Box owner, then explicitly dereference its payload", "E230");
-        subject = dereference(subject, pat->span);
-      } else if (p.hasReference(subject.type)) {
-        fail(pat->span, "use '&' to borrow through a reference payload", "E230");
-      }
+    if (borrowsSlot) {
+      if (p.hasReference(subject.type))
+        fail(pat->span, "bind the reference payload by value; move an owning subject for mutable references", "E230");
       if (pat->kind == NodeKind::PatternMutRef && !subject.writable)
         fail(pat->span, "ref mut pattern requires writable storage", "E230");
       auto *reference = p.reference(subject.type, !subject.writable || pat->kind == NodeKind::PatternRef);
       auto origin = subject.origin;
-      if (borrowsSlot && subject.local >= 0 &&
+      if (subject.local >= 0 &&
           (origin.root < 0 || (origin.raw && !locals[subject.local].reference))) {
         if (!reference->readOnly && origin.raw) locals[subject.local].origin = {};
         origin = {subject.local, -1};

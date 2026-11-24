@@ -5,6 +5,9 @@ pub error ThreadError { StartFailed, Closed, JoinFailed, SelfJoin, MissingResult
 
 pub class ThreadId {
     pub var value: usize;
+
+    pub func init(value: usize)
+        : value(value) {}
 }
 
 class State<T: Movable + Sendable> {
@@ -62,7 +65,7 @@ pub class Thread<T: Movable + Sendable> {
         Thread<T>(native, id, rawState)
     }
 
-    pub const func id() ThreadId { ThreadId{value: identity} }
+    pub const func id() ThreadId { ThreadId(identity) }
 
     pub const func isFinished() bool {
         switch state {
@@ -106,7 +109,7 @@ pub func spawn<T: Movable + Sendable, F: Movable + Sendable>(callback: F) !Threa
     Thread<T>.spawn<F>(move(callback))
 }
 
-pub func currentId() ThreadId { ThreadId{value: __vqr_thread_id()} }
+pub func currentId() ThreadId { ThreadId(__vqr_thread_id()) }
 pub func cpuCount() usize { __vqr_thread_cpu_count() }
 pub func yieldNow() void { __vqr_thread_yield(); }
 pub func sleep(duration: time.Duration) !void { time.sleep(duration) }

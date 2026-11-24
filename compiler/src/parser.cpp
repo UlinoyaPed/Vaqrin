@@ -746,10 +746,8 @@ Ast Parser::pattern() {
   Nest nesting(*this);
   auto t = current();
   if (eat("_")) return make(NodeKind::PatternAny, t.span);
-  if (eat("&")) {
-    auto binding = name();
-    return make(NodeKind::PatternIndirect, binding.span, binding.text);
-  }
+  if (at("&"))
+    fail(t.span, "legacy indirect pattern; bind the payload, then explicitly dereference a Box or pointer", "E110");
   if (t.kind == TokenKind::Name && t.text == "ref" && current(1).kind == TokenKind::Name) {
     take();
     const bool writable = eatWord("mut");

@@ -154,7 +154,7 @@ pub class Regex {
         }
         var result = runNfa(self, value, byteOffset, true)!;
         switch move(result) {
-            some(item) => some(core.replace<?Captures>(raw item.captures, null).unwrap()),
+            some(item) => some(core.Exchange<?Captures>.replace(item.captures, null).unwrap()),
             null => null
         }
     }
@@ -184,7 +184,7 @@ pub class Regex {
                 some(item) => {
                     var matched = item.matched;
                     for i in cursor..matched.startByte { output.push(value.asBytes()[i])!; }
-                    var captures = core.replace<?Captures>(raw item.captures, null).unwrap();
+                    var captures = core.Exchange<?Captures>.replace(item.captures, null).unwrap();
                     appendReplacement(replacement, raw captures, raw output)!;
                     cursor = matched.endByte;
                     replaced = true;

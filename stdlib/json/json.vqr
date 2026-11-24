@@ -83,6 +83,8 @@ pub class JsonArray {
 class JsonEntry {
     pub var key: string;
     pub var value: Value;
+
+    pub func init(key: string, value: move Value) : key(move(key)), value(move(value)) {}
 }
 
 pub class JsonObject {
@@ -119,7 +121,7 @@ pub class JsonObject {
                 return some(move(previous));
             }
         }
-        entries.push(JsonEntry{key: move(key), value: move(value)})!;
+        entries.push(JsonEntry(move(key), move(value)))!;
         null
     }
     pub func remove(key: str) ?Value {

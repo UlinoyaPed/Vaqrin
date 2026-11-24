@@ -319,6 +319,9 @@ pub class Datagram {
     pub var len: usize;
     pub var source: SocketAddr;
     pub var truncated: bool;
+
+    pub func init(len: usize, source: SocketAddr, truncated: bool)
+        : len(len), source(source), truncated(truncated) {}
 }
 
 pub class UdpSocket {
@@ -348,7 +351,7 @@ pub class UdpSocket {
         var truncated: i32 = 0;
         var count = unsafe { __vqr_net_receive_from(socket.fd()!, data, dst.len(), raw wire[0], raw truncated, raw reason) };
         checkStatus(reason)!;
-        Datagram{len: usize(count)!, source: fromWire(wire[:])!, truncated: truncated != 0}
+        Datagram(usize(count)!, fromWire(wire[:])!, truncated != 0)
     }
     pub func recv(dst: []u8) !Datagram { recvFrom(dst) }
     pub func setBroadcast(value: bool) !void { socket.option(2, value) }

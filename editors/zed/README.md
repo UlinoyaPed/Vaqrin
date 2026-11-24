@@ -31,8 +31,8 @@ Zed 可跳转到定义、声明、类型定义和接口实现。接口实现查�
 仓库的 `.zed/settings.json` 为 Vaqrin 打开行内类型提示。在其他项目里可从命令面板运行
 `editor: toggle inlay hints`，或在语言设置中启用 `inlay_hints.enabled`。使用本仓库编译器时，
 `:=`、`for` 和 `some(...)` 等绑定会显示编译器推断的类型，例如 `num i32 := ...`、
-`for i:i32 in ...` 和 `some(v:*i32)`。`var &item = ptr`、`some(ref item)` 和 `some(&item)`
-按实际权限显示 `&T` 或 `&const T`。函数签名保留兼容参数的 `in &const T`。遇到错误时，保留编译器已检查到的绑定类型，并尽量显示源码索引
+`for i:i32 in ...` 和 `some(v:*i32)`。`ref item = place`、`some(ref item)` 和 `some(ref mut item)`
+按实际权限显示 `ref T` 或 `ref mut T`。遇到错误时，保留编译器已检查到的绑定类型，并尽量显示源码索引
 可推断的提示。仓库将编辑后的行内提示等待时间设为 100 毫秒。函数补全会放入调用括号并将光标留在其中。仓库已打开
 `show_signature_help_after_edits`，让 Zed 在接受函数补全后显示调用签名。
 

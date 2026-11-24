@@ -100,6 +100,26 @@ class Acceptance(CompilerCase):
                 diagnostic = self.process(VAQC, "check", entry, good=False).stderr
                 self.assertIn(b"explicit", diagnostic)
 
+    def test_v020_pattern_borrow_and_explicit_box_dereference(self):
+        self.hosted("""
+            func main() !void {
+                var input = some(new i32(40)!);
+                if let some(ref mut box) = input {
+                    ref mut value = *box;
+                    value++;
+                    io.println(value)!;
+                }
+                if let some(ref box) = input { io.println(*box)!; }
+                if let some(box) = move(input) { io.println(box.intoInner())!; }
+            }
+        """, "41\n41\n41\n")
+        for pattern in ("some(&x)", "some(ref mut &x)"):
+            with self.subTest(pattern=pattern):
+                source = self.source("legacy-pattern.vqr",
+                    "func bad(x: ?*i32) void { if let " + pattern + " = x {} }")
+                diagnostic = self.process(VAQC, "check", source, good=False).stderr
+                self.assertIn(b"E110", diagnostic)
+
     def test_v020_optional_member_access_does_not_dereference(self):
         setup = """
             class Item {
@@ -2612,7 +2632,7 @@ class Acceptance(CompilerCase):
                 *address += n;
                 event := Event.Link(raw a);
                 switch event {
-                    Event.Link(&v) => { v++; },
+                    Event.Link(pointer) => { (*pointer)++; },
                     Event.Num(ref mut v) => { v++; },
                 }
                 for &v in [_]*i32{raw a, raw b} { v++; }
@@ -2804,7 +2824,7 @@ class Acceptance(CompilerCase):
                     var both = View<i32>{first: raw number, second: raw alternate, tag: 99};
                     io.println(*both.first + *both.second + both.tag)!;
                     var included: ?View<i32> = some(both);
-                    switch included?.first { some(&item) => { io.println(item)!; }, null => {} }
+                    switch included?.first { some(item) => { io.println(item)!; }, null => {} }
                 }
                 number++;
                 var borrow: ref i32 = raw number;
@@ -3069,13 +3089,13 @@ class Acceptance(CompilerCase):
             func increment(hit: in Hit) Hit {
                 switch hit {
                     Hit.Empty => Hit.Empty,
-                    Hit.Match(&number, count) => Hit.Match(number, count + 1),
+                    Hit.Match(number, count) => Hit.Match(number, count + 1),
                 }
             }
             func print(hit: Hit) !void {
                 switch hit {
                     Hit.Empty => { io.println("empty")!; },
-                    Hit.Match(&number, count) => { io.println(number + count)!; },
+                    Hit.Match(number, count) => { io.println(number + count)!; },
                 }
             }
             func main() !void {
@@ -3095,7 +3115,7 @@ class Acceptance(CompilerCase):
                    var number = 42;
                    var selected = Hit.Match(raw number);
                    number++;
-                   switch selected { Hit.Empty => 0, Hit.Match(&result) => result, }
+                   switch selected { Hit.Empty => 0, Hit.Match(result) => result, }
                }""",
             """enum Hit { #borrowed: scoped; Empty, Match(ref i32), }
                func bad(source: in i32) Hit {
@@ -3207,9 +3227,9 @@ class Acceptance(CompilerCase):
                 var item: ?i32 = some(41);
                 {
                     var slot: ref mut ?i32 = raw item;
-                    switch opt.asMutRef(slot) { some(&n) => { n++; }, null => {} }
+                    switch opt.asMutRef(slot) { some(n) => { n++; }, null => {} }
                 }
-                switch opt.asRef(item) { some(&n) => { io.println(n)!; }, null => {} }
+                switch opt.asRef(item) { some(n) => { io.println(n)!; }, null => {} }
             }
         """, "42\n42\n42\n")
         self.hosted("""
@@ -3251,7 +3271,7 @@ class Acceptance(CompilerCase):
             ("func f(a, b: ref mut i32) void {} func g() void { var n = 0; var r: ref mut i32 = raw n; f(r, r); }",
              "active borrow"),
             ("func f(obj: ?i32) void { switch obj { some(&x) => {}, null => {}, } }",
-             "requires a pointer, reference or Box"),
+             "legacy indirect pattern"),
             ("func f(r: in i32) void {} func g() void { var n = 0; var p = raw n; var pp = raw p; f(pp); }",
              "no accessible overload"),
             ("func f() !void { var v = coll.Vec<i32>(); v.push(7)!; var opt = v.getMut(0);"

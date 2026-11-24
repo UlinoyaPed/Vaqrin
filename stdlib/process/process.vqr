@@ -104,6 +104,9 @@ func checkPipeDeadline(deadline: ?time.Deadline) !void {
 
 class ChildHandle {
     pub var address: usize;
+
+    pub func init(address: usize)
+        : address(address) {}
 }
 
 pub class ChildInput {
@@ -313,15 +316,15 @@ pub class Command {
     }
 
     pub const func spawn() !Child {
-        Child(ChildHandle{address: start(inheritStream, inheritStream)!})
+        Child(ChildHandle(start(inheritStream, inheritStream)!))
     }
     pub const func status() !ExitStatus {
         var handle = start(inheritStream, inheritStream)!;
-        var child = Child(ChildHandle{address: handle});
+        var child = Child(ChildHandle(handle));
         waitState(handle, 2)!.unwrap()
     }
     pub const func output(limit: usize) !Output {
-        var child = Child(ChildHandle{address: start(nullStream, pipedStream)!});
+        var child = Child(ChildHandle(start(nullStream, pipedStream)!));
         child.waitWithOutput(limit)
     }
     const func start(defaultInput: i32, defaultOutput: i32) !usize {

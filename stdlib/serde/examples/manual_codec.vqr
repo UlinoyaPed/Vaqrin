@@ -3,6 +3,8 @@ import (convert, io, json, serde, toml)
 class User {
     pub var name: string;
     pub var age: i32;
+
+    pub func init(name: string, age: i32) : name(move(name)), age(age) {}
 }
 
 class UserCodec {
@@ -37,12 +39,12 @@ class UserCodec {
             }
         }
         deserializer.endMap()!;
-        User{name: move(name), age: age}
+        User(move(name), age)
     }
 }
 
 func main() !void {
-    var user = User{name: "Ada", age: 37};
+    var user = User("Ada", 37);
     var codec = UserCodec();
 
     var jsonText = json.marshal<User>(raw user, raw codec)!;

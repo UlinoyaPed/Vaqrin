@@ -234,7 +234,7 @@ pub func marshal<T>(value: *const T, codec: *serde.Codec<T>) !string {
     var serializer = JsonDomSerializer();
     serde.encode<T>(value, raw serializer, codec)!;
     var root = serializer.takeValue()!;
-    stringify(raw root)
+    stringify(root)
 }
 
 pub func unmarshal<T>(value: str, codec: *serde.Codec<T>) !T {

@@ -1,5 +1,5 @@
 package coll
-import (core, mem)
+import (core, mem, meta)
 
 pub class Stack<T: Movable> {
     var values: Vec<T>;
@@ -25,8 +25,13 @@ pub class Stack<T: Movable> {
 
     pub const func len() usize { values.len() }
     pub const func isEmpty() bool { values.isEmpty() }
-    pub func push(value: T) !void { values.push(move(value)) }
-    pub func pushPreserving(value: T) PushResult<T> { values.pushPreserving(move(value)) }
+    comptime if meta.isCopyable<T>() {
+        pub func push(value: T) !void { values.push(move(value)) }
+        pub func pushPreserving(value: T) PushResult<T> { values.pushPreserving(move(value)) }
+    } else {
+        pub func push(value: move T) !void { values.push(move(value)) }
+        pub func pushPreserving(value: move T) PushResult<T> { values.pushPreserving(move(value)) }
+    }
     pub func pop() ?T { values.pop() }
     pub const func peek() ?*const T { values.last() }
     pub func peekMut() ?*T { values.lastMut() }
@@ -57,8 +62,13 @@ pub class Queue<T: Movable> {
 
     pub const func len() usize { values.len() }
     pub const func isEmpty() bool { values.isEmpty() }
-    pub func enqueue(value: T) !void { values.pushBack(move(value)) }
-    pub func enqueuePreserving(value: T) PushResult<T> { values.pushBackPreserving(move(value)) }
+    comptime if meta.isCopyable<T>() {
+        pub func enqueue(value: T) !void { values.pushBack(move(value)) }
+        pub func enqueuePreserving(value: T) PushResult<T> { values.pushBackPreserving(move(value)) }
+    } else {
+        pub func enqueue(value: move T) !void { values.pushBack(move(value)) }
+        pub func enqueuePreserving(value: move T) PushResult<T> { values.pushBackPreserving(move(value)) }
+    }
     pub func dequeue() ?T { values.popFront() }
     pub const func front() ?*const T { values.front() }
     pub const func back() ?*const T { values.back() }

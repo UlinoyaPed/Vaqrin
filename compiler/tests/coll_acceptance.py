@@ -1128,6 +1128,142 @@ class ContainerAcceptance(CompilerCase):
         ''')
         self.assertEqual(sorted(map(int, dropped)), list(range(1, 11)))
 
+    def test_stack_and_queue_preserve_copies_and_moved_values(self):
+        self.assertEqual(self.run_container("""
+            error Injected { Capacity }
+            class Allocator {
+                #implements: mem.Allocator
+                var backing: mem.GlobalAllocator;
+                pub var fail: bool;
+                pub var live: usize;
+                pub func init() : backing(mem.GlobalAllocator()), fail(false), live(0) {}
+                pub func alloc(layout: mem.Layout) core.ResultOptional<*u8> {
+                    if fail { return Injected.Capacity; }
+                    var address = backing.alloc(layout)!;
+                    if address != null { live += layout.size(); }
+                    address
+                }
+                pub unsafe func free(address: *u8, layout: mem.Layout) void {
+                    live -= layout.size();
+                    unsafe { backing.free(address, layout); }
+                }
+            }
+            class Counted {
+                #copy: enable
+                var copies: *i32;
+                var drops: *i32;
+                pub var id: i32;
+                pub func init(c: *i32, d: *i32, id: i32) : copies(c), drops(d), id(id) {}
+                pub const func copy() Self {
+                    unsafe { (*copies)++; }
+                    Counted(copies, drops, id)
+                }
+                func deinit() void { unsafe { (*drops)++; } }
+            }
+            class Owner {
+                #copy: disabled
+                var drops: *i32;
+                pub var id: i32;
+                pub func init(d: *i32, id: i32) : drops(d), id(id) {}
+                func deinit() void { unsafe { (*drops)++; } }
+            }
+            func main() !void {
+                var allocator = Allocator();
+                var source = unsafe { mem.AllocatorRef.fromRaw(raw allocator) };
+                var copies = 0;
+                var drops = 0;
+                {
+                    var token = Counted(raw copies, raw drops, 1);
+                    var stack = coll.Stack<Counted>.withCapacityAndAllocator(1, source)!;
+                    var queue = coll.Queue<Counted>.withCapacityAndAllocator(1, source)!;
+                    stack.push(token)!;
+                    queue.enqueue(token)!;
+                    if copies != 2 || drops != 0 { panic("adapter recopied the acquired payload"); }
+                    allocator.fail = true;
+                    switch stack.pushPreserving(token) {
+                        coll.PushResult.Failed(reason, received) => {
+                            if reason != Injected.Capacity || received.id != 1 ||
+                               copies != 3 || drops != 0 { panic("stack did not return its acquired copy"); }
+                        },
+                        _ => panic("stack growth unexpectedly succeeded"),
+                    }
+                    switch queue.enqueuePreserving(token) {
+                        coll.PushResult.Failed(reason, received) => {
+                            if reason != Injected.Capacity || received.id != 1 ||
+                               copies != 4 || drops != 1 { panic("queue did not return its acquired copy"); }
+                        },
+                        _ => panic("queue growth unexpectedly succeeded"),
+                    }
+                    var fromStack = stack.pop().unwrap();
+                    var fromQueue = queue.dequeue().unwrap();
+                    if copies != 4 || drops != 2 || fromStack.id != 1 || fromQueue.id != 1 ||
+                       token.id != 1 { panic("Copyable payload was lost or recopied"); }
+                    allocator.fail = false;
+                }
+                if drops != 5 || allocator.live != 0 { panic("copy cleanup leaked or dropped twice"); }
+
+                var owners = 0;
+                {
+                    var stack = coll.Stack<Owner>.withCapacityAndAllocator(1, source)!;
+                    var queue = coll.Queue<Owner>.withCapacityAndAllocator(1, source)!;
+                    var first = Owner(raw owners, 11);
+                    stack.push(move(first))!;
+                    queue.enqueue(Owner(raw owners, 12))!;
+                    allocator.fail = true;
+                    var refused = Owner(raw owners, 13);
+                    switch stack.pushPreserving(move(refused)) {
+                        coll.PushResult.Failed(reason, received) => {
+                            if reason != Injected.Capacity || received.id != 13 ||
+                               owners != 0 { panic("stack did not return its original owner"); }
+                        },
+                        _ => panic("stack growth unexpectedly succeeded"),
+                    }
+                    switch queue.enqueuePreserving(Owner(raw owners, 14)) {
+                        coll.PushResult.Failed(reason, received) => {
+                            if reason != Injected.Capacity || received.id != 14 ||
+                               owners != 1 { panic("queue did not return its original owner"); }
+                        },
+                        _ => panic("queue growth unexpectedly succeeded"),
+                    }
+                    stack.push(Owner(raw owners, 17)) catch (reason) {
+                        if reason != Injected.Capacity { return reason; }
+                    };
+                    var rejected = Owner(raw owners, 18);
+                    queue.enqueue(move(rejected)) catch (reason) {
+                        if reason != Injected.Capacity { return reason; }
+                    };
+                    if owners != 4 { panic("nonpreserving failure did not drop its input exactly once"); }
+                    allocator.fail = false;
+                    stack.push(Owner(raw owners, 15))!;
+                    var next = Owner(raw owners, 16);
+                    queue.enqueue(move(next))!;
+                    var top = stack.pop().unwrap();
+                    var base = stack.pop().unwrap();
+                    var head = queue.dequeue().unwrap();
+                    var tail = queue.dequeue().unwrap();
+                    if top.id != 15 || base.id != 11 || head.id != 12 || tail.id != 16 ||
+                       owners != 4 { panic("failed growth damaged order or ownership"); }
+                }
+                if owners != 8 || allocator.live != 0 { panic("move cleanup leaked or dropped twice"); }
+            }
+        """), [])
+        for kind, operation in (
+            ("Stack", "push"), ("Stack", "pushPreserving"),
+            ("Queue", "enqueue"), ("Queue", "enqueuePreserving"),
+        ):
+            with self.subTest(container=kind, operation=operation):
+                source = self.source(operation + "/main.vqr", f"""
+                    import (coll)
+                    class Owned {{ #copy: disabled; pub var id: i32; }}
+                    func f() void {{
+                        var container = coll.{kind}<Owned>();
+                        var owner = Owned{{id: 3}};
+                        container.{operation}(owner);
+                    }}
+                """)
+                diagnostic = self.process(VAQC, "check", source, good=False).stderr
+                self.assertIn(b"move parameter requires move(object) or an owning temporary", diagnostic)
+
     def test_list_stack_queue_heap_and_priority_queue(self):
         self.assertEqual(self.run_container('''
             func less(a, b: *const i32) bool { *a < *b }

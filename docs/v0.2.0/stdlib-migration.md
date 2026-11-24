@@ -8,6 +8,7 @@
 | `opt` 映射 | 自由函数 `map`、`andThen` 复制可复制的输入和回调；`Transform<T>.map/andThen` 依 T 选取复制或转移输入。`mapOwned/andThenOwned` 额外接管不可复制的回调。空可选值不执行回调，但仍正常回收已取得的回调。带可写作用域引用捕获的闭包不走拥有型转换入口；`filter` 未迁移。 | [opt.vqr](../../stdlib/opt/opt.vqr) |
 | `opt.inspectMut` | 将具名观察回调作为 `mut F` 借给即时调用，不复制或消费它。原捕获的借用仍持续到回调绑定离开作用域；仅在可选值存在时将载荷作为共享借用交给 `in T` 回调，并返回原取得的可选值。已有 `opt.inspect` 及其裸指针回调合同不变，尚需单独迁移。 | [opt.vqr](../../stdlib/opt/opt.vqr) |
 | `cell.OnceCell` | `getOrTryInitMut(factory)` 借用具名工厂回调；已初始化时不执行它，失败后仍可重试，递归初始化仍返回错误。已有按值工厂接口和发布地址的裸指针约定不变；这不是并发 `OnceLock` 的迁移。 | [once.vqr](../../stdlib/cell/once.vqr) |
+| `bits` 字操作 | 按值接收泛型整数操作数的 19 个入口明确声明 `T: Copyable`；整数和位宽限制仍由原有内建操作检查。仅将 `T` 用作结果的 `maskLow<T>(count: usize) T` 不额外加界。位流接口未改变。 | [word.vqr](../../stdlib/bits/word.vqr) |
 | `bufio` | `Token.text() str from self`。文本视图受 Token 来源限制；这不等于 `ByteToken.bytes()` 或一般切片都已有相同契约。 | [bufio.vqr](../../stdlib/bufio/bufio.vqr) |
 | `num`、`linalg` | 大整数和有理数的迁移运算，以及已迁移的矩阵乘法、LU、QR 和求解，使用 `in` 借用只读操作数，不再让调用方为了这些操作创建裸指针。矩阵和向量的 `get/getMut` 返回随本体存活的 `?ref T` / `?ref mut T`；现有 Slice 接口尚未同步迁移。 | [num](../../stdlib/num)、[linalg](../../stdlib/linalg) |
 | `coll` | Vec 的追加、插入和替换，以及 HashMap、BTreeMap 的已迁移插入接口，按类型的 `Copyable` 能力选择复制或显式转移。单个实例不会仅靠参数模式区分多个同名入口。 | [coll](../../stdlib/coll)、[容器验收](../../compiler/tests/coll_acceptance.py) |

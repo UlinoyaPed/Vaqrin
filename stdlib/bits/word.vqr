@@ -3,42 +3,43 @@ import (meta)
 
 pub error BitError { OutOfRange, InvalidAlignment }
 
-pub func countOnes<T>(value: T) usize { __vqr_bits_popcount(value) }
-pub func countZeros<T>(value: T) usize { meta.bitWidth<T>() - countOnes(value) }
-pub func leadingZeros<T>(value: T) usize { __vqr_bits_leading(value) }
-pub func trailingZeros<T>(value: T) usize { __vqr_bits_trailing(value) }
-pub func reverseBits<T>(value: T) T { __vqr_bits_reverse(value) }
-pub func reverseBytes<T>(value: T) T { __vqr_bits_bytes(value) }
-pub func byteSwap<T>(value: T) T { reverseBytes(value) }
-pub func rotateLeft<T>(value: T, n: usize) T { __vqr_bits_rol(value, n) }
-pub func rotateRight<T>(value: T, n: usize) T { __vqr_bits_ror(value, n) }
+// Word operands are copied; the intrinsics still require fixed-width integers.
+pub func countOnes<T: Copyable>(value: T) usize { __vqr_bits_popcount(value) }
+pub func countZeros<T: Copyable>(value: T) usize { meta.bitWidth<T>() - countOnes(value) }
+pub func leadingZeros<T: Copyable>(value: T) usize { __vqr_bits_leading(value) }
+pub func trailingZeros<T: Copyable>(value: T) usize { __vqr_bits_trailing(value) }
+pub func reverseBits<T: Copyable>(value: T) T { __vqr_bits_reverse(value) }
+pub func reverseBytes<T: Copyable>(value: T) T { __vqr_bits_bytes(value) }
+pub func byteSwap<T: Copyable>(value: T) T { reverseBytes(value) }
+pub func rotateLeft<T: Copyable>(value: T, n: usize) T { __vqr_bits_rol(value, n) }
+pub func rotateRight<T: Copyable>(value: T, n: usize) T { __vqr_bits_ror(value, n) }
 
-pub func firstSet<T>(value: T) ?usize {
+pub func firstSet<T: Copyable>(value: T) ?usize {
     var index = trailingZeros(value);
     if index == meta.bitWidth<T>() { null } else { some(index) }
 }
 
-pub func lastSet<T>(value: T) ?usize {
+pub func lastSet<T: Copyable>(value: T) ?usize {
     var width = meta.bitWidth<T>();
     var leading = leadingZeros(value);
     if leading == width { null } else { some(width - leading - 1) }
 }
 
-pub func testBit<T>(value: T, index: usize) bool { __vqr_bits_test(value, index) }
-pub func setBit<T>(value: T, index: usize) T { __vqr_bits_set(value, index) }
-pub func clearBit<T>(value: T, index: usize) T { __vqr_bits_clear(value, index) }
-pub func toggleBit<T>(value: T, index: usize) T { __vqr_bits_toggle(value, index) }
+pub func testBit<T: Copyable>(value: T, index: usize) bool { __vqr_bits_test(value, index) }
+pub func setBit<T: Copyable>(value: T, index: usize) T { __vqr_bits_set(value, index) }
+pub func clearBit<T: Copyable>(value: T, index: usize) T { __vqr_bits_clear(value, index) }
+pub func toggleBit<T: Copyable>(value: T, index: usize) T { __vqr_bits_toggle(value, index) }
 pub func maskLow<T>(count: usize) T { __vqr_bits_mask<T>(count) }
-pub func extractBits<T>(value: T, start: usize, count: usize) T {
+pub func extractBits<T: Copyable>(value: T, start: usize, count: usize) T {
     __vqr_bits_extract(value, start, count)
 }
-pub func insertBits<T>(value: T, field: T, start: usize, count: usize) T {
+pub func insertBits<T: Copyable>(value: T, field: T, start: usize, count: usize) T {
     __vqr_bits_insert(value, field, start, count)
 }
 
-pub func isPowerOfTwo<T>(value: T) bool { value > T(0) && countOnes(value) == 1 }
+pub func isPowerOfTwo<T: Copyable>(value: T) bool { value > T(0) && countOnes(value) == 1 }
 
-pub func nextPowerOfTwo<T>(value: T) !T {
+pub func nextPowerOfTwo<T: Copyable>(value: T) !T {
     var width = meta.bitWidth<T>();
     if value < T(0) { return BitError.OutOfRange; }
     if value <= T(1) { return T(1); }

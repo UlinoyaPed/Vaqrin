@@ -4182,6 +4182,34 @@ class Acceptance(CompilerCase):
             }
         """, "11\n15\n64\n3\n7\n6\n5649426\n13330\n64\n7\n7\ntrue\n0\n128\ntrue\n16777215\n2\n0\n498\n4\n8\n22\n32\n16\ntrue\n2\n191\n5\n0\n5\n1\ntrue\n7\n")
 
+    def test_bits_copyable_value_words_are_forwardable(self):
+        self.hosted("""
+            import (bits)
+            type Word = u24;
+            func replaceAndCount<T: Copyable>(value: T, field: T) usize {
+                var replaced = bits.insertBits<T>(value, field, 3, 4);
+                bits.countZeros(replaced) + bits.countOnes(value)
+            }
+            const mask = bits.maskLow<Word>(4);
+            const count = replaceAndCount<Word>(0x103u24, mask);
+            func main() !void {
+                var value: i7 = 5;
+                var field: i7 = 2;
+                io.println(replaceAndCount(value, field))!;
+                io.println(value)!;
+                io.println(field)!;
+                io.println(count)!;
+            }
+        """, "6\n5\n2\n20\n")
+
+        invalid = self.source("bits_float.vqr", """
+            package main
+            import (bits)
+            func main() void { bits.countZeros(2.0f32); }
+        """)
+        diagnostic = self.process(VAQC, "check", invalid, good=False).stderr
+        self.assertIn(b"bit operations require integer types", diagnostic)
+
     def test_slice_search_and_heap(self):
         self.hosted("""
             import (algo, core)

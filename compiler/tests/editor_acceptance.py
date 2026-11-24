@@ -176,7 +176,7 @@ n
                   'func main() !void {\n  rep|\n}'),
                  'import (io, report)\nfunc main() !void {\n  report.|\n}',
                  'import (rep|)',
-                 'import (log|)',
+                 'import (logi|)',
                  'import (logic)\nfunc f() void { logic.| }']
         for version, marked in enumerate(cases, 1):
             before, after = marked.split("|")

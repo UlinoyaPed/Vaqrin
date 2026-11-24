@@ -250,7 +250,7 @@ pub class TcpStream {
     #copy: disabled
     #implements: io.Reader, io.Writer, io.Closer
     var socket: Socket;
-    pub func init(value: Socket) : socket(move(value)) {}
+    pub func init(value: move Socket) : socket(move(value)) {}
     pub static func connect(address: SocketAddr) !Self { TcpStream(openSocket(address, 0, -1)!) }
     pub static func connectTimeout(address: SocketAddr, timeout: time.Duration) !Self {
         if timeout.isNegative() || timeout.isZero() { return NetError.InvalidTimeout; }
@@ -298,7 +298,7 @@ pub class TcpStream {
 pub class TcpListener {
     #copy: disabled
     var socket: Socket;
-    func init(value: Socket) : socket(move(value)) {}
+    func init(value: move Socket) : socket(move(value)) {}
     pub static func bind(address: SocketAddr) !Self { TcpListener(openSocket(address, 1, -1)!) }
     pub func accept() !(TcpStream, SocketAddr) {
         var wire = mem.zeroedBytes<24>();
@@ -327,7 +327,7 @@ pub class Datagram {
 pub class UdpSocket {
     #copy: disabled
     var socket: Socket;
-    func init(value: Socket) : socket(move(value)) {}
+    func init(value: move Socket) : socket(move(value)) {}
     pub static func bind(address: SocketAddr) !Self { UdpSocket(openSocket(address, 2, -1)!) }
     pub func connect(address: SocketAddr) !void {
         var wire = toWire(address);

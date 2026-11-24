@@ -70,11 +70,11 @@ pub class JsonArray {
     pub const func get(index: usize) ?*const Value { values.getPtr(index) }
     pub const func getRef(index: usize) ?ref Value from self { values.get(index) }
     pub func getMut(index: usize) ?*Value { values.getMutPtr(index) }
-    pub func push(value: Value) !void { values.push(move(value)) }
+    pub func push(value: move Value) !void { values.push(move(value)) }
     pub func pop() ?Value { values.pop() }
-    pub func insert(index: usize, value: Value) !void { values.insert(index, move(value)) }
+    pub func insert(index: usize, value: move Value) !void { values.insert(index, move(value)) }
     pub func remove(index: usize) ?Value { values.remove(index) }
-    pub func replace(index: usize, value: Value) ?Value { values.replace(index, move(value)) }
+    pub func replace(index: usize, value: move Value) ?Value { values.replace(index, move(value)) }
     pub const func asSlice() []const Value { values.asConstSlice() }
     pub const func iterRef() iterator.SliceIterRef<Value> {
         iterator.SliceIterRef<Value>(values.asConstSlice())
@@ -113,7 +113,7 @@ pub class JsonObject {
         }
         null
     }
-    pub func insert(key: string, value: Value) core.ResultOptional<Value> {
+    pub func insert(key: string, value: move Value) core.ResultOptional<Value> {
         for index in usize(0)..entries.len() {
             var entry = entries.getMut(index).unwrap();
             if entry.key == key {

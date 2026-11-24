@@ -224,17 +224,17 @@ class IoV2Acceptance(CompilerCase):
                 var writer = FaultyWriter{sink: io.MemoryWriter(), calls: 0};
                 var data = "payload".asBytes();
                 var sent: usize = 0;
-                var first = io.writeAll(raw writer, data, raw sent);
+                var first = io.writeAll(raw writer, data, sent);
                 io.println(sent == 2 && result.errorOf(raw first).unwrap() == io.IoError.WouldBlock)!;
-                var second = io.writeAll(raw writer, data, raw sent);
+                var second = io.writeAll(raw writer, data, sent);
                 io.println(sent == 2 && result.errorOf(raw second).unwrap() == io.IoError.Interrupted)!;
-                var cancelled = io.writeAll(raw writer, data, raw sent);
+                var cancelled = io.writeAll(raw writer, data, sent);
                 io.println(sent == 2 && result.errorOf(raw cancelled).unwrap() == io.IoError.Cancelled)!;
                 var timeout = io.writeAllProgress(raw writer, data[sent..data.len()])!;
                 io.println(timeout.processed == 0 && timeout.status == io.ReadStatus.DeadlineExceeded)!;
-                var disk = io.writeAll(raw writer, data, raw sent);
+                var disk = io.writeAll(raw writer, data, sent);
                 io.println(sent == 2 && result.errorOf(raw disk).unwrap() == io.systemError(28))!;
-                io.writeAll(raw writer, data, raw sent)!;
+                io.writeAll(raw writer, data, sent)!;
                 io.println(sent == 7 && bytes.equal(writer.sink.asSlice(), data))!;
 
                 var reader = FaultyReader{source: io.MemoryReader(data), calls: 0};
@@ -242,18 +242,69 @@ class IoV2Acceptance(CompilerCase):
                 var run = io.readExactProgress(raw reader, dst[:])!;
                 io.println(run.processed == 2 && run.status == io.ReadStatus.Cancelled)!;
                 var received = run.processed;
-                io.readExact(raw reader, dst[:], raw received)!;
+                io.readExact(raw reader, dst[:], received)!;
                 io.println(received == 7 && bytes.equal(dst[:], data))!;
                 var eof = io.readExactProgress(raw reader, dst[:])!;
                 io.println(eof.processed == 0 && eof.status == io.ReadStatus.Eof)!;
 
                 var atLeast = FaultyReader{source: io.MemoryReader(data), calls: 0};
                 var offset: usize = 0;
-                var partial = io.readAtLeast(raw atLeast, dst[:], 4, raw offset);
+                var partial = io.readAtLeast(raw atLeast, dst[:], 4, offset);
                 io.println(offset == 2 && result.errorOf(raw partial).unwrap() == io.IoError.Cancelled)!;
-                io.println(io.readAtLeast(raw atLeast, dst[:], 4, raw offset)! == 7 && offset == 7)!;
+                io.println(io.readAtLeast(raw atLeast, dst[:], 4, offset)! == 7 && offset == 7)!;
             }
         """, "true\n" * 11)
+
+    def test_progress_requires_an_exclusive_checked_place(self):
+        self.hosted("""
+            import (bytes, result)
+            func main() !void {
+                var writer = io.MemoryWriter();
+                var payload = "payload".asBytes();
+                var sent: usize = 8;
+                var outOfRange = io.writeAll(raw writer, payload, sent);
+                io.println(sent == 8 && writer.asSlice().len() == 0 &&
+                    result.errorOf(raw outOfRange).unwrap() == io.IoError.InvalidCount)!;
+                sent = 0;
+                {
+                    var loan: ref mut usize = ref mut sent;
+                    io.writeAll(raw writer, payload, loan)!;
+                    io.println(loan == payload.len())!;
+                }
+                io.println(sent == 7 && bytes.equal(writer.asSlice(), payload))!;
+
+                var reader = io.MemoryReader(payload);
+                var target = [2]u8{0, 0};
+                var taken: usize = 3;
+                var invalid = io.readExact(raw reader, target[:], taken);
+                io.println(taken == 3 && reader.remaining() == 7 &&
+                    result.errorOf(raw invalid).unwrap() == io.IoError.InvalidCount)!;
+                var short = io.MemoryReader("x".asBytes());
+                taken = 0;
+                var earlyEnd = io.readExact(raw short, target[:], taken);
+                io.println(taken == 1 && target[0] == 120 &&
+                    result.errorOf(raw earlyEnd).unwrap() == io.IoError.UnexpectedEof)!;
+            }
+        """, "true\n" * 5)
+
+        for case, declaration, argument, expected in (
+            ("raw", "var sent: usize = 0;", "raw sent", b"no accessible overload"),
+            ("read_only", "const sent: usize = 0;", "sent", b"read-only object mutably"),
+            ("active_loan", "var sent: usize = 0; var shared: ref usize = ref sent;", "sent",
+             b"access conflicts with active borrow"),
+        ):
+            with self.subTest(case=case):
+                source = self.source(case + "/main.vqr", """
+                    package main
+                    import (io)
+                    func main() !void {
+                        var writer = io.MemoryWriter();
+                """ + declaration + """
+                        io.writeAll(raw writer, "payload".asBytes(), """ + argument + """)!;
+                    }
+                """)
+                result = self.process(VAQC, "check", source, good=False)
+                self.assertIn(expected, result.stderr)
 
     def test_copy_resumes_its_pending_scratch(self):
         self.hosted(r"""
@@ -433,6 +484,53 @@ class IoV2Acceptance(CompilerCase):
                 io.println(child.join()!)!;
             }
         """, "true\n" * 2)
+
+    def test_async_socket_wrappers_transfer_descriptor_owners(self):
+        self.hosted(r"""
+            import (net)
+            extern "C" func fcntl(fd: c_int, command: c_int) c_int;
+
+            func main() !void {
+                var local = net.parseSocketAddr("127.0.0.1:0")!;
+                var udpFd: i32;
+                {
+                    var udp = net.UdpSocket.bind(local)!;
+                    udpFd = udp.systemDescriptor()!;
+                    var address = udp.localAddr()!;
+                    var socket = net.AsyncUdpSocket.fromUdp(move(udp))!;
+                    io.println(socket.localAddr()!.port() == address.port())!;
+                    io.println(unsafe { fcntl(udpFd, 1) } >= 0)!;
+                }
+                io.println(unsafe { fcntl(udpFd, 1) } < 0)!;
+
+                var listener = net.TcpListener.bind(local)!;
+                var tcpFd: i32;
+                {
+                    var tcp = net.TcpStream.connect(listener.localAddr()!)!;
+                    tcpFd = tcp.systemDescriptor()!;
+                    var asynchronous = net.AsyncTcpStream.fromTcp(move(tcp))!;
+                    io.println(asynchronous.systemDescriptor()! == tcpFd)!;
+                    var handedBack = net.AsyncTcpStream.intoTcp(move(asynchronous));
+                    io.println(handedBack.systemDescriptor()! == tcpFd)!;
+                }
+                io.println(unsafe { fcntl(tcpFd, 1) } < 0)!;
+            }
+        """, "true\n" * 6)
+
+        for kind, conversion in (
+            ("UdpSocket", "net.AsyncUdpSocket.fromUdp(input)!"),
+            ("TcpStream", "net.AsyncTcpStream.fromTcp(input)!"),
+            ("AsyncTcpStream", "net.AsyncTcpStream.intoTcp(input)"),
+        ):
+            with self.subTest(kind=kind):
+                source = self.source("owned_socket.vqr", f"""
+                    import (net)
+                    func invalid(input: move net.{kind}) !void {{
+                        var wrapped = {conversion};
+                    }}
+                """)
+                result = self.process(VAQC, "check", source, good=False)
+                self.assertIn(b"move parameter requires move(object) or an owning temporary", result.stderr)
 
     def test_async_tcp_one_worker_and_deadlines(self):
         self.hosted(r"""

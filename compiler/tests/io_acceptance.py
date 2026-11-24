@@ -130,6 +130,51 @@ class IoAcceptance(CompilerCase):
                 result = self.process(VAQC, "check", source, good=False)
                 self.assertIn(b"move parameter requires move(object) or an owning temporary", result.stderr)
 
+    def test_filesystem_wrappers_require_transfer_of_host_handles(self):
+        result = self.run_source(r"""
+            import (fs, io, path)
+            extern "C" func fcntl(fd: c_int, command: c_int) c_int;
+            func main() !void {
+                fs.writeFile("owned.txt", "19".asBytes())!;
+                var descriptor: i32;
+                {
+                    var original = io.HostFile.open("owned.txt".asBytes(), 1, 0)!;
+                    descriptor = original.systemDescriptor()!;
+                    var file = fs.File(move(original));
+                    var bytes = [2]u8{0, 0};
+                    io.println(file.read(bytes[:])! == 2)!;
+                }
+                io.println(unsafe { fcntl(descriptor, 1) } < 0)!;
+                var file = fs.File(io.HostFile.open("owned.txt".asBytes(), 1, 0)!);
+                file.close()!;
+
+                var base = path.fromString(".")!;
+                var original = io.HostDirectory.open(".".asBytes())!;
+                var directory = fs.Directory(move(original), base);
+                io.println(directory.next()! != null)!;
+                directory.close()!;
+                var temporary = fs.Directory(io.HostDirectory.open(".".asBytes())!, base);
+                temporary.close()!;
+            }
+        """)
+        self.assertEqual(result.stdout, b"true\ntrue\ntrue\n")
+
+        for handle, wrapper in (
+            ('io.HostFile.open("owned.txt".asBytes(), 1, 0)!', 'fs.File(handle)'),
+            ('io.HostDirectory.open(".".asBytes())!',
+             'fs.Directory(handle, path.fromString(".")!)'),
+        ):
+            with self.subTest(wrapper=wrapper):
+                source = self.source("named_fs_handle.vqr", f"""
+                    import (fs, io, path)
+                    func main() !void {{
+                        var handle = {handle};
+                        var resource = {wrapper};
+                    }}
+                """)
+                result = self.process(VAQC, "check", source, good=False)
+                self.assertIn(b"move parameter requires move(object) or an owning temporary", result.stderr)
+
     def test_standard_streams_and_legacy_println(self):
         result = self.run_source(r'''
             import (io)

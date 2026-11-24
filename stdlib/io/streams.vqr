@@ -69,28 +69,28 @@ pub func readExactProgress(reader: *Reader, dst: []u8) !IoProgress {
     }
     complete(offset)
 }
-pub func readExact(reader: *Reader, dst: []u8, processed: *usize) !void {
-    if *processed > dst.len() { return IoError.InvalidCount; }
-    var progress = readExactProgress(reader, dst[*processed..dst.len()])!;
-    *processed += progress.processed;
+pub func readExact(reader: *Reader, dst: []u8, processed: mut usize) !void {
+    if processed > dst.len() { return IoError.InvalidCount; }
+    var progress = readExactProgress(reader, dst[processed..dst.len()])!;
+    processed += progress.processed;
     progress.check()
 }
 pub func readExact(reader: *Reader, dst: []u8) !void {
     var processed: usize = 0;
-    readExact(reader, dst, raw processed)
+    readExact(reader, dst, processed)
 }
-pub func readAtLeast(reader: *Reader, dst: []u8, min: usize, processed: *usize) !usize {
-    if min > dst.len() || *processed > dst.len() { return IoError.InvalidCount; }
-    while *processed < min {
-        var count = read(reader, dst[*processed..dst.len()])!;
+pub func readAtLeast(reader: *Reader, dst: []u8, min: usize, processed: mut usize) !usize {
+    if min > dst.len() || processed > dst.len() { return IoError.InvalidCount; }
+    while processed < min {
+        var count = read(reader, dst[processed..dst.len()])!;
         if count == 0 { return IoError.UnexpectedEof; };
-        *processed += count;
+        processed += count;
     }
-    return *processed;
+    return processed;
 }
 pub func readAtLeast(reader: *Reader, dst: []u8, min: usize) !usize {
     var processed: usize = 0;
-    readAtLeast(reader, dst, min, raw processed)
+    readAtLeast(reader, dst, min, processed)
 }
 pub func writeAllProgress(writer: *Writer, src: []const u8) !IoProgress {
     var offset: usize = 0;
@@ -100,15 +100,15 @@ pub func writeAllProgress(writer: *Writer, src: []const u8) !IoProgress {
     }
     complete(offset)
 }
-pub func writeAll(writer: *Writer, src: []const u8, processed: *usize) !void {
-    if *processed > src.len() { return IoError.InvalidCount; }
-    var progress = writeAllProgress(writer, src[*processed..src.len()])!;
-    *processed += progress.processed;
+pub func writeAll(writer: *Writer, src: []const u8, processed: mut usize) !void {
+    if processed > src.len() { return IoError.InvalidCount; }
+    var progress = writeAllProgress(writer, src[processed..src.len()])!;
+    processed += progress.processed;
     progress.check()
 }
 pub func writeAll(writer: *Writer, src: []const u8) !void {
     var processed: usize = 0;
-    writeAll(writer, src, raw processed)
+    writeAll(writer, src, processed)
 }
 pub func writeString(writer: *Writer, value: str) !void { writeAll(writer, value.asBytes()) }
 

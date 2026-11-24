@@ -445,19 +445,36 @@ pub class FixedDeque<T: Movable, comptime N: usize> {
         if index >= tail { index - tail } else { head + index }
     }
 
-    pub func pushBack(value: T) PushResult<T> {
-        if length == N { return PushResult<T>.Full(move(value)); }
-        unsafe { address(physical(length)).write(move(value)); }
-        length++;
-        PushResult<T>.Stored()
-    }
+    comptime if meta.isCopyable<T>() {
+        pub func pushBack(value: T) PushResult<T> {
+            if length == N { return PushResult<T>.Full(move(value)); }
+            unsafe { address(physical(length)).write(move(value)); }
+            length++;
+            PushResult<T>.Stored()
+        }
 
-    pub func pushFront(value: T) PushResult<T> {
-        if length == N { return PushResult<T>.Full(move(value)); }
-        if head == 0 { head = N - 1; } else { head--; }
-        unsafe { address(head).write(move(value)); }
-        length++;
-        PushResult<T>.Stored()
+        pub func pushFront(value: T) PushResult<T> {
+            if length == N { return PushResult<T>.Full(move(value)); }
+            if head == 0 { head = N - 1; } else { head--; }
+            unsafe { address(head).write(move(value)); }
+            length++;
+            PushResult<T>.Stored()
+        }
+    } else {
+        pub func pushBack(value: move T) PushResult<T> {
+            if length == N { return PushResult<T>.Full(move(value)); }
+            unsafe { address(physical(length)).write(move(value)); }
+            length++;
+            PushResult<T>.Stored()
+        }
+
+        pub func pushFront(value: move T) PushResult<T> {
+            if length == N { return PushResult<T>.Full(move(value)); }
+            if head == 0 { head = N - 1; } else { head--; }
+            unsafe { address(head).write(move(value)); }
+            length++;
+            PushResult<T>.Stored()
+        }
     }
 
     pub func popFront() ?T {
@@ -493,18 +510,34 @@ pub class FixedDeque<T: Movable, comptime N: usize> {
     pub const func back() ?*const T { if length == 0 { null } else { get(length - 1) } }
     pub func backMut() ?*T { if length == 0 { null } else { getMut(length - 1) } }
 
-    pub func insert(index: usize, value: T) PushResult<T> {
-        if index > length {
-            return PushResult<T>.Failed(CapacityError.IndexOutOfBounds, move(value));
+    comptime if meta.isCopyable<T>() {
+        pub func insert(index: usize, value: T) PushResult<T> {
+            if index > length {
+                return PushResult<T>.Failed(CapacityError.IndexOutOfBounds, move(value));
+            }
+            if length == N { return PushResult<T>.Full(move(value)); }
+            for i := length; i > index; i-- {
+                var item = unsafe { address(physical(i - 1)).assumeInit() };
+                unsafe { address(physical(i)).write(move(item)); }
+            }
+            unsafe { address(physical(index)).write(move(value)); }
+            length++;
+            PushResult<T>.Stored()
         }
-        if length == N { return PushResult<T>.Full(move(value)); }
-        for i := length; i > index; i-- {
-            var item = unsafe { address(physical(i - 1)).assumeInit() };
-            unsafe { address(physical(i)).write(move(item)); }
+    } else {
+        pub func insert(index: usize, value: move T) PushResult<T> {
+            if index > length {
+                return PushResult<T>.Failed(CapacityError.IndexOutOfBounds, move(value));
+            }
+            if length == N { return PushResult<T>.Full(move(value)); }
+            for i := length; i > index; i-- {
+                var item = unsafe { address(physical(i - 1)).assumeInit() };
+                unsafe { address(physical(i)).write(move(item)); }
+            }
+            unsafe { address(physical(index)).write(move(value)); }
+            length++;
+            PushResult<T>.Stored()
         }
-        unsafe { address(physical(index)).write(move(value)); }
-        length++;
-        PushResult<T>.Stored()
     }
 
     pub func remove(index: usize) ?T {
@@ -519,12 +552,22 @@ pub class FixedDeque<T: Movable, comptime N: usize> {
         some(move(value))
     }
 
-    pub func replace(index: usize, value: T) ?T {
-        if index >= length { return null; }
-        var slot = address(physical(index));
-        var previous = unsafe { slot.assumeInit() };
-        unsafe { slot.write(move(value)); }
-        some(move(previous))
+    comptime if meta.isCopyable<T>() {
+        pub func replace(index: usize, value: T) ?T {
+            if index >= length { return null; }
+            var slot = address(physical(index));
+            var previous = unsafe { slot.assumeInit() };
+            unsafe { slot.write(move(value)); }
+            some(move(previous))
+        }
+    } else {
+        pub func replace(index: usize, value: move T) ?T {
+            if index >= length { return null; }
+            var slot = address(physical(index));
+            var previous = unsafe { slot.assumeInit() };
+            unsafe { slot.write(move(value)); }
+            some(move(previous))
+        }
     }
 
     pub func retain<F: Movable>(predicate: F) void {
@@ -564,7 +607,7 @@ pub class FixedDeque<T: Movable, comptime N: usize> {
         iterator.rev<DequeIterRef<T>, *const T>(iterRef())
     }
 
-    pub static func intoIter(value: Self) IntoFixedDequeIter<T, N> {
+    pub static func intoIter(value: move Self) IntoFixedDequeIter<T, N> {
         IntoFixedDequeIter<T, N>(move(value))
     }
 
@@ -632,7 +675,7 @@ pub class FixedDeque<T: Movable, comptime N: usize> {
 
 pub class IntoFixedDequeIter<T: Movable, comptime N: usize> {
     var source: FixedDeque<T, N>;
-    pub func init(value: FixedDeque<T, N>) : source(move(value)) {}
+    pub func init(value: move FixedDeque<T, N>) : source(move(value)) {}
     pub func next() ?T { source.popFront() }
     pub func nextBack() ?T { source.popBack() }
     pub const func remaining() usize { source.len() }

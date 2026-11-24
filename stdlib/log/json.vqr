@@ -62,7 +62,7 @@ pub class JsonHandler {
         writer.flush()
     }
     func drain() !void {
-        io.writeAll(writer, pending.asConstSlice(), raw position)!;
+        io.writeAll(writer, pending.asConstSlice(), position)!;
         pending.clear();
         position = 0;
     }

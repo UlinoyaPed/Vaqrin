@@ -9,7 +9,7 @@ pub class TempFile {
     var leaf: string;
     var file: File;
     var keep: bool;
-    func init(parent: io.HostDirectory, base: path.Path, leaf: string, file: File)
+    func init(parent: move io.HostDirectory, base: path.Path, leaf: string, file: move File)
         : parent(move(parent)), base(move(base)), leaf(move(leaf)), file(move(file)), keep(false) {}
     func deinit() void { close() catch {}; }
     pub static func inDir(directory: path.Path) !Self {
@@ -52,7 +52,7 @@ pub class TempDir {
     var base: path.Path;
     var leaf: string;
     var cleaned: bool;
-    func init(parent: io.HostDirectory, base: path.Path, leaf: string)
+    func init(parent: move io.HostDirectory, base: path.Path, leaf: string)
         : parent(move(parent)), base(move(base)), leaf(move(leaf)), cleaned(false) {}
     func deinit() void { close() catch {}; }
     pub static func inDir(directory: path.Path) !Self {

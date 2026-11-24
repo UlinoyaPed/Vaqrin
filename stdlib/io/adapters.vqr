@@ -97,7 +97,7 @@ pub class MultiWriter {
             }
         }
         while targetIndex < targets.len() {
-            writeAll(targets[targetIndex], pending.asConstSlice(), raw processed)!;
+            writeAll(targets[targetIndex], pending.asConstSlice(), processed)!;
             targetIndex++;
             processed = 0;
         }
@@ -136,7 +136,7 @@ pub class TeeReader {
             delivered = 0;
             if filled == 0 { return 0; }
         }
-        writeAll(mirror, buffer[0..filled], raw written)!;
+        writeAll(mirror, buffer[0..filled], written)!;
         var available = filled - delivered;
         var count = if dst.len() < available { dst.len() } else { available };
         mem.copyBytes(buffer[delivered..delivered + count], dst[0..count])!;

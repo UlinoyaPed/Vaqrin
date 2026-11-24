@@ -33,12 +33,22 @@ pub class FixedVec<T: Movable, comptime N: usize> {
     pub const func last() ?*const T { if length == 0 { null } else { get(length - 1) } }
     pub func lastMut() ?*T { if length == 0 { null } else { getMut(length - 1) } }
 
-    pub func push(value: T) PushResult<T> { tryPush(move(value)) }
-    pub func tryPush(value: T) PushResult<T> {
-        if length == N { return PushResult<T>.Full(move(value)); }
-        unsafe { __vqr_slot_write<T>(address(length), move(value)); }
-        length++;
-        PushResult<T>.Stored()
+    comptime if meta.isCopyable<T>() {
+        pub func push(value: T) PushResult<T> { tryPush(move(value)) }
+        pub func tryPush(value: T) PushResult<T> {
+            if length == N { return PushResult<T>.Full(move(value)); }
+            unsafe { __vqr_slot_write<T>(address(length), move(value)); }
+            length++;
+            PushResult<T>.Stored()
+        }
+    } else {
+        pub func push(value: move T) PushResult<T> { tryPush(move(value)) }
+        pub func tryPush(value: move T) PushResult<T> {
+            if length == N { return PushResult<T>.Full(move(value)); }
+            unsafe { __vqr_slot_write<T>(address(length), move(value)); }
+            length++;
+            PushResult<T>.Stored()
+        }
     }
 
     pub func pop() ?T {
@@ -85,20 +95,38 @@ pub class FixedVec<T: Movable, comptime N: usize> {
         pop()
     }
 
-    pub func replace(index: usize, value: T) ?T {
-        if index >= length { return null; }
-        unsafe {
-            var slot = address(index);
-            var previous = __vqr_slot_take<T>(slot);
-            __vqr_slot_write<T>(slot, move(value));
-            some(move(previous))
+    comptime if meta.isCopyable<T>() {
+        pub func replace(index: usize, value: T) ?T {
+            if index >= length { return null; }
+            unsafe {
+                var slot = address(index);
+                var previous = __vqr_slot_take<T>(slot);
+                __vqr_slot_write<T>(slot, move(value));
+                some(move(previous))
+            }
         }
-    }
 
-    pub func replacePreserving(index: usize, value: T) ReplaceResult<T> {
-        if index >= length { return ReplaceResult<T>.InvalidIndex(move(value)); }
-        var previous = replace(index, move(value)).unwrap();
-        ReplaceResult<T>.Replaced(move(previous))
+        pub func replacePreserving(index: usize, value: T) ReplaceResult<T> {
+            if index >= length { return ReplaceResult<T>.InvalidIndex(move(value)); }
+            var previous = replace(index, move(value)).unwrap();
+            ReplaceResult<T>.Replaced(move(previous))
+        }
+    } else {
+        pub func replace(index: usize, value: move T) ?T {
+            if index >= length { return null; }
+            unsafe {
+                var slot = address(index);
+                var previous = __vqr_slot_take<T>(slot);
+                __vqr_slot_write<T>(slot, move(value));
+                some(move(previous))
+            }
+        }
+
+        pub func replacePreserving(index: usize, value: move T) ReplaceResult<T> {
+            if index >= length { return ReplaceResult<T>.InvalidIndex(move(value)); }
+            var previous = replace(index, move(value)).unwrap();
+            ReplaceResult<T>.Replaced(move(previous))
+        }
     }
 
     pub func truncate(n: usize) void {
@@ -187,7 +215,7 @@ pub class FixedVec<T: Movable, comptime N: usize> {
         iterator.rev<iterator.SliceIterRef<T>, *const T>(iterRef())
     }
 
-    pub static func intoIter(value: Self) IntoFixedVecIter<T, N> {
+    pub static func intoIter(value: move Self) IntoFixedVecIter<T, N> {
         IntoFixedVecIter<T, N>(move(value))
     }
 
@@ -202,7 +230,7 @@ pub class FixedVec<T: Movable, comptime N: usize> {
 
 pub class IntoFixedVecIter<T: Movable, comptime N: usize> {
     var source: FixedVec<T, N>;
-    pub func init(values: FixedVec<T, N>) : source(move(values)) {}
+    pub func init(values: move FixedVec<T, N>) : source(move(values)) {}
     pub func next() ?T { source.remove(0) }
     pub func nextBack() ?T { source.pop() }
     pub const func remaining() usize { source.len() }

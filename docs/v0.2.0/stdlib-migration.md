@@ -14,6 +14,8 @@
 | `mem` 和自定义容器分配器 | `AllocatorRef` 不再是 `*Allocator` 的别名，而是持有私有地址的非拥有句柄；调用者通过 `unsafe { mem.AllocatorRef.fromRaw(raw allocator) }` 明确承担地址稳定、调用序列化和分配器/后备存储的生命周期责任。已有容器及 Arena/Pool 的分配器入口接收该句柄。原始释放必须使用 `unsafe` 并提供同一分配器、原布局、未释放的分配。默认分配不变。 | [allocator.vqr](../../stdlib/mem/allocator.vqr) |
 | `json` 解析 | Unicode 转义写入由解析器局部拥有的缓冲区，通过 `mut` 传递；保留最后一个重复键时，就地替换并释放旧值。编码器、借用 Reader 的入口及通用 JSON 字段指针接口不在此切片。 | [parser.vqr](../../stdlib/json/parser.vqr) |
 | `json` 编码值 | `Encoder.encodeValue`、`write`、`stringify`、`stringifyPretty` 通过 `in Value` 读取输入，不再接收 `raw value`。递归访问使用绑定到数组或对象的 `getRef`、`valueRefAt`。旧索引指针接口仍供现有 Reader/Serde/迭代器使用；Writer 存储和排序回调未迁移。 | [encoder.vqr](../../stdlib/json/encoder.vqr) |
+| `io` 进度计数 | `readExact/readAtLeast/writeAll` 的可恢复进度计数使用 `mut usize`，调用方传进度变量本身；错误前成功传输的字节数仍保留。Writer/Reader 的原始生命周期约定不变。 | [streams.vqr](../../stdlib/io/streams.vqr) |
+| `json` 所有权转移 | `JsonArray.push/insert/replace`、`JsonObject.insert`、`pointerSet` 与 DOM 反序列化构造显式消费 `Value`。具名值需写 `move(value)`；构造所得临时值可直接交付。编码和查询仍借用输入。 | [json.vqr](../../stdlib/json/json.vqr)、[serde.vqr](../../stdlib/json/serde.vqr) |
 
 自定义分配器必须比句柄的所有副本、从中派生的容器和尚未释放的块活得更久。该契约是调用者的显式保证，不是编译器验证的引用生命周期。Box 的定制分配形式 `new(allocator) T(...)` 也要求显式 `unsafe`，若来源是原始指针，必须先显式解引用。编译器仍不追踪 Box 中的定制分配器地址，调用者必须保证分配器及后备存储一直有效，直到最后一个使用该分配器的 Box 或其拆分后的释放上下文完成释放。默认 `new T(...)` 不需 `unsafe`。
 

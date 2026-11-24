@@ -765,7 +765,7 @@ class StandardLibraryAcceptance(CompilerCase):
                 command.stdin(process.Stdio.Piped);
                 command.stdout(process.Stdio.Piped);
                 command.stderr(process.Stdio.Null);
-                var child = command.spawn()!;
+                var child = process.spawn(command)!;
                 io.println(child.tryWait()! == null)!;
                 {
                     var input = child.stdin().unwrap();
@@ -785,7 +785,8 @@ class StandardLibraryAcceptance(CompilerCase):
                 producer.args(redirectedArgs[:])!;
                 producer.envClear();
                 var destination = fs.create("redirected.txt")!;
-                producer.stdout(process.Stdio.File(move(destination)));
+                var redirect = process.Stdio.File(move(destination));
+                producer.stdout(move(redirect));
                 io.println(producer.status()!.success())!;
                 var file = fs.openRead(path.fromString("redirected.txt")!)!;
                 io.println(io.readToString(raw file)!)!;
@@ -1361,6 +1362,75 @@ class StandardLibraryAcceptance(CompilerCase):
                     import (io, json)
                     func main() !void {
                 """ + program + "}")
+                result = self.process(VAQC, "check", source, good=False)
+                self.assertIn(diagnostic, result.stderr)
+
+    def test_json_value_insert_and_serde_transfer_ownership(self):
+        self.hosted("""
+            import (json)
+            func main() !void {
+                var input = json.Value.Bool(true);
+                var array = json.JsonArray();
+                array.push(move(input))!;
+                {
+                    var element: ref json.Value = array.getRef(0).unwrap();
+                    switch element {
+                        json.Value.Bool(value) => { io.println(value)!; },
+                        _ => panic("expected original owned boolean"),
+                    }
+                }
+                input = json.Value.Null;
+                array.insert(0, move(input))!;
+                var old = array.replace(0, json.Value.Bool(false)).unwrap();
+                switch old {
+                    json.Value.Null => { io.println(true)!; },
+                    _ => panic("replacement did not transfer the previous value"),
+                }
+
+                var root = json.Value.Array(move(array));
+                var updated = json.Value.Bool(true);
+                json.pointerSet(raw root, "/0", move(updated))!;
+                var reader = json.JsonDomDeserializer(move(root));
+                io.println(reader.beginSeq()!.unwrap() == 2)!;
+                if !reader.nextElement()! { panic("first element missing"); }
+                io.println(reader.readBool()!)!;
+                if !reader.nextElement()! { panic("second element missing"); }
+                io.println(reader.readBool()!)!;
+                reader.endSeq()!;
+                reader.finish()!;
+
+                var writer = json.JsonDomSerializer();
+                writer.beginMap(null)!;
+                writer.writeKey("seq")!;
+                writer.beginSeq(null)!;
+                writer.writeBool(true)!;
+                writer.endSeq()!;
+                writer.endMap()!;
+                var document = writer.takeValue()!;
+                var decoded = json.pointerGet(raw document, "/seq/0").unwrap();
+                io.println(json.asBool(decoded).unwrap())!;
+            }
+        """, "true\n" * 6)
+
+        for case, action, diagnostic in (
+            ("push", "array.push(input)!;", b"move parameter requires move(object)"),
+            ("insert", "array.insert(0, input)!;", b"move parameter requires move(object)"),
+            ("replace", "var previous = array.replace(0, input);", b"move parameter requires move(object)"),
+            ("object", 'var old = object.insert("name", input)!;', b"move parameter requires move(object)"),
+            ("reader", "var reader = json.JsonDomDeserializer(input);", b"move parameter requires move(object)"),
+            ("pointer", 'json.pointerSet(raw target, "", input)!;', b"move parameter requires move(object)"),
+            ("use_after_move", "array.push(move(input))!; var reused = move(input);", b"not initialized"),
+        ):
+            with self.subTest(case=case):
+                source = self.source(case + "/main.vqr", """
+                    package main
+                    import (json)
+                    func main() !void {
+                        var array = json.JsonArray();
+                        var object = json.JsonObject();
+                        var target = json.Value.Null;
+                        var input = json.Value.Bool(true);
+                """ + action + "}")
                 result = self.process(VAQC, "check", source, good=False)
                 self.assertIn(diagnostic, result.stderr)
 

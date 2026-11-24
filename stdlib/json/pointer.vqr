@@ -46,7 +46,7 @@ func decodePointerToken(value: []const u8) !string {
     text.fromBytes(output.asConstSlice())
 }
 
-pub func pointerSet(value: *Value, pointer: str, newValue: Value) !void {
+pub func pointerSet(value: *Value, pointer: str, newValue: move Value) !void {
     if pointer.byteLen() == 0 { *value = move(newValue); return; }
     var bytes = pointer.asBytes();
     if bytes[0] != 47 { return JsonError.InvalidPointer; }

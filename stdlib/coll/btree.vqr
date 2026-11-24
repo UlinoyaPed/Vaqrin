@@ -149,12 +149,14 @@ class BTreeCursors<K: Movable, V: Movable> {
     pub const func remaining() usize { count }
 }
 
+// The BTree cursors own their traversal state and optional pointer lists,
+// not the tree storage or pointees. Keep their addresses live and stable.
 pub class BTreeIterRef<K: Movable, V: Movable> {
     var cursors: BTreeCursors<K, V>;
     var snapshot: ?IteratorSnapshot<*const (K, V)>;
     pub func init(root: ?*BTreeNode<K, V>, count: usize)
         : cursors(BTreeCursors<K, V>(root, count)), snapshot(null) {}
-    pub func init(items: Vec<*const (K, V)>, count: usize)
+    pub func init(items: move Vec<*const (K, V)>, count: usize)
         : cursors(BTreeCursors<K, V>(null, 0)), snapshot(some(IteratorSnapshot<*const (K, V)>(move(items), count))) {}
     pub func next() ?(*const K, *const V) { take(false) }
     pub func nextBack() ?(*const K, *const V) { take(true) }
@@ -179,7 +181,7 @@ pub class BTreeIterMut<K: Movable, V: Movable> {
     var snapshot: ?IteratorSnapshot<*(K, V)>;
     pub func init(root: ?*BTreeNode<K, V>, count: usize)
         : cursors(BTreeCursors<K, V>(root, count)), snapshot(null) {}
-    pub func init(items: Vec<*(K, V)>, count: usize)
+    pub func init(items: move Vec<*(K, V)>, count: usize)
         : cursors(BTreeCursors<K, V>(null, 0)), snapshot(some(IteratorSnapshot<*(K, V)>(move(items), count))) {}
     pub func next() ?(*const K, *V) { take(false) }
     pub func nextBack() ?(*const K, *V) { take(true) }
@@ -228,7 +230,7 @@ pub class BTreeRangeRef<K: Movable, V: Movable> {
 
 pub class BTreeSetIterRef<T: Movable> {
     var source: BTreeIterRef<T, u8>;
-    pub func init(source: BTreeIterRef<T, u8>) : source(move(source)) {}
+    pub func init(source: move BTreeIterRef<T, u8>) : source(move(source)) {}
     pub func next() ?*const T {
         switch source.next() {
             null => null,

@@ -35,7 +35,7 @@ pub class Output {
     var termination: ExitStatus;
     var outBytes: coll.Vec<u8>;
     var errBytes: coll.Vec<u8>;
-    pub func init(status: ExitStatus, out: coll.Vec<u8>, err: coll.Vec<u8>)
+    pub func init(status: ExitStatus, out: move coll.Vec<u8>, err: move coll.Vec<u8>)
         : termination(status), outBytes(move(out)), errBytes(move(err)) {}
     pub const func status() ExitStatus { termination }
     pub const func stdout() []const u8 { outBytes.asConstSlice() }
@@ -73,8 +73,8 @@ const inheritStream: i32 = -1;
 const nullStream: i32 = -2;
 const pipedStream: i32 = -3;
 
-func mode(config: *const ?Stdio, fallback: i32) !i32 {
-    switch *config {
+func mode(config: in ?Stdio, fallback: i32) !i32 {
+    switch config {
         null => fallback,
         some(ref value) => switch value {
             Stdio.Inherit => inheritStream,
@@ -245,7 +245,7 @@ func containsNul(value: str) bool {
     false
 }
 
-func appendCString(output: *coll.Vec<u8>, value: str) !void {
+func appendCString(output: mut coll.Vec<u8>, value: str) !void {
     for byte in value.asBytes() { output.push(byte)!; }
     output.push(0)!
 }
@@ -293,9 +293,9 @@ pub class Command {
         }
         directory = move(value);
     }
-    pub func stdin(value: Stdio) void { inputMode = some(move(value)); }
-    pub func stdout(value: Stdio) void { outputMode = some(move(value)); }
-    pub func stderr(value: Stdio) void { errorMode = some(move(value)); }
+    pub func stdin(value: move Stdio) void { inputMode = some(move(value)); }
+    pub func stdout(value: move Stdio) void { outputMode = some(move(value)); }
+    pub func stderr(value: move Stdio) void { errorMode = some(move(value)); }
 
     pub func env(key: str, value: str) !void {
         validateEnvironmentKey(key)!;
@@ -331,10 +331,10 @@ pub class Command {
         var argv = argumentBlock()!;
         var cwd = directoryBlock()!;
         var overrides = coll.Vec<u8>();
-        for entry in environment.iterRef() { appendCString(raw overrides, *entry)!; }
+        for index in usize(0)..environment.len() { appendCString(overrides, environment[index])!; }
         overrides.push(0)!;
-        var modes = [3]i32{mode(raw inputMode, defaultInput)!,
-                           mode(raw outputMode, defaultOutput)!, mode(raw errorMode, defaultOutput)!};
+        var modes = [3]i32{mode(inputMode, defaultInput)!,
+                           mode(outputMode, defaultOutput)!, mode(errorMode, defaultOutput)!};
         var reason: i32 = 0;
         var inherit = if inheritEnvironment { 1 } else { 0 };
         var handle = unsafe { __vqr_process_spawn(raw argv[0], arguments.len() + 1, raw cwd[0], raw modes[0],
@@ -346,18 +346,18 @@ pub class Command {
         var name = program.asString();
         if name.byteLen() == 0 || containsNul(name) { return ProcessError.InvalidProgram; }
         var result = coll.Vec<u8>();
-        appendCString(raw result, name)!;
-        for value in arguments.iterRef() { appendCString(raw result, *value)!; }
+        appendCString(result, name)!;
+        for index in usize(0)..arguments.len() { appendCString(result, arguments[index])!; }
         move(result)
     }
     const func directoryBlock() !coll.Vec<u8> {
         var result = coll.Vec<u8>();
-        appendCString(raw result, directory.asString())!;
+        appendCString(result, directory.asString())!;
         move(result)
     }
 }
 
-pub func spawn(command: Command) !Child { command.spawn() }
+pub func spawn(command: in Command) !Child { command.spawn() }
 
 pub func run(program: path.Path, args: []const str) !ExitStatus {
     var command = Command.new(move(program));

@@ -90,6 +90,8 @@ class HashBucket<K: Movable, V: Movable> {
     pub func deinit() void { clearEntry(); }
 }
 
+// The cursor owns its traversal state and optional pointer list, not the
+// table storage or pointees. Keep that storage alive and unmodified.
 pub class MapIterRef<K: Movable, V: Movable> {
     var buckets: []const HashBucket<K, V>;
     var frontIndex: usize;
@@ -99,7 +101,7 @@ pub class MapIterRef<K: Movable, V: Movable> {
     pub func init(buckets: []const HashBucket<K, V>, count: usize)
         : buckets(buckets), frontIndex(0), backIndex(buckets.len()), count(count), snapshot(null) {}
 
-    pub func init(items: Vec<(*const K, *const V)>, count: usize)
+    pub func init(items: move Vec<(*const K, *const V)>, count: usize)
         : buckets(unsafe { __vqr_const_slice<HashBucket<K, V>>(null, 0) }),
           frontIndex(0), backIndex(0), count(0),
           snapshot(some(IteratorSnapshot<(*const K, *const V)>(move(items), count))) {}
@@ -147,7 +149,7 @@ pub class MapIterRef<K: Movable, V: Movable> {
 
 pub class Keys<K: Movable, V: Movable> {
     var source: MapIterRef<K, V>;
-    pub func init(source: MapIterRef<K, V>) : source(move(source)) {}
+    pub func init(source: move MapIterRef<K, V>) : source(move(source)) {}
     pub func next() ?*const K {
         switch source.next() { some(entry) => some(entry.0), null => null, }
     }
@@ -159,7 +161,7 @@ pub class Keys<K: Movable, V: Movable> {
 
 pub class Values<K: Movable, V: Movable> {
     var source: MapIterRef<K, V>;
-    pub func init(source: MapIterRef<K, V>) : source(move(source)) {}
+    pub func init(source: move MapIterRef<K, V>) : source(move(source)) {}
     pub func next() ?*const V {
         switch source.next() { some(entry) => some(entry.1), null => null, }
     }
@@ -745,7 +747,7 @@ pub class Entry<K: Movable, V: Movable> {
 
 pub class SetIterRef<T: Movable> {
     var source: MapIterRef<T, u8>;
-    pub func init(source: MapIterRef<T, u8>) : source(move(source)) {}
+    pub func init(source: move MapIterRef<T, u8>) : source(move(source)) {}
     pub func next() ?*const T {
         switch source.next() {
             null => null,

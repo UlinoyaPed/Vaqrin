@@ -74,7 +74,7 @@ pub class File {
     #copy: disabled
     #implements: io.Reader, io.Writer, io.Seeker, io.ReaderAt, io.WriterAt, io.Closer
     var handle: io.HostFile;
-    pub func init(handle: io.HostFile) : handle(move(handle)) {}
+    pub func init(handle: move io.HostFile) : handle(move(handle)) {}
     // A borrowed OS descriptor. Its ownership remains with this file.
     pub const func systemDescriptor() !i32 { handle.systemDescriptor() }
     pub func read(dst: []u8) !usize { handle.read(dst) }
@@ -106,7 +106,7 @@ pub class Directory {
     #copy: disabled
     var handle: io.HostDirectory;
     var base: path.Path;
-    pub func init(handle: io.HostDirectory, base: path.Path) : handle(move(handle)), base(base) {}
+    pub func init(handle: move io.HostDirectory, base: path.Path) : handle(move(handle)), base(base) {}
     pub func next() core.ResultOptional<DirectoryEntry> {
         var item = handle.next()!;
         switch item {

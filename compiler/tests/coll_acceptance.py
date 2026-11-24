@@ -656,6 +656,98 @@ class ContainerAcceptance(CompilerCase):
         """)
         self.assertEqual(output, ["14", "true", "true", "true", "true", "true"])
 
+    def test_map_projection_owns_cursor_and_preserves_its_remaining_state(self):
+        self.assertEqual(self.run_container("""
+            func less(a: *const i32, b: *const i32) bool { unsafe { *a < *b } }
+            func main() !void {
+                var table = coll.i32Map<i32>();
+                table.insert(1, 10)!;
+                table.insert(2, 20)!;
+                table.insert(3, 30)!;
+                var live = table.iterRef()!;
+                var first = live.next().unwrap();
+                var projected = coll.Keys<i32, i32>(move(live));
+                var tail = projected.nextBack().unwrap();
+                var middle = projected.next().unwrap();
+                if projected.remaining() != 0 || projected.next() != null ||
+                   first.0 == tail || first.0 == middle || tail == middle {
+                    panic("moving a live cursor reset or duplicated its iteration state");
+                }
+                if unsafe { *first.0 + *tail + *middle } != 6 {
+                    panic("projected keys no longer refer to the live map");
+                }
+
+                var pairs = [3](i32, i32){(1, 10), (2, 20), (3, 30)};
+                var pointers = coll.Vec<(*const i32, *const i32)>();
+                for i in usize(0)..3 { pointers.push((raw pairs[i].0, raw pairs[i].1))!; }
+                var snapshot = coll.MapIterRef<i32, i32>(move(pointers), 3);
+                var firstSnapshot = snapshot.next().unwrap();
+                var values = coll.Values<i32, i32>(move(snapshot));
+                var firstPointer: *const i32 = raw pairs[0].1;
+                var middlePointer: *const i32 = raw pairs[1].1;
+                var lastPointer: *const i32 = raw pairs[2].1;
+                if values.remaining() != 2 || firstSnapshot.1 != firstPointer ||
+                   values.nextBack().unwrap() != lastPointer ||
+                   values.next().unwrap() != middlePointer || values.nextBack() != null {
+                    panic("moving a snapshot cursor did not preserve its pointers and consumed prefix");
+                }
+
+                var btreePointers = coll.Vec<*(i32, i32)>();
+                btreePointers.push(raw pairs[0])!;
+                btreePointers.push(raw pairs[1])!;
+                var writable = coll.BTreeIterMut<i32, i32>(move(btreePointers), 2);
+                var existing = writable.nextBack().unwrap();
+                var keyPointer: *const i32 = raw pairs[1].0;
+                var valuePointer: *i32 = raw pairs[1].1;
+                if existing.0 != keyPointer || existing.1 != valuePointer {
+                    panic("snapshot changed the address of a mutable BTree entry");
+                }
+                unsafe { *existing.1 = 99; }
+                if pairs[1].1 != 99 || writable.remaining() != 1 {
+                    panic("snapshot lost access to the original value");
+                }
+
+                var hashSet = coll.HashSet<i32>.withHasher(hash.hashI32, hash.eqI32);
+                hashSet.insert(4)!;
+                var hashKeys = hashSet.iterRef()!;
+                if unsafe { *hashKeys.next().unwrap() } != 4 || hashKeys.remaining() != 0 {
+                    panic("hash-set projection lost its fresh cursor");
+                }
+                var treeSet = coll.BTreeSet<i32>.withComparator(less);
+                treeSet.insert(5)!;
+                treeSet.insert(6)!;
+                var treeKeys = treeSet.iterRef()!;
+                if unsafe { *treeKeys.nextBack().unwrap() } != 6 ||
+                   unsafe { *treeKeys.next().unwrap() } != 5 || treeKeys.remaining() != 0 {
+                    panic("BTree-set projection lost its fresh cursor");
+                }
+            }
+        """), [])
+        for projection in ("Keys<i32, i32>", "Values<i32, i32>", "SetIterRef<i32>"):
+            with self.subTest(projection=projection):
+                entry = self.source(projection.split("<")[0] + "/main.vqr", """
+                    import (coll)
+                    func main() !void {
+                        var table = coll.i32Map<TYPE>();
+                        var cursor = table.iterRef()!;
+                        var projection = coll.PROJECTION(cursor);
+                    }
+                """.replace("TYPE", "u8" if projection.startswith("Set") else "i32")
+                    .replace("PROJECTION", projection))
+                diagnostic = self.process(VAQC, "check", entry, good=False).stderr
+                self.assertIn(b"move parameter requires move(object) or an owning temporary", diagnostic)
+        after_move = self.source("moved/main.vqr", """
+            import (coll)
+            func main() !void {
+                var table = coll.i32Map<i32>();
+                var cursor = table.iterRef()!;
+                var keys = coll.Keys<i32, i32>(move(cursor));
+                cursor.next();
+            }
+        """)
+        diagnostic = self.process(VAQC, "check", after_move, good=False).stderr
+        self.assertIn(b"not initialized", diagnostic)
+
     def test_vec_splice_and_drain_owned_elements(self):
         output = self.run_container(r"""
             class Tag {
@@ -843,6 +935,157 @@ class ContainerAcceptance(CompilerCase):
                         var item = Owned(raw count, 7);
                         var ring = coll.VecDeque<Owned>();
                 """ + f"ring.{operation}(item){post};" + "\n}")
+                diagnostic = self.process(VAQC, "check", source, good=False).stderr
+                self.assertIn(b"move parameter requires move(object) or an owning temporary", diagnostic)
+
+    def test_fixed_insertions_keep_copies_and_failed_owners_distinct(self):
+        setup = """
+            class Counted {
+                #copy: enable
+                var copies: *i32;
+                var drops: *i32;
+                pub var id: i32;
+                pub func init(c: *i32, d: *i32, id: i32) : copies(c), drops(d), id(id) {}
+                pub const func copy() Self {
+                    unsafe { (*copies)++; }
+                    Counted(copies, drops, id)
+                }
+                func deinit() void { unsafe { (*drops)++; } }
+            }
+            class Owned {
+                #copy: disabled
+                var drops: *i32;
+                pub var id: i32;
+                pub func init(d: *i32, id: i32) : drops(d), id(id) {}
+                func deinit() void { unsafe { (*drops)++; } }
+            }
+        """
+        self.assertEqual(self.run_container(setup + """
+            func main() !void {
+                var copies = 0;
+                var drops = 0;
+                {
+                    var one = Counted(raw copies, raw drops, 1);
+                    var two = Counted(raw copies, raw drops, 2);
+                    var values = coll.FixedVec<Counted, 2>();
+                    switch values.push(one) { coll.PushResult.Stored => {}, _ => panic("push failed") }
+                    switch values.tryPush(two) { coll.PushResult.Stored => {}, _ => panic("tryPush failed") }
+                    if copies != 2 || drops != 0 { panic("extra copies on insertion"); }
+                    switch values.tryPush(one) {
+                        coll.PushResult.Full(returned) => {
+                            if returned.id != 1 || copies != 3 || drops != 0 { panic("wrong rejected copy"); }
+                        },
+                        _ => panic("tryPush should report full"),
+                    }
+                    switch values.insert(3, two) {
+                        coll.PushResult.Failed(reason, returned) => {
+                            if reason != coll.CapacityError.IndexOutOfBounds || returned.id != 2 {
+                                panic("invalid index must precede full");
+                            }
+                        },
+                        _ => panic("invalid insert should fail"),
+                    }
+                    if values.replace(3, one) != null || drops != 3 { panic("invalid replace did not drop its copy"); }
+                    switch values.replacePreserving(2, two) {
+                        coll.ReplaceResult.InvalidIndex(returned) => {
+                            if returned.id != 2 || copies != 6 || drops != 3 { panic("wrong exposed copy"); }
+                        },
+                        _ => panic("replacePreserving should return its copy"),
+                    }
+                    switch values.replacePreserving(1, one) {
+                        coll.ReplaceResult.Replaced(previous) => {
+                            if previous.id != 2 || copies != 7 || drops != 4 { panic("wrong replaced owner"); }
+                        },
+                        _ => panic("replacement failed"),
+                    }
+                    {
+                        var previous = values.replace(0, two).unwrap();
+                        if previous.id != 1 || copies != 8 || drops != 5 { panic("replace made another copy"); }
+                    }
+                    if values.get(0).unwrap().id != 2 || values.get(1).unwrap().id != 1 ||
+                       one.id != 1 || two.id != 2 { panic("wrong final slots or consumed copy source"); }
+                }
+                if copies != 8 || drops != 10 { panic("fixed vec dropped the wrong number of copies"); }
+                {
+                    var one = Counted(raw copies, raw drops, 11);
+                    var two = Counted(raw copies, raw drops, 12);
+                    var ring = coll.FixedDeque<Counted, 3>();
+                    switch ring.pushBack(one) { coll.PushResult.Stored => {}, _ => panic("back failed") }
+                    switch ring.pushFront(two) { coll.PushResult.Stored => {}, _ => panic("front failed") }
+                    switch ring.insert(1, one) { coll.PushResult.Stored => {}, _ => panic("insert failed") }
+                    switch ring.pushFront(two) {
+                        coll.PushResult.Full(returned) => {
+                            if returned.id != 12 || copies != 12 || drops != 10 { panic("wrong full owner"); }
+                        },
+                        _ => panic("ring should be full"),
+                    }
+                    {
+                        var previous = ring.replace(1, two).unwrap();
+                        if previous.id != 11 || copies != 13 || drops != 11 { panic("wrong replacement"); }
+                    }
+                    if ring.get(0).unwrap().id != 12 || ring.get(1).unwrap().id != 12 ||
+                       ring.get(2).unwrap().id != 11 { panic("incorrect ring order"); }
+                }
+                if copies != 13 || drops != 17 { panic("fixed ring dropped the wrong number of copies"); }
+
+                var owners = 0;
+                {
+                    var values = coll.FixedVec<Owned, 1>();
+                    var first = Owned(raw owners, 21);
+                    switch values.push(move(first)) { coll.PushResult.Stored => {}, _ => panic("push failed") }
+                    var replacement = Owned(raw owners, 22);
+                    switch values.replacePreserving(1, move(replacement)) {
+                        coll.ReplaceResult.InvalidIndex(returned) => {
+                            if returned.id != 22 || owners != 0 { panic("lost original owner"); }
+                        },
+                        _ => panic("invalid replacement was accepted"),
+                    }
+                    var ownedIter = coll.FixedVec<Owned, 1>.intoIter(move(values));
+                    var entry = ownedIter.next().unwrap();
+                    if entry.id != 21 || owners != 1 || ownedIter.next() != null { panic("wrong owned traversal"); }
+                }
+                {
+                    var ring = coll.FixedDeque<Owned, 0>();
+                    var first = Owned(raw owners, 23);
+                    switch ring.pushFront(move(first)) {
+                        coll.PushResult.Full(returned) => {
+                            if returned.id != 23 || owners != 2 || ring.len() != 0 { panic("zero capacity"); }
+                        },
+                        _ => panic("zero capacity should be full"),
+                    }
+                }
+                {
+                    var ring = coll.FixedDeque<Owned, 1>();
+                    switch ring.pushBack(Owned(raw owners, 24)) {
+                        coll.PushResult.Stored => {},
+                        _ => panic("ring push failed"),
+                    }
+                    var ownedIter = coll.FixedDeque<Owned, 1>.intoIter(move(ring));
+                    var entry = ownedIter.nextBack().unwrap();
+                    if entry.id != 24 || owners != 3 || ownedIter.nextBack() != null {
+                        panic("wrong owned ring traversal");
+                    }
+                }
+                if owners != 4 { panic("lost an owning value or dropped it twice"); }
+            }
+        """), [])
+        for kind, operation in (
+            ("FixedVec", "push(item)"), ("FixedVec", "tryPush(item)"),
+            ("FixedVec", "insert(0, item)"), ("FixedVec", "replace(0, item)"),
+            ("FixedVec", "replacePreserving(0, item)"),
+            ("FixedDeque", "pushBack(item)"), ("FixedDeque", "pushFront(item)"),
+            ("FixedDeque", "insert(0, item)"), ("FixedDeque", "replace(0, item)"),
+        ):
+            with self.subTest(container=kind, operation=operation):
+                name = kind + "_" + operation.split("(")[0] + "/main.vqr"
+                source = self.source(name, "import (coll)\n" + setup + f"""
+                    func main() void {{
+                        var drops = 0;
+                        var item = Owned(raw drops, 31);
+                        var value = coll.{kind}<Owned, 1>();
+                        value.{operation};
+                    }}
+                """)
                 diagnostic = self.process(VAQC, "check", source, good=False).stderr
                 self.assertIn(b"move parameter requires move(object) or an owning temporary", diagnostic)
 

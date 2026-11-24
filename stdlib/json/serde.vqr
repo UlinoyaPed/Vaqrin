@@ -67,7 +67,7 @@ pub class JsonDomSerializer {
         if !frames.isEmpty() { return JsonSerdeError.InvalidState; }
         core.Exchange<?Value>.replace(root, null) ?? { return JsonSerdeError.MissingRoot; }
     }
-    func appendValue(value: Value) !void {
+    func appendValue(value: move Value) !void {
         if frames.isEmpty() {
             if root != null { return JsonSerdeError.InvalidState; }
             root = some(move(value));
@@ -97,7 +97,7 @@ pub class JsonDomDeserializer {
     var root: Value;
     var current: ?*const Value;
     var frames: coll.Vec<JsonReadFrame>;
-    pub func init(value: Value)
+    pub func init(value: move Value)
         : root(move(value)), current(null), frames(coll.Vec<JsonReadFrame>()) {
         current = some(raw root);
     }

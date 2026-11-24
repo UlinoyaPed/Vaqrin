@@ -1,3 +1,5 @@
+package settings
+
 import (env, io, parse)
 
 pub error SettingsError { MissingCertificate, MissingPrivateKey }

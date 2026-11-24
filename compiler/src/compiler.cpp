@@ -276,14 +276,14 @@ Type *Program::aggregate(Kind kind, std::vector<Type *> parts, std::uint64_t cou
 }
 
 std::string Program::import(const File &file, std::string_view name) {
-  return inputs.qualifier(file, name, file.span);
+  return inputs.qualifier(file, name);
 }
 
 std::vector<Definition> Program::resolve(const File &f, std::string_view name, Span span) {
   auto dot = name.find('.');
   auto symbol = dot == name.npos ? name : name.substr(dot + 1);
   if (symbol == "main" && dot != name.npos) return {};
-  auto package = dot == name.npos ? inputs.scope(f, name, span) : inputs.qualifier(f, name.substr(0, dot), span);
+  auto package = dot == name.npos ? inputs.scope(f, name, span) : inputs.qualifier(f, name.substr(0, dot));
   indexFiles();
   if (package.empty()) return {};
   auto id = package + (symbol == "main" ? ":" + f.identity : "") + "." + std::string(symbol);
@@ -291,7 +291,7 @@ std::vector<Definition> Program::resolve(const File &f, std::string_view name, S
   if (i == definitions.end()) return {};
   auto out = i->second;
   if (package != f.module) {
-    std::erase_if(out, [&](auto d) { return !d.decl->visible && !inputs.directoryVisible(f, *d.file); });
+    std::erase_if(out, [&](auto d) { return !d.decl->visible; });
     if (out.empty()) fail(span, "declaration '" + std::string(name) + "' is private");
   }
   return out;

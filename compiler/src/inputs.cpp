@@ -489,7 +489,6 @@ Inputs::Outline &Inputs::outline(const Path &path, Span span) {
   std::ifstream input(contents, std::ios::binary);
   if (!input) fail(span, "cannot read " + path.string(), "E301");
   out.source = {path.string(), std::string(std::istreambuf_iterator<char>{input}, {})};
-  out.stem = identifier(path.stem().string());
   // Standard modules have no hosted entry. A cached parse tree also
   // supplies their declaration index without lexing the source again.
   if (replacement == overlays.end() && !standardRoot.empty() &&
@@ -576,14 +575,6 @@ File &Inputs::activate(const Path &path, Span span) {
                           : dependencyIdentity(path);
   if (f.anonymous) {
     f.module = "@" + f.identity;
-    if (!record.stem.empty()) {
-      auto [it, fresh] = normalizedStems.emplace(std::pair{path.parent_path(), record.stem}, path);
-      if (!fresh && it->second != path)
-        fail(f.span,
-             pathsMessage("anonymous file names have the same normalized identifier",
-                          std::vector{it->second, path}),
-             "E301");
-    }
   } else {
     f.module = f.package;
     if (!f.standard && path.parent_path() != project)
@@ -616,15 +607,9 @@ bool Inputs::lockedDirectory(const Path &directory) const {
 }
 
 std::string Inputs::resolveImport(const Path &dir, const Import &item) {
-  if (item.filePath) {
-    fileProbes.insert(dir / item.path);
-    auto path = fs::weakly_canonical(dir / item.path);
-    if (lockedDirectory(dir) && !lockedSources.contains(path))
-      fail(item.span, "file import in a path dependency must resolve to a locked source", "E301");
-    if (!outline(path, item.span).package.empty())
-      fail(item.span, "named packages require a logical import", "E301");
-    return activate(path, item.span).module;
-  }
+  // Do not resolve a path even if an older on-disk parser cache encoded one.
+  if (item.filePath)
+    fail(item.span, "file imports are not supported; use a logical package import", "E110");
   auto logical = item.path.starts_with("std/") ? item.path.substr(4) : item.path;
   auto leaf = fs::path(logical).filename().string();
   Path directory;
@@ -661,24 +646,10 @@ std::string Inputs::resolveImport(const Path &dir, const Import &item) {
   return module;
 }
 
-bool Inputs::directoryVisible(const File &a, const File &b) const {
-  return a.anonymous && b.anonymous &&
-         Path(a.span.source->path).parent_path() == Path(b.span.source->path).parent_path();
-}
-
-std::string Inputs::qualifier(const File &file, std::string_view alias, Span span) {
+std::string Inputs::qualifier(const File &file, std::string_view alias) const {
   for (const auto &item : file.imports)
     if (item.alias == alias) return item.path;
-  if (!file.anonymous) return {};
-  std::vector<Path> candidates;
-  for (const auto &path : siblings(Path(file.span.source->path).parent_path())) {
-    auto &o = outline(path, span);
-    if (o.package.empty() && o.stem == alias && o.file != &file) candidates.push_back(path);
-  }
-  if (candidates.size() > 1)
-    fail(span, pathsMessage("ambiguous file qualifier '" + std::string(alias) + "'", candidates));
-  if (candidates.empty()) return {};
-  return activate(candidates.front(), span).module;
+  return {};
 }
 
 const Inputs::DirectoryNames &Inputs::namesIn(const Path &directory, Span span) {
@@ -694,16 +665,12 @@ const Inputs::DirectoryNames &Inputs::namesIn(const Path &directory, Span span) 
 }
 
 std::string Inputs::scope(const File &file, std::string_view name, Span span) {
-  if (name == "main") return file.module;
+  if (file.anonymous || name == "main") return file.module;
   Path current(file.span.source->path);
   auto &self = outlines.at(current);
-  if (file.anonymous && self.names.contains(name)) return file.module;
   const auto &names = namesIn(current.parent_path(), span);
   auto candidates = names.find({self.package, name});
   if (candidates == names.end()) return file.module;
-  if (file.anonymous && candidates->second.size() > 1)
-    fail(span, pathsMessage("ambiguous declaration '" + std::string(name) + "'; qualify with a file alias",
-                            candidates->second));
   std::string scope = file.module;
   for (const auto &p : candidates->second)
     if (p != current) scope = activate(p, span).module;
@@ -736,42 +703,31 @@ void Inputs::load(const std::vector<Path> &inputs, const std::vector<Path> &pack
   std::optional<Path> selected;
   std::optional<std::string> entryPackage;
   if (directory) {
-    auto config = entry.empty() && hostedExecutable ? readManifest(project, true).entry : std::optional<Path>{};
-    auto relative = entry.empty() ? config.value_or(Path{}) : entry;
-    auto selector = relative.string();
-    if (auto separator = selector.find("::"); separator != std::string::npos) {
-      auto name = selector.substr(0, separator);
-      if (name.empty() || selector.substr(separator) != "::main" || identifier(name) != name)
-        fail({}, "entry must use the form package::main", "E301");
-      entryPackage = std::move(name);
+    const auto config = entry.empty() && hostedExecutable ? readManifest(project, true).entry : std::optional<Path>{};
+    const auto selector = entry.empty() ? config.value_or(Path{}).string() : entry.string();
+    if (!selector.empty()) {
+      const auto separator = selector.find("::");
+      const auto name = selector.substr(0, separator);
+      if (separator == std::string::npos || name.empty() ||
+          selector.substr(separator) != "::main" || identifier(name) != name)
+        fail({}, "directory entry must use the form package::main", "E301");
+      entryPackage = name;
     }
-    if (!relative.empty() && !entryPackage) {
-      auto path = fs::weakly_canonical(project / relative);
-      auto within = path.lexically_relative(project);
-      if (relative.is_absolute() || within.empty() || *within.begin() == "..")
-        fail({}, "entry must be relative to and inside the project root", "E301");
-      selected = path;
-      paths.insert(path);
-    } else {
-      for (fs::recursive_directory_iterator it(project), end; it != end; ++it) {
-        if (it->is_directory() &&
-            (ignored(it->path()) || std::ranges::any_of(pathDependencies, [&](const auto &dependency) {
-              return dependency.second == it->path();
-            }))) it.disable_recursion_pending();
-        if (it->path().extension() == ".vqr" && it->is_regular_file())
-          paths.insert(fs::canonical(it->path()));
-      }
+    for (fs::recursive_directory_iterator it(project), end; it != end; ++it) {
+      if (it->is_directory() &&
+          (ignored(it->path()) || std::ranges::any_of(pathDependencies, [&](const auto &dependency) {
+            return dependency.second == it->path();
+          }))) it.disable_recursion_pending();
+      if (it->path().extension() == ".vqr" && it->is_regular_file())
+        paths.insert(fs::canonical(it->path()));
     }
   } else {
-    for (auto &p : inputs)
+    if (!entry.empty()) fail({}, "--entry requires a directory build and package::main", "E301");
+    for (const auto &p : inputs)
       paths.insert(fs::weakly_canonical(fs::absolute(p)));
-    if (!entry.empty()) {
-      selected = fs::weakly_canonical(entry);
-      if (!paths.contains(*selected)) fail({}, "--entry must name an explicitly listed source", "E301");
-    }
   }
   if (paths.empty()) fail({}, "no .vqr source files found", "E301");
-  if (!selected && (hostedExecutable || entryPackage)) {
+  if (hostedExecutable || entryPackage) {
     std::vector<Path> candidates, malformed;
     for (auto &path : paths) {
       auto &o = outline(path, {});
@@ -787,7 +743,7 @@ void Inputs::load(const std::vector<Path> &inputs, const std::vector<Path> &pack
            pathsMessage(entryPackage ? (candidates.empty() ? "no main in package " : "multiple main files in package ") +
                                            *entryPackage
                                      : candidates.empty() ? "no main in the selected sources"
-                                                          : "multiple entry files; specify --entry",
+                                                          : "multiple entry files; specify --entry package::main",
                         candidates),
            "E301");
     selected = candidates.front();

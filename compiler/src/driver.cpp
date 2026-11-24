@@ -109,7 +109,6 @@ void help() {
                "  --features FEATURES     Target feature string\n"
                "  --profile PROFILE       hosted or freestanding\n"
                "  --entry PACKAGE::main   Select a named package entry in a directory build\n"
-               "  --entry FILE            Select a file-local main\n"
                "  --overlay FILE          Read replacement contents for one .vqr in check mode\n"
                "  --overlay-map FILE      Read a JSON object mapping source paths to replacement files\n"
                "  --syntax-only          Check syntax without imports or types; '-' reads stdin\n"

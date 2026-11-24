@@ -1,5 +1,5 @@
 package main
-import ("../settings.vqr" as settings, fmt, grpc, io, pb_example as generated, text)
+import (settings, fmt, grpc, io, pb_example as generated, text)
 
 error GreeterError { RpcFailed, MissingReply }
 

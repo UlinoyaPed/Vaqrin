@@ -1,5 +1,5 @@
 package main
-import ("../settings.vqr" as settings, grpc, io, net, pb_example as generated, text, tls)
+import (settings, grpc, io, net, pb_example as generated, text, tls)
 
 class Greeter {
     #implements: generated.GreeterService

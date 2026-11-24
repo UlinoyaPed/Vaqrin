@@ -21,9 +21,8 @@ public:
   void writeLock(const Path &directory);
   void load(const std::vector<Path> &inputs, const std::vector<Path> &packagePaths, const Path &entry,
             bool hostedExecutable);
-  std::string qualifier(const File &file, std::string_view alias, Span span);
+  std::string qualifier(const File &file, std::string_view alias) const;
   std::string scope(const File &file, std::string_view symbol, Span span);
-  bool directoryVisible(const File &a, const File &b) const;
   Path taskRuntimeSource() const { return runtimeRoot / "tasks.c"; }
   Path ioRuntimeSource() const { return runtimeRoot / "io_posix.cpp"; }
   Path processRuntimeSource() const { return runtimeRoot / "process_posix.cpp"; }
@@ -39,7 +38,7 @@ public:
 private:
   struct Outline {
     Source source;
-    std::string package, stem;
+    std::string package;
     std::set<std::string, std::less<>> names;
     unsigned mainCount = 0;
     bool entrySignature = false, exported = false;
@@ -66,7 +65,6 @@ private:
   const DirectoryNames &namesIn(const Path &directory, Span span);
   std::set<Path> importing;
   std::map<std::string, Path> identities;
-  std::map<std::pair<Path, std::string>, Path> normalizedStems;
   Outline &outline(const Path &path, Span span);
   const std::vector<Path> &siblings(const Path &dir);
   File &activate(const Path &path, Span span);

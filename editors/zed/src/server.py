@@ -31,7 +31,7 @@ IDENT = r"[^\W\d]\w*"
 MASK = re.compile(r'''//[^\n]*|/\*[\s\S]*?(?:\*/|\Z)|"(?:\\.|[^"\\\r\n])*"?|'(?:\\.|[^'\\\r\n])*'?''')
 IMPORT = re.compile(r"\bimport\s*\(([^)]*)\)", re.S)
 IMPORT_START = re.compile(r"\bimport\s*\(")
-IMPORT_ITEM = re.compile(rf'\s*(?:"([^"\n]+)"|({IDENT}(?:\s*/\s*{IDENT})*))(?:\s+as\s+({IDENT}))?\s*')
+IMPORT_ITEM = re.compile(rf"\s*({IDENT}(?:\s*/\s*{IDENT})*)(?:\s+as\s+({IDENT}))?\s*")
 PACKAGE = re.compile(rf"\s*package\s+({IDENT})")
 ERROR = re.compile(r"^(.*):(\d+):(\d+): error\[([^]]+)\]: (.+(?:\n  candidate [^\n]+)*)$", re.M)
 GLOBAL_ERROR = re.compile(r"^vaqc: error\[([^]]+)\]: (.+)$", re.M)
@@ -53,13 +53,12 @@ def import_items(model):
         for part in re.finditer(r"[^,]+", group[1]):
             item = import_text(model.text[start + part.start():start + part.end()])
             if match := IMPORT_ITEM.fullmatch(item):
-                filename, name, alias = match.groups()
-                if name:
-                    name = re.sub(r"\s+", "", name)
-                default = Path(filename).stem if filename else name.rsplit("/", 1)[-1]
+                name, alias = match.groups()
+                name = re.sub(r"\s+", "", name)
+                default = name.rsplit("/", 1)[-1]
                 if alias or (re.fullmatch(IDENT, default) and default != "_"
                              and (default not in KEYWORDS or default == "ref")):
-                    yield filename, name, alias or default
+                    yield name, alias or default
 
 
 def matching_delimiter(code, start, left, right):
@@ -444,49 +443,33 @@ class Server:
         return sorted(paths)
 
     def imports(self, model):
-        for filename, name, alias in import_items(model):
-            if filename:
-                target = (model.file.parent / filename).resolve()
-                if target.is_file() or target.as_uri() in self.documents:
-                    yield alias, [target]
-            else:
-                logical = name.removeprefix("std/")
-                folders = [root / logical for root in self.standard_roots()]
-                if not name.startswith("std/"):
-                    project = self.project_root(model.file)
-                    if dependency := self.local_dependencies(project).get(logical):
-                        folders.append(dependency)
-                    folders.extend(root / logical for root in (project, project.parent, model.file.parent))
-                for folder in dict.fromkeys(folders):
-                    if folder.is_dir():
-                        paths = sorted({path.resolve() for path in self.source_paths(folder.resolve())})
-                        if paths:
-                            yield alias, paths
-                        break
+        for name, alias in import_items(model):
+            logical = name.removeprefix("std/")
+            package = logical.rsplit("/", 1)[-1]
+            folders = [root / logical for root in self.standard_roots()]
+            if not name.startswith("std/"):
+                project = self.project_root(model.file)
+                if dependency := self.local_dependencies(project).get(logical):
+                    folders.append(dependency)
+                folders.extend(root / logical for root in (project, project.parent, model.file.parent))
+            for folder in dict.fromkeys(folders):
+                if folder.is_dir():
+                    results = []
+                    for path in self.source_paths(folder.resolve()):
+                        try:
+                            header = PACKAGE.match(self.source_index(path).code)
+                        except (OSError, UnicodeError):
+                            continue
+                        if header and header[1] == package:
+                            results.append(path.resolve())
+                    if results:
+                        yield alias, sorted(set(results))
+                    break
 
     def complete_import(self, model, offset, start):
         prefix = model.code[start:offset]
         start += prefix.rfind(",") + 1
         item = import_text(model.text[start:offset]).lstrip()
-        if item.startswith('"') and item.count('"') == 1:
-            path = Path(item[1:])
-            if path.is_absolute() or "\n" in item or "\\" in item:
-                return []
-            parent, _, leaf = item[1:].rpartition("/")
-            folder = (model.file.parent / parent).resolve()
-            tail = re.match(r'([^"\r\n]*)"', model.text[offset:])
-            end = offset + len(tail[1]) if tail else offset
-            closed = tail is not None
-            edit_range = {"start": offset_position(model.text, offset - len(leaf)),
-                          "end": offset_position(model.text, end)}
-            choices = {(p.name, 17) for p in self.source_paths(folder) if p.resolve() != model.file}
-            if folder.is_dir():
-                choices.update((p.name + "/", 19) for p in folder.iterdir()
-                               if p.is_dir() and not p.name.startswith("."))
-            return [{"label": name, "kind": kind, "textEdit": {
-                "range": edit_range, "newText": name + ('"' if kind == 17 and not closed else "")}}
-                    for name, kind in sorted(choices) if name.startswith(leaf) and not re.search(r'["\\\r\n]', name)]
-
         if not re.fullmatch(rf"(?:(?:{IDENT}/)*\w*)", item):
             return []
         parent, _, leaf = item.rpartition("/")
@@ -503,14 +486,7 @@ class Server:
             if folder.is_dir():
                 names.update(p.name for p in folder.iterdir() if p.is_dir() and p.name.startswith(leaf)
                              and re.fullmatch(IDENT, p.name) and any(p.glob("*.vqr")))
-        results = [{"label": name, "kind": 9} for name in sorted(names)]
-        if "/" not in item:
-            for path in self.source_paths(model.file.parent):
-                if path.resolve() == model.file or not path.name.startswith(leaf) or re.search(r'["\\\r\n]', path.name):
-                    continue
-                quoted = '"' + path.name + '"'
-                results.append({"label": quoted, "filterText": path.name, "insertText": quoted, "kind": 17})
-        return results
+        return [{"label": name, "kind": 9} for name in sorted(names)]
 
     def symbols_in(self, paths):
         for path in paths:
@@ -526,8 +502,10 @@ class Server:
 
     def local_symbols(self, model, offset):
         header = PACKAGE.match(model.code)
-        package = header[1] if header else None
         visible = model.visible(offset)
+        if not header:
+            return visible
+        package = header[1]
         for symbol in self.symbols_in(p for p in model.file.parent.glob("*.vqr") if p != model.file):
             if symbol.owner or (symbol.scope and symbol.kind not in DECLARED_TYPES):
                 continue
@@ -969,7 +947,7 @@ class Server:
         else:
             entries.update({name: 14 for name in (*KEYWORDS, *CONTEXTUAL_KEYWORDS)})
             entries.update({name: 7 for name in TYPES})
-            entries.update({alias: 9 for _, _, alias in import_items(model)})
+            entries.update({alias: 9 for _, alias in import_items(model)})
             candidates = self.local_symbols(model, offset)
         items = {name: {"label": name, "kind": kind} for name, kind in entries.items()}
         for symbol in reversed(candidates):

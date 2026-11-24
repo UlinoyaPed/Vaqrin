@@ -52,7 +52,7 @@ printf '1 -2 43\n' | ./build/examples/stdin
 
 ## 多文件项目
 
-- [本地导入](projects/local_import/) 用 `package.toml` 指定入口，再通过文件别名调用另一个文件的公开函数。输出 `42`。
+- [本地导入](projects/local_import/) 用 `package.toml` 指定 `local_import::main`，再按逻辑包名导入 `report` 的公开函数。输出 `42`。
 - [gRPC Greeter](projects/grpc/README.md) 包含服务端、客户端、Protobuf 定义及生成的 Vaqrin 绑定。按项目说明生成 TLS 证书，再启动服务端和客户端。客户端输出 `Hello, Vaqrin`。
 
 ## 算法题解

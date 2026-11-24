@@ -129,14 +129,16 @@ n
 
     def test_multi_file_overlays_and_compiler_local_symbols(self):
         entry = self.source("app/main.vqr", "func main() void {}")
-        helper = self.root / "app/helper.vqr"
-        content = ("func main() i32 {\n"
+        helper_dir = self.root / "app/helper"
+        helper_dir.mkdir()
+        helper = helper_dir / "body.vqr"
+        content = ("import (helper)\nfunc main() i32 {\n"
                    '    /* 📚 */ var n = helper.read();\n'
                    "    var call = [n]() i32 => n;\n"
                    "    call()\n"
                    "}\n")
         edited = self.source("buffers/main.vqr", content)
-        new_helper = self.source("buffers/helper.vqr", "pub func read() i32 { 42 }")
+        new_helper = self.source("buffers/helper.vqr", "package helper\npub func read() i32 { 42 }")
         overlays = self.source("overlays.json", json.dumps({str(entry): str(edited), str(helper): str(new_helper)}))
         result = self.process(VAQC, "check", "--editor-symbols", "--overlay-map", overlays, entry)
         symbols = json.loads(result.stdout)
@@ -149,10 +151,10 @@ n
         self.assertFalse(helper.exists())
 
     def test_local_import_completion(self):
-        main = self.source("main.vqr", 'import (io, "report.vqr" as report, logic)\n'
+        main = self.source("main.vqr", 'package app\nimport (io, report, logic)\n'
                            'func main() !void { io.println(report.total(10, logic.count()))!; }\n')
-        self.source("report.vqr", "pub func total(first: i32, second: i32) i32 { first + second }\n")
-        self.source("package.toml", '[build]\nentry = "main.vqr"\n[dependencies]\n'
+        self.source("report/functions.vqr", "package report\npub func total(first: i32, second: i32) i32 { first + second }\n")
+        self.source("package.toml", '[build]\nentry = "app::main"\n[dependencies]\n'
                     'logic = { path = "deps/logic-src" }\n')
         self.source("custom/summary.vqr", "package custom\npub func count() i32 { 1 }\n")
         self.source("deps/logic-src/main.vqr", "package logic\npub func count() i32 { 21 }\n")
@@ -169,10 +171,10 @@ n
 
         requests = message("initialize", {}, 0)
         cases = ['import (io, "rep|", custom)',
-                 'import (io, "report.vqr" as report, cus|)',
-                 ('import (io, /* hidden */ "report.vqr" as report)\n'
+                 'import (io, report, cus|)',
+                 ('import (io, /* hidden */ report)\n'
                   'func main() !void {\n  rep|\n}'),
-                 'import (io, "report.vqr" as report)\nfunc main() !void {\n  report.|\n}',
+                 'import (io, report)\nfunc main() !void {\n  report.|\n}',
                  'import (rep|)',
                  'import (log|)',
                  'import (logic)\nfunc f() void { logic.| }']
@@ -199,12 +201,11 @@ n
             if "id" in reply:
                 self.assertNotIn("error", reply)
                 replies[reply["id"]] = reply["result"]
-        files = {item["label"]: item for item in replies[1]}
-        self.assertEqual(files["report.vqr"]["textEdit"]["newText"], "report.vqr")
+        self.assertEqual(replies[1], [])
         self.assertEqual(replies[2], [{"label": "custom", "kind": 9}])
         self.assertIn({"label": "report", "kind": 9}, replies[3])
         self.assertEqual([item["label"] for item in replies[4]], ["total"])
-        self.assertEqual(replies[5][0]["insertText"], '"report.vqr"')
+        self.assertEqual(replies[5], [{"label": "report", "kind": 9}])
         self.assertEqual(replies[6], [{"label": "logic", "kind": 9}])
         self.assertEqual([item["label"] for item in replies[7]], ["count"])
 
@@ -434,41 +435,43 @@ func forward(value: ?i32) !?i32 {
             self.assertIn("unknownName", receive()["params"]["diagnostics"][0]["message"])
             hover = request("hover", position=position(5, "b"))
             self.assertIn("b: i32", hover["contents"]["value"])
-            helper = self.source("helper.vqr", "pub func count() i32 { 4 }\n")
-            source = "func f() i32 { helper.count() }\n"
+            helper = self.source("helper/body.vqr", "package helper\npub func count() i32 { 4 }\n")
+            source = "import (helper)\nfunc f() i32 { helper.count() }\n"
             send("textDocument/didChange", {"textDocument": {"uri": uri, "version": 8},
                                            "contentChanges": [{"text": source}]})
             self.assertEqual(receive()["params"]["diagnostics"], [])
-            found = request("references", position=position(0, "count"),
+            found = request("references", position=position(1, "count"),
                             context={"includeDeclaration": True})
             self.assertEqual({item["uri"] for item in found}, {uri, helper.as_uri()})
-            rename = request("rename", position=position(0, "count"), newName="countItems")
+            rename = request("rename", position=position(1, "count"), newName="countItems")
             self.assertEqual({item["textDocument"]["uri"] for item in rename["documentChanges"]},
                              {uri, helper.as_uri()})
             self.assertTrue(all(item["edits"][0]["newText"] == "countItems"
                                 for item in rename["documentChanges"]))
 
-            helper.write_text("pub class Element { pub var value: i32; }\n", encoding="utf-8")
-            source = "func f() i32 { var x: helper.Element = helper.Element{value: 4}; x.value }\n"
+            helper.write_text("package helper\npub class Element { pub var value: i32; }\n", encoding="utf-8")
+            source = "import (helper)\nfunc f() i32 { var x: helper.Element = helper.Element{value: 4}; x.value }\n"
             send("textDocument/didChange", {"textDocument": {"uri": uri, "version": 9},
                                            "contentChanges": [{"text": source}]})
             self.assertEqual(receive()["params"]["diagnostics"], [])
-            changed = request("rename", position=position(0, "Element"), newName="Value")
+            changed = request("rename", position=position(1, "Element"), newName="Value")
             self.assertEqual({edit["textDocument"]["uri"]: len(edit["edits"])
                               for edit in changed["documentChanges"]}, {uri: 2, helper.as_uri(): 1})
 
-            field = request("rename", position=position(0, "value"), newName="quantity")
+            field = request("rename", position=position(1, "value"), newName="quantity")
             self.assertEqual({edit["textDocument"]["uri"]: len(edit["edits"])
                               for edit in field["documentChanges"]}, {uri: 2, helper.as_uri(): 1})
 
-            helper.write_text("""pub class Boxed<T> {
+            helper.write_text("""package helper
+pub class Boxed<T> {
     pub var size: T;
     pub func init(input: T) : size(input) {}
     pub const func measure() T { size }
 }
 pub class Other { pub var size: i32; }
 """, encoding="utf-8")
-            source = """func f() i32 {
+            source = """import (helper)
+func f() i32 {
     var item = helper.Boxed<i32>(4);
     var maybe = some(item);
     var other = helper.Other{size: 5};
@@ -478,11 +481,11 @@ pub class Other { pub var size: i32; }
             send("textDocument/didChange", {"textDocument": {"uri": uri, "version": 10},
                                            "contentChanges": [{"text": source}]})
             self.assertEqual(receive()["params"]["diagnostics"], [])
-            cursor = position(4, "size")
+            cursor = position(5, "size")
             found = request("references", position=cursor, context={"includeDeclaration": True})
             self.assertEqual({path: [item["range"]["start"]["line"] for item in found
                                      if item["uri"] == path] for path in (uri, helper.as_uri())},
-                             {uri: [4, 4], helper.as_uri(): [1, 2, 3]})
+                             {uri: [5, 5], helper.as_uri(): [2, 3, 4]})
             field = request("rename", position=cursor, newName="capacity")
             self.assertEqual({edit["textDocument"]["uri"]: len(edit["edits"])
                               for edit in field["documentChanges"]}, {uri: 2, helper.as_uri(): 3})

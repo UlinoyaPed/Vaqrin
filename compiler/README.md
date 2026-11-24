@@ -47,9 +47,9 @@ build/host/vaqc build -O2 -g examples/hello.vqr -o build/hello
 `--dependencies` 使用单独的 `.json` 路径，并在清单写完后原子替换文件。POSIX 上，编译器
 仅从当前用户持有且防止其他用户写入的缓存加载语法和编译产物。不可验证的缓存会重新生成对应产物。
 
-文件头可以省略 `package`。`package demo` 和 `import (io)` 的分号可选。目录构建优先采用 `--entry`，其次采用 `package.toml` 的 `[build].entry`，最后递归查找唯一入口。两处设置都支持 `demo::main`，按源文件的 `package demo` 声明选择唯一的 `main`。同名包存在多个入口时会列出候选源文件。文件路径选择仍可用于现有项目和显式源码列表。
+文件头可以省略 `package`。`package demo` 和 `import (io)` 的分号可选。目录构建优先采用 `--entry`，其次采用 `package.toml` 的 `[build].entry`，最后递归查找唯一入口。两处设置都支持 `demo::main`，按源文件的 `package demo` 声明选择唯一的 `main`。同名包存在多个入口时会列出候选源文件。两种配置均只接受包入口。要直接指定入口文件，请把它作为唯一源文件传给 `vaqc build` 或 `vaqc run`。
 
-同目录匿名文件可以直接引用唯一的辅助声明，也可用 `helpers.name` 限定。跨目录使用 `import ("lib/helpers.vqr" as h)` 导入目标的公开声明。有名包通过逻辑包名导入，额外搜索根由 `--package-path DIR` 指定。标准包也支持 `std/` 前缀。参见[标准包说明](../stdlib/README.md)。
+无包名的单文件不会发现同目录其他源文件的声明或文件名别名。同一目录的多文件通过相同的 `package` 声明共享符号。跨包使用 `import (lib/helpers as h)` 按逻辑包路径导入目标的 `pub` 声明。清单的路径依赖仍受锁文件约束，额外搜索根由 `--package-path DIR` 指定。标准包也支持 `std/` 前缀。参见[标准包说明](../stdlib/README.md)。
 
 在 Zed 中打开仓库根目录，`task: spawn` 可启动 `build vaqc`。`run code` 使用已有的编译器运行当前 `.vqr`
 文件，`build vaqc and run` 会先更新编译器。任务首次配置时生成 `build/host/compile_commands.json`，供 clangd 使用。
@@ -80,7 +80,7 @@ build/host/vaqdbg examples/language/ownership.vqr
 
 ```toml
 [build]
-entry = "main.vqr"
+entry = "app::main"
 
 [registry]
 index = "index.json"
@@ -90,6 +90,8 @@ models = { path = "../shared/models" }
 schema = { git = "https://example.org/team/schema.git", rev = "0123456789abcdef0123456789abcdef01234567", path = "vaqrin" }
 offset = { version = "1.2.3" }
 ```
+
+上例的入口源文件声明 `package app`。[build].entry 使用逻辑名，不接受源文件路径。
 
 依赖名是源码的逻辑导入名。本地路径相对于声明该依赖的清单。Git 的 `rev`
 使用完整提交哈希。可用 `path` 选择仓库中的包目录。

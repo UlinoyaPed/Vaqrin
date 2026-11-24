@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <initializer_list>
-#include <filesystem>
 #include <iostream>
 #include <utility>
 
@@ -162,25 +161,14 @@ File Parser::file() {
     list(")", [&] {
       Import item;
       item.span = current().span;
-      if (current().kind == TokenKind::Text) {
-        item.filePath = true;
-        item.path = take().text;
-        std::filesystem::path target(item.path);
-        if (target.is_absolute() || target.extension() != ".vqr" || item.path.find('\0') != item.path.npos)
-          fail(item.span, "file import requires a relative .vqr path", "E110");
-        if (eat("as")) item.alias = name().text;
-        else {
-          item.alias = identifier(target.stem().string());
-          if (item.alias.empty()) fail(item.span, "file import requires an explicit identifier alias", "E110");
-        }
-      } else {
-        item.path = item.alias = name().text;
-        while (eat("/")) {
-          item.alias = name().text;
-          item.path += '/' + item.alias;
-        }
-        if (eat("as")) item.alias = name().text;
+      if (current().kind == TokenKind::Text)
+        fail(item.span, "file imports are not supported; use a logical package import", "E110");
+      item.path = item.alias = name().text;
+      while (eat("/")) {
+        item.alias = name().text;
+        item.path += '/' + item.alias;
       }
+      if (eat("as")) item.alias = name().text;
       f.imports.push_back(std::move(item));
     });
     eat(";");

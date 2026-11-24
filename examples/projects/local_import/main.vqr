@@ -1,4 +1,5 @@
-import (io, "report.vqr" as report)
+package local_import
+import (io, report)
 
 func main() !void {
     io.println(report.total(20, 22))!;

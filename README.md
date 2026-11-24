@@ -31,10 +31,11 @@ build/host/vaqc build examples/hello.vqr -o build/hello
 ### 项目依赖
 
 在项目目录的 `package.toml` 中声明依赖。依赖目录须含声明了对应包名的 `.vqr` 源文件，也可在自己的 `package.toml` 中声明传递依赖。
+下例的入口源文件声明 `package app`；依赖通过 `import (models)` 导入。
 
 ```toml
 [build]
-entry = "main.vqr"
+entry = "app::main"
 
 [dependencies]
 models = { path = "../shared/models" }

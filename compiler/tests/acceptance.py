@@ -448,8 +448,8 @@ class Acceptance(CompilerCase):
             self.assertEqual(len(list(cache.glob("*.table"))), 4)
 
     def test_optimized_module_cache_reuses_verified_bitcode(self):
-        helper = self.source("math_data.vqr", "pub func square() i32 { 42 }")
-        source = self.source("main.vqr", "func main() i32 { math_data.square() }")
+        helper = self.source("math_data/values.vqr", "package math_data\npub func square() i32 { 42 }")
+        source = self.source("main.vqr", "import (math_data)\nfunc main() i32 { math_data.square() }")
         cache = self.root / "artifacts"
         with patch.dict(os.environ, VAQRIN_MODULE_CACHE=str(cache)):
             def build(expected, hit=False, level="-O2"):
@@ -472,7 +472,7 @@ class Acceptance(CompilerCase):
             build(42, hit=True)
             build(42, level="-O1")
 
-            helper.write_text("pub func square() i32 { 19 }", encoding="utf-8")
+            helper.write_text("package math_data\npub func square() i32 { 19 }", encoding="utf-8")
             build(19)
             self.assertEqual(len(list(cache.glob("*.bc"))), 3)
 
@@ -591,10 +591,10 @@ class Acceptance(CompilerCase):
         indexed = repository("index-source", "offset", 2)
         project = self.root / "offline"
         entry = self.source("offline/main.vqr",
-                            "import (model, offset)\nfunc main() i32 { model.number() + offset.number() - 42 }")
+                            "package offline\nimport (model, offset)\nfunc main() i32 { model.number() + offset.number() - 42 }")
         self.source("offline/package.toml", f"""
             [build]
-            entry = "main.vqr"
+            entry = "offline::main"
             [registry]
             index = "index.json"
             [dependencies]
@@ -632,9 +632,9 @@ class Acceptance(CompilerCase):
 
     def test_local_path_dependencies_and_lock(self):
         project = self.root / "app"
-        self.source("app/package.toml", '[build]\nentry = "main.vqr"\n'
+        self.source("app/package.toml", '[build]\nentry = "app::main"\n'
                     '[dependencies]\nmodels = { path = "../model-files" }\n')
-        main = self.source("app/main.vqr", "import (models)\nfunc main() i32 { models.answer() - 42 }")
+        main = self.source("app/main.vqr", "package app\nimport (models)\nfunc main() i32 { models.answer() - 42 }")
         self.source("model-files/package.toml", "[dependencies]\nbase = { path = '../base-files' }\n")
         self.source("model-files/models.vqr",
                     "package models\nimport (base)\npub func answer() i32 { base.answer() }")
@@ -1368,53 +1368,48 @@ class Acceptance(CompilerCase):
         self.process("arm-none-eabi-objcopy", "-O", "binary", "firmware.elf", "firmware.bin")
         self.assertGreater((self.root / "firmware.bin").stat().st_size, 236)
 
-    def test_file_entries_and_discovery(self):
-        a = self.source("a.vqr", "func main() i32 { twice(solve()) } func solve() i32 { 5 }")
-        b = self.source("b.vqr", "func main() !i32 { 22 } func solve() i32 { 99 }")
-        self.source("helpers.vqr", "func twice(n: i32) i32 { n * 2 }")
-        self.source("unfinished.vqr", "func unfinished() i32 { @; }")
+    def test_v020_explicit_files_do_not_discover_anonymous_siblings(self):
+        program = self.source("program.vqr", "func main() i32 { 13 }")
+        helper = self.source("helpers.vqr", "pub func twice(n: i32) i32 { n * 2 }")
+        other = self.source("other.vqr", "func main() i32 { 22 }")
         self.source("build/ignored.vqr", "func main() void {}")
-        def status(code, *inputs):
-            self.process(VAQC, "build", *inputs, "-o", "app")
-            self.assertEqual(self.process("./app", good=code == 0).returncode, code)
-            symbols = self.process("llvm-nm", "--defined-only", "app").stdout.splitlines()
-            self.assertEqual(sum(line.endswith(b" T main") for line in symbols), 1)
-        status(10, a)
-        status(22, b)
-        error = self.process(VAQC, self.root, good=False).stderr
-        for filename in (b"a.vqr", b"b.vqr"):
-            self.assertIn(filename, error)
-        self.assertNotIn(b"ignored.vqr", error)
-        self.source("package.toml", "[package]\nname = 'test'\n[build]\nentry = 'a.vqr' # default\n")
-        status(10, self.root)
-        status(22, self.root, "--entry", "b.vqr")
-        status(22, a, b, "--entry", b)
-        self.assertIn(b"explicitly listed", self.process(VAQC, a, "--entry", b, good=False).stderr)
-        self.assertIn(b"inside", self.process(VAQC, self.root, "--entry", "../outside.vqr", good=False).stderr)
-        c = self.source("c.vqr", "func main() i32 { solve() }")
-        self.assertIn(b"ambiguous declaration", self.process(VAQC, c, good=False).stderr)
-        c.write_text("func main() i32 { b.solve() }")
-        status(99, c)
-        a.write_text("package demo func main() i32 { shared() }")
-        b.write_text("package demo func shared() i32 { 17 } func main() void {}")
-        status(17, a)
-        status(17, a, b, "--entry", a)
-        c.write_text("func main() i32 { shared() }")
-        self.assertIn(b"shared", self.process(VAQC, c, good=False).stderr)
+        self.assertEqual(self.process(VAQC, "run", program, good=False).returncode, 13)
+        result = self.process(VAQC, "build", self.root, good=False)
+        for filename in (b"program.vqr", b"other.vqr"):
+            self.assertIn(filename, result.stderr)
+        self.assertNotIn(b"ignored.vqr", result.stderr)
+        self.assertIn(b"directory build and package::main",
+                      self.process(VAQC, "build", program, other, "--entry", other, good=False).stderr)
+        for expr in ("twice(5)", "helpers.twice(5)"):
+            with self.subTest(expr=expr):
+                program.write_text(f"func main() i32 {{ {expr} }}", encoding="utf-8")
+                self.process(VAQC, "check", program, good=False)
+                self.process(VAQC, "check", program, helper, good=False)
+
+        program.write_text("package demo; func main() i32 { twice(5) }", encoding="utf-8")
+        helper.write_text("package demo; func twice(n: i32) i32 { n * 2 }", encoding="utf-8")
+        self.assertEqual(self.process(VAQC, "run", program, good=False).returncode, 10)
+        program.write_text("package demo; func main() i32 { helpers.twice(5) }", encoding="utf-8")
+        self.process(VAQC, "check", program, good=False)
 
     def test_v020_named_package_entry(self):
-        self.source("a/main.vqr", "package alpha; func main() i32 { 13 }")
+        self.source("a/main.vqr", "package alpha; func main() i32 { answer() }")
+        self.source("a/shared.vqr", "package alpha; func answer() i32 { 13 }")
         self.source("b/main.vqr", "package beta; func main() i32 { 27 }")
         self.process(VAQC, "build", self.root, "--entry", "beta::main", "-o", "app")
         self.assertEqual(self.process("./app", good=False).returncode, 27)
         self.source("package.toml", "[package]\nname = 'project'\n[build]\nentry = 'alpha::main'\n")
         self.process(VAQC, "build", self.root, "-o", "app")
         self.assertEqual(self.process("./app", good=False).returncode, 13)
+        self.assertIn(b"package::main", self.process(
+            VAQC, "build", self.root, "--entry", "a/main.vqr", good=False).stderr)
         missing = self.process(VAQC, "build", self.root, "--entry", "missing::main", good=False)
         self.assertIn(b"no main in package missing", missing.stderr)
         self.source("a/second.vqr", "package alpha; func main() void {}")
         duplicate = self.process(VAQC, "build", self.root, "--entry", "alpha::main", good=False)
         self.assertIn(b"multiple main files in package alpha", duplicate.stderr)
+        self.source("package.toml", "[build]\nentry = 'a/main.vqr'\n")
+        self.assertIn(b"package::main", self.process(VAQC, "build", self.root, good=False).stderr)
 
     def test_v020_removed_access_and_borrow_syntax(self):
         for code, diagnostic in (
@@ -1429,23 +1424,27 @@ class Acceptance(CompilerCase):
                 source = self.source("removed.vqr", code)
                 self.assertIn(diagnostic, self.process(VAQC, "check", "--syntax-only", source, good=False).stderr)
 
-    def test_file_imports_and_recursive_entry(self):
-        entry = self.source("src/root.vqr", 'import ("lib/helper-tools.vqr" as h, "lib/./helper-tools.vqr" as j) '
+    def test_v020_logical_imports_and_same_package_recursion(self):
+        entry = self.source("src/root.vqr",
+                            "package src; import (src/lib/helpers as h, src/lib/helpers as j) "
                             "func main() i32 { h.answer() + j.answer() }")
-        dep = self.source("src/lib/helper-tools.vqr", "pub func answer() i32 { secret() } func secret() i32 { 3 }")
-        self.process(VAQC, self.root, "-o", "app")
+        dep = self.source("src/lib/helpers/helper-tools.vqr",
+                          "package helpers; pub func answer() i32 { secret() } func secret() i32 { 3 }")
+        self.process(VAQC, "build", self.root, "-o", "app")
         self.assertEqual(self.process("./app", good=False).returncode, 6)
-        entry.write_text('import ("lib/helper-tools.vqr" as h) func main() i32 { h.secret() }')
-        self.assertIn(b"private", self.process(VAQC, entry, good=False).stderr)
-        dep.write_text("package demo pub func secret() i32 { 3 }")
-        self.assertIn(b"logical import", self.process(VAQC, entry, good=False).stderr)
-        dep.write_text('import ("../root.vqr" as root) pub func secret() i32 { 3 }')
-        self.assertIn(b"cyclic", self.process(VAQC, entry, good=False).stderr)
-        entry.write_text("func main() i32 { even(4) }")
-        self.source("src/e.vqr", "func even(n: i32) i32 { if (n == 0) 1 else odd(n-1) }")
-        self.source("src/o.vqr", "func odd(n: i32) i32 { if (n == 0) 0 else even(n-1) }")
-        self.process(VAQC, entry, "-o", "app")
-        self.assertEqual(self.process("./app", good=False).returncode, 1)
+        entry.write_text("package src; import (src/lib/helpers as h) func main() i32 { h.secret() }")
+        self.assertIn(b"private", self.process(VAQC, "check", entry, good=False).stderr)
+        entry.write_text('import ("lib/helpers/helper-tools.vqr" as h) func main() i32 { h.answer() }')
+        for flags in (("check",), ("check", "--syntax-only"), ("fmt", "--check")):
+            result = self.process(VAQC, *flags, entry, good=False)
+            self.assertIn(b"use a logical package import", result.stderr)
+        entry.write_text("package src; import (src/lib/helpers as h) func main() i32 { h.secret() }")
+        dep.write_text("package helpers; import (src) pub func secret() i32 { 3 }")
+        self.assertIn(b"cyclic", self.process(VAQC, "check", entry, good=False).stderr)
+        entry.write_text("package src; func main() i32 { even(4) }")
+        self.source("src/e.vqr", "package src; func even(n: i32) i32 { if (n == 0) 1 else odd(n-1) }")
+        self.source("src/o.vqr", "package src; func odd(n: i32) i32 { if (n == 0) 0 else even(n-1) }")
+        self.assertEqual(self.process(VAQC, "run", entry, good=False).returncode, 1)
 
     def test_module_identity_and_unused_code(self):
         self.source("a/utils/one.vqr", "package utils pub func value() i32 { 1 }")
@@ -2694,14 +2693,15 @@ class Acceptance(CompilerCase):
         self.assertRegex(assembly, r"\bisb\b")
 
     def test_nested_explicit_generic_results_drive_outer_inference(self):
-        self.source("types.vqr", """
+        self.source("types/helpers.vqr", """
+            package types
             pub func identity<T>(value: T) T { value }
             pub class Passthrough {
                 pub const func call<T>(value: T) T { value }
             }
         """)
         self.hosted(r"""
-            import ("types.vqr" as source)
+            import (types as source)
             func wrap<T>(value: T) T { value }
             func check<T>(value: T) T {
                 var instance = source.Passthrough{};
@@ -4190,20 +4190,11 @@ class Acceptance(CompilerCase):
             self.process(VAQC, "build", source, "-o", "standalone")
             self.assertEqual(self.process("./standalone").stdout.decode().strip(), expected)
 
-        section = spec.split("## 附录 D", 1)[1].split("## 附录 E", 1)[0]
-        helper, hello, sort = blocks(section)
-        self.source("scratch/helpers.vqr", helper)
-        hello_file = self.source("scratch/hello.vqr", hello)
-        self.source("scratch/sort.vqr", sort)
-        self.process(VAQC, "build", hello_file, "-o", "example")
+        # The v0.1.5 appendix illustrates legacy anonymous/file-path project syntax.
+        # Exercise the migrated shipped package layout instead.
+        project = REPOSITORY / "examples/projects/local_import"
+        self.process(VAQC, "build", project, "-o", "example")
         self.assertEqual(self.process("./example").stdout, b"42\n")
-        self.assertIn(b"multiple entry files", self.process(VAQC, "build", "scratch", good=False).stderr)
-        manifest, = re.findall(r"```toml\n(.*?)```", section, flags=re.S)
-        self.source("scratch/package.toml", manifest)
-        self.process(VAQC, "build", "scratch", "-o", "example")
-        self.assertEqual(self.process("./example").stdout, b"42\n")
-        self.process(VAQC, "build", "scratch", "--entry", "sort.vqr", "-o", "example")
-        self.assertEqual(self.process("./example").stdout, b"sort demo\n")
 
     def test_spec_task_example(self):
         spec = (REPOSITORY / "docs/language-spec-v0.1.5.md").read_text(encoding="utf-8")

@@ -10,6 +10,65 @@ class ContainerAcceptance(CompilerCase):
         self.process(VAQC, "build", entry, "-O2", "-o", "containers")
         return self.process("./containers").stdout.decode().splitlines()
 
+    def test_manual_storage_ownership_modes(self):
+        definitions = """
+            class Counted {
+                #copy: enable
+                pub var id: i32;
+                pub func init(id: i32) : id(id) {}
+                pub const func copy() Counted {
+                    io.println(100 + id) catch {};
+                    Counted(id)
+                }
+                func deinit() void { io.println(id) catch {}; }
+            }
+            class Owned {
+                #copy: disabled
+                pub var id: i32;
+                pub func init(id: i32) : id(id) {}
+                func deinit() void { io.println(id) catch {}; }
+            }
+        """
+        output = self.run_container(definitions + """
+            func main() !void {
+                var input = Counted(1);
+                var slot = mem.MaybeUninit<Counted>.uninit();
+                unsafe {
+                    var stored = slot.write(input);
+                    if stored.id != 1 { panic("wrong copied payload"); }
+                    slot.assumeInitDrop();
+                }
+                var copy = mem.ManuallyDrop<Counted>.new(input);
+                if input.id != 1 { panic("copy failed to preserve the source"); }
+                var extracted = mem.ManuallyDrop<Counted>.intoInner(move(copy));
+
+                var owner = Owned(2);
+                var vacant = mem.MaybeUninit<Owned>.uninit();
+                unsafe {
+                    vacant.write(move(owner));
+                    vacant.assumeInitDrop();
+                }
+                var manual = mem.ManuallyDrop<Owned>.new(Owned(3));
+                var transferred = mem.ManuallyDrop<Owned>.intoInner(move(manual));
+                if extracted.id != 1 || transferred.id != 3 { panic("wrong transfer"); }
+            }
+        """)
+        self.assertEqual(sorted(map(int, output)), [1, 1, 1, 2, 3, 101, 101])
+        for operation in (
+            "unsafe { slot.write(owner); }",
+            "var manual = mem.ManuallyDrop<Owned>.new(owner);",
+            "var value = mem.ManuallyDrop<Counted>.intoInner(manual);",
+        ):
+            with self.subTest(operation=operation):
+                entry = self.source("move.vqr", "import (io, mem)\n" + definitions + """
+                    func main() void {
+                        var owner = Owned(4);
+                        var slot = mem.MaybeUninit<Owned>.uninit();
+                        var manual = mem.ManuallyDrop<Counted>.new(Counted(5));
+                """ + operation + "\n}")
+                diagnostic = self.process(VAQC, "check", entry, good=False).stderr
+                self.assertIn(b"move parameter requires move(object)", diagnostic)
+
     def test_conditional_vec_methods_do_not_force_recursive_layout(self):
         self.assertEqual(self.run_container(r"""
             import (meta)
@@ -194,6 +253,88 @@ class ContainerAcceptance(CompilerCase):
             }
         """)
         self.assertEqual(sorted(map(int, result)), [1, 1, 2, 2, 101, 102])
+
+    def test_map_owned_get_or_insert_and_entry_modes(self):
+        definitions = """
+            class Owned {
+                #copy: disabled
+                pub var id: i32;
+                pub var label: i32;
+                pub func init(id: i32, label: i32) : id(id), label(label) {}
+                func deinit() void { io.println(label) catch {}; }
+            }
+            func keyHash(key: *const Owned, seed: u32) usize { hash.hashI32(raw key.id, seed) }
+            func keyEquals(a, b: *const Owned) bool { a.id == b.id }
+            func create() Owned { io.println(90) catch {}; Owned(3, 32) }
+            class RefusingAllocator {
+                #implements: mem.Allocator
+                pub func init() {}
+                pub func alloc(layout: mem.Layout) core.ResultOptional<*u8> {
+                    mem.AllocationError.OutOfMemory
+                }
+                pub func free(ptr: *u8, layout: mem.Layout) void { panic("unallocated storage"); }
+            }
+        """
+        output = self.run_container(definitions + """
+            func main() !void {
+                var map = coll.HashMap<Owned, Owned>.withHasher(keyHash, keyEquals);
+                var key = Owned(1, 11);
+                var value = Owned(1, 12);
+                {
+                    var inserted = map.getOrInsert(move(key), move(value))!;
+                    inserted.id++;
+                    if inserted.label != 12 { panic("wrong inserted value"); }
+                }
+                if map.getOrInsertPtr(Owned(1, 13), Owned(1, 14))!.id != 2 {
+                    panic("hit overwrote stored value");
+                }
+                {
+                    var query = Owned(2, 21);
+                    var bound = unsafe { map.entry(move(query)) };
+                    var initial = Owned(2, 22);
+                    if bound.orInsert(move(initial))!.label != 22 { panic("entry lost value"); }
+                }
+                {
+                    var lookup = Owned(2, 23);
+                    var existing = map.getOrInsertWith(move(lookup), create)!;
+                    if existing.label != 22 { panic("lazy hit called factory"); }
+                }
+                {
+                    var existing = map.getOrInsertWith(Owned(3, 31), create)!;
+                    if existing.label != 32 { panic("lazy miss did not call factory"); }
+                }
+                var set = coll.HashSet<Owned>.withHasher(keyHash, keyEquals);
+                var member = Owned(4, 41);
+                if !set.insert(move(member))! { panic("move-only set insert failed"); }
+                var allocator = RefusingAllocator();
+                var refused = coll.HashMap<Owned, Owned>.withAllocator(keyHash, keyEquals, raw allocator);
+                refused.getOrInsert(Owned(5, 51), Owned(5, 52)) catch (reason) {
+                    if reason != mem.AllocationError.OutOfMemory || !refused.isEmpty() {
+                        panic("failed allocation changed the map");
+                    }
+                    return;
+                };
+                panic("allocation unexpectedly succeeded");
+            }
+        """)
+        self.assertEqual(sorted(map(int, output)), [11, 12, 13, 14, 21, 22, 23, 31, 32, 41, 51, 52, 90])
+
+        for statement in (
+            "map.getOrInsert(key, Owned(2, 22))!;",
+            "map.getOrInsertPtr(Owned(1, 21), value)!;",
+            "unsafe { var result = map.entry(key); }",
+            "map.getOrInsertWith(key, create)!;",
+            "var result = unsafe { map.entry(Owned(2, 21)) }; result.orInsert(value)!;",
+        ):
+            with self.subTest(statement=statement):
+                entry = self.source("failed.vqr", "import (coll, core, hash, io, mem)\n" + definitions + """
+                    func main() !void {
+                        var map = coll.HashMap<Owned, Owned>.withHasher(keyHash, keyEquals);
+                        var key = Owned(1, 11);
+                        var value = Owned(2, 12);
+                """ + statement + "\n}")
+                diagnostic = self.process(VAQC, "check", entry, good=False).stderr
+                self.assertIn(b"move parameter requires move(object)", diagnostic)
 
     def test_consuming_vec_drops_each_slot_once(self):
         output = self.run_container(r"""
@@ -738,6 +879,27 @@ class ContainerAcceptance(CompilerCase):
                     values.shrinkToFit()!;
                 }
                 if allocator.live != 0 { panic("allocation/free layouts differed"); }
+                {
+                    var deque = coll.VecDeque<Probe>.withAllocator(raw allocator);
+                    deque.reserve(1)!;
+                    deque.pushBack(Probe{id: 31})!;
+                    allocator.fail = true;
+                    switch deque.pushBackPreserving(Probe{id: 32}) {
+                        coll.PushResult.Failed(reason, item) => {
+                            if reason != Injected.Exhausted || item.id != 32 ||
+                               deque.len() != 1 || deque.get(0).unwrap().id != 31 {
+                                panic("failed deque growth lost an initialized slot or its input");
+                            }
+                        },
+                        _ => panic("failed deque growth unexpectedly stored the input"),
+                    }
+                    allocator.fail = false;
+                    deque.pushBack(Probe{id: 33})!;
+                    if deque.popFront().unwrap().id != 31 || deque.popFront().unwrap().id != 33 {
+                        panic("recovering deque growth changed slot order");
+                    }
+                }
+                if allocator.live != 0 { panic("deque growth leaked storage"); }
                 {
                     var map = coll.HashMap<i32, Probe>.withAllocator(hash.hashI32, hash.eqI32, raw allocator);
                     allocator.fail = true;

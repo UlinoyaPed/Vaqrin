@@ -8,7 +8,9 @@ func area(rows: usize, cols: usize) !usize {
     rows * cols
 }
 
-pub func dot<T>(a: []const T, b: []const T) !T {
+pub func dot<T>(a: []const T, b: []const T) !T { dotSlices<T>(a, b) }
+
+func dotSlices<T>(a: []const T, b: []const T) !T {
     if a.len() != b.len() { return LinalgError.ShapeMismatch; }
     var sum = T(0);
     for i in usize(0)..a.len() { sum += a[i] * b[i]; }
@@ -76,10 +78,10 @@ pub class Vector<T: Copyable> {
         values.reserve(n)!;
         for i in values.len()..n { values.push(value)!; }
     }
-    pub const func dot(other: *const Self) !T { linalg.dot<T>(asSlice(), other.asSlice()) }
+    pub const func dot(other: in Self) !T { dotSlices<T>(asSlice(), other.asSlice()) }
     pub const func norm() T { norm2<T>(asSlice()) }
     pub func normalize() !void { linalg.normalize<T>(asMutSlice()) }
-    pub const func add(other: *const Self) !Self {
+    pub const func add(other: in Self) !Self {
         if len() != other.len() { return LinalgError.ShapeMismatch; }
         var out = Vector<T>.zeros(len())!;
         for i in usize(0)..len() { out.values[i] = values[i] + other.values[i]; }
@@ -149,13 +151,13 @@ pub class Matrix<T: Copyable> {
         }
         move(out)
     }
-    pub const func add(other: *const Self) !Self {
+    pub const func add(other: in Self) !Self {
         if height != other.height || width != other.width { return LinalgError.ShapeMismatch; }
         var out = clone()!;
         for i in usize(0)..values.len() { out.values[i] += other.values[i]; }
         move(out)
     }
-    pub const func sub(other: *const Self) !Self {
+    pub const func sub(other: in Self) !Self {
         if height != other.height || width != other.width { return LinalgError.ShapeMismatch; }
         var out = clone()!;
         for i in usize(0)..values.len() { out.values[i] -= other.values[i]; }
@@ -164,7 +166,7 @@ pub class Matrix<T: Copyable> {
     pub func scale(factor: T) void {
         for i in usize(0)..values.len() { values[i] *= factor; }
     }
-    pub const func matmul(other: *const Self) !Self {
+    pub const func matmul(other: in Self) !Self {
         if width != other.height { return LinalgError.ShapeMismatch; }
         var out = Matrix<T>.zeros(height, other.width)!;
         for i in usize(0)..height {
@@ -184,10 +186,10 @@ pub class Matrix<T: Copyable> {
     }
 }
 
-pub func matmul<T: Copyable>(a: *const Matrix<T>, b: *const Matrix<T>) !Matrix<T> { a.matmul(b) }
-pub func transpose<T: Copyable>(value: *const Matrix<T>) !Matrix<T> { value.transposeCopy() }
+pub func matmul<T: Copyable>(a: in Matrix<T>, b: in Matrix<T>) !Matrix<T> { a.matmul(b) }
+pub func transpose<T: Copyable>(value: in Matrix<T>) !Matrix<T> { value.transposeCopy() }
 
-pub func trace<T: Copyable>(value: *const Matrix<T>) !T {
+pub func trace<T: Copyable>(value: in Matrix<T>) !T {
     if value.rows() != value.cols() { return LinalgError.ShapeMismatch; }
     var sum = T(0);
     for i in usize(0)..value.rows() { sum += value.at(i, i); }
@@ -202,7 +204,7 @@ pub func outer<T: Copyable>(a: []const T, b: []const T) !Matrix<T> {
     move(out)
 }
 
-pub func kron<T: Copyable>(a: *const Matrix<T>, b: *const Matrix<T>) !Matrix<T> {
+pub func kron<T: Copyable>(a: in Matrix<T>, b: in Matrix<T>) !Matrix<T> {
     var height = area(a.rows(), b.rows())!;
     var width = area(a.cols(), b.cols())!;
     var out = Matrix<T>.zeros(height, width)!;
@@ -222,7 +224,7 @@ pub class LU<T: Copyable> {
     var factors: Matrix<T>;
     var permutation: coll.Vec<usize>;
     var odd: bool;
-    pub static func factor(matrix: *const Matrix<T>) !Self {
+    pub static func factor(matrix: in Matrix<T>) !Self {
         var size = matrix.rows();
         if size != matrix.cols() { return LinalgError.ShapeMismatch; }
         for entry in matrix.asSlice() {
@@ -258,7 +260,7 @@ pub class LU<T: Copyable> {
         }
         LU<T>(move(factors), move(permutation), odd)
     }
-    pub const func solve(rhs: *const Vector<T>) !Vector<T> {
+    pub const func solve(rhs: in Vector<T>) !Vector<T> {
         var size = factors.rows();
         if rhs.len() != size { return LinalgError.ShapeMismatch; }
         var out = Vector<T>.zeros(size)!;
@@ -293,7 +295,7 @@ pub class LU<T: Copyable> {
         var basis = Vector<T>.zeros(size)!;
         for j in usize(0)..size {
             *basis.getMut(j).unwrap() = T(1);
-            var column = solve(raw basis)!;
+            var column = solve(basis)!;
             *basis.getMut(j).unwrap() = T(0);
             var values = column.asSlice();
             for i in usize(0)..size { out.set(i, j, values[i]); }
@@ -304,9 +306,9 @@ pub class LU<T: Copyable> {
         : factors(move(factors)), permutation(move(permutation)), odd(odd) {}
 }
 
-pub func lu<T: Copyable>(matrix: *const Matrix<T>) !LU<T> { LU<T>.factor(matrix) }
+pub func lu<T: Copyable>(matrix: in Matrix<T>) !LU<T> { LU<T>.factor(matrix) }
 
-pub func determinant<T: Copyable>(matrix: *const Matrix<T>) !T {
+pub func determinant<T: Copyable>(matrix: in Matrix<T>) !T {
     var factor = lu<T>(matrix) catch (reason) {
         if reason == LinalgError.Singular { return T(0); }
         return reason;
@@ -314,12 +316,12 @@ pub func determinant<T: Copyable>(matrix: *const Matrix<T>) !T {
     factor.determinant()
 }
 
-pub func solve<T: Copyable>(matrix: *const Matrix<T>, rhs: *const Vector<T>) !Vector<T> {
+pub func solve<T: Copyable>(matrix: in Matrix<T>, rhs: in Vector<T>) !Vector<T> {
     var factor = lu<T>(matrix)!;
     factor.solve(rhs)
 }
 
-pub func inverse<T: Copyable>(matrix: *const Matrix<T>) !Matrix<T> {
+pub func inverse<T: Copyable>(matrix: in Matrix<T>) !Matrix<T> {
     var factor = lu<T>(matrix)!;
     factor.inverse()
 }

@@ -1812,25 +1812,42 @@ ValueAt Body::loop(const Ast &n) {
     body = n->children[1];
     auto range = n->children[0];
     if (borrowing) {
-      // No reference is derived from a temporary, raw slice, iterator result,
-      // closure environment, or indirectly addressed object.
       if (range->kind != NodeKind::Name)
-        fail(range->span, "reference iteration requires a named, owned fixed array", "E230");
+        fail(range->span, "reference iteration requires a named, owned fixed array or checked readonly slice", "E230");
       array = expression(range);
-      if (array.type->kind != Kind::Array || array.local < 0 || !array.address || array.temporaryBorrow ||
-          locals[array.local].reference || locals[array.local].refCapture ||
-          array.address != locals[array.local].slot || carriesBorrow(array.type))
-        fail(range->span, "reference iteration requires a named, owned fixed array without borrowed elements", "E230");
       requireInit(array, range->span);
-      if (exclusive && !array.writable)
-        fail(range->span, "cannot iterate a read-only array with ref mut", "E230");
-      checkAccess(array, exclusive, range->span);
+      if (array.type->kind == Kind::Slice && array.origin.checkedView &&
+          p.readonlyView(array.type) && array.origin.root >= 0 && !array.origin.raw &&
+          array.local >= 0 && !array.temporaryBorrow &&
+          (!locals[array.local].refCapture ||
+           (array.origin.root == array.local && locals[array.local].reference &&
+            locals[array.local].reference->readOnly))) {
+        if (exclusive)
+          fail(range->span, "cannot iterate a checked readonly slice with ref mut", "E230");
+        // Read the checked descriptor while its proof is live. Keep every
+        // possible storage owner pinned for the entire loop, including
+        // between iterations and when the descriptor itself is a parameter.
+        auto *pair = read(array, range->span);
+        pinBorrow(array, range->span, scopes.size() - 1);
+        arrayPtr = ir.CreateExtractValue(pair, 0);
+        length = ir.CreateExtractValue(pair, 1);
+      } else {
+        if (array.type->kind != Kind::Array || array.local < 0 || !array.address || array.temporaryBorrow ||
+            locals[array.local].reference || locals[array.local].refCapture ||
+            array.address != locals[array.local].slot || carriesBorrow(array.type))
+          fail(range->span, "reference iteration requires a named, owned fixed array without borrowed elements "
+                            "or a checked readonly slice", "E230");
+        if (exclusive && !array.writable)
+          fail(range->span, "cannot iterate a read-only array with ref mut", "E230");
+        checkAccess(array, exclusive, range->span);
+        arrayPtr = array.address;
+        length = ConstantInt::get(p.sizeTy->ir, array.type->count);
+      }
       element = array.type->parts[0];
       if (element == p.voidTy || element == p.neverTy)
         fail(range->span, "reference iteration requires an object element type", "E230");
-      arrayPtr = array.address;
       start = {p.sizeTy, ConstantInt::get(p.sizeTy->ir, 0)};
-      last = {p.sizeTy, ConstantInt::get(p.sizeTy->ir, array.type->count)};
+      last = {p.sizeTy, length};
     } else if (range->kind == NodeKind::Binary && (range->text == ".." || range->text == "..=")) {
       if (n->names.size() != 1) fail(n->span, "range loop binds one variable");
       closed = range->text == "..=";
@@ -1998,13 +2015,18 @@ ValueAt Body::loop(const Ast &n) {
         bindItem(i, payload(item, i, element->parts[i]));
     }
   } else if (borrowing) {
-    auto *addr = ir.CreateGEP(array.type->ir, arrayPtr, {ir.getInt32(0), counter});
-    // Besides protecting the actual array, a second lexical root limits the
-    // loan to this iteration. Existing joins conservatively retain both roots.
+    const bool slice = array.type->kind == Kind::Slice;
+    auto *addr = slice ? ir.CreateGEP(p.storage(element), arrayPtr, counter)
+                       : ir.CreateGEP(array.type->ir, arrayPtr, {ir.getInt32(0), counter});
+    // Keep the storage proof AND an iteration-local lifetime. This prevents
+    // a reference into even an outer owner from escaping this iteration.
     const auto iterationLifetime = pinBorrow({p.boolTy}, n->span, scopes.size() - 1);
-    Borrow origin{array.local, -1, false,
-                  std::make_shared<const std::vector<int>>(std::vector{iterationLifetime})};
-    auto place = ValueAt{element, nullptr, addr, array.writable, -1, true, false, std::move(origin)};
+    Borrow origin = slice ? array.origin : Borrow{array.local};
+    auto alternatives = origin.alternatives ? *origin.alternatives : std::vector<int>{};
+    alternatives.push_back(iterationLifetime); // Fresh local IDs are monotonic.
+    origin.alternatives = std::make_shared<const std::vector<int>>(std::move(alternatives));
+    origin.checkedView = false; // A scalar element is a normal shared borrow, not a view descriptor.
+    auto place = ValueAt{element, nullptr, addr, !slice && array.writable, -1, true, false, std::move(origin)};
     bindIteration(0, borrow(place, p.reference(element, !exclusive), n->bindingSpans[0], false));
   } else if (each) {
     Value *item = counter;

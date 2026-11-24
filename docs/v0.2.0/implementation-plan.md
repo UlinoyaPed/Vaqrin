@@ -54,8 +54,10 @@
 - `Vec<T>` 的 `push`、`insert`、`replace` 及相应的保留值变体用类成员的 `comptime if meta.isCopyable<T>()` 选择签名：Copyable 元素用 `value: T`，否则用 `value: move T`。每个实例只有一个成员，不是仅模式不同的重载。两条分支都可交付独立临时值；非 Copyable 具名实参须显式 `move`。保留原有分配失败和越界时的所有权语义。
 - `Vec<T>.spliceOwned` 和 `intoIter` 明确消费整个 Vec；`fromSlice`、`splice` 和 `clone` 则只向 Copyable 元素开放。独立的迭代器或回调类型参数（如 `fromIter<I>`、`extend<I>`、`retain<F>`）不会从元素的条件分支取得 Copyable 保证，仍需要后续迁移。
 - 对只有一个元素类型的容器，可沿用此模式迁移插入、替换和保留值的操作。对 HashMap 和 BTree 等键、值独立的接口，须分别判定 K 和 V，而非假设两者具有相同模式。只读取的参数优先用 `in`；纯复制泛型函数加 `T: Copyable`。不能声明条件成员的独立函数，需要拆分 API 或重构为符合实际所有权的借用操作。
-- `HashMap<K, V>.insert` 和 `insertPreserving` 分别按 K 与 V 是否 Copyable 选择形参模式。探测或扩容时只借用键；失败时返回原有的两份入参所有权，覆盖时返回旧值并销毁旧键。私有转移路径和扩容复用成对所有权，不再次复制。Entry 和 `getOrInsert` 变体仍待迁移。
+- `HashMap<K, V>` 的 `insert`、`insertPreserving` 和 `getOrInsert` 系列按各自键和值是否 Copyable 选择形参模式。探测或扩容时只借用键；`insertPreserving` 失败时归还两项输入，覆盖时返回旧值并销毁旧键。现有键的 `getOrInsert` 不覆盖旧值。私有转移和扩容不再次复制；`HashSet.insert`、`entry` 的键与 `Entry.orInsert` 的值也采用相应模式。Entry 的现有 unsafe 生命周期约定没有改变。方法自身的泛型工厂、回调仍待迁移。
 - `BTreeMap<K, V>.insert` 也分别判定 K 与 V。查找、节点分裂和插槽选择期间只借用键，确定位置后再搬入整对输入；失败时销毁收到的所有者，保留已存在的键和值。`BTreeSet.insert` 和底层 `FixedVec.insert` 按各自元素的 Copyable 能力选择单一签名。
+- `MaybeUninit<T>.write` 与 `ManuallyDrop<T>.new` 按 T 选择 Copy/Move 参数。手动存储容器始终不可复制，`ManuallyDrop.intoInner` 消费整个容器；初始化、提取与手动销毁的既有契约不变。deque、链表、共享存储和 OnceLock 的存储调用已使用显式移动或临时值。
+- `core.replace` / `mem.replace` 仍接收泛型普通 Value。标准库有 60 多处直接调用，集中在 gRPC、正则及序列化；`opt.take`、`opt.replace` 还将它们带入 channel、cell 与任务。类成员的条件签名不能直接套用到这些独立函数；迁移需逐一选择复制或显式所有权转移，并保留替换位置的权限和析构语义。
 - 启用全局检查前，声明检查必须证明普通泛型参数 Copyable，包括包装类型的结构推导和条件成员的受控分支。一个具体实例恰好 Copyable 不是无约束声明的证明；若采用条件分支作为证明，必须确认分支受真实 Copyable 判定支配，不能仅根据函数名推断。
 - 一次未合入的实验在共用参数降低入口拒绝非 Copyable Value，不作标准库豁免。容器 11 项里有 10 项失败，标准库 43 项里有 39 项失败。首批诊断涉及容器、JSON、HTTP、正则、线代、文件与网络等。这仅是调用点实验，不是完整签名验证。签名验证还需要覆盖声明、函数类型、Lambda 和接口，以及示例和代码生成器。
 

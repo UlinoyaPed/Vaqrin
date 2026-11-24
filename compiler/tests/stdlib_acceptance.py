@@ -438,6 +438,44 @@ class StandardLibraryAcceptance(CompilerCase):
             (REPOSITORY / "examples/stdlib/numerics/expected.txt").read_text(encoding="utf-8"),
         )
 
+    def test_numeric_operands_are_shared_borrows(self):
+        self.hosted("""
+            import (cmp, num, result)
+            func main() !void {
+                const value = num.BigUint.fromU64(12)!;
+                io.println(value.add(value)!.toU64()!)!;
+                quotient, remainder := value.divMod(value)!;
+                io.println(quotient.toU64()!)!;
+                io.println(remainder.toU64()!)!;
+                var zero = num.BigUint.fromU64(0)!;
+                var bad = value.div(zero);
+                io.println(result.errorOf(raw bad).unwrap() == num.NumError.DivisionByZero)!;
+                const negative = num.BigInt.fromI64(-6)!;
+                var divisor = num.BigInt.fromI64(4)!;
+                io.println(negative.mul(divisor)!.toI64()!)!;
+                io.println(num.BigInt.gcd(negative, divisor)!.toI64()!)!;
+                io.println(negative.compare(negative) == cmp.Ordering.Equal)!;
+                const fraction = num.Rational<i64>.new(-2, 3)!;
+                var sum = fraction.add(fraction)!;
+                var identity = fraction.div(fraction)!;
+                io.println(sum.numerator())!;
+                io.println(sum.denominator())!;
+                io.println(identity.numerator())!;
+                io.println(identity.denominator())!;
+                io.println(fraction.compare(fraction)! == cmp.Ordering.Equal)!;
+            }
+        """, "24\n1\n0\ntrue\n-24\n2\ntrue\n-4\n3\n1\n1\ntrue\n")
+
+        source = self.source("numeric_raw_operand.vqr", """
+            import (num)
+            func f() !void {
+                var value = num.BigUint.fromU64(2)!;
+                var outcome = value.mul(raw value)!;
+            }
+        """)
+        result = self.process(VAQC, "check", source, good=False)
+        self.assertIn(b"no accessible overload", result.stderr)
+
     def test_bigint_twos_complement_byte_carry(self):
         program = self.source("bigint_twos_complement.vqr", """
             import (io, meta, num)
@@ -853,17 +891,48 @@ class StandardLibraryAcceptance(CompilerCase):
                 var rhs = [2]f64{4.0, 7.0};
                 var matrix = linalg.Matrix<f64>.fromFlat(2, 2, entries[:])!;
                 var b = linalg.Vector<f64>.fromSlice(rhs[:])!;
-                var solution = linalg.solve<f64>(raw matrix, raw b)!;
+                var solution = linalg.solve<f64>(matrix, b)!;
                 io.println(*solution.get(0).unwrap() == 1.0 && *solution.get(1).unwrap() == 2.0)!;
-                io.println(linalg.determinant<f64>(raw matrix)! == -2.0)!;
-                var inverse = linalg.inverse<f64>(raw matrix)!;
-                var identity = matrix.matmul(raw inverse)!;
+                io.println(linalg.determinant<f64>(matrix)! == -2.0)!;
+                var inverse = linalg.inverse<f64>(matrix)!;
+                var identity = matrix.matmul(inverse)!;
                 io.println(math.abs<f64>(identity.at(0, 0) - 1.0) < 0.000001)!;
                 var singular = linalg.Matrix<f64>.zeros(2, 2)!;
-                var rejected = linalg.inverse<f64>(raw singular);
+                var rejected = linalg.inverse<f64>(singular);
                 io.println(result.errorOf(raw rejected).unwrap() == linalg.LinalgError.Singular)!;
             }
         """, "true\n" * 4)
+
+    def test_linalg_operands_are_checked_borrows(self):
+        self.hosted("""
+            import (linalg)
+            func main() !void {
+                input := [_]f64{1.0, 2.0, 3.0, 4.0};
+                const matrix = linalg.Matrix<f64>.fromFlat(2, 2, input[:])!;
+                var squared = linalg.matmul<f64>(matrix, matrix)!;
+                var doubled = matrix.add(matrix)!;
+                var zero = matrix.sub(matrix)!;
+                var transposed = linalg.transpose<f64>(matrix)!;
+                var product = linalg.kron<f64>(matrix, matrix)!;
+                io.println(squared.at(1, 1) == 22.0 && doubled.at(1, 1) == 8.0)!;
+                io.println(zero.at(0, 1) == 0.0 && transposed.at(0, 1) == 3.0)!;
+                io.println(product.at(3, 3) == 16.0 && linalg.trace<f64>(matrix)! == 5.0)!;
+
+                const v = linalg.Vector<f64>.fromSlice(input[:])!;
+                var sum = v.add(v)!;
+                io.println(v.dot(v)! == 30.0 && sum.dot(v)! == 60.0)!;
+            }
+        """, "true\n" * 4)
+
+        source = self.source("raw_matrix_operand.vqr", """
+            import (linalg)
+            func f() !void {
+                var matrix = linalg.Matrix<f64>.zeros(2, 2)!;
+                var outcome = matrix.matmul(raw matrix)!;
+            }
+        """)
+        result = self.process(VAQC, "check", source, good=False)
+        self.assertIn(b"no accessible overload", result.stderr)
 
     def test_qr_least_squares(self):
         self.hosted(r"""
@@ -873,22 +942,22 @@ class StandardLibraryAcceptance(CompilerCase):
                 var measurements = [3]f64{1.0, 2.0, 2.0};
                 var matrix = linalg.Matrix<f64>.fromFlat(3, 2, design[:])!;
                 var rhs = linalg.Vector<f64>.fromSlice(measurements[:])!;
-                var factor = linalg.qr<f64>(raw matrix)!;
-                var coeff = factor.solveLeastSquares(raw rhs)!;
+                var factor = linalg.qr<f64>(matrix)!;
+                var coeff = factor.solveLeastSquares(rhs)!;
                 io.println(math.abs<f64>(*coeff.get(0).unwrap() - 7.0 / 6.0) < 0.000001)!;
                 io.println(math.abs<f64>(*coeff.get(1).unwrap() - 0.5) < 0.000001)!;
                 var q = factor.q()!;
                 var r = factor.r()!;
-                var reconstructed = q.matmul(raw r)!;
+                var reconstructed = q.matmul(r)!;
                 var transpose = q.transposeCopy()!;
-                var gram = transpose.matmul(raw q)!;
+                var gram = transpose.matmul(q)!;
                 io.println(linalg.distance<f64>(reconstructed.asSlice(), matrix.asSlice())! < 0.000001)!;
                 io.println(math.abs<f64>(gram.at(0, 0) - 1.0) < 0.000001 &&
                            math.abs<f64>(gram.at(1, 1) - 1.0) < 0.000001 &&
                            math.abs<f64>(gram.at(0, 1)) < 0.000001)!;
                 var rankZero = linalg.Matrix<f64>.zeros(3, 2)!;
-                var deficient = linalg.qr<f64>(raw rankZero)!;
-                var rejected = deficient.solveLeastSquares(raw rhs);
+                var deficient = linalg.qr<f64>(rankZero)!;
+                var rejected = deficient.solveLeastSquares(rhs);
                 io.println(result.errorOf(raw rejected).unwrap() == linalg.LinalgError.Singular)!;
             }
         """, "true\n" * 5)

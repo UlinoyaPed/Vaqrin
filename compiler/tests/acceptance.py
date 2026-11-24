@@ -899,6 +899,64 @@ class Acceptance(CompilerCase):
                 self.assertEqual(self.process("./checked-view").stdout,
                                  b"label\n3\n7\n2\nowned\n111\n9\n")
 
+    def test_v020_checked_slice_reference_iteration(self):
+        self.hosted("""
+            func bytes(value: in [4]u8) []const u8 from value { value[0..4] }
+            func sum(view: in []const u8) u64 {
+                var total: u64 = 0;
+                for ref item in view {
+                    if item == 2 { continue; }
+                    var alias = ref item;
+                    total += u64(alias);
+                }
+                total
+            }
+            func main() !void {
+                var owner = [4]u8{1, 2, 3, 4};
+                {
+                    var view = bytes(owner);
+                    var count: u64 = 0;
+                    outer: for ref item in view {
+                        for ref other in view {
+                            if item == 3 { break outer; }
+                            count += u64(item) + u64(other);
+                        }
+                    }
+                    io.println(count)!;
+                    io.println(sum(view))!;
+                    var empty = view[2..2];
+                    io.println(sum(empty))!;
+                }
+                owner[0] = 8;
+                io.println(sum(bytes(owner)))!;
+            }
+        """, "32\n8\n0\n15\n")
+
+    def test_v020_checked_slice_reference_iteration_rejects_invalid_sources(self):
+        prelude = """
+            func bytes(value: in [4]u8) []const u8 from value { value[0..4] }
+        """
+        cases = {
+            "untracked": ("func f(value: []const u8) void { for ref x in value {} }",
+                          "checked readonly slice"),
+            "unnamed": ("func f(value: in [4]u8) void { for ref x in bytes(value) {} }",
+                        "requires a named"),
+            "exclusive": ("func f(value: in []const u8) void { for ref mut x in value {} }",
+                          "checked readonly slice with ref mut"),
+            "write_element": ("func f(value: in []const u8) void { for ref x in value { x++; } }",
+                              "writable"),
+            "return_element": ("func f(owner: in [4]u8) ref u8 from owner { var view = bytes(owner); "
+                               "for ref x in view { return ref x; } ref owner[0] }",
+                               "declared source"),
+            "owner_write": ("func f() void { var owner = [4]u8{1, 2, 3, 4}; var view = bytes(owner); "
+                            "for ref x in view { owner[0]++; } }", "active borrow"),
+        }
+        for name, (body, diagnostic) in cases.items():
+            with self.subTest(name=name):
+                source = self.source(name + "/main.vqr", prelude + body)
+                result = self.process(VAQC, "check", source, good=False)
+                self.assertIn(diagnostic.encode(), result.stderr, result.stderr.decode())
+
     def test_v020_checked_view_rejects_unproven_origins_and_escapes(self):
         prelude = """
             package main;

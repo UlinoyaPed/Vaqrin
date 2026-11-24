@@ -1,7 +1,7 @@
 package linalg
 import (math, num)
 
-func applyReflector<T: Copyable>(matrix: *Matrix<T>, reflectors: *const Matrix<T>,
+func applyReflector<T: Copyable>(matrix: mut Matrix<T>, reflectors: in Matrix<T>,
                                 column: usize, firstColumn: usize) !void {
     for j in firstColumn..matrix.cols() {
         var projection = T(0);
@@ -24,7 +24,7 @@ pub class QR<T: Copyable> {
     var orthogonal: Matrix<T>;
     var triangular: Matrix<T>;
     func init(q: Matrix<T>, r: Matrix<T>) : orthogonal(move(q)), triangular(move(r)) {}
-    pub static func factor(matrix: *const Matrix<T>) !Self {
+    pub static func factor(matrix: in Matrix<T>) !Self {
         var rows = matrix.rows();
         var cols = matrix.cols();
         if rows < cols { return LinalgError.ShapeMismatch; }
@@ -52,7 +52,7 @@ pub class QR<T: Copyable> {
                 reflectors.set(i, k, reflectors.at(i, k) / length);
             }
             factors.set(k, k, -sign * norm);
-            applyReflector<T>(raw factors, raw reflectors, k, k + 1)!;
+            applyReflector<T>(factors, reflectors, k, k + 1)!;
         }
 
         var q = Matrix<T>.zeros(rows, cols)!;
@@ -65,7 +65,7 @@ pub class QR<T: Copyable> {
         while k != 0 {
             k--;
             if reflectors.at(k, k) != T(0) {
-                applyReflector<T>(raw q, raw reflectors, k, 0)!;
+                applyReflector<T>(q, reflectors, k, 0)!;
             }
         }
         QR<T>(move(q), move(r))
@@ -74,7 +74,7 @@ pub class QR<T: Copyable> {
     pub const func q() !Matrix<T> { orthogonal.clone() }
     pub const func r() !Matrix<T> { triangular.clone() }
 
-    pub const func solveLeastSquares(rhs: *const Vector<T>) !Vector<T> {
+    pub const func solveLeastSquares(rhs: in Vector<T>) !Vector<T> {
         var rows = orthogonal.rows();
         var cols = triangular.cols();
         if rhs.len() != rows { return LinalgError.ShapeMismatch; }
@@ -113,4 +113,4 @@ pub class QR<T: Copyable> {
     }
 }
 
-pub func qr<T: Copyable>(matrix: *const Matrix<T>) !QR<T> { QR<T>.factor(matrix) }
+pub func qr<T: Copyable>(matrix: in Matrix<T>) !QR<T> { QR<T>.factor(matrix) }

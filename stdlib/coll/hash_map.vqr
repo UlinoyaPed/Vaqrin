@@ -410,11 +410,12 @@ pub class HashMap<K: Movable, V: Movable> {
     func insertionPlan(key: in K) !(usize, usize, bool) {
         var address = key.toRaw();
         var hash = hashKey(address);
-        switch findIndex(address, hash) {
+        var location = probe(address, hash);
+        switch location.0 {
             some(index) => (index, hash, true),
             null => {
-                ensureRoomForOne()!;
-                (insertionIndex(hash), hash, false)
+                var index = if ensureRoomForOne()! { insertionIndex(hash) } else { location.1.unwrap() };
+                (index, hash, false)
             },
         }
     }
@@ -478,12 +479,26 @@ pub class HashMap<K: Movable, V: Movable> {
             pub func insert(key: K, value: V) core.ResultOptional<V> {
                 insertValuePair((move(key), move(value)))
             }
+            pub func getOrInsert(key: K, initial: V) !ref mut V from self {
+                var address = getOrInsertPair((move(key), move(initial)))!;
+                unsafe { __vqr_borrow_from_self(address) }
+            }
+            pub func getOrInsertPtr(key: K, initial: V) !*V {
+                getOrInsertPair((move(key), move(initial)))
+            }
         } else {
             pub func insertPreserving(key: K, value: move V) InsertResult<K, V> {
                 insertPair((move(key), move(value)))
             }
             pub func insert(key: K, value: move V) core.ResultOptional<V> {
                 insertValuePair((move(key), move(value)))
+            }
+            pub func getOrInsert(key: K, initial: move V) !ref mut V from self {
+                var address = getOrInsertPair((move(key), move(initial)))!;
+                unsafe { __vqr_borrow_from_self(address) }
+            }
+            pub func getOrInsertPtr(key: K, initial: move V) !*V {
+                getOrInsertPair((move(key), move(initial)))
             }
         }
     } else {
@@ -494,12 +509,26 @@ pub class HashMap<K: Movable, V: Movable> {
             pub func insert(key: move K, value: V) core.ResultOptional<V> {
                 insertValuePair((move(key), move(value)))
             }
+            pub func getOrInsert(key: move K, initial: V) !ref mut V from self {
+                var address = getOrInsertPair((move(key), move(initial)))!;
+                unsafe { __vqr_borrow_from_self(address) }
+            }
+            pub func getOrInsertPtr(key: move K, initial: V) !*V {
+                getOrInsertPair((move(key), move(initial)))
+            }
         } else {
             pub func insertPreserving(key: move K, value: move V) InsertResult<K, V> {
                 insertPair((move(key), move(value)))
             }
             pub func insert(key: move K, value: move V) core.ResultOptional<V> {
                 insertValuePair((move(key), move(value)))
+            }
+            pub func getOrInsert(key: move K, initial: move V) !ref mut V from self {
+                var address = getOrInsertPair((move(key), move(initial)))!;
+                unsafe { __vqr_borrow_from_self(address) }
+            }
+            pub func getOrInsertPtr(key: move K, initial: move V) !*V {
+                getOrInsertPair((move(key), move(initial)))
             }
         }
     }
@@ -514,38 +543,53 @@ pub class HashMap<K: Movable, V: Movable> {
         unsafe { __vqr_borrow_from_self(buckets.getMutPtr(index).unwrap().valueMut()) }
     }
 
-    pub func getOrInsert(key: K, initial: V) !ref mut V from self {
-        var address = getOrInsertPtr(move(key), move(initial))!;
-        unsafe { __vqr_borrow_from_self(address) }
-    }
-
-    pub func getOrInsertWith<F: Movable>(key: K, create: F) !ref mut V from self {
-        var index = findIndex(raw key, hashKey(raw key));
-        switch index {
-            some(at) => {
-                return unsafe { __vqr_borrow_from_self(buckets.getMutPtr(at).unwrap().valueMut()) };
-            },
-            null => {},
+    comptime if meta.isCopyable<(K, V)>() {
+        func getOrInsertPair(entry: (K, V)) !*V {
+            var plan = insertionPlan(entry.0)!;
+            if plan.2 { return buckets.getMutPtr(plan.0).unwrap().valueMut(); }
+            insertAt(plan.0, plan.1, move(entry))
         }
-        var initial: V = move(create)();
-        var address = getOrInsertPtr(move(key), move(initial))!;
-        unsafe { __vqr_borrow_from_self(address) }
-    }
-
-    pub func getOrInsertPtr(key: K, initial: V) !*V {
-        var hash = hashKey(raw key);
-        var location = probe(raw key, hash);
-        switch location.0 {
-            some(index) => buckets.getMutPtr(index).unwrap().valueMut(),
-            null => {
-                var index = if ensureRoomForOne()! { insertionIndex(hash) } else { location.1.unwrap() };
-                insertAt(index, hash, (move(key), move(initial)))
-            },
+    } else {
+        func getOrInsertPair(entry: move (K, V)) !*V {
+            var plan = insertionPlan(entry.0)!;
+            if plan.2 { return buckets.getMutPtr(plan.0).unwrap().valueMut(); }
+            insertAt(plan.0, plan.1, move(entry))
         }
     }
 
-    // Keep the map at this address and use this entry exclusively while it is live.
-    pub unsafe func entry(key: K) Entry<K, V> { unsafe { Entry<K, V>(self, move(key)) } }
+    comptime if meta.isCopyable<K>() {
+        pub func getOrInsertWith<F: Movable>(key: K, create: F) !ref mut V from self {
+            var index = findIndex(raw key, hashKey(raw key));
+            switch index {
+                some(at) => {
+                    return unsafe { __vqr_borrow_from_self(buckets.getMutPtr(at).unwrap().valueMut()) };
+                },
+                null => {},
+            }
+            var initial: V = move(create)();
+            var address = getOrInsertPair((move(key), move(initial)))!;
+            unsafe { __vqr_borrow_from_self(address) }
+        }
+
+        // Keep the map at this address and use this entry exclusively while it is live.
+        pub unsafe func entry(key: K) Entry<K, V> { unsafe { Entry<K, V>(self, move(key)) } }
+    } else {
+        pub func getOrInsertWith<F: Movable>(key: move K, create: F) !ref mut V from self {
+            var index = findIndex(raw key, hashKey(raw key));
+            switch index {
+                some(at) => {
+                    return unsafe { __vqr_borrow_from_self(buckets.getMutPtr(at).unwrap().valueMut()) };
+                },
+                null => {},
+            }
+            var initial: V = move(create)();
+            var address = getOrInsertPair((move(key), move(initial)))!;
+            unsafe { __vqr_borrow_from_self(address) }
+        }
+
+        // Keep the map at this address and use this entry exclusively while it is live.
+        pub unsafe func entry(key: move K) Entry<K, V> { unsafe { Entry<K, V>(self, move(key)) } }
+    }
 
     pub func getMutPtr(key: *const K) ?*V {
         var index = findIndex(key, hashKey(key)) ?? { return null; };
@@ -632,7 +676,11 @@ pub class Entry<K: Movable, V: Movable> {
     #copy: disabled
     var map: *HashMap<K, V>;
     var query: ?K;
-    pub unsafe func init(map: *HashMap<K, V>, key: K) : map(map), query(some(move(key))) {}
+    comptime if meta.isCopyable<K>() {
+        pub unsafe func init(map: *HashMap<K, V>, key: K) : map(map), query(some(move(key))) {}
+    } else {
+        pub unsafe func init(map: *HashMap<K, V>, key: move K) : map(map), query(some(move(key))) {}
+    }
 
     pub const func key() *const K {
         var lookup = queryPtr();
@@ -657,7 +705,11 @@ pub class Entry<K: Movable, V: Movable> {
         }
         self
     }
-    pub func orInsert(value: V) !*V { map.getOrInsertPtr(takeKey(), move(value)) }
+    comptime if meta.isCopyable<V>() {
+        pub func orInsert(value: V) !*V { map.getOrInsertPtr(takeKey(), move(value)) }
+    } else {
+        pub func orInsert(value: move V) !*V { map.getOrInsertPtr(takeKey(), move(value)) }
+    }
     pub func orInsertWith<F: Movable>(create: F) !*V {
         switch getMut() {
             some(value) => {
@@ -781,10 +833,19 @@ pub class HashSet<T: Movable> {
     pub const func capacity() usize { values.capacity() }
     pub const func isEmpty() bool { values.isEmpty() }
 
-    pub func insert(value: T) !bool {
-        switch values.insert(move(value), 0u8)! {
-            null => true,
-            some(_) => false,
+    comptime if meta.isCopyable<T>() {
+        pub func insert(value: T) !bool {
+            switch values.insert(move(value), 0u8)! {
+                null => true,
+                some(_) => false,
+            }
+        }
+    } else {
+        pub func insert(value: move T) !bool {
+            switch values.insert(move(value), 0u8)! {
+                null => true,
+                some(_) => false,
+            }
         }
     }
 

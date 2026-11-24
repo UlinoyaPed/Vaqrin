@@ -95,7 +95,7 @@ pub class BigUint {
         limbs.len() * 32 - 32 + (usize(32) - __vqr_parse_bits<usize>(u128(bits.leadingZeros(last))))
     }
 
-    pub const func compare(other: *const Self) cmp.Ordering {
+    pub const func compare(other: in Self) cmp.Ordering {
         if limbs.len() < other.limbs.len() { return cmp.Ordering.Less; }
         if limbs.len() > other.limbs.len() { return cmp.Ordering.Greater; }
         var index = limbs.len();
@@ -115,7 +115,7 @@ pub class BigUint {
         BigUint(move(out))
     }
 
-    pub const func add(other: *const Self) !Self {
+    pub const func add(other: in Self) !Self {
         var count = if limbs.len() > other.limbs.len() { limbs.len() } else { other.limbs.len() };
         if count == ~usize(0) { return coll.CapacityError.Overflow; }
         var out = coll.Vec<u32>.withCapacity(count + 1)!;
@@ -131,7 +131,7 @@ pub class BigUint {
         BigUint(move(out))
     }
 
-    pub const func sub(other: *const Self) !Self {
+    pub const func sub(other: in Self) !Self {
         if compare(other) == cmp.Ordering.Less { return NumError.Underflow; }
         var out = coll.Vec<u32>.withCapacity(limbs.len())!;
         var borrow: u64 = 0;
@@ -150,7 +150,7 @@ pub class BigUint {
         BigUint(move(out))
     }
 
-    pub const func mul(other: *const Self) !Self {
+    pub const func mul(other: in Self) !Self {
         if isZero() || other.isZero() { return BigUint(); }
         if limbs.len() > ~usize(0) - other.limbs.len() { return coll.CapacityError.Overflow; }
         var count = limbs.len() + other.limbs.len();
@@ -178,7 +178,7 @@ pub class BigUint {
         BigUint(move(out))
     }
 
-    pub const func divMod(other: *const Self) !(Self, Self) {
+    pub const func divMod(other: in Self) !(Self, Self) {
         if other.isZero() { return NumError.DivisionByZero; }
         var quotient = BigUint();
         var remainder = BigUint();
@@ -195,12 +195,12 @@ pub class BigUint {
         (move(quotient), move(remainder))
     }
 
-    pub const func div(other: *const Self) !Self {
+    pub const func div(other: in Self) !Self {
         quotient, remainder := divMod(other)!;
         move(quotient)
     }
 
-    pub const func rem(other: *const Self) !Self {
+    pub const func rem(other: in Self) !Self {
         quotient, remainder := divMod(other)!;
         move(remainder)
     }
@@ -345,7 +345,7 @@ pub class BigUint {
         u32(remainder)!
     }
 
-    func subInPlace(other: *const Self) !void {
+    func subInPlace(other: in Self) !void {
         if compare(other) == cmp.Ordering.Less { return NumError.Underflow; }
         var borrow: u64 = 0;
         var data = limbs.asSlice();
@@ -453,11 +453,11 @@ pub class BigInt {
 
     pub const func isZero() bool { sign == 0 }
     pub const func isNegative() bool { sign < 0 }
-    pub const func compare(other: *const Self) cmp.Ordering {
+    pub const func compare(other: in Self) cmp.Ordering {
         if sign < other.sign { return cmp.Ordering.Less; }
         if sign > other.sign { return cmp.Ordering.Greater; }
         if sign == 0 { return cmp.Ordering.Equal; }
-        var order = magnitude.compare(raw other.magnitude);
+        var order = magnitude.compare(other.magnitude);
         if sign < 0 {
             if order == cmp.Ordering.Less { return cmp.Ordering.Greater; }
             if order == cmp.Ordering.Greater { return cmp.Ordering.Less; }
@@ -469,46 +469,46 @@ pub class BigInt {
         BigInt(sign, magnitude.clone()!)
     }
 
-    pub const func add(other: *const Self) !Self {
+    pub const func add(other: in Self) !Self {
         if sign == 0 { return other.clone(); }
         if other.sign == 0 { return clone(); }
         if sign == other.sign {
-            BigInt(sign, magnitude.add(raw other.magnitude)!)
+            BigInt(sign, magnitude.add(other.magnitude)!)
         } else {
-            var order = magnitude.compare(raw other.magnitude);
+            var order = magnitude.compare(other.magnitude);
             if order == cmp.Ordering.Equal { return BigInt(); }
             if order == cmp.Ordering.Greater {
-                BigInt(sign, magnitude.sub(raw other.magnitude)!)
+                BigInt(sign, magnitude.sub(other.magnitude)!)
             } else {
-                BigInt(other.sign, other.magnitude.sub(raw magnitude)!)
+                BigInt(other.sign, other.magnitude.sub(magnitude)!)
             }
         }
     }
 
-    pub const func sub(other: *const Self) !Self {
+    pub const func sub(other: in Self) !Self {
         var negative = other.negated()!;
-        add(raw negative)
+        add(negative)
     }
 
-    pub const func mul(other: *const Self) !Self {
+    pub const func mul(other: in Self) !Self {
         if sign == 0 || other.sign == 0 { return BigInt(); }
-        BigInt(if sign == other.sign { i8(1) } else { i8(-1) }, magnitude.mul(raw other.magnitude)!)
+        BigInt(if sign == other.sign { i8(1) } else { i8(-1) }, magnitude.mul(other.magnitude)!)
     }
 
-    pub const func divMod(other: *const Self) !(Self, Self) {
+    pub const func divMod(other: in Self) !(Self, Self) {
         if other.sign == 0 { return NumError.DivisionByZero; }
-        quotient, remainder := magnitude.divMod(raw other.magnitude)!;
+        quotient, remainder := magnitude.divMod(other.magnitude)!;
         var quotientSign = if quotient.isZero() { i8(0) } else { sign * other.sign };
         var remainderSign = if remainder.isZero() { i8(0) } else { sign };
         (BigInt(quotientSign, move(quotient)), BigInt(remainderSign, move(remainder)))
     }
 
-    pub const func div(other: *const Self) !Self {
+    pub const func div(other: in Self) !Self {
         quotient, remainder := divMod(other)!;
         move(quotient)
     }
 
-    pub const func rem(other: *const Self) !Self {
+    pub const func rem(other: in Self) !Self {
         quotient, remainder := divMod(other)!;
         move(remainder)
     }
@@ -521,9 +521,9 @@ pub class BigInt {
         var shifted = magnitude.shr(count)!;
         if sign < 0 {
             var restored = shifted.shl(count)!;
-            if restored.compare(raw magnitude) != cmp.Ordering.Equal {
+            if restored.compare(magnitude) != cmp.Ordering.Equal {
                 var one = BigUint.fromU64(1)!;
-                shifted = shifted.add(raw one)!;
+                shifted = shifted.add(one)!;
             }
         }
         BigInt(sign, move(shifted))
@@ -533,11 +533,11 @@ pub class BigInt {
         BigInt(if sign == 0 { i8(0) } else { i8(1) }, magnitude.clone()!)
     }
 
-    pub static const func gcd(a: *const Self, b: *const Self) !Self {
+    pub static const func gcd(a: in Self, b: in Self) !Self {
         var left = a.abs()!;
         var right = b.abs()!;
         while !right.isZero() {
-            var remainder = left.rem(raw right)!;
+            var remainder = left.rem(right)!;
             left = move(right);
             right = move(remainder);
         }

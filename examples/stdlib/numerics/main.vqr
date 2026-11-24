@@ -4,7 +4,7 @@ import (io, math, num, random)
 func main() !void {
     var wide = num.BigUint.fromU64(18446744073709551615u64)!;
     var two = num.BigUint.fromU64(2u64)!;
-    var product = wide.mul(raw two)!;
+    var product = wide.mul(two)!;
     io.println(product.toText(10)!)!;
 
     var minimum = num.BigInt.parse("-9223372036854775808", 10)!;

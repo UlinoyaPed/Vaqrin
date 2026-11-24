@@ -1,6 +1,8 @@
 package mem
+import (meta)
 
 pub class MaybeUninit<T: Movable> {
+    #copy: disabled
     var storage: __vqr_RawStorage<T>;
     func init() : storage(__vqr_uninitialized<T>()) {}
     pub static func uninit() Self { MaybeUninit<T>() }
@@ -8,10 +10,18 @@ pub class MaybeUninit<T: Movable> {
     pub func asPtr() *T { __vqr_raw_address(raw storage) }
     pub const func asConstPtr() *const T { __vqr_raw_address(raw storage) }
 
-    pub unsafe func write(value: T) *T {
-        var address = asPtr();
-        unsafe { __vqr_slot_write<T>(address, move(value)); }
-        address
+    comptime if meta.isCopyable<T>() {
+        pub unsafe func write(value: T) *T {
+            var address = asPtr();
+            unsafe { __vqr_slot_write<T>(address, move(value)); }
+            address
+        }
+    } else {
+        pub unsafe func write(value: move T) *T {
+            var address = asPtr();
+            unsafe { __vqr_slot_write<T>(address, move(value)); }
+            address
+        }
     }
 
     pub unsafe func assumeInit() T { unsafe { __vqr_slot_take<T>(asPtr()) } }
@@ -20,13 +30,21 @@ pub class MaybeUninit<T: Movable> {
 }
 
 pub class ManuallyDrop<T: Movable> {
+    #copy: disabled
     var slot: MaybeUninit<T>;
-    func init(value: T) : slot(MaybeUninit<T>.uninit()) {
-        unsafe { slot.write(move(value)); }
+    comptime if meta.isCopyable<T>() {
+        func init(value: T) : slot(MaybeUninit<T>.uninit()) {
+            unsafe { slot.write(move(value)); }
+        }
+        pub static func new(value: T) Self { ManuallyDrop<T>(move(value)) }
+    } else {
+        func init(value: move T) : slot(MaybeUninit<T>.uninit()) {
+            unsafe { slot.write(move(value)); }
+        }
+        pub static func new(value: move T) Self { ManuallyDrop<T>(move(value)) }
     }
-    pub static func new(value: T) Self { ManuallyDrop<T>(move(value)) }
     pub func asPtr() *T { slot.asPtr() }
-    pub static func intoInner(value: Self) T { unsafe { value.slot.assumeInit() } }
+    pub static func intoInner(value: move Self) T { unsafe { value.slot.assumeInit() } }
     pub unsafe func dropInPlace() void { unsafe { slot.assumeInitDrop(); } }
 }
 

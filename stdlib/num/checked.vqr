@@ -242,10 +242,10 @@ pub func average<T: Copyable + Movable>(values: []const T) core.ResultOptional<T
     var total = BigInt.zero();
     for value in values {
         var term = BigInt.fromInteger<T>(value)!;
-        var next = total.add(raw term)!;
+        var next = total.add(term)!;
         total = move(next);
     }
     var count = BigInt.fromInteger<usize>(values.len())!;
-    var mean = total.div(raw count)!;
+    var mean = total.div(count)!;
     some(mean.toInteger<T>()!)
 }

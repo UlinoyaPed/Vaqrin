@@ -1,5 +1,5 @@
 package coll
-import (core, iter as iterator, mem)
+import (core, iter as iterator, mem, meta)
 
 pub class DequeIterRef<T: Movable> {
     var slots: []const mem.MaybeUninit<T>;
@@ -171,36 +171,80 @@ pub class VecDeque<T: Movable> {
         reserve(nextSequenceCapacity(capacity()))
     }
 
-    pub func pushBack(value: T) !void {
+    // Reserve first: allocation failure must leave the live slots, head and
+    // length untouched. A successful reserve may have relinearized the ring.
+    func preparePush(front: bool) !usize {
         ensureRoomForOne()!;
-        unsafe { slots.getMutPtr(physical(length)).unwrap().write(move(value)); }
-        length++;
+        if !front { return physical(length); }
+        if head == 0 { capacity() - 1 } else { head - 1 }
     }
 
-    pub func pushFront(value: T) !void {
-        ensureRoomForOne()!;
-        if head == 0 { head = capacity() - 1; } else { head--; }
-        unsafe { slots.getMutPtr(head).unwrap().write(move(value)); }
-        length++;
-    }
+    // Copyable callers make their sole copy at the public boundary; the
+    // acquired value is then moved into the vacant slot or the failure payload.
+    comptime if meta.isCopyable<T>() {
+        pub func pushBack(value: T) !void {
+            var index = preparePush(false)!;
+            unsafe { slots.getMut(index).unwrap().write(move(value)); }
+            length++;
+        }
 
-    pub func pushBackPreserving(value: T) PushResult<T> {
-        ensureRoomForOne() catch (reason) {
-            return PushResult<T>.Failed(reason, move(value));
-        };
-        unsafe { slots.getMutPtr(physical(length)).unwrap().write(move(value)); }
-        length++;
-        PushResult<T>.Stored()
-    }
+        pub func pushFront(value: T) !void {
+            var index = preparePush(true)!;
+            unsafe { slots.getMut(index).unwrap().write(move(value)); }
+            head = index;
+            length++;
+        }
 
-    pub func pushFrontPreserving(value: T) PushResult<T> {
-        ensureRoomForOne() catch (reason) {
-            return PushResult<T>.Failed(reason, move(value));
-        };
-        if head == 0 { head = capacity() - 1; } else { head--; }
-        unsafe { slots.getMutPtr(head).unwrap().write(move(value)); }
-        length++;
-        PushResult<T>.Stored()
+        pub func pushBackPreserving(value: T) PushResult<T> {
+            var index = preparePush(false) catch (reason) {
+                return PushResult<T>.Failed(reason, move(value));
+            };
+            unsafe { slots.getMut(index).unwrap().write(move(value)); }
+            length++;
+            PushResult<T>.Stored()
+        }
+
+        pub func pushFrontPreserving(value: T) PushResult<T> {
+            var index = preparePush(true) catch (reason) {
+                return PushResult<T>.Failed(reason, move(value));
+            };
+            unsafe { slots.getMut(index).unwrap().write(move(value)); }
+            head = index;
+            length++;
+            PushResult<T>.Stored()
+        }
+    } else {
+        pub func pushBack(value: move T) !void {
+            var index = preparePush(false)!;
+            unsafe { slots.getMut(index).unwrap().write(move(value)); }
+            length++;
+        }
+
+        pub func pushFront(value: move T) !void {
+            var index = preparePush(true)!;
+            unsafe { slots.getMut(index).unwrap().write(move(value)); }
+            head = index;
+            length++;
+        }
+
+        pub func pushBackPreserving(value: move T) PushResult<T> {
+            var index = preparePush(false) catch (reason) {
+                return PushResult<T>.Failed(reason, move(value));
+            };
+            unsafe { slots.getMut(index).unwrap().write(move(value)); }
+            length++;
+            PushResult<T>.Stored()
+        }
+
+        pub func pushFrontPreserving(value: move T) PushResult<T> {
+            var index = preparePush(true) catch (reason) {
+                return PushResult<T>.Failed(reason, move(value));
+            };
+            unsafe { slots.getMut(index).unwrap().write(move(value)); }
+            head = index;
+            length++;
+            PushResult<T>.Stored()
+        }
     }
 
     pub func popFront() ?T {

@@ -2,12 +2,14 @@ package atomic
 
 pub enum Order { Relaxed, Acquire, Release, AcqRel, SeqCst }
 
-pub class CompareExchange<T> {
+pub class CompareExchange<T: Copyable> {
     pub var old: T;
     pub var exchanged: bool;
+    pub func init(old: T, exchanged: bool) : old(old), exchanged(exchanged) {}
 }
 
-pub class Atomic<T> {
+// The intrinsics also require an atomic type and width supported by the target.
+pub class Atomic<T: Copyable> {
     #copy: disabled
     var cell: T;
     pub func init(value: T) : cell(value) {
@@ -24,7 +26,7 @@ pub class Atomic<T> {
 
     pub func compareExchange(expected: T, desired: T, success: Order, failure: Order) CompareExchange<T> {
         old, exchanged := __vqr_atomic_compare(raw cell, expected, desired, success, failure);
-        CompareExchange<T>{old: old, exchanged: exchanged}
+        CompareExchange<T>(old, exchanged)
     }
     pub func compareExchange(expected: T, desired: T) CompareExchange<T> {
         compareExchange(expected, desired, Order.SeqCst, Order.SeqCst)
@@ -32,7 +34,7 @@ pub class Atomic<T> {
 
     pub func compareExchangeWeak(expected: T, desired: T, success: Order, failure: Order) CompareExchange<T> {
         old, exchanged := __vqr_atomic_compare_weak(raw cell, expected, desired, success, failure);
-        CompareExchange<T>{old: old, exchanged: exchanged}
+        CompareExchange<T>(old, exchanged)
     }
     pub func compareExchangeWeak(expected: T, desired: T) CompareExchange<T> {
         compareExchangeWeak(expected, desired, Order.SeqCst, Order.SeqCst)
@@ -53,7 +55,7 @@ pub class Atomic<T> {
     pub func fetchMin(value: T, order: Order) T { __vqr_atomic_min(raw cell, value, order) }
     pub func fetchMin(value: T) T { fetchMin(value, Order.SeqCst) }
 
-    pub static func intoInner(value: Self) T { value.cell }
+    pub static func intoInner(value: move Self) T { value.cell }
 }
 
 pub class AtomicFlag {
@@ -79,5 +81,5 @@ pub func supportedWidths() []const usize {
     widths[0..count]
 }
 
-pub func atomicLoad<T>(ptr: *const Atomic<T>, order: Order) T { ptr.load(order) }
-pub func atomicStore<T>(ptr: *Atomic<T>, value: T, order: Order) void { ptr.store(value, order); }
+pub func atomicLoad<T: Copyable>(ptr: *const Atomic<T>, order: Order) T { ptr.load(order) }
+pub func atomicStore<T: Copyable>(ptr: *Atomic<T>, value: T, order: Order) void { ptr.store(value, order); }

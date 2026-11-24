@@ -40,7 +40,7 @@ pub class BufferedReader {
     }
     pub func init(reader: *io.Reader, size: usize) !void : self(size) { source = some(reader); }
     comptime if __vqr_host_supports_io() {
-        pub func init(reader: io.HostFile, size: usize) !void : self(size) {
+        pub func init(reader: move io.HostFile, size: usize) !void : self(size) {
             ownedSource = some(move(reader));
         }
     }
@@ -267,7 +267,7 @@ pub class ByteToken {
     var data: coll.Vec<u8>;
     pub var start: u64;
     pub var end: u64;
-    pub func init(data: coll.Vec<u8>, start: u64, end: u64) : data(move(data)), start(start), end(end) {}
+    pub func init(data: move coll.Vec<u8>, start: u64, end: u64) : data(move(data)), start(start), end(end) {}
     pub const func bytes() []const u8 { data.asConstSlice() }
 }
 
@@ -279,12 +279,12 @@ pub class Scanner {
     var mode: SplitMode;
     var pending: coll.Vec<u8>;
     var tokenStart: u64;
-    func init(buffered: BufferedReader, maxToken: usize)
+    func init(buffered: move BufferedReader, maxToken: usize)
         : reader(move(buffered)), maximum(maxToken), consumed(0), mode(SplitMode.AsciiWhitespace),
           pending(coll.Vec<u8>()), tokenStart(0) {}
     pub func init(source: *io.Reader) !void : self(BufferedReader(source, 4096)!, 1048576) {}
     comptime if __vqr_host_supports_io() {
-        pub func init(source: io.HostFile) !void : self(BufferedReader(move(source), 4096)!, 1048576) {}
+        pub func init(source: move io.HostFile) !void : self(BufferedReader(move(source), 4096)!, 1048576) {}
     }
     pub func setMaxToken(value: usize) void { maximum = value; }
     pub func setSplitMode(value: SplitMode) void { mode = value; }
@@ -372,7 +372,7 @@ pub func newWriter(writer: *io.Writer, capacity: usize) !BufferedWriter {
     BufferedWriter(writer, capacity)
 }
 pub func newScanner(reader: *io.Reader) !Scanner { Scanner(reader) }
-pub func newScanner(reader: io.HostFile) !Scanner { Scanner(move(reader)) }
+pub func newScanner(reader: move io.HostFile) !Scanner { Scanner(move(reader)) }
 pub func readLine(reader: *BufferedReader, maxBytes: usize) core.ResultOptional<string> {
     reader.readLine(maxBytes)
 }

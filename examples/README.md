@@ -18,7 +18,7 @@ Zed 的 `run code` 任务可直接启动单文件和各项目的入口文件。
 | --- | --- | --- |
 | [hello.vqr](hello.vqr) | 导入、`main`、传播输出错误 | `Hello, Vaqrin!` |
 | [basics/control_flow.vqr](basics/control_flow.vqr) | 常量、数组、`if`、`for`、函数末尾表达式 | `excellent`、`retry`、`pass`、`2` |
-| [basics/collections.vqr](basics/collections.vqr) | `Vec` 的借用迭代和 `HashMap` 频次统计 | `2`、`1`、`0` |
+| [basics/collections.vqr](basics/collections.vqr) | `Vec` 的索引读取和 `HashMap` 频次统计 | `2`、`1`、`0` |
 | [language/optional.vqr](language/optional.vqr) | `?` 传播空值，`!` 传播错误，`??` 提供后备值 | `42`、`0`、`-1` |
 | [language/generics.vqr](language/generics.vqr) | 类型参数和函数类型 | `42`、`true` |
 | [language/interfaces.vqr](language/interfaces.vqr) | 接口、带载荷的枚举和模式匹配 | `21`、`16`、`10` |

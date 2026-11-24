@@ -20,7 +20,7 @@ pub class AtomicPtr<T> {
     pub func compareExchange(expected: ?*T, desired: ?*T, success: Order, failure: Order) CompareExchange<?*T> {
         var result = cell.compareExchange(__vqr_atomic_encode(expected), __vqr_atomic_encode(desired),
                                           success, failure);
-        CompareExchange<?*T>{old: __vqr_atomic_decode<T>(result.old), exchanged: result.exchanged}
+        CompareExchange<?*T>(__vqr_atomic_decode<T>(result.old), result.exchanged)
     }
     pub func compareExchange(expected: ?*T, desired: ?*T) CompareExchange<?*T> {
         compareExchange(expected, desired, Order.SeqCst, Order.SeqCst)

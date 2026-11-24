@@ -68,6 +68,7 @@ pub class JsonArray {
     pub const func isEmpty() bool { values.isEmpty() }
     pub func reserve(count: usize) !void { values.reserve(count) }
     pub const func get(index: usize) ?*const Value { values.getPtr(index) }
+    pub const func getRef(index: usize) ?ref Value from self { values.get(index) }
     pub func getMut(index: usize) ?*Value { values.getMutPtr(index) }
     pub func push(value: Value) !void { values.push(move(value)) }
     pub func pop() ?Value { values.pop() }
@@ -137,7 +138,12 @@ pub class JsonObject {
     }
     pub const func keyAt(index: usize) ?str {
         if index >= entries.len() { return null; }
-        some(entries.getPtr(index).unwrap().key)
+        some(entries[index].key)
+    }
+    pub const func valueRefAt(index: usize) ?ref Value from self {
+        if index >= entries.len() { return null; }
+        var entry = entries.get(index).unwrap();
+        some(ref entry.value)
     }
     pub const func valueAt(index: usize) ?*const Value {
         if index >= entries.len() { return null; }

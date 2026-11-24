@@ -651,7 +651,7 @@ class StandardLibraryAcceptance(CompilerCase):
                 var jsonWriter = json.JsonDomSerializer();
                 jsonWriter.writeF64(-0.0)!;
                 var jsonValue = jsonWriter.takeValue()!;
-                var wire = json.stringify(raw jsonValue)!;
+                var wire = json.stringify(jsonValue)!;
                 var jsonReader = json.JsonDomDeserializer(json.parse(wire)!);
                 var signedZero = jsonReader.readF64()!;
                 io.println(convert.bitCast<u64>(signedZero) == 0x8000000000000000u64)!;
@@ -691,8 +691,14 @@ class StandardLibraryAcceptance(CompilerCase):
                 io.println(text.equal(previous, "有=值"))!;
                 snapshot.set(key, "owned")!;
                 var cloned = snapshot.clone()!;
+                var keys = snapshot.keys()!;
                 snapshot.remove(key)!;
                 io.println(!snapshot.contains(key))!;
+                var wasListed = false;
+                for index in usize(0)..keys.len() {
+                    if text.equal(keys[index], key) { wasListed = true; }
+                }
+                io.println(wasListed)!;
                 var clonedValue = cloned.get(key)!.unwrap();
                 var liveValue = env.getOr(key, "missing")!;
                 io.println(text.equal(clonedValue, "owned"))!;
@@ -704,7 +710,7 @@ class StandardLibraryAcceptance(CompilerCase):
                 var executable = env.currentExe()!;
                 io.println(executable.isAbsolute())!;
             }
-        """, "true\n" * 10)
+        """, "true\n" * 11)
 
     def test_process_status_and_output(self):
         self.hosted(r"""
@@ -1305,6 +1311,59 @@ class StandardLibraryAcceptance(CompilerCase):
             }
         """, "old\ntrue\ntrue\n")
 
+    def test_json_encoder_borrows_values_from_their_owners(self):
+        self.hosted("""
+            import (json)
+            func main() !void {
+                var array = json.JsonArray();
+                array.push(json.Value.Bool(true))!;
+                {
+                    var child: ref json.Value = array.getRef(0).unwrap();
+                    io.println(json.stringify(child)!)!;
+                }
+                array.push(json.Value.Null)!;
+                io.println(json.stringify(json.Value.Array(move(array)))!)!;
+
+                var object = json.JsonObject();
+                var previous = object.insert("key", json.Value.Bool(false))!;
+                {
+                    var child: ref json.Value = object.valueRefAt(0).unwrap();
+                    io.println(json.stringify(child)!)!;
+                }
+                var removed = object.remove("key").unwrap();
+                io.println(json.stringify(removed)!)!;
+            }
+        """, "true\n[true,null]\nfalse\nfalse\n")
+
+        for case, program, diagnostic in (
+            ("array_growth", """
+                var array = json.JsonArray();
+                array.push(json.Value.Null)!;
+                var child: ref json.Value = array.getRef(0).unwrap();
+                array.reserve(16)!;
+                io.println(json.stringify(child)!)!;
+            """, b"access conflicts with active borrow"),
+            ("object_removal", """
+                var object = json.JsonObject();
+                var previous = object.insert("key", json.Value.Null)!;
+                var child: ref json.Value = object.valueRefAt(0).unwrap();
+                var removed = object.remove("key");
+                io.println(json.stringify(child)!)!;
+            """, b"access conflicts with active borrow"),
+            ("raw_value", """
+                var value = json.Value.Null;
+                var encoded = json.stringify(raw value)!;
+            """, b"no accessible overload"),
+        ):
+            with self.subTest(case=case):
+                source = self.source(case + "/main.vqr", """
+                    package main
+                    import (io, json)
+                    func main() !void {
+                """ + program + "}")
+                result = self.process(VAQC, "check", source, good=False)
+                self.assertIn(diagnostic, result.stderr)
+
     def test_json_encoder_options(self):
         expected = "\n".join([
             r'{"z":[{"\ud83d\ude80":"\u00e9\ud83d\ude00\n\u0001","b":2}],"\u00e9":0,"aa":1,"a":2}',
@@ -1332,17 +1391,17 @@ class StandardLibraryAcceptance(CompilerCase):
                 var options = json.EncodeOptions();
                 options.escapeNonAscii = true;
                 var compact = io.MemoryWriter();
-                json.write(raw compact, raw value, options)!;
+                json.write(raw compact, value, options)!;
                 io.println(text.fromBytes(compact.asSlice())!)!;
 
                 options.sortKeys = true;
                 options.indent = 2;
                 var pretty = io.MemoryWriter();
                 var encoder = json.Encoder(raw pretty, options);
-                encoder.encodeValue(raw value)!;
+                encoder.encodeValue(value)!;
                 encoder.flush()!;
                 io.println(text.fromBytes(pretty.asSlice())!)!;
-                io.println(json.stringify(raw value)!)!;
+                io.println(json.stringify(value)!)!;
             }
         ''', expected)
 
@@ -1356,12 +1415,12 @@ class StandardLibraryAcceptance(CompilerCase):
                 var output = io.MemoryWriter();
                 var encoder = json.Encoder(raw output, options);
                 var nested = json.parse("[[]]")!;
-                encoder.encodeValue(raw nested) catch (reason) {
+                encoder.encodeValue(nested) catch (reason) {
                     if reason != json.JsonError.DepthLimit { return reason; }
                     io.println("depth limit")!;
                 };
                 var shallow = json.parse("[]")!;
-                encoder.encodeValue(raw shallow)!;
+                encoder.encodeValue(shallow)!;
                 io.println(text.fromBytes(output.asSlice())!)!;
             }
         ''', "depth limit\n[[]\n")
@@ -1438,6 +1497,55 @@ class StandardLibraryAcceptance(CompilerCase):
             }
         ''')
         self.assertEqual(self.run_program(program), "e\u0301\nAfi\nAe\u0301\n3\ntrue\n")
+
+    def test_log_and_error_nested_attributes_keep_order_and_ownership(self):
+        self.hosted("""
+            import (errors, log, text)
+            error Failure { First, Second }
+
+            func group() !log.Attr {
+                var items = [2]log.Attr{
+                    log.Attr.int("attempt", 2)!,
+                    log.Attr.bool("retry", false)!,
+                };
+                log.Attr.group("request", items[:])
+            }
+
+            func aggregate(attrs: []const log.Attr) !errors.Report {
+                var first = errors.fromError(Failure.First)!;
+                var location = errors.SourceLocation("client.vqr", 4, 2, 4, 6, "call")!;
+                first.addContextAt("request failed", move(location), attrs)!;
+                var next = errors.fromError(Failure.Second)!;
+                next.addContext("transport lost")!;
+                first.addCause(move(next))!;
+                var entries = [1]errors.Report{move(first)};
+                errors.join(entries[:])
+            }
+
+            func main() !void {
+                var writer = io.MemoryWriter();
+                var handler = log.TextHandler.new(raw writer);
+                var root = log.Logger.new(raw handler)!;
+                var extra = [1]log.Attr{log.Attr.string("worker", "a")!};
+                var logger = root.with(extra[:])!;
+                var attrs = [1]log.Attr{group()!};
+                logger.log(log.Level.Info, "ready", attrs[:])!;
+                var rendered = text.fromBytes(writer.asSlice())!;
+                io.print(rendered)!;
+
+                var report = aggregate(attrs[:])!;
+                io.println(report.rootError().unwrap() == Failure.Second)!;
+                io.println(report.matches(Failure.First) && report.matches(Failure.Second))!;
+                var diagnostic = report.formatString()!;
+                io.print(diagnostic)!;
+            }
+        """, 'INFO "ready" "worker"="a" "request.attempt"=2 "request.retry"=false\n'
+             'true\ntrue\n'
+             'multiple errors\n'
+             '  error [ErrorId]\n'
+             '    context: request failed (client.vqr:4:2) "request.attempt"=2 "request.retry"=false\n'
+             '    error [ErrorId]\n'
+             '      context: transport lost\n')
 
     def test_utilities(self):
         output = self.example("examples/stdlib/utilities.vqr")

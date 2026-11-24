@@ -7,8 +7,9 @@ func main() !void {
     values.push(4)!;
 
     var counts = coll.i32Map<i32>();
-    // Read each Vec element through a borrowed iterator.
-    for &key in values.iterRef() {
+    // These i32 keys are Copyable, so read each from the live Vec by index.
+    for index in usize(0)..values.len() {
+        var key: i32 = values[index];
         // The returned map reference is live only during this iteration.
         var count = counts.getOrInsert(key, 0)!;
         count++;

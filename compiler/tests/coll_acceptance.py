@@ -683,6 +683,169 @@ class ContainerAcceptance(CompilerCase):
         """)
         self.assertEqual(sorted(output), list("0123456789"))
 
+    def test_vecdeque_push_modes_preserve_values_and_drop_once_on_failure(self):
+        setup = """
+            error Injected { Capacity }
+            class Allocator {
+                #implements: mem.Allocator
+                var backing: mem.GlobalAllocator;
+                pub var fail: bool;
+                pub var live: usize;
+                pub func init() : backing(mem.GlobalAllocator()), fail(false), live(0) {}
+                pub func alloc(layout: mem.Layout) core.ResultOptional<*u8> {
+                    if fail { return Injected.Capacity; }
+                    var out = backing.alloc(layout)!;
+                    if out != null { live += layout.size(); }
+                    out
+                }
+                pub unsafe func free(ptr: *u8, layout: mem.Layout) void {
+                    live -= layout.size();
+                    unsafe { backing.free(ptr, layout); }
+                }
+            }
+            class CopyProbe {
+                #copy: enable
+                var copies: *i32;
+                var drops: *i32;
+                pub var id: i32;
+                pub func init(copies: *i32, drops: *i32, id: i32) : copies(copies), drops(drops), id(id) {}
+                pub const func copy() Self {
+                    unsafe { (*copies)++; }
+                    CopyProbe(copies, drops, id)
+                }
+                func deinit() void { unsafe { (*drops)++; } }
+            }
+            class Owned {
+                #copy: disabled
+                var drops: *i32;
+                pub var id: i32;
+                pub func init(drops: *i32, id: i32) : drops(drops), id(id) {}
+                func deinit() void { unsafe { (*drops)++; } }
+            }
+        """
+        self.assertEqual(self.run_container(setup + """
+            func main() !void {
+                var allocator = Allocator();
+                var copies = 0;
+                var copyDrops = 0;
+                var ownerDrops = 0;
+                {
+                    var back = CopyProbe(raw copies, raw copyDrops, 1);
+                    var front = CopyProbe(raw copies, raw copyDrops, 2);
+                    var deque = coll.VecDeque<CopyProbe>.withCapacityAndAllocator(2, unsafe {
+                        mem.AllocatorRef.fromRaw(raw allocator)
+                    })!;
+                    deque.pushBack(back)!;
+                    deque.pushFront(front)!;
+                    if copies != 2 || copyDrops != 0 { panic("copy did not stay at the public boundary"); }
+                    allocator.fail = true;
+                    switch deque.pushFrontPreserving(front) {
+                        coll.PushResult.Failed(reason, item) => {
+                            if reason != Injected.Capacity || item.id != 2 || copies != 3 || copyDrops != 0 {
+                                panic("front failure did not return the argument copy");
+                            }
+                        },
+                        _ => panic("front growth should fail"),
+                    }
+                    switch deque.pushBackPreserving(back) {
+                        coll.PushResult.Failed(reason, item) => {
+                            if reason != Injected.Capacity || item.id != 1 || copies != 4 || copyDrops != 1 {
+                                panic("back failure did not return the argument copy");
+                            }
+                        },
+                        _ => panic("back growth should fail"),
+                    }
+                    deque.pushFront(front) catch (reason) {
+                        if reason != Injected.Capacity { return reason; }
+                    };
+                    deque.pushBack(back) catch (reason) {
+                        if reason != Injected.Capacity { return reason; }
+                    };
+                    if copies != 6 || copyDrops != 4 || deque.len() != 2 ||
+                       deque.get(0).unwrap().id != 2 || deque.get(1).unwrap().id != 1 ||
+                       front.id != 2 || back.id != 1 { panic("failed pushes changed the ring or consumed a copy source"); }
+                    allocator.fail = false;
+                    switch deque.pushFrontPreserving(front) {
+                        coll.PushResult.Stored => {},
+                        _ => panic("front growth should recover"),
+                    }
+                    switch deque.pushBackPreserving(back) {
+                        coll.PushResult.Stored => {},
+                        _ => panic("back storage should recover"),
+                    }
+                    if copies != 8 || copyDrops != 4 || deque.len() != 4 ||
+                       deque.get(0).unwrap().id != 2 || deque.get(1).unwrap().id != 2 ||
+                       deque.get(2).unwrap().id != 1 || deque.get(3).unwrap().id != 1 {
+                        panic("copy path duplicated ownership or lost order during growth");
+                    }
+                }
+                if copyDrops != 10 || allocator.live != 0 { panic("copy path leaked or double-dropped"); }
+
+                {
+                    var deque = coll.VecDeque<Owned>.withCapacityAndAllocator(2, unsafe {
+                        mem.AllocatorRef.fromRaw(raw allocator)
+                    })!;
+                    var back = Owned(raw ownerDrops, 10);
+                    deque.pushBack(move(back))!;
+                    deque.pushFront(Owned(raw ownerDrops, 20))!;
+                    allocator.fail = true;
+                    var frontRejected = Owned(raw ownerDrops, 30);
+                    switch deque.pushFrontPreserving(move(frontRejected)) {
+                        coll.PushResult.Failed(reason, item) => {
+                            if reason != Injected.Capacity || item.id != 30 || ownerDrops != 0 {
+                                panic("front failure did not return precisely the moved owner");
+                            }
+                        },
+                        _ => panic("front growth should fail"),
+                    }
+                    switch deque.pushBackPreserving(Owned(raw ownerDrops, 40)) {
+                        coll.PushResult.Failed(reason, item) => {
+                            if reason != Injected.Capacity || item.id != 40 || ownerDrops != 1 {
+                                panic("back failure did not return precisely the temporary owner");
+                            }
+                        },
+                        _ => panic("back growth should fail"),
+                    }
+                    deque.pushBack(Owned(raw ownerDrops, 50)) catch (reason) {
+                        if reason != Injected.Capacity { return reason; }
+                    };
+                    var rejected = Owned(raw ownerDrops, 60);
+                    deque.pushFront(move(rejected)) catch (reason) {
+                        if reason != Injected.Capacity { return reason; }
+                    };
+                    if ownerDrops != 4 || deque.len() != 2 ||
+                       deque.get(0).unwrap().id != 20 || deque.get(1).unwrap().id != 10 {
+                        panic("failed growth altered the ring or mishandled an owner");
+                    }
+                    allocator.fail = false;
+                    switch deque.pushFrontPreserving(Owned(raw ownerDrops, 70)) {
+                        coll.PushResult.Stored => {},
+                        _ => panic("owning front growth should recover"),
+                    }
+                    var last = Owned(raw ownerDrops, 80);
+                    switch deque.pushBackPreserving(move(last)) {
+                        coll.PushResult.Stored => {},
+                        _ => panic("owning back storage should recover"),
+                    }
+                    if deque.len() != 4 || deque.get(0).unwrap().id != 70 ||
+                       deque.get(1).unwrap().id != 20 || deque.get(2).unwrap().id != 10 ||
+                       deque.get(3).unwrap().id != 80 { panic("recovered ring order is wrong"); }
+                }
+                if ownerDrops != 8 || allocator.live != 0 { panic("move path leaked or double-dropped"); }
+            }
+        """), [])
+        for operation, post in (("pushBack", "!"), ("pushFront", "!"),
+                                ("pushBackPreserving", ""), ("pushFrontPreserving", "")):
+            with self.subTest(operation=operation):
+                source = self.source(operation + "/main.vqr", "import (coll, core, mem)\n" + setup + """
+                    func main() !void {
+                        var count = 0;
+                        var item = Owned(raw count, 7);
+                        var ring = coll.VecDeque<Owned>();
+                """ + f"ring.{operation}(item){post};" + "\n}")
+                diagnostic = self.process(VAQC, "check", source, good=False).stderr
+                self.assertIn(b"move parameter requires move(object) or an owning temporary", diagnostic)
+
     def test_deques_wrap_and_preserve_noncopy_values(self):
         dropped = self.run_container('''
             class Probe {

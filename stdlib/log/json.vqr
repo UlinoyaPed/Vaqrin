@@ -49,7 +49,7 @@ pub class JsonHandler {
             null => {},
         };
         var value = json.Value.Object(move(object));
-        var line = json.stringify(raw value)!;
+        var line = json.stringify(value)!;
         var encoded = coll.Vec<u8>.withCapacity(line.byteLen() + 1)!;
         for byte in line.asBytes() { encoded.push(byte)!; }
         encoded.push(10)!;

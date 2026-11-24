@@ -147,12 +147,6 @@ private:
       fail(current().span, "expected an identifier", "E110");
     return take();
   }
-  Token iterationBindingName() {
-    if (!eat("&")) return name(true);
-    auto t = name();
-    t.text = "&" + t.text;
-    return t;
-  }
   bool typePunctuation(char c) {
     auto t = current();
     if (t.kind != TokenKind::Punctuation || t.text.empty() || t.text[0] != c) return false;
@@ -722,7 +716,9 @@ Ast Parser::loop() {
       n->iterationBinding = exclusive ? IterationBinding::Exclusive : IterationBinding::Shared;
     } else {
       do {
-        auto binding = iterationBindingName();
+        if (at("&"))
+          fail(current().span, "legacy '&' iteration binding; use 'for ref', 'for ref mut', or an explicit dereference", "E110");
+        auto binding = name(true);
         n->names.push_back(binding.text);
         n->bindingSpans.push_back(binding.span);
       } while (eat(","));

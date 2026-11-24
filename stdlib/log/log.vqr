@@ -1,5 +1,5 @@
 package log
-import (iter as iterator, coll, io, text, time)
+import (coll, io, text, time)
 
 pub enum Level { Trace, Debug, Info, Warn, Error, Fatal }
 
@@ -67,7 +67,7 @@ pub class Attr {
         : keyValue(text.fromBytes(key.asBytes())!), kindValue(kind),
           stringValue(text.fromBytes(stringValue.asBytes())!), intValue(intValue),
           boolValue(boolValue), errorValue(errorValue), children(coll.Vec<Attr>()) {
-        for &attr in iterator.SliceIterRef<Attr>(values) { children.push(attr.clone()!)!; }
+        for index in usize(0)..values.len() { children.push(values[index].clone()!)!; }
     }
     pub static func string(key: str, value: str) !Self {
         var empty = [0]Attr{};
@@ -107,6 +107,39 @@ pub class Attr {
         Attr(keyValue, kindValue, stringValue, intValue, boolValue, errorValue,
             children.asConstSlice())!
     }
+
+    pub const func writeText(writer: *io.Writer, prefix: str) !void {
+        var builder = text.StringBuilder();
+        if prefix.byteLen() != 0 {
+            builder.append(prefix)!;
+            builder.append(".")!;
+        }
+        builder.append(key())!;
+        var name = builder.build()!;
+        if kind() == AttrKind.Group {
+            for index in usize(0)..children.len() { children[index].writeText(writer, name)!; }
+            return;
+        }
+        io.writeString(writer, " ")!;
+        writeQuoted(writer, name)!;
+        io.writeString(writer, "=")!;
+        switch kind() {
+            AttrKind.String => writeQuoted(writer, asString().unwrap())!,
+            AttrKind.Int => { var number = formatInt(asInt().unwrap())!; io.writeString(writer, number)!; },
+            AttrKind.Bool => io.writeString(writer, if asBool().unwrap() { "true" } else { "false" })!,
+            AttrKind.Error => io.writeString(writer, "ErrorId")!,
+            AttrKind.Group => {},
+        }
+    }
+
+    pub const func format() !string {
+        var writer = io.MemoryWriter();
+        writeText(raw writer, "")!;
+        var bytes = io.MemoryWriter.intoBytes(move(writer));
+        var data = bytes.asConstSlice();
+        if data.len() == 0 { return text.fromBytes(data); }
+        text.fromBytes(data[1..data.len()])
+    }
 }
 
 pub class Record {
@@ -118,7 +151,7 @@ pub class Record {
         : levelValue(level), timestampValue(null),
           messageValue(text.fromBytes(message.asBytes())!),
           attrsValue(coll.Vec<Attr>()) {
-        for &attr in iterator.SliceIterRef<Attr>(attrs) { attrsValue.push(attr.clone()!)!; }
+        for index in usize(0)..attrs.len() { attrsValue.push(attrs[index].clone()!)!; }
     }
     pub const func level() Level { levelValue }
     pub const func timestamp() ?time.Instant { timestampValue }
@@ -167,7 +200,7 @@ pub class Logger {
         clock: ?*time.Clock) !void
         : target(handler), minimum(level), fixed(coll.Vec<Attr>()),
           groupValue(text.fromBytes(group.asBytes())!), clock(clock) {
-        for &attr in iterator.SliceIterRef<Attr>(attrs) { fixed.push(attr.clone()!)!; }
+        for index in usize(0)..attrs.len() { fixed.push(attrs[index].clone()!)!; }
     }
     pub static func new(handler: *Handler) !Self {
         var empty = [0]Attr{};
@@ -182,8 +215,8 @@ pub class Logger {
         if !enabled(level) { return; }
         if attrs.len() > ~usize(0) - fixed.len() { return LogError.Overflow; }
         var all = coll.Vec<Attr>.withCapacity(fixed.len() + attrs.len())!;
-        for &item in iterator.SliceIterRef<Attr>(fixed.asConstSlice()) { all.push(item.clone()!)!; }
-        for &item in iterator.SliceIterRef<Attr>(attrs) { all.push(item.clone()!)!; }
+        for index in usize(0)..fixed.len() { all.push(fixed[index].clone()!)!; }
+        for index in usize(0)..attrs.len() { all.push(attrs[index].clone()!)!; }
         if groupValue.byteLen() == 0 {
             emitRecord(target, level, message, move(all), clock)
         } else {
@@ -196,8 +229,8 @@ pub class Logger {
     pub func with(attrs: []const Attr) !Self {
         if attrs.len() > ~usize(0) - fixed.len() { return LogError.Overflow; }
         var all = coll.Vec<Attr>.withCapacity(fixed.len() + attrs.len())!;
-        for &item in iterator.SliceIterRef<Attr>(fixed.asConstSlice()) { all.push(item.clone()!)!; }
-        for &item in iterator.SliceIterRef<Attr>(attrs) { all.push(item.clone()!)!; }
+        for index in usize(0)..fixed.len() { all.push(fixed[index].clone()!)!; }
+        for index in usize(0)..attrs.len() { all.push(attrs[index].clone()!)!; }
         Logger(target, minimum, all.asConstSlice(), groupValue, clock)!
     }
     pub func withGroup(name: str) !Self {
@@ -242,38 +275,7 @@ func writeQuoted(writer: *io.Writer, value: str) !void {
     io.writeString(writer, "\"")
 }
 
-func writeAttribute(writer: *io.Writer, attr: *const Attr, prefix: str) !void {
-    var builder = text.StringBuilder();
-    if prefix.byteLen() != 0 {
-        builder.append(prefix)!;
-        builder.append(".")!;
-    }
-    builder.append(attr.key())!;
-    var name = builder.build()!;
-    if attr.kind() == AttrKind.Group {
-        for &child in iterator.SliceIterRef<Attr>(attr.asGroup()) { writeAttribute(writer, child.toRaw(), name)!; }
-        return;
-    }
-    io.writeString(writer, " ")!;
-    writeQuoted(writer, name)!;
-    io.writeString(writer, "=")!;
-    switch attr.kind() {
-        AttrKind.String => writeQuoted(writer, attr.asString().unwrap())!,
-        AttrKind.Int => { var number = formatInt(attr.asInt().unwrap())!; io.writeString(writer, number)!; },
-        AttrKind.Bool => io.writeString(writer, if attr.asBool().unwrap() { "true" } else { "false" })!,
-        AttrKind.Error => io.writeString(writer, "ErrorId")!,
-        AttrKind.Group => {},
-    }
-}
-
-pub func formatAttr(value: *const Attr) !string {
-    var writer = io.MemoryWriter();
-    writeAttribute(raw writer, value, "")!;
-    var bytes = io.MemoryWriter.intoBytes(move(writer));
-    var data = bytes.asConstSlice();
-    if data.len() == 0 { return text.fromBytes(data); }
-    text.fromBytes(data[1..data.len()])
-}
+pub func formatAttr(value: *const Attr) !string { value.format() }
 
 pub class TextHandler {
     #implements: Handler
@@ -285,7 +287,8 @@ pub class TextHandler {
         io.writeString(writer, levelText(record.level()))!;
         io.writeString(writer, " ")!;
         writeQuoted(writer, record.message())!;
-        for &attr in iterator.SliceIterRef<Attr>(record.attrs()) { writeAttribute(writer, attr.toRaw(), "")!; }
+        var attributes = record.attrs();
+        for index in usize(0)..attributes.len() { attributes[index].writeText(writer, "")!; }
         io.writeString(writer, "\n")
     }
     pub func flush() !void { writer.flush() }

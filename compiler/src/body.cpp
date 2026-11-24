@@ -41,12 +41,10 @@ int Body::findLocal(std::string_view name) const {
 
 int Body::bind(std::string name, Type *t, bool writable, Value *initial, Span span,
                std::optional<std::size_t> targetScope) {
-  bool reference = name.starts_with('&') || t->kind == Kind::Reference;
+  const bool reference = t->kind == Kind::Reference;
   Type *referenceType = nullptr;
   if (reference) {
-    if (name.starts_with('&')) name.erase(0, 1);
-    if ((t->kind != Kind::Pointer && t->kind != Kind::Reference) || !initial)
-      fail(span, "reference binding requires an initialized pointer or reference");
+    if (!initial) fail(span, "reference binding requires an initialized reference");
     referenceType = p.reference(t->parts[0], t->readOnly);
     writable = !t->readOnly;
     t = t->parts[0];
@@ -1817,6 +1815,7 @@ ValueAt Body::loop(const Ast &n) {
   const bool exclusive = n->iterationBinding == IterationBinding::Exclusive;
   Ast condition, step, body;
   ValueAt start, last, array, iterator, nextItem;
+  Borrow iterationSource{};
   Ast nextCall;
   bool closed = false, enumerate = false;
   Type *element = nullptr;
@@ -1842,15 +1841,31 @@ ValueAt Body::loop(const Ast &n) {
         // possible storage owner pinned for the entire loop, including
         // between iterations and when the descriptor itself is a parameter.
         auto *pair = read(array, range->span);
+        iterationSource = array.origin;
         pinBorrow(array, range->span, scopes.size() - 1);
         arrayPtr = ir.CreateExtractValue(pair, 0);
         length = ir.CreateExtractValue(pair, 1);
       } else {
         if (array.type->kind != Kind::Array || array.local < 0 || !array.address || array.temporaryBorrow ||
-            locals[array.local].reference || locals[array.local].refCapture ||
-            array.address != locals[array.local].slot || carriesBorrow(array.type))
+            carriesBorrow(array.type))
           fail(range->span, "reference iteration requires a named, owned fixed array without borrowed elements "
                             "or a checked readonly slice", "E230");
+        const auto &binding = locals[array.local];
+        if (binding.reference) {
+          // A checked alias is eligible only when the checker can identify
+          // the exact whole local array slot, not just a type-compatible
+          // parameter, projection, or unproven address.
+          const auto &origin = array.origin;
+          if (origin.root < 0 || origin.raw || origin.alternatives || origin.captures ||
+              !origin.fields.empty() || locals[origin.root].reference || locals[origin.root].refCapture ||
+              locals[origin.root].type != array.type || locals[origin.root].slot != array.address)
+            fail(range->span, "reference iteration through an alias requires a proven owned local fixed array", "E230");
+          iterationSource = origin;
+        } else {
+          if (binding.refCapture || binding.slot != array.address)
+            fail(range->span, "reference iteration requires an owned local fixed array", "E230");
+          iterationSource = {array.local};
+        }
         if (exclusive && !array.writable)
           fail(range->span, "cannot iterate a read-only array with ref mut", "E230");
         checkAccess(array, exclusive, range->span);
@@ -2000,8 +2015,6 @@ ValueAt Body::loop(const Ast &n) {
   loops.push_back({end, next, scopes.size(), {}, {}, n->text});
   enter();
   auto bindIteration = [&](std::size_t index, ValueAt value) {
-    if (n->names[index].starts_with('&') && value.type->kind == Kind::Box)
-      fail(n->bindingSpans[index], "bind the Box owner, then explicitly dereference its payload", "E230");
     auto id = bind(n->names[index], value.type, true, read(value, n->span), n->span);
     indexLocal(id, n->bindingSpans[index]);
     recordBorrow(id, value, n->span);
@@ -2035,7 +2048,7 @@ ValueAt Body::loop(const Ast &n) {
     // Keep the storage proof AND an iteration-local lifetime. This prevents
     // a reference into even an outer owner from escaping this iteration.
     const auto iterationLifetime = pinBorrow({p.boolTy}, n->span, scopes.size() - 1);
-    Borrow origin = slice ? array.origin : Borrow{array.local};
+    Borrow origin = iterationSource;
     auto alternatives = origin.alternatives ? *origin.alternatives : std::vector<int>{};
     alternatives.push_back(iterationLifetime); // Fresh local IDs are monotonic.
     origin.alternatives = std::make_shared<const std::vector<int>>(std::move(alternatives));

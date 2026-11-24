@@ -49,15 +49,15 @@ pub func normalize<T>(values: []T) !void {
     for i in usize(0)..values.len() { values[i] = (values[i] / scale) / length; }
 }
 
-pub func axpy<T>(factor: T, x: []const T, y: []T) !void {
+pub func axpy<T: Copyable>(factor: T, x: []const T, y: []T) !void {
     if x.len() != y.len() { return LinalgError.ShapeMismatch; }
     for i in usize(0)..x.len() { y[i] += factor * x[i]; }
 }
 
-pub class Vector<T: Copyable> {
+pub class Vector<T: Copyable + Movable> {
     #copy: disabled
     var values: coll.Vec<T>;
-    func init(values: coll.Vec<T>) : values(move(values)) {}
+    func init(values: move coll.Vec<T>) : values(move(values)) {}
     pub static func zeros(n: usize) !Self {
         var values = coll.Vec<T>.withCapacity(n)!;
         for i in usize(0)..n { values.push(T(0))!; }
@@ -92,12 +92,12 @@ pub class Vector<T: Copyable> {
     }
 }
 
-pub class Matrix<T: Copyable> {
+pub class Matrix<T: Copyable + Movable> {
     #copy: disabled
     var height: usize;
     var width: usize;
     var values: coll.Vec<T>;
-    func init(rows: usize, cols: usize, values: coll.Vec<T>)
+    func init(rows: usize, cols: usize, values: move coll.Vec<T>)
         : height(rows), width(cols), values(move(values)) {}
     pub static func zeros(rows: usize, cols: usize) !Self {
         var count = area(rows, cols)!;
@@ -186,17 +186,17 @@ pub class Matrix<T: Copyable> {
     }
 }
 
-pub func matmul<T: Copyable>(a: in Matrix<T>, b: in Matrix<T>) !Matrix<T> { a.matmul(b) }
-pub func transpose<T: Copyable>(value: in Matrix<T>) !Matrix<T> { value.transposeCopy() }
+pub func matmul<T: Copyable + Movable>(a: in Matrix<T>, b: in Matrix<T>) !Matrix<T> { a.matmul(b) }
+pub func transpose<T: Copyable + Movable>(value: in Matrix<T>) !Matrix<T> { value.transposeCopy() }
 
-pub func trace<T: Copyable>(value: in Matrix<T>) !T {
+pub func trace<T: Copyable + Movable>(value: in Matrix<T>) !T {
     if value.rows() != value.cols() { return LinalgError.ShapeMismatch; }
     var sum = T(0);
     for i in usize(0)..value.rows() { sum += value.at(i, i); }
     sum
 }
 
-pub func outer<T: Copyable>(a: []const T, b: []const T) !Matrix<T> {
+pub func outer<T: Copyable + Movable>(a: []const T, b: []const T) !Matrix<T> {
     var out = Matrix<T>.zeros(a.len(), b.len())!;
     for i in usize(0)..a.len() {
         for j in usize(0)..b.len() { out.set(i, j, a[i] * b[j]); }
@@ -204,7 +204,7 @@ pub func outer<T: Copyable>(a: []const T, b: []const T) !Matrix<T> {
     move(out)
 }
 
-pub func kron<T: Copyable>(a: in Matrix<T>, b: in Matrix<T>) !Matrix<T> {
+pub func kron<T: Copyable + Movable>(a: in Matrix<T>, b: in Matrix<T>) !Matrix<T> {
     var height = area(a.rows(), b.rows())!;
     var width = area(a.cols(), b.cols())!;
     var out = Matrix<T>.zeros(height, width)!;
@@ -219,7 +219,7 @@ pub func kron<T: Copyable>(a: in Matrix<T>, b: in Matrix<T>) !Matrix<T> {
     move(out)
 }
 
-pub class LU<T: Copyable> {
+pub class LU<T: Copyable + Movable> {
     #copy: disabled
     var factors: Matrix<T>;
     var permutation: coll.Vec<usize>;
@@ -302,13 +302,13 @@ pub class LU<T: Copyable> {
         }
         move(out)
     }
-    func init(factors: Matrix<T>, permutation: coll.Vec<usize>, odd: bool)
+    func init(factors: move Matrix<T>, permutation: move coll.Vec<usize>, odd: bool)
         : factors(move(factors)), permutation(move(permutation)), odd(odd) {}
 }
 
-pub func lu<T: Copyable>(matrix: in Matrix<T>) !LU<T> { LU<T>.factor(matrix) }
+pub func lu<T: Copyable + Movable>(matrix: in Matrix<T>) !LU<T> { LU<T>.factor(matrix) }
 
-pub func determinant<T: Copyable>(matrix: in Matrix<T>) !T {
+pub func determinant<T: Copyable + Movable>(matrix: in Matrix<T>) !T {
     var factor = lu<T>(matrix) catch (reason) {
         if reason == LinalgError.Singular { return T(0); }
         return reason;
@@ -316,12 +316,12 @@ pub func determinant<T: Copyable>(matrix: in Matrix<T>) !T {
     factor.determinant()
 }
 
-pub func solve<T: Copyable>(matrix: in Matrix<T>, rhs: in Vector<T>) !Vector<T> {
+pub func solve<T: Copyable + Movable>(matrix: in Matrix<T>, rhs: in Vector<T>) !Vector<T> {
     var factor = lu<T>(matrix)!;
     factor.solve(rhs)
 }
 
-pub func inverse<T: Copyable>(matrix: in Matrix<T>) !Matrix<T> {
+pub func inverse<T: Copyable + Movable>(matrix: in Matrix<T>) !Matrix<T> {
     var factor = lu<T>(matrix)!;
     factor.inverse()
 }

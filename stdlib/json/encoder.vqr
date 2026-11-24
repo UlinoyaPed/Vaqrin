@@ -76,7 +76,7 @@ pub class Encoder {
     var options: EncodeOptions;
     pub func init(writer: *io.Writer, options: EncodeOptions)
         : writer(writer), options(move(options)) {}
-    pub func encodeValue(value: *const Value) !void { writeValue(value, 0) }
+    pub func encodeValue(value: in Value) !void { writeValue(value, 0) }
     pub func flush() !void { writer.flush() }
     func writeIndent(depth: usize) !void {
         if depth != 0 && options.indent > ~usize(0) / depth { return JsonError.SizeLimit; }
@@ -95,7 +95,7 @@ pub class Encoder {
         io.writeString(writer, encoded)
     }
 
-    func writeObject(items: *const JsonObject, depth: usize) !void {
+    func writeObject(items: in JsonObject, depth: usize) !void {
         var keys = coll.Vec<ObjectKey>();
         var count = items.len();
         if options.sortKeys && count > 1 {
@@ -111,53 +111,53 @@ pub class Encoder {
         io.writeString(writer, "{")!;
         for index in usize(0)..count {
             writeItemPrefix(index, depth + 1)!;
-            var entry = if keys.isEmpty() { index } else { keys.getPtr(index).unwrap().index };
+            var entry = if keys.isEmpty() { index } else { keys[index].index };
             writeQuoted(items.keyAt(entry).unwrap())!;
             io.writeString(writer, if options.indent == 0 { ":" } else { ": " })!;
-            writeValue(items.valueAt(entry).unwrap(), depth + 1)!;
+            writeValue(items.valueRefAt(entry).unwrap(), depth + 1)!;
         }
         if count != 0 && options.indent != 0 { writeIndent(depth)!; }
         io.writeString(writer, "}")
     }
 
-    func writeValue(value: *const Value, depth: usize) !void {
-        switch *value {
+    func writeValue(value: in Value, depth: usize) !void {
+        switch value {
             Value.Null => io.writeString(writer, "null"),
             Value.Bool(item) => io.writeString(writer, if item { "true" } else { "false" }),
             Value.Number(ref item) => io.writeString(writer, item.text()),
-            Value.String(item) => writeQuoted(item),
+            Value.String(ref item) => writeQuoted(item),
             Value.Array(ref items) => {
                 if depth >= options.maxDepth { return JsonError.DepthLimit; }
                 io.writeString(writer, "[")!;
                 for index in usize(0)..items.len() {
                     writeItemPrefix(index, depth + 1)!;
-                    writeValue(items.get(index).unwrap(), depth + 1)!;
+                    writeValue(items.getRef(index).unwrap(), depth + 1)!;
                 }
                 if items.len() != 0 && options.indent != 0 { writeIndent(depth)!; }
                 io.writeString(writer, "]")
             },
             Value.Object(ref items) => {
                 if depth >= options.maxDepth { return JsonError.DepthLimit; }
-                writeObject(items.toRaw(), depth)
+                writeObject(items, depth)
             },
         }
     }
 }
 
-pub func write(writer: *io.Writer, value: *const Value, options: EncodeOptions) !void {
+pub func write(writer: *io.Writer, value: in Value, options: EncodeOptions) !void {
     var encoder = Encoder(writer, options);
     encoder.encodeValue(value)!;
     encoder.flush()
 }
 
-pub func stringify(value: *const Value) !string {
+pub func stringify(value: in Value) !string {
     var writer = io.MemoryWriter();
     write(raw writer, value, EncodeOptions())!;
     var data = io.MemoryWriter.intoBytes(move(writer));
     text.fromBytes(data.asConstSlice())
 }
 
-pub func stringifyPretty(value: *const Value, indent: usize) !string {
+pub func stringifyPretty(value: in Value, indent: usize) !string {
     var options = EncodeOptions();
     options.indent = indent;
     var writer = io.MemoryWriter();

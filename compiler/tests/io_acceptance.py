@@ -106,6 +106,30 @@ class IoAcceptance(CompilerCase):
         ''', input=b"11 22")
         self.assertEqual(result.stdout, b"11\n22\ntrue\n19\n42\n7\n8\n")
 
+    def test_bufio_hostfile_transfer_requires_move_or_a_temporary(self):
+        result = self.run_source(r"""
+            import (bufio, io)
+            func main() !void {
+                var file = io.stdin();
+                var scanner = bufio.newScanner(move(file))!;
+                io.println(scanner.readInt<i32>()!)!;
+            }
+        """, input=b"17")
+        self.assertEqual(result.stdout, b"17\n")
+
+        for factory in ("bufio.newScanner(file)", "bufio.Scanner(file)",
+                        "bufio.BufferedReader(file, 32)"):
+            with self.subTest(factory=factory):
+                source = self.source("named_owner.vqr", """
+                    import (bufio, io)
+                    func main() !void {
+                        var file = io.stdin();
+                        var owner = """ + factory + """!;
+                    }
+                """)
+                result = self.process(VAQC, "check", source, good=False)
+                self.assertIn(b"move parameter requires move(object) or an owning temporary", result.stderr)
+
     def test_standard_streams_and_legacy_println(self):
         result = self.run_source(r'''
             import (io)

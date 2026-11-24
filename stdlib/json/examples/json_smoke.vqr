@@ -4,8 +4,8 @@ func main() !void {
     var parsed = json.parse("{\"ok\":true,\"items\":[1,2,{\"name\":\"Vaqrin\"}],\"rocket\":\"\\uD83D\\uDE80\"}");
     io.println(core.isOk(raw parsed))!;
     var value = move(parsed)!;
-    io.println(json.stringify(raw value)!)!;
-    io.println(json.stringifyPretty(raw value, 2)!)!;
+    io.println(json.stringify(value)!)!;
+    io.println(json.stringifyPretty(value, 2)!)!;
 
     var second = json.pointerGet(raw value, "/items/2/name");
     io.println(second != null)!;

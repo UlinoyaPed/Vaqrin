@@ -1,20 +1,23 @@
 package iter
+import (core, meta)
 
 pub class OnceOptional<T: Movable> {
     var item: ?T;
-    pub func init(value: ?T) : item(move(value)) {}
-    pub func next() ?T {
-        unsafe {
-            var old = __vqr_slot_take<?T>(raw item);
-            __vqr_slot_write<?T>(raw item, null);
-            move(old)
-        }
+    comptime if meta.isCopyable<T>() {
+        pub func init(value: ?T) : item(move(value)) {}
+    } else {
+        pub func init(value: move ?T) : item(move(value)) {}
     }
+    pub func next() ?T { core.Exchange<?T>.replace(item, null) }
 }
 
 pub class OnceIter<T: Movable> {
     var source: OnceOptional<T>;
-    pub func init(value: T) : source(OnceOptional<T>(some(move(value)))) {}
+    comptime if meta.isCopyable<T>() {
+        pub func init(value: T) : source(OnceOptional<T>(some(move(value)))) {}
+    } else {
+        pub func init(value: move T) : source(OnceOptional<T>(some(move(value)))) {}
+    }
     pub func next() ?T { source.next() }
 }
 
@@ -35,8 +38,6 @@ pub class FromFnIter<T, F: Movable> {
     pub func next() ?T { callback() }
 }
 
-pub func once<T: Movable>(value: T) OnceIter<T> { OnceIter<T>(move(value)) }
-pub func onceOptional<T: Movable>(value: ?T) OnceOptional<T> { OnceOptional<T>(move(value)) }
 pub func empty<T>() EmptyIter<T> { EmptyIter<T>() }
 pub func repeat<T: Copyable + Movable>(value: T) RepeatIter<T> { RepeatIter<T>(move(value)) }
 pub func fromFn<T, F: Movable>(callback: F) FromFnIter<T, F> { FromFnIter<T, F>(move(callback)) }

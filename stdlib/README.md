@@ -73,7 +73,7 @@ func main() !void {
 }
 ```
 
-Vec 按值接收可移动元素。其 `reserve` 先分配，再搬迁已有元素，分配失败时保留原缓冲区和元素；`withAllocator` 可绑定自定义分配器，分配器及其上下文必须比容器活得更久。Vec 还提供 `insert`、`remove`、`swapRemove`、`replace`、`retain`、`append`、`splitOff`、容量收缩和显式 `clone`。`pushPreserving` 与 `insertPreserving` 在失败时归还输入值。`asSlice` 返回借用视图，重分配或移动相关元素后原视图失效。
+Vec 对 Copyable 元素按值复制；对于不可复制的可移动元素，具名实参须用 `move(...)` 交付所有权。其 `reserve` 先分配，再搬迁已有元素，分配失败时保留原缓冲区和元素；`withAllocator` 可绑定自定义分配器，分配器及其上下文必须比容器活得更久。Vec 还提供 `insert`、`remove`、`swapRemove`、`replace`、`retain`、`append`、`splitOff`、容量收缩和显式 `clone`。`pushPreserving` 与 `insertPreserving` 在失败时归还输入值。`asSlice` 返回借用视图，重分配或移动相关元素后原视图失效。
 
 `VecDeque` 使用循环缓冲槽数组，支持两端插入、移除和随机访问；`FixedDeque<T,N>` 使用内联固定槽，容量不足时以 `PushResult.Full(value)` 归还元素。两者均提供正反向借用迭代。Stack 以 Vec 尾部实现 LIFO，Queue 以 VecDeque 实现 FIFO。BinaryHeap 通过显式比较回调和 `HeapOrder.Min/Max` 构造最小堆或最大堆，也提供 `min()` / `max()` 使用 `<` 运算符；PriorityQueue 是同一实现的别名。
 
@@ -81,7 +81,7 @@ LinkedList 使用双向节点和独立 Box 所有权表，节点地址在插入�
 
 容器的安全查询 `get/getMut` 返回绑定到接收者的可空引用。活跃引用结束前，禁止冲突的写入和结构性修改。Vec 的 `getPtr/getMutPtr` 提供遵循失效合同的裸指针。
 
-按裸指针遍历时使用 `iterRef()` 或 `iterMut()`，后者可配合 `for &item in ...` 修改原位置。
+当前的 `iterRef()` 和 `iterMut()` 仍返回裸指针迭代器，不提供静态生命周期保证。对于 Copyable 元素，可按索引读取副本；需要借用时，用 `get` / `getMut`，使编译器追踪借用来源。
 
 文本按字节比较，`chars` 按 Unicode 标量遍历。`fromBytes` 验证 UTF-8 后复制成不可变字符串，`StringBuilder.build()` 生成可独立持有的快照。拥有型 `string` 的副本共享不可变存储，`str` 与字节视图遵守来源的生命周期。
 
@@ -91,7 +91,7 @@ LinkedList 使用双向节点和独立 Box 所有权表，节点地址在插入�
 
 位流的 `LsbFirst` 从字节低位开始，也先读写结果或参数的低位。`MsbFirst` 从字节高位开始，从读写宽度所覆盖的最高位开始。读不到足够位时，`BitReader` 返回成功的空值并保持位置。超出写入容量时，`BitWriter` 返回错误并保持缓冲区和位置。
 
-`atomic` 在 x86-64 和 AArch64 上支持 8、16、32、64 位原子操作，在 Thumbv7-M 和 Thumbv7E-M 上支持 8、16、32 位原子操作。默认内存顺序为 `SeqCst`，非法的顺序组合触发 trap。用 `Atomic<T>.intoInner(move(value))` 交付原子对象并取出其值。
+`atomic` 在 x86-64 和 AArch64 上支持 8、16、32、64 位原子操作，在 Thumbv7-M 和 Thumbv7E-M 上支持 8、16、32 位原子操作。`Atomic<T>` 和 `CompareExchange<T>` 要求 `T: Copyable`；实际可用于原子操作的类型还受目标限制。`AtomicPtr<T>` 不要求所指的 `T` 可复制。默认内存顺序为 `SeqCst`，非法的顺序组合触发 trap。用 `Atomic<T>.intoInner(move(value))` 交付原子对象并取出其值。
 
 `RefCell` 用借用守卫管理共享和独占访问，守卫或其映射结果释放时归还借用。`OnceCell` 检测重入，`OnceLock` 使用 Acquire/Release 发布已初始化的值，争抢初始化的线程采用自旋等待。可失败的初始化失败后允许重试。守卫和借出的指针必须在对应容器的有效期内使用。
 

@@ -146,17 +146,35 @@ pub func getOrInsertWith<T: Movable, F: Movable>(slot: *?T, factory: F) *T {
     asMutPtr(slot) ?? insert(slot, factory())
 }
 
-pub func toVec<T: Movable>(value: ?T) !coll.Vec<T> {
-    var out = coll.Vec<T>();
-    switch move(value) {
-        null => {},
-        some(item) => { out.push(move(item))!; },
+// Lift an optional into an owning collection. For non-Copyable payloads,
+// the source optional must be a temporary or an explicitly moved owner.
+pub class Collection<T: Movable> {
+    static func collect(source: mut iterator.OnceOptional<T>) !coll.Vec<T> {
+        var out = coll.Vec<T>();
+        switch source.next() {
+            null => {},
+            some(item) => { out.push(move(item))!; },
+        }
+        move(out)
     }
-    move(out)
-}
 
-pub func intoIter<T: Movable>(value: ?T) iterator.OnceOptional<T> {
-    iterator.OnceOptional<T>(move(value))
+    comptime if meta.isCopyable<T>() {
+        pub static func toVec(value: ?T) !coll.Vec<T> {
+            var source = iterator.OnceOptional<T>(move(value));
+            Self.collect(source)
+        }
+        pub static func intoIter(value: ?T) iterator.OnceOptional<T> {
+            iterator.OnceOptional<T>(move(value))
+        }
+    } else {
+        pub static func toVec(value: move ?T) !coll.Vec<T> {
+            var source = iterator.OnceOptional<T>(move(value));
+            Self.collect(source)
+        }
+        pub static func intoIter(value: move ?T) iterator.OnceOptional<T> {
+            iterator.OnceOptional<T>(move(value))
+        }
+    }
 }
 
 pub func transpose<T: Movable>(value: core.OptionalResult<T>) core.ResultOptional<T> {

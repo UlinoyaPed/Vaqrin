@@ -1,7 +1,7 @@
 package num
 import (core, convert, meta)
 
-pub func checkedAdd<T>(a: T, b: T) !T {
+pub func checkedAdd<T: Copyable>(a: T, b: T) !T {
     var minimum = minValue<T>();
     var maximum = maxValue<T>();
     if __vqr_parse_signed<T>() {
@@ -13,7 +13,7 @@ pub func checkedAdd<T>(a: T, b: T) !T {
     a + b
 }
 
-pub func checkedSub<T>(a: T, b: T) !T {
+pub func checkedSub<T: Copyable>(a: T, b: T) !T {
     var minimum = minValue<T>();
     var maximum = maxValue<T>();
     if __vqr_parse_signed<T>() {
@@ -25,7 +25,7 @@ pub func checkedSub<T>(a: T, b: T) !T {
     a - b
 }
 
-pub func checkedMul<T>(a: T, b: T) !T {
+pub func checkedMul<T: Copyable>(a: T, b: T) !T {
     if a == T(0) || b == T(0) { return T(0); }
     var minimum = minValue<T>();
     var maximum = maxValue<T>();
@@ -47,7 +47,7 @@ pub func checkedMul<T>(a: T, b: T) !T {
     a * b
 }
 
-pub func checkedDiv<T>(a: T, b: T) !T {
+pub func checkedDiv<T: Copyable>(a: T, b: T) !T {
     if b == T(0) { return NumError.DivisionByZero; }
     if __vqr_parse_signed<T>() {
         if a == minValue<T>() && b == __vqr_parse_bits<T>(~u128(0)) {
@@ -57,7 +57,7 @@ pub func checkedDiv<T>(a: T, b: T) !T {
     a / b
 }
 
-pub func checkedNeg<T>(value: T) !T {
+pub func checkedNeg<T: Copyable>(value: T) !T {
     if !__vqr_parse_signed<T>() {
         if value != T(0) { return NumError.NegativeValue; }
         return T(0);
@@ -66,11 +66,11 @@ pub func checkedNeg<T>(value: T) !T {
     -value
 }
 
-pub func wrappingAdd<T>(a: T, b: T) T { a +% b }
-pub func wrappingSub<T>(a: T, b: T) T { a -% b }
-pub func wrappingMul<T>(a: T, b: T) T { a *% b }
+pub func wrappingAdd<T: Copyable>(a: T, b: T) T { a +% b }
+pub func wrappingSub<T: Copyable>(a: T, b: T) T { a -% b }
+pub func wrappingMul<T: Copyable>(a: T, b: T) T { a *% b }
 
-pub func saturatingAdd<T>(a: T, b: T) T {
+pub func saturatingAdd<T: Copyable>(a: T, b: T) T {
     var maximum = maxValue<T>();
     if __vqr_parse_signed<T>() {
         if b > T(0) && a > maximum - b { return maximum; }
@@ -81,7 +81,7 @@ pub func saturatingAdd<T>(a: T, b: T) T {
     a + b
 }
 
-pub func saturatingSub<T>(a: T, b: T) T {
+pub func saturatingSub<T: Copyable>(a: T, b: T) T {
     if __vqr_parse_signed<T>() {
         if b > T(0) && a < minValue<T>() + b { return minValue<T>(); }
         if b < T(0) && a > maxValue<T>() + b { return maxValue<T>(); }
@@ -91,7 +91,7 @@ pub func saturatingSub<T>(a: T, b: T) T {
     a - b
 }
 
-pub func saturatingMul<T>(a: T, b: T) T {
+pub func saturatingMul<T: Copyable>(a: T, b: T) T {
     if a == T(0) || b == T(0) { return T(0); }
     var result: !T = checkedMul<T>(a, b);
     var value = move(result) catch {
@@ -102,7 +102,7 @@ pub func saturatingMul<T>(a: T, b: T) T {
     value
 }
 
-pub func abs<T>(value: T) !T {
+pub func abs<T: Copyable>(value: T) !T {
     if !__vqr_parse_signed<T>() { return value; }
     if value == minValue<T>() { return NumError.Overflow; }
     if value < T(0) { -value } else { value }
@@ -116,7 +116,7 @@ func magnitudeU128<T>(value: T) u128 {
     }
 }
 
-pub func absDiff<T>(a: T, b: T) u128 {
+pub func absDiff<T: Copyable>(a: T, b: T) u128 {
     var leftNegative = __vqr_parse_signed<T>() && a < T(0);
     var rightNegative = __vqr_parse_signed<T>() && b < T(0);
     var left = magnitudeU128<T>(a);
@@ -125,7 +125,7 @@ pub func absDiff<T>(a: T, b: T) u128 {
     if left >= right { left - right } else { right - left }
 }
 
-pub func signum<T>(value: T) T {
+pub func signum<T: Copyable>(value: T) T {
     if __vqr_parse_signed<T>() && value < T(0) {
         __vqr_parse_bits<T>(~u128(0))
     } else if value > T(0) {
@@ -135,7 +135,7 @@ pub func signum<T>(value: T) T {
     }
 }
 
-pub func divMod<T>(a: T, b: T) !(T, T) {
+pub func divMod<T: Copyable>(a: T, b: T) !(T, T) {
     if b == T(0) { return NumError.DivisionByZero; }
     if __vqr_parse_signed<T>() &&
        a == minValue<T>() && b == __vqr_parse_bits<T>(~u128(0)) {
@@ -144,7 +144,7 @@ pub func divMod<T>(a: T, b: T) !(T, T) {
     (a / b, a % b)
 }
 
-pub func divEuclid<T>(a: T, b: T) !T {
+pub func divEuclid<T: Copyable>(a: T, b: T) !T {
     var pair = divMod<T>(a, b)!;
     var quotient = pair.0;
     var remainder = a % b;
@@ -155,7 +155,7 @@ pub func divEuclid<T>(a: T, b: T) !T {
     }
 }
 
-pub func remEuclid<T>(a: T, b: T) !T {
+pub func remEuclid<T: Copyable>(a: T, b: T) !T {
     if b == T(0) { return NumError.DivisionByZero; }
     if __vqr_parse_signed<T>() &&
        a == minValue<T>() && b == __vqr_parse_bits<T>(~u128(0)) {
@@ -169,7 +169,7 @@ pub func remEuclid<T>(a: T, b: T) !T {
     }
 }
 
-pub func gcd<T>(a: T, b: T) !T {
+pub func gcd<T: Copyable>(a: T, b: T) !T {
     var left = magnitudeU128<T>(a);
     var right = magnitudeU128<T>(b);
     while right != 0 {
@@ -184,7 +184,7 @@ pub func gcd<T>(a: T, b: T) !T {
     }
 }
 
-pub func lcm<T>(a: T, b: T) !T {
+pub func lcm<T: Copyable>(a: T, b: T) !T {
     if a == T(0) || b == T(0) { return T(0); }
     var divisor = gcd<T>(a, b)!;
     var left = abs<T>(a)! / divisor;
@@ -192,7 +192,7 @@ pub func lcm<T>(a: T, b: T) !T {
     checkedMul<T>(left, right)
 }
 
-pub func powInt<T>(base: T, exponent: usize) !T {
+pub func powInt<T: Copyable>(base: T, exponent: usize) !T {
     var power = exponent;
     var factor = base;
     var result = T(1);
@@ -204,7 +204,7 @@ pub func powInt<T>(base: T, exponent: usize) !T {
     result
 }
 
-pub func midpoint<T>(a: T, b: T) T {
+pub func midpoint<T: Copyable>(a: T, b: T) T {
     if !__vqr_parse_signed<T>() {
         if a <= b {
             a + (b - a) / T(2)

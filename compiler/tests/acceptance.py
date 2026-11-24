@@ -2466,6 +2466,71 @@ class Acceptance(CompilerCase):
                 result = self.process(VAQC, "check", source, good=False)
                 self.assertIn(diagnostic.encode(), result.stderr, result.stderr.decode())
 
+    def test_v020_reference_iteration_reborrows_owned_array_alias(self):
+        self.hosted("""
+            func main() !void {
+                var owner = [3]i32{1, 2, 3};
+                {
+                    ref mut outer = owner;
+                    ref mut inner = outer;
+                    for ref mut item in inner {
+                        var start = item;
+                        defer { item++; }
+                        if start == 1 { continue; }
+                        if start == 2 { break; }
+                    }
+                }
+                io.println(owner[0] + owner[1] + owner[2])!;
+                {
+                    ref alias = owner;
+                    var total = 0;
+                    for ref item in alias { total += item; }
+                    io.println(total)!;
+                }
+                owner[2] = 5;
+                io.println(owner[2])!;
+            }
+        """, "8\n8\n5\n")
+
+        cases = {
+            "parameter": ("func check(values: mut [2]i32) void { for ref mut item in values {} }",
+                          "requires a proven owned local fixed array"),
+            "readonly": ("func check() void { var values = [2]i32{1, 2}; "
+                         "ref alias = values; for ref mut item in alias {} }", "read-only array"),
+            "alias_access": ("func check() void { var values = [2]i32{1, 2}; "
+                             "ref mut alias = values; for ref mut item in alias { alias[0]++; } }",
+                             "conflicts with active borrow"),
+            "owner_access": ("func check() void { var values = [2]i32{1, 2}; "
+                             "ref mut alias = values; for ref mut item in alias { var n = values[0]; } }",
+                             "conflicts with active borrow"),
+            "callback_escape": ("func check() void { var values = [2]i32{1, 2}; "
+                                "ref alias = values; for ref item in alias { "
+                                "var callback = [ref item](input: in i32) ref i32 => item; } }",
+                                "returned reference must borrow from its declared source"),
+        }
+        for name, (body, diagnostic) in cases.items():
+            with self.subTest(name=name):
+                source = self.source(name + "/main.vqr", body)
+                self.assertIn(diagnostic.encode(), self.process(VAQC, "check", source, good=False).stderr)
+
+    def test_v020_iteration_requires_explicit_reference_binding(self):
+        for header in ("for &item in items", "for index, &item in enumerate(items)",
+                       "for &first, second in items"):
+            with self.subTest(header=header):
+                source = self.source("legacy-iteration.vqr",
+                    "func f() void { var items = [2]i32{1, 2}; " + header + " {} }")
+                stderr = self.process(VAQC, "check", source, good=False).stderr
+                self.assertIn(b"error[E110]: legacy '&' iteration binding", stderr)
+        self.hosted("""
+            func main() !void {
+                var items = [2]i32{5, 7};
+                for ref mut item in items { item += 1; }
+                for index, value in enumerate(items) {
+                    io.println(value & i32(index + 6)!)!;
+                }
+            }
+        """, "6\n0\n")
+
     def test_v020_loop_headers_require_canonical_spelling(self):
         for header, diagnostic in (
             ("for i < 3", "use while for a condition-only loop"),
@@ -2695,7 +2760,7 @@ class Acceptance(CompilerCase):
                     Event.Link(pointer) => { (*pointer)++; },
                     Event.Num(ref mut v) => { v++; },
                 }
-                for &v in [_]*i32{raw a, raw b} { v++; }
+                for pointer in [_]*i32{raw a, raw b} { (*pointer)++; }
                 { var readOnly: ref i32 = raw a; io.println(readOnly)!; }
                 io.println(b)!;
                 c := C{n: 9}; maybe := some(c);
@@ -3407,27 +3472,83 @@ class Acceptance(CompilerCase):
                 io.println((opt.transpose(bad) catch some(23)) ?? 0)!;
                 var nested: ?!i32 = some(ok(11));
                 io.println(opt.transpose(nested)!.unwrap())!;
-                var items = opt.toVec(o)!;
+                var items = opt.Collection<i32>.toVec(o)!;
                 items.push(9)!; items.push(10)!;
-                for index, &item in enumerate(items.iterMut()) {
+                for index in 0..items.len() {
+                    var item = items.getMut(index).unwrap();
                     item += i32(index)!;
                 }
                 var cursor = items.iterRef();
                 io.println(*cursor.nextBack().unwrap())!;
                 io.println(cursor.remaining())!;
                 io.println(*cursor.next().unwrap())!;
-                var once = opt.intoIter<i32>(opt.take(o));
+                var once = opt.Collection<i32>.intoIter(opt.take(o));
                 io.println(once.next().unwrap())!;
                 var exhausted = once.next(); io.println(opt.isNone(raw exhausted))!;
                 var listed = iter.iter(items.asConstSlice());
                 io.println(listed.sizeHint().lower)!;
-                for index, &count in iter.enumerate<iter.SliceIterMut<i32>, *i32>(items.iterMut()) {
-                    count += i32(index)!;
+                for index, pointer in iter.enumerate<iter.SliceIterMut<i32>, *i32>(items.iterMut()) {
+                    (*pointer) += i32(index)!;
                 }
                 io.println(*items.last().unwrap())!;
                 io.println(core.isNone(raw o))!;
             }
         """, "18\ntrue\n5\n5\n8\ntrue\ntrue\n8\n8\n12\n8\n2\n8\n23\n11\n12\n2\n8\n8\ntrue\n3\n14\ntrue\n")
+
+    def test_v020_single_item_collections_copy_or_transfer_and_drop_once(self):
+        cases = """
+            import (iter, opt)
+            class Owner {
+                #copy: disabled
+                var drops: *i32;
+                var number: i32;
+                pub func init(drops: *i32, value: i32) : drops(drops), number(value) {}
+                pub func deinit() void { unsafe { (*drops)++; } }
+                pub const func value() i32 { number }
+            }
+        """
+        valid = self.source("owned/main.vqr", cases + """
+            func main() !i32 {
+                var drops = 0;
+                var number = 3;
+                var copy = iter.OnceIter<i32>(number);
+                if copy.next().unwrap() != 3 || number != 3 || copy.next() != null { return 1; }
+                var original: ?i32 = some(4);
+                var copied = opt.Collection<i32>.toVec(original)!;
+                if copied[0] != 4 || original.unwrap() != 4 { return 2; }
+                {
+                    var owner = Owner(raw drops, 11);
+                    var single = iter.OnceIter<Owner>(move(owner));
+                    var lifted = single.next().unwrap();
+                    if lifted.value() != 11 || single.next() != null || drops != 0 { return 3; }
+                }
+                {
+                    var source: ?Owner = some(Owner(raw drops, 22));
+                    var iterated = opt.Collection<Owner>.intoIter(move(source));
+                    if drops != 1 { return 4; }
+                }
+                {
+                    var collected = opt.Collection<Owner>.toVec(some(Owner(raw drops, 33)))!;
+                    if collected[0].value() != 33 || drops != 2 { return 5; }
+                }
+                var empty = opt.Collection<Owner>.toVec(null)!;
+                if empty.len() != 0 || drops != 3 { return 6; }
+                0
+            }
+        """)
+        self.process(VAQC, "build", "-O2", valid, "-o", "once-run")
+        self.process("./once-run")
+        for name, code in {
+            "once": "var x = Owner(raw drops, 1); iter.OnceIter<Owner>(x);",
+            "optional": "var x: ?Owner = some(Owner(raw drops, 1)); iter.OnceOptional<Owner>(x);",
+            "collect": "var x: ?Owner = some(Owner(raw drops, 1)); opt.Collection<Owner>.toVec(x)!;",
+            "into_iter": "var x: ?Owner = some(Owner(raw drops, 1)); opt.Collection<Owner>.intoIter(x);",
+        }.items():
+            with self.subTest(api=name):
+                source = self.source(name + "/main.vqr", cases +
+                                     "func main() !void { var drops = 0; " + code + " }")
+                error = self.process(VAQC, "check", source, good=False).stderr
+                self.assertIn(b"move parameter requires move(object) or an owning temporary", error)
 
     def test_result_contracts(self):
         self.hosted("""
@@ -3660,6 +3781,8 @@ class Acceptance(CompilerCase):
                 io.println(exchanged.old)!; io.println(exchanged.exchanged)!;
                 var rejected = value.compareExchange(3, 8);
                 io.println(rejected.old)!; io.println(rejected.exchanged)!;
+                var weakRejected = value.compareExchangeWeak(3, 8);
+                io.println(weakRejected.old)!; io.println(weakRejected.exchanged)!;
                 io.println(value.fetchSub(1))!;
                 io.println(value.fetchOr(8))!;
                 io.println(value.fetchAnd(11))!;
@@ -3667,6 +3790,7 @@ class Acceptance(CompilerCase):
                 io.println(value.fetchMax(-5))!;
                 io.println(value.fetchMin(-4))!;
                 io.println(value.load())!;
+                io.println(atomic.Atomic<i32>.intoInner(move(value)))!;
                 var flag = atomic.AtomicFlag(false);
                 io.println(flag.testAndSet())!;
                 io.println(flag.test())!;
@@ -3679,6 +3803,8 @@ class Acceptance(CompilerCase):
                 io.println(*slot.load().unwrap())!;
                 var removed = slot.compareExchange(raw n, null);
                 io.println(*removed.old.unwrap())!; io.println(removed.exchanged)!;
+                var stillEmpty = slot.compareExchange(raw n, raw n);
+                io.println(stillEmpty.old == null)!; io.println(stillEmpty.exchanged)!;
                 atomic.compilerFence(atomic.Order.Acquire);
                 atomic.fence(atomic.Order.SeqCst);
                 io.println(atomic.supportedWidths().len())!;
@@ -3686,7 +3812,7 @@ class Acceptance(CompilerCase):
         """)
         self.process(VAQC, source, "-o", "atomic-test")
         self.assertEqual(self.process("./atomic-test").stdout.decode(),
-                         "true\n1\n3\n3\ntrue\n7\nfalse\n7\n6\n14\n10\n11\n11\n-4\nfalse\ntrue\nfalse\ntrue\n19\n19\ntrue\n4\n")
+                         "true\n1\n3\n3\ntrue\n7\nfalse\n7\nfalse\n7\n6\n14\n10\n11\n11\n-4\n-4\nfalse\ntrue\nfalse\ntrue\n19\n19\ntrue\ntrue\nfalse\n4\n")
         bare = self.source("bare.vqr", """
             import (atomic)
             export "C" func update(p: *atomic.Atomic<u32>) u32 {
@@ -3708,6 +3834,42 @@ class Acceptance(CompilerCase):
         """)
         self.process(VAQC, invalid, "-o", "invalid")
         self.assertLess(self.process("./invalid", good=False).returncode, 0)
+
+    def test_atomic_value_parameters_require_copyable_payload(self):
+        definitions = """
+            import (atomic)
+            class Owner {
+                #copy: disabled
+                var value: i32;
+                pub func init(value: i32) : value(value) {}
+            }
+        """
+        for ctor in ("atomic.Atomic<Owner>(Owner(1))",
+                     "atomic.CompareExchange<Owner>(Owner(1), false)"):
+            with self.subTest(ctor=ctor):
+                source = self.source("noncopy.vqr", definitions +
+                                     f"func main() void {{ value := {ctor}; }}")
+                result = self.process(VAQC, "check", source, good=False)
+                self.assertIn(b"does not satisfy Copyable", result.stderr)
+
+        source = self.source("no-move.vqr", definitions + """
+            func main() i32 {
+                var value = atomic.Atomic<i32>(42);
+                atomic.Atomic<i32>.intoInner(value)
+            }
+        """)
+        result = self.process(VAQC, "check", source, good=False)
+        self.assertIn(b"move parameter requires move(object)", result.stderr)
+
+        self.hosted(definitions + """
+            func main() !void {
+                var owner = Owner(1);
+                var slot = atomic.AtomicPtr<Owner>.new(null);
+                slot.store(raw owner);
+                var result = slot.compareExchange(raw owner, null);
+                io.println(result.exchanged && result.old != null && slot.load() == null)!;
+            }
+        """, "true\n")
 
     def test_binary_endianness_and_cursor(self):
         self.hosted("""

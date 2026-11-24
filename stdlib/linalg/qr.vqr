@@ -1,7 +1,7 @@
 package linalg
 import (math, num)
 
-func applyReflector<T: Copyable>(matrix: mut Matrix<T>, reflectors: in Matrix<T>,
+func applyReflector<T: Copyable + Movable>(matrix: mut Matrix<T>, reflectors: in Matrix<T>,
                                 column: usize, firstColumn: usize) !void {
     for j in firstColumn..matrix.cols() {
         var projection = T(0);
@@ -19,11 +19,11 @@ func applyReflector<T: Copyable>(matrix: mut Matrix<T>, reflectors: in Matrix<T>
 }
 
 // Thin Householder QR. Q is rows-by-cols and R is square.
-pub class QR<T: Copyable> {
+pub class QR<T: Copyable + Movable> {
     #copy: disabled
     var orthogonal: Matrix<T>;
     var triangular: Matrix<T>;
-    func init(q: Matrix<T>, r: Matrix<T>) : orthogonal(move(q)), triangular(move(r)) {}
+    func init(q: move Matrix<T>, r: move Matrix<T>) : orthogonal(move(q)), triangular(move(r)) {}
     pub static func factor(matrix: in Matrix<T>) !Self {
         var rows = matrix.rows();
         var cols = matrix.cols();
@@ -113,4 +113,4 @@ pub class QR<T: Copyable> {
     }
 }
 
-pub func qr<T: Copyable>(matrix: in Matrix<T>) !QR<T> { QR<T>.factor(matrix) }
+pub func qr<T: Copyable + Movable>(matrix: in Matrix<T>) !QR<T> { QR<T>.factor(matrix) }

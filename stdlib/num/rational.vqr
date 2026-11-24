@@ -8,7 +8,7 @@ pub class Rational<T: Copyable + Movable> {
     func init(numerator: T, denominator: T)
         : numeratorValue(numerator), denominatorValue(denominator) {}
 
-    static func fromBig(numerator: BigInt, denominator: BigInt) !Self {
+    static func fromBig(numerator: in BigInt, denominator: in BigInt) !Self {
         if denominator.isZero() { return NumError.ZeroDenominator; }
         var divisor = BigInt.gcd(numerator, denominator)!;
         var reducedNumerator = numerator.div(divisor)!;
@@ -24,7 +24,7 @@ pub class Rational<T: Copyable + Movable> {
         if denominator == T(0) { return NumError.ZeroDenominator; }
         var top = BigInt.fromInteger<T>(numerator)!;
         var bottom = BigInt.fromInteger<T>(denominator)!;
-        Rational<T>.fromBig(move(top), move(bottom))
+        Rational<T>.fromBig(top, bottom)
     }
 
     pub const func numerator() T { numeratorValue }
@@ -39,7 +39,7 @@ pub class Rational<T: Copyable + Movable> {
         var right = rightTop.mul(leftBottom)!;
         var top = left.add(right)!;
         var bottom = leftBottom.mul(rightBottom)!;
-        Rational<T>.fromBig(move(top), move(bottom))
+        Rational<T>.fromBig(top, bottom)
     }
 
     pub const func sub(other: in Self) !Self {
@@ -51,7 +51,7 @@ pub class Rational<T: Copyable + Movable> {
         var right = rightTop.mul(leftBottom)!;
         var top = left.sub(right)!;
         var bottom = leftBottom.mul(rightBottom)!;
-        Rational<T>.fromBig(move(top), move(bottom))
+        Rational<T>.fromBig(top, bottom)
     }
 
     pub const func mul(other: in Self) !Self {
@@ -61,7 +61,7 @@ pub class Rational<T: Copyable + Movable> {
         var rightBottom = BigInt.fromInteger<T>(other.denominatorValue)!;
         var top = leftTop.mul(rightTop)!;
         var bottom = leftBottom.mul(rightBottom)!;
-        Rational<T>.fromBig(move(top), move(bottom))
+        Rational<T>.fromBig(top, bottom)
     }
 
     pub const func div(other: in Self) !Self {
@@ -72,7 +72,7 @@ pub class Rational<T: Copyable + Movable> {
         var rightTop = BigInt.fromInteger<T>(other.numeratorValue)!;
         var top = leftTop.mul(rightBottom)!;
         var bottom = leftBottom.mul(rightTop)!;
-        Rational<T>.fromBig(move(top), move(bottom))
+        Rational<T>.fromBig(top, bottom)
     }
 
     pub const func compare(other: in Self) !cmp.Ordering {

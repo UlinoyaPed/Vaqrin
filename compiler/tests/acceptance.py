@@ -4309,6 +4309,31 @@ class Acceptance(CompilerCase):
             }
         """, "24\n12\ni64\n4\ntrue\nfalse\ntrue\ntrue\ntrue\ntrue\ntrue\n2\n5\n3\n9\n1\n3\n8\n2\n0\n15\n2\n")
 
+    def test_cmp_copies_ordered_values_and_comparators(self):
+        source = self.source("main.vqr", """
+            package main
+            import (std/cmp)
+            func less(a: *const i32, b: *const i32) bool { unsafe { *a < *b } }
+            func exercise<T: Movable + Copyable, F: Movable + Copyable>(a: T, b: T, pred: F) !void {
+                if cmp.min(a, b) != b || cmp.max(a, b) != a ||
+                   cmp.minBy(a, b, pred) != b || cmp.maxBy(a, b, pred) != a ||
+                   cmp.clamp(a, b, b) != b { panic("order changed"); }
+            }
+            func main() !void {
+                var first: i32 = 3;
+                var second: i32 = -7;
+                exercise(first, second, less)!;
+                var reverse = true;
+                var capture = [reverse](a: *const i32, b: *const i32) bool =>
+                    unsafe { if reverse { *a > *b } else { *a < *b } };
+                if cmp.minBy(first, second, capture) != first ||
+                   cmp.maxBy(first, second, capture) != second ||
+                   first != 3 || second != -7 { panic("copy or comparator changed"); }
+            }
+        """)
+        self.process(VAQC, "build", source, "-o", "cmp-probe")
+        self.process("./cmp-probe")
+
     def test_bits_and_compile_time_word_size(self):
         self.hosted("""
             import (bits, core)

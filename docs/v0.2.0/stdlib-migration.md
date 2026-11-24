@@ -18,7 +18,7 @@
 
 | `task` 提交工作 | `TaskGroup.spawn` 接收 Copyable 函数或闭包，`spawnOwned` 转移非 Copyable 且可跨任务交付的闭包；具名所有者写 `move(callback)`。这两个任务 API 不是额外参数模式。两者共用排队、取消、回收路径，不保留对调用者捕获的借用。自由函数 `task.spawn` 走复制入口，直接传入可写的组。 | [task.vqr](../../stdlib/task/task.vqr) |
 
-| `cmp` | `partialCmp`、`compare`、`totalCmp` 和 `between` 的操作数使用 `in T`。只读借用支持变量、临时值和安全引用，调用方不再传 `raw x`。此切片不含 `eq`、`ne`、接口或算法回调。 | [cmp.vqr](../../stdlib/cmp/cmp.vqr) |
+| `cmp` | `partialCmp`、`compare`、`totalCmp` 和 `between` 的操作数使用 `in T`。只读借用支持变量、临时值和安全引用，调用方不再传 `raw x`。`min/max/minBy/maxBy/clamp` 按值复制操作数，`minBy/maxBy` 也按值复制比较器，均声明相应的 `Copyable` 约束。`eq`、`ne`、接口和回调形参的裸指针契约不变。 | [cmp.vqr](../../stdlib/cmp/cmp.vqr) |
 
 | `mem` 原址初始化 | `write` 复制可复制的输入；`writeOwned` 消费不可复制的值，具名值须显式 `move`。两个入口均为 `unsafe`，只初始化对齐、有效且可独占访问的空槽，不会清理已有值。 | [layout.vqr](../../stdlib/mem/layout.vqr) |
 | `mem` 和自定义容器分配器 | `AllocatorRef` 不再是 `*Allocator` 的别名，而是持有私有地址的非拥有句柄；调用者通过 `unsafe { mem.AllocatorRef.fromRaw(raw allocator) }` 明确承担地址稳定、调用序列化和分配器/后备存储的生命周期责任。已有容器及 Arena/Pool 的分配器入口接收该句柄。原始释放必须使用 `unsafe` 并提供同一分配器、原布局、未释放的分配。默认分配不变。 | [allocator.vqr](../../stdlib/mem/allocator.vqr) |

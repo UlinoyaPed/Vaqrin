@@ -36,7 +36,10 @@ pub func encodeResponse<T>(value: TypedResponse<T>, codec: *protobuf.Codec<T>, m
         some(ref message) => { data = some(protobuf.encode<T>(message.toRaw(), codec, maxBytes)!); },
         null => {},
     };
-    UnaryResponse{initial: core.replace<Metadata>(raw value.initial, Metadata()),
-        trailing: core.replace<Metadata>(raw value.trailing, Metadata()),
-        status: core.replace<Status>(raw value.status, status(StatusCode.Unknown, "")), body: move(data)}
+    UnaryResponse(
+        core.replace<Metadata>(raw value.initial, Metadata()),
+        core.replace<Metadata>(raw value.trailing, Metadata()),
+        core.replace<Status>(raw value.status, status(StatusCode.Unknown, "")),
+        move(data)
+    )
 }

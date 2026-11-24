@@ -124,8 +124,7 @@ pub class ServerStream {
         } else {
             var headers = core.replace<Metadata>(raw initial, Metadata());
             var trailers = core.replace<Metadata>(raw trailing, Metadata());
-            var response = UnaryResponse{initial: move(headers), trailing: move(trailers),
-                                         status: move(result), body: null};
+            var response = UnaryResponse(move(headers), move(trailers), move(result), null);
             sendResponse(session, id, raw response, limit, Compression.Identity)!;
         }
         session.flush(socket)

@@ -12,11 +12,17 @@ enum StreamResult { Sent, Message(coll.Vec<u8>), End, Failure(ErrorId) }
 class StreamCommand {
     #copy: disabled
     pub var operation: StreamOperation;
+
+    pub func init(operation: move StreamOperation)
+        : operation(move(operation)) {}
 }
 
 class StreamReply {
     #copy: disabled
     pub var result: StreamResult;
+
+    pub func init(result: move StreamResult)
+        : result(move(result)) {}
 }
 
 pub class ConcurrentServerStream {
@@ -95,7 +101,7 @@ pub class ConcurrentServerStream {
     }
     func transact(operation: StreamOperation) !StreamResult {
         checkDeadline()!;
-        requests.send(StreamCommand{operation: move(operation)}) catch (reason) {
+        requests.send(StreamCommand(move(operation))) catch (reason) {
             if reason == channel.ChannelError.OutOfMemory { return RpcError.ResourceExhausted; }
             return RpcError.Cancelled;
         };
@@ -115,6 +121,9 @@ class ConcurrentStreamInput {
     #copy: disabled
     pub var handler: *const ConcurrentStreamingHandler;
     pub var stream: ConcurrentServerStream;
+
+    pub func init(handler: *const ConcurrentStreamingHandler, stream: move ConcurrentServerStream)
+        : handler(handler), stream(move(stream)) {}
 
     pub func run() !void {
         var result = handler.handle(raw stream) catch (reason) { status(streamStatus(reason), "") };
@@ -265,7 +274,7 @@ class PendingStream {
 
     func reply(result: StreamResult) !void {
         // Only the worker can request a reply, and it waits for each before sending another command.
-        switch replies.trySend(StreamReply{result: move(result)}) {
+        switch replies.trySend(StreamReply(move(result))) {
             channel.TrySendResult.Sent => {},
             channel.TrySendResult.Closed(dropped) => {},
             channel.TrySendResult.OutOfMemory(dropped) => { return RpcError.ResourceExhausted; },

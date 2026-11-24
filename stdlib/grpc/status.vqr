@@ -13,10 +13,13 @@ pub class Status {
     pub var message: string;
     pub var details: coll.Vec<u8>;
     pub func isOk() bool { code == StatusCode.Ok }
+
+    pub func init(code: StatusCode, message: string, details: move coll.Vec<u8>)
+        : code(code), message(move(message)), details(move(details)) {}
 }
 
 pub func status(code: StatusCode, message: string) Status {
-    Status{code: code, message: move(message), details: coll.Vec<u8>()}
+    Status(code, move(message), coll.Vec<u8>())
 }
 
 func statusNumber(code: StatusCode) u64 {

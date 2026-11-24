@@ -623,6 +623,70 @@ class ContainerAcceptance(CompilerCase):
             }
         '''), [])
 
+    def test_btree_insert_selects_independent_key_and_value_modes(self):
+        setup = """
+            class Owned {
+                #copy: disabled
+                pub var id: i32;
+                pub var label: i32;
+                pub func init(id: i32, label: i32) : id(id), label(label) {}
+                func deinit() void { io.println(label) catch {}; }
+            }
+            func lessInt(a, b: *const i32) bool { *a < *b }
+            func lessOwned(a, b: *const Owned) bool { a.id < b.id }
+        """
+        output = self.run_container(setup + """
+            func main() !void {
+                var key = 1;
+                var value = 7;
+                var integers = coll.BTreeMap<i32, i32>.withComparator(lessInt);
+                integers.insert(key, value)!;
+                if integers.insert(key, value + 1)!.unwrap() != value || key != 1 {
+                    panic("wrong copied entry");
+                }
+
+                var values = coll.BTreeMap<i32, Owned>.withComparator(lessInt);
+                var ownedValue = Owned(1, 21);
+                values.insert(key, move(ownedValue))!;
+                var previous = values.insert(key, Owned(1, 22))!.unwrap();
+                if previous.label != 21 || values.get(key).unwrap().label != 22 { panic("wrong owned value"); }
+
+                var keys = coll.BTreeMap<Owned, i32>.withComparator(lessOwned);
+                var ownedKey = Owned(1, 31);
+                keys.insert(move(ownedKey), value)!;
+                if keys.insert(Owned(1, 32), value + 1)!.unwrap() != value { panic("wrong owned key"); }
+
+                var both = coll.BTreeMap<Owned, Owned>.withComparator(lessOwned);
+                var pairKey = Owned(1, 41);
+                var pairValue = Owned(1, 51);
+                both.insert(move(pairKey), move(pairValue))!;
+                var old = both.insert(Owned(1, 42), Owned(1, 52))!.unwrap();
+                if old.label != 51 || both.len() != 1 { panic("wrong previous owner"); }
+            }
+        """)
+        self.assertEqual(sorted(output), ["21", "22", "31", "32", "41", "42", "51", "52"])
+        for statement in (
+            "values.insert(1, value)!;",
+            "keys.insert(key, 7)!;",
+            "both.insert(move(key), value)!;",
+            "both.insert(key, move(value))!;",
+            "set.insert(key)!;",
+            "fixed.insert(0, value);",
+        ):
+            with self.subTest(statement=statement):
+                source = self.source("missing-move.vqr", "import (coll, io)\n" + setup + """
+                    func main() !void {
+                        var values = coll.BTreeMap<i32, Owned>.withComparator(lessInt);
+                        var keys = coll.BTreeMap<Owned, i32>.withComparator(lessOwned);
+                        var both = coll.BTreeMap<Owned, Owned>.withComparator(lessOwned);
+                        var set = coll.BTreeSet<Owned>.withComparator(lessOwned);
+                        var fixed = coll.FixedVec<Owned, 2>();
+                        var key = Owned(1, 11);
+                        var value = Owned(1, 12);
+                """ + statement + "\n}")
+                diagnostic = self.process(VAQC, "check", source, good=False).stderr
+                self.assertIn(b"move parameter requires move(object)", diagnostic)
+
     def test_allocator_failure_preserves_value_and_layout(self):
         self.assertEqual(self.run_container('''
             error Injected { Exhausted }
@@ -745,7 +809,16 @@ class ContainerAcceptance(CompilerCase):
         source = self.source("oom.vqr", '''
             import (coll, mem)
             extern "C" func fail_second_allocation() void;
+            extern "C" func record_owned_drop(id: c_int) void;
+            extern "C" func owned_drops(id: c_int) c_int;
             func less(a, b: *const i32) bool { *a < *b }
+            class Owned {
+                #copy: disabled
+                pub var id: i32;
+                pub func init(id: i32) : id(id) {}
+                func deinit() void { unsafe { record_owned_drop(id); } }
+            }
+            func lessOwned(a, b: *const Owned) bool { a.id < b.id }
             func try_insert() !i32 {
                 var tree = coll.BTreeMap<i32, i32>.withComparator(less);
                 for key in 0..7 { var old = tree.insert(key, key * 3)!; }
@@ -765,13 +838,34 @@ class ContainerAcceptance(CompilerCase):
                 0
             }
             export "C" func exercise() c_int { try_insert() catch 4 }
+            func try_owned() !i32 {
+                var tree = coll.BTreeMap<Owned, Owned>.withComparator(lessOwned);
+                for key in 0..7 { tree.insert(Owned(key), Owned(key + 10))!; }
+                var key = Owned(7);
+                var value = Owned(17);
+                unsafe { fail_second_allocation(); }
+                var rejected = false;
+                tree.insert(move(key), move(value)) catch (reason) {
+                    if reason != mem.AllocationError.OutOfMemory { return reason; }
+                    rejected = true;
+                    null
+                };
+                if !rejected || tree.len() != 7 || unsafe { owned_drops(7) } != 1 ||
+                   unsafe { owned_drops(17) } != 1 || unsafe { owned_drops(0) } != 0 { return 5; }
+                0
+            }
+            export "C" func exercise_owned() c_int { try_owned() catch 6 }
         ''')
         client = self.source("oom.c", '''
             #include <stddef.h>
             extern void *__real_malloc(size_t);
             extern void *__real_aligned_alloc(size_t, size_t);
             extern int exercise(void);
+            extern int exercise_owned(void);
             static int countdown;
+            static int drops[18];
+            void record_owned_drop(int id) { ++drops[id]; }
+            int owned_drops(int id) { return drops[id]; }
             void fail_second_allocation(void) { countdown = 2; }
             void *__wrap_malloc(size_t bytes) {
                 if (countdown && --countdown == 0) return NULL;
@@ -781,7 +875,15 @@ class ContainerAcceptance(CompilerCase):
                 if (countdown && --countdown == 0) return NULL;
                 return __real_aligned_alloc(alignment, bytes);
             }
-            int main(void) { return exercise(); }
+            int main(void) {
+                int result = exercise();
+                if (result) return result;
+                result = exercise_owned();
+                if (result) return result;
+                for (int i = 0; i < 8; ++i)
+                    if (drops[i] != 1 || drops[i + 10] != 1) return 7;
+                return 0;
+            }
         ''')
         self.process(VAQC, source, "-O2", "--emit=obj", "-o", "tree.o")
         self.process("cc", client, "tree.o", "-Wl,--wrap=malloc,--wrap=aligned_alloc", "-o", "tree")

@@ -1,5 +1,5 @@
 package coll
-import (core, iter as iterator, mem)
+import (core, iter as iterator, mem, meta)
 
 pub enum PushResult<T: Movable> {
     Stored,
@@ -47,15 +47,28 @@ pub class FixedVec<T: Movable, comptime N: usize> {
         unsafe { some(__vqr_slot_take<T>(address(length))) }
     }
 
-    pub func insert(index: usize, value: T) PushResult<T> {
-        if index > length { return PushResult<T>.Failed(CapacityError.IndexOutOfBounds, move(value)); }
-        if length == N { return PushResult<T>.Full(move(value)); }
-        unsafe {
-            for i := length; i > index; i-- { transfer(i - 1, i); }
-            __vqr_slot_write<T>(address(index), move(value));
+    comptime if meta.isCopyable<T>() {
+        pub func insert(index: usize, value: T) PushResult<T> {
+            if index > length { return PushResult<T>.Failed(CapacityError.IndexOutOfBounds, move(value)); }
+            if length == N { return PushResult<T>.Full(move(value)); }
+            unsafe {
+                for i := length; i > index; i-- { transfer(i - 1, i); }
+                __vqr_slot_write<T>(address(index), move(value));
+            }
+            length++;
+            PushResult<T>.Stored()
         }
-        length++;
-        PushResult<T>.Stored()
+    } else {
+        pub func insert(index: usize, value: move T) PushResult<T> {
+            if index > length { return PushResult<T>.Failed(CapacityError.IndexOutOfBounds, move(value)); }
+            if length == N { return PushResult<T>.Full(move(value)); }
+            unsafe {
+                for i := length; i > index; i-- { transfer(i - 1, i); }
+                __vqr_slot_write<T>(address(index), move(value));
+            }
+            length++;
+            PushResult<T>.Stored()
+        }
     }
 
     pub func remove(index: usize) ?T {

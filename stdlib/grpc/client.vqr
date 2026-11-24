@@ -7,6 +7,10 @@ pub class UnaryResponse {
     pub var trailing: Metadata;
     pub var status: Status;
     pub var body: ?coll.Vec<u8>;
+
+    pub func init(initial: move Metadata, trailing: move Metadata,
+                  status: move Status, body: move ?coll.Vec<u8>)
+        : initial(move(initial)), trailing(move(trailing)), status(move(status)), body(move(body)) {}
 }
 
 pub class Call {
@@ -41,7 +45,7 @@ pub class Call {
         var current = core.replace<?Status>(raw status, null) ?? { return RpcError.CallClosed; };
         var headers = core.replace<Metadata>(raw initial, Metadata());
         var trailers = core.replace<Metadata>(raw trailing, Metadata());
-        UnaryResponse{initial: move(headers), trailing: move(trailers), status: move(current), body: null}
+        UnaryResponse(move(headers), move(trailers), move(current), null)
     }
 }
 
@@ -257,9 +261,11 @@ pub class ClientConn {
                     }
                     if info.remoteStatus != null {
                         if (event.code & 1) == 0 || call.status != null { return RpcError.Protocol; }
-                        var remote = Status{code: info.remoteStatus.unwrap(),
-                            message: core.replace<string>(raw info.message, ""),
-                            details: core.replace<coll.Vec<u8>>(raw info.details, coll.Vec<u8>())};
+                        var remote = Status(
+                            info.remoteStatus.unwrap(),
+                            core.replace<string>(raw info.message, ""),
+                            core.replace<coll.Vec<u8>>(raw info.details, coll.Vec<u8>())
+                        );
                         call.status = some(move(remote));
                         call.trailing = core.replace<Metadata>(raw info.metadata, Metadata());
                     } else if initial {

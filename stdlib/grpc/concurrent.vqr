@@ -9,7 +9,7 @@ class ConcurrentInput {
         : handler(handler), request(move(request)) {}
     pub func run(limit: usize) !ConcurrentOutput {
         var input = core.replace<UnaryRequest>(raw request,
-            UnaryRequest{path: "", metadata: Metadata(), deadline: null, body: coll.Vec<u8>()});
+            UnaryRequest("", Metadata(), null, coll.Vec<u8>()));
         var result = handler.call(move(input)) catch {
             var code = if task.isCancelled() { StatusCode.Cancelled } else { StatusCode.Internal };
             reply(status(code, ""))
@@ -38,9 +38,13 @@ func copyResponse(source: in UnaryResponse, limit: usize) !UnaryResponse {
     };
     var message = text.fromBytes(source.status.message.asBytes())!;
     var details = coll.Vec<u8>.fromSlice(source.status.details.asConstSlice())!;
-    var code = Status{code: source.status.code, message: move(message), details: move(details)};
-    UnaryResponse{initial: source.initial.cloneOwned()!, trailing: source.trailing.cloneOwned()!,
-                  status: move(code), body: move(content)}
+    var code = Status(source.status.code, move(message), move(details));
+    UnaryResponse(
+        source.initial.cloneOwned()!,
+        source.trailing.cloneOwned()!,
+        move(code),
+        move(content)
+    )
 }
 
 class PendingCall {
@@ -133,7 +137,7 @@ class ConcurrentCalls {
         reply, replies := channel.Channel<StreamReply>.bounded(1)!;
         var stream = ConcurrentServerStream(move(command), move(replies), completionDescriptor()!,
                                             move(request), options);
-        var input = ConcurrentStreamInput{handler: handler, stream: move(stream)};
+        var input = ConcurrentStreamInput(handler, move(stream));
         var run = [move(input)]() !void => {
             var owned = move(input);
             owned.run()

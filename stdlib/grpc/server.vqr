@@ -7,6 +7,9 @@ pub class UnaryRequest {
     pub var metadata: Metadata;
     pub var deadline: ?time.Deadline;
     pub var body: coll.Vec<u8>;
+
+    pub func init(path: string, metadata: move Metadata, deadline: ?time.Deadline, body: move coll.Vec<u8>)
+        : path(move(path)), metadata(move(metadata)), deadline(deadline), body(move(body)) {}
 }
 
 pub interface UnaryHandler { func call(request: UnaryRequest) !UnaryResponse; }
@@ -27,12 +30,11 @@ pub class ServeOptions {
 }
 
 pub func reply(status: Status) UnaryResponse {
-    UnaryResponse{initial: Metadata(), trailing: Metadata(), status: move(status), body: null}
+    UnaryResponse(Metadata(), Metadata(), move(status), null)
 }
 
 pub func response(body: coll.Vec<u8>) UnaryResponse {
-    UnaryResponse{initial: Metadata(), trailing: Metadata(), status: status(StatusCode.Ok, ""),
-                  body: some(move(body))}
+    UnaryResponse(Metadata(), Metadata(), status(StatusCode.Ok, ""), some(move(body)))
 }
 
 enum RouteHandler {
@@ -44,6 +46,9 @@ enum RouteHandler {
 class Route {
     pub var path: string;
     pub var handler: RouteHandler;
+
+    pub func init(path: string, handler: RouteHandler)
+        : path(move(path)), handler(handler) {}
 }
 
 class Incoming {
@@ -61,8 +66,7 @@ class Incoming {
         decoder.finish()!;
         var path = core.replace<string>(raw head.path, "");
         var metadata = core.replace<Metadata>(raw head.metadata, Metadata());
-        UnaryRequest{path: move(path), metadata: move(metadata), deadline: head.deadline,
-                     body: move(body)}
+        UnaryRequest(move(path), move(metadata), head.deadline, move(body))
     }
 }
 
@@ -137,7 +141,7 @@ pub class Server {
     func registerRoute(path: str, handler: RouteHandler) !void {
         if !validMethod(path) || find(path) != null { return RpcError.InvalidMethod; }
         var name = text.fromBytes(path.asBytes())!;
-        routes.push(Route{path: move(name), handler: handler})
+        routes.push(Route(move(name), handler))
     }
     const func find(path: str) ?RouteHandler {
         for route in routes.iterRef() {

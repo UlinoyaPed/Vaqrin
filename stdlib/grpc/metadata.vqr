@@ -4,6 +4,9 @@ import (bytes, coll, encoding, fmt, http2, text)
 pub class MetadataField {
     pub var name: string;
     pub var value: coll.Vec<u8>;
+
+    pub func init(name: string, value: move coll.Vec<u8>)
+        : name(move(name)), value(move(value)) {}
 }
 
 func binaryKey(name: str) bool { bytes.endsWith(name.asBytes(), "-bin".asBytes()) }
@@ -81,7 +84,7 @@ pub class Metadata {
     func add(name: str, value: []const u8) !void {
         var key = text.fromBytes(name.asBytes())!;
         var data = coll.Vec<u8>.fromSlice(value)!;
-        entries.push(MetadataField{name: move(key), value: move(data)})
+        entries.push(MetadataField(move(key), move(data)))
     }
     func addEncoded(name: str, value: []const u8) !void {
         var first: usize = 0;

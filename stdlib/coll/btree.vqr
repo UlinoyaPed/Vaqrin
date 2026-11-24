@@ -1,5 +1,5 @@
 package coll
-import (core)
+import (core, meta)
 
 const btreeMinimumDegree: usize = 4;
 const btreeMaximumEntries: usize = 7;
@@ -19,10 +19,19 @@ class BTreeNode<K: Movable, V: Movable> {
     pub const func entryAt(index: usize) *const (K, V) { entries.get(index).unwrap() }
     pub func entryAtMut(index: usize) *(K, V) { entries.getMut(index).unwrap() }
 
-    pub func insertEntry(index: usize, entry: (K, V)) void {
-        switch entries.insert(index, move(entry)) {
-            PushResult.Stored => {},
-            else => panic("BTree node entry capacity invariant"),
+    comptime if meta.isCopyable<(K, V)>() {
+        pub func insertEntry(index: usize, entry: (K, V)) void {
+            switch entries.insert(index, move(entry)) {
+                PushResult.Stored => {},
+                else => panic("BTree node entry capacity invariant"),
+            }
+        }
+    } else {
+        pub func insertEntry(index: usize, entry: move (K, V)) void {
+            switch entries.insert(index, move(entry)) {
+                PushResult.Stored => {},
+                else => panic("BTree node entry capacity invariant"),
+            }
         }
     }
 
@@ -279,43 +288,6 @@ pub class BTreeMap<K: Movable, V: Movable> {
         parent.insertChild(index + 1, right);
     }
 
-    func replaceEntry(
-        node: *BTreeNode<K, V>, index: usize, key: K, value: V
-    ) ?V {
-        var previous = node.removeEntry(index);
-        oldKey, oldValue := move(previous);
-        node.insertEntry(index, (move(key), move(value)));
-        some(move(oldValue))
-    }
-
-    func insertNonFull(
-        node: *BTreeNode<K, V>, key: K, value: V
-    ) core.ResultOptional<V> {
-        var index = btreeLowerIndex<K, V>(node, raw key, less);
-        if index < node.entryCount() {
-            var existing = raw node.entryAt(index).0;
-            if !less(raw key, existing) && !less(existing, raw key) {
-                return replaceEntry(node, index, move(key), move(value));
-            }
-        }
-
-        if node.isLeaf() {
-            node.insertEntry(index, (move(key), move(value)));
-            return null;
-        }
-
-        var child = node.childAt(index);
-        if child.entryCount() == btreeMaximumEntries {
-            splitChild(node, index)!;
-            var promoted = raw node.entryAt(index).0;
-            if !less(raw key, promoted) && !less(promoted, raw key) {
-                return replaceEntry(node, index, move(key), move(value));
-            }
-            if less(promoted, raw key) { index++; }
-        }
-        insertNonFull(node.childAt(index), move(key), move(value))
-    }
-
     func borrowFromPrevious(parent: *BTreeNode<K, V>, index: usize) void {
         var child = parent.childAt(index);
         var sibling = parent.childAt(index - 1);
@@ -454,15 +426,13 @@ pub class BTreeMap<K: Movable, V: Movable> {
         current.entryAt(current.entryCount() - 1)
     }
 
-    pub func insert(key: K, value: V) core.ResultOptional<V> {
+    // Find a position while borrowing the incoming key. Root/child splits
+    // allocate before mutating an existing node; the owned pair remains intact
+    // until a destination is selected.
+    func planInsertion(key: in K) !(*BTreeNode<K, V>, usize, bool) {
+        var address = key.toRaw();
         switch root {
-            null => {
-                var node = allocateBTreeNode<K, V>(true)!;
-                node.insertEntry(0, (move(key), move(value)));
-                root = some(node);
-                length = 1;
-                return null;
-            },
+            null => { return (allocateBTreeNode<K, V>(true)!, 0, false); },
             some(currentRoot) => {
                 if currentRoot.entryCount() == btreeMaximumEntries {
                     var newRoot = allocateBTreeNode<K, V>(false)!;
@@ -477,9 +447,79 @@ pub class BTreeMap<K: Movable, V: Movable> {
             },
         }
 
-        var result = insertNonFull(root.unwrap(), move(key), move(value))!;
-        if result == null { length++; }
-        move(result)
+        var node = root.unwrap();
+        for {
+            var index = btreeLowerIndex<K, V>(node, address, less);
+            if index < node.entryCount() {
+                var existing = raw node.entryAt(index).0;
+                if !less(address, existing) && !less(existing, address) {
+                    return (node, index, true);
+                }
+            }
+            if node.isLeaf() { return (node, index, false); }
+            var child = node.childAt(index);
+            if child.entryCount() == btreeMaximumEntries {
+                splitChild(node, index)!;
+                var promoted = raw node.entryAt(index).0;
+                if !less(address, promoted) && !less(promoted, address) {
+                    return (node, index, true);
+                }
+                if less(promoted, address) { index++; }
+            }
+            node = node.childAt(index);
+        }
+    }
+
+    comptime if meta.isCopyable<(K, V)>() {
+        func insertPair(entry: (K, V)) core.ResultOptional<V> {
+            node, index, replacing := planInsertion(entry.0)!;
+            if replacing {
+                var previous = node.removeEntry(index);
+                oldKey, oldValue := move(previous);
+                node.insertEntry(index, move(entry));
+                return some(move(oldValue));
+            }
+            node.insertEntry(index, move(entry));
+            if root == null { root = some(node); }
+            length++;
+            null
+        }
+    } else {
+        func insertPair(entry: move (K, V)) core.ResultOptional<V> {
+            node, index, replacing := planInsertion(entry.0)!;
+            if replacing {
+                var previous = node.removeEntry(index);
+                oldKey, oldValue := move(previous);
+                node.insertEntry(index, move(entry));
+                return some(move(oldValue));
+            }
+            node.insertEntry(index, move(entry));
+            if root == null { root = some(node); }
+            length++;
+            null
+        }
+    }
+
+    comptime if meta.isCopyable<K>() {
+        comptime if meta.isCopyable<V>() {
+            pub func insert(key: K, value: V) core.ResultOptional<V> {
+                insertPair((move(key), move(value)))
+            }
+        } else {
+            pub func insert(key: K, value: move V) core.ResultOptional<V> {
+                insertPair((move(key), move(value)))
+            }
+        }
+    } else {
+        comptime if meta.isCopyable<V>() {
+            pub func insert(key: move K, value: V) core.ResultOptional<V> {
+                insertPair((move(key), move(value)))
+            }
+        } else {
+            pub func insert(key: move K, value: move V) core.ResultOptional<V> {
+                insertPair((move(key), move(value)))
+            }
+        }
     }
 
     pub const func get(query: in K) ?ref V from self {
@@ -672,10 +712,19 @@ pub class BTreeSet<T: Movable> {
     pub const func isEmpty() bool { values.isEmpty() }
     pub const func contains(value: in T) bool { values.containsKey(value) }
 
-    pub func insert(value: T) !bool {
-        switch values.insert(move(value), 0u8)! {
-            null => true,
-            some(_) => false,
+    comptime if meta.isCopyable<T>() {
+        pub func insert(value: T) !bool {
+            switch values.insert(move(value), 0u8)! {
+                null => true,
+                some(_) => false,
+            }
+        }
+    } else {
+        pub func insert(value: move T) !bool {
+            switch values.insert(move(value), 0u8)! {
+                null => true,
+                some(_) => false,
+            }
         }
     }
 

@@ -111,7 +111,7 @@ pub class Cow<T: Copyable + Movable> {
         switch value.borrowed {
             some(source) => *source,
             null => {
-                var owned = core.replace<?T>(raw value.owned, null);
+                var owned = core.Exchange<?T>.replace(value.owned, null);
                 move(owned).unwrap()
             },
         }

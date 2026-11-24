@@ -3398,6 +3398,36 @@ class Acceptance(CompilerCase):
             }
         """, "true\ntrue\ntrue\n2\n3\n4\n10\n6\n11\n2\ntrue\n9\ntrue\n9\n13\n9\n")
 
+    def test_v020_ordering_helpers_borrow_operands(self):
+        self.hosted("""
+            import (cmp)
+            func main() !void {
+                var low: i32 = 2;
+                var high: i32 = 9;
+                {
+                    var borrowed = ref low;
+                    io.println(cmp.compare(borrowed, high) == cmp.Ordering.Less)!;
+                    io.println(cmp.between(5, borrowed, high))!;
+                    io.println(cmp.between(10, borrowed, high))!;
+                    io.println(cmp.partialCmp(low, low).unwrap() == cmp.Ordering.Equal)!;
+                }
+                low = high;
+                io.println(cmp.compare(low, high) == cmp.Ordering.Equal)!;
+            }
+        """, "true\ntrue\nfalse\ntrue\ntrue\n")
+        invalid = self.source("pointers.vqr", """
+            package main
+            import (cmp)
+            func main() void {
+                var number: i32 = 2;
+                var address = raw number;
+                var order = cmp.compare<i32>(address, number);
+            }
+        """)
+        result = self.process(VAQC, "check", invalid, good=False)
+        self.assertIn(b"error[E202]: no accessible overload matches", result.stderr)
+        self.assertIn(b"candidate compare(a: in, b: in)", result.stderr)
+
     def test_layout_ordering_and_vec_contracts(self):
         self.hosted("""
             import (cmp, meta, coll, core, iter)
@@ -3413,11 +3443,11 @@ class Acceptance(CompilerCase):
                 io.println(meta.isMovable<coll.Vec<i32>>())!;
                 io.println(meta.isZeroSized<[0]u8>())!;
                 a := -0.0f64; b := 0.0f64;
-                io.println(cmp.totalCmp(raw a, raw b) == cmp.Ordering.Less)!;
+                io.println(cmp.totalCmp(a, b) == cmp.Ordering.Less)!;
                 c := bitCast<f64>(0x7ff8000000000001u64);
-                var unordered = cmp.partialCmp(raw b, raw c);
+                var unordered = cmp.partialCmp(b, c);
                 io.println(core.isNone(raw unordered))!;
-                io.println(cmp.totalCmp(raw b, raw c) == cmp.Ordering.Less)!;
+                io.println(cmp.totalCmp(b, c) == cmp.Ordering.Less)!;
                 io.println(cmp.minBy(3, 2, shorter))!;
                 io.println(cmp.clamp(8, 2, 5))!;
                 var input = [_]i32{1, 2, 3};
@@ -4300,8 +4330,7 @@ class Acceptance(CompilerCase):
                 var overlong = [_]u8{0xc0, 0x80};
                 var invalid = encoding.utf8Validate(overlong[:]);
                 io.println(core.isErr(raw invalid))!;
-                var opts = encoding.Base64Options{alphabet: encoding.Base64Alphabet.Standard,
-                    padding: true, lineWidth: 0, ignoreWhitespace: false};
+                var opts = encoding.Base64Options(encoding.Base64Alphabet.Standard, true, 0, false);
                 io.println(encoding.base64EncodedLen(4)!)!;
                 io.println(encoding.base64Encode("f".asBytes(), opts)!)!;
                 io.println(encoding.base64Encode("fo".asBytes(), opts)!)!;

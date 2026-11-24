@@ -49,7 +49,7 @@ pub class TomlDomSerializer {
         if frames.isEmpty() { return TomlSerdeError.InvalidState; }
         var frame = frames.pop().unwrap();
         if frame.mapMode { return TomlSerdeError.InvalidState; }
-        appendValue(Value.Array(core.replace<coll.Vec<Value>>(raw frame.array, coll.Vec<Value>())))
+        appendValue(Value.Array(core.Exchange<coll.Vec<Value>>.replace(frame.array, coll.Vec<Value>())))
     }
     pub func beginMap(length: ?usize) !void { frames.push(TomlWriteFrame(true))!; }
     pub func writeKey(value: str) !void {
@@ -62,11 +62,11 @@ pub class TomlDomSerializer {
         if frames.isEmpty() { return TomlSerdeError.InvalidState; }
         var frame = frames.pop().unwrap();
         if !frame.mapMode || frame.pendingKey != null { return TomlSerdeError.InvalidState; }
-        appendValue(Value.Table(core.replace<Document>(raw frame.table, Document())))
+        appendValue(Value.Table(core.Exchange<Document>.replace(frame.table, Document())))
     }
     pub func takeValue() !Value {
         if !frames.isEmpty() { return TomlSerdeError.InvalidState; }
-        core.replace<?Value>(raw root, null) ?? { return TomlSerdeError.MissingRoot; }
+        core.Exchange<?Value>.replace(root, null) ?? { return TomlSerdeError.MissingRoot; }
     }
     func appendValue(value: Value) !void {
         if frames.isEmpty() {

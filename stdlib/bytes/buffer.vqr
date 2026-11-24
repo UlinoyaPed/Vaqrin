@@ -1,5 +1,5 @@
 package bytes
-import (coll, mem)
+import (core, coll, mem)
 
 pub class Buffer {
     var contents: coll.Vec<u8>;
@@ -84,7 +84,7 @@ pub class Buffer {
     pub func clear() void { contents.clear(); cursor = 0; }
 
     pub static func intoVec(value: Self) coll.Vec<u8> {
-        mem.replace<coll.Vec<u8>>(raw value.contents, coll.Vec<u8>())
+        core.Exchange<coll.Vec<u8>>.replace(value.contents, coll.Vec<u8>())
     }
 }
 

@@ -64,8 +64,8 @@ class Incoming {
     pub func request() !UnaryRequest {
         var body = decoder.next()! ?? { return RpcError.Protocol; };
         decoder.finish()!;
-        var path = core.replace<string>(raw head.path, "");
-        var metadata = core.replace<Metadata>(raw head.metadata, Metadata());
+        var path = core.Exchange<string>.replace(head.path, "");
+        var metadata = core.Exchange<Metadata>.replace(head.metadata, Metadata());
         UnaryRequest(move(path), move(metadata), head.deadline, move(body))
     }
 }

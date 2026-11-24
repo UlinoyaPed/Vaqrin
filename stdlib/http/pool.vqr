@@ -76,7 +76,7 @@ pub class AsyncPool {
             }
             if idle.secure == secure && sameName(idle.authority, authority) {
                 var taken = entries.remove(index).unwrap();
-                var connection = core.replace<AsyncConnection>(raw taken.connection,
+                var connection = core.Exchange<AsyncConnection>.replace(taken.connection,
                     AsyncConnection(null, null, "", client.limits));
                 return (secure, move(authority), move(connection));
             }

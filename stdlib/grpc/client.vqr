@@ -42,9 +42,9 @@ pub class Call {
     pub const func sendCompression() Compression { compression }
     pub func complete() !UnaryResponse {
         if !remoteEnd { return RpcError.CallInProgress; }
-        var current = core.replace<?Status>(raw status, null) ?? { return RpcError.CallClosed; };
-        var headers = core.replace<Metadata>(raw initial, Metadata());
-        var trailers = core.replace<Metadata>(raw trailing, Metadata());
+        var current = core.Exchange<?Status>.replace(status, null) ?? { return RpcError.CallClosed; };
+        var headers = core.Exchange<Metadata>.replace(initial, Metadata());
+        var trailers = core.Exchange<Metadata>.replace(trailing, Metadata());
         UnaryResponse(move(headers), move(trailers), move(current), null)
     }
 }
@@ -263,15 +263,15 @@ pub class ClientConn {
                         if (event.code & 1) == 0 || call.status != null { return RpcError.Protocol; }
                         var remote = Status(
                             info.remoteStatus.unwrap(),
-                            core.replace<string>(raw info.message, ""),
-                            core.replace<coll.Vec<u8>>(raw info.details, coll.Vec<u8>())
+                            core.Exchange<string>.replace(info.message, ""),
+                            core.Exchange<coll.Vec<u8>>.replace(info.details, coll.Vec<u8>())
                         );
                         call.status = some(move(remote));
-                        call.trailing = core.replace<Metadata>(raw info.metadata, Metadata());
+                        call.trailing = core.Exchange<Metadata>.replace(info.metadata, Metadata());
                     } else if initial {
-                        call.initial = core.replace<Metadata>(raw info.metadata, Metadata());
+                        call.initial = core.Exchange<Metadata>.replace(info.metadata, Metadata());
                     } else {
-                        call.trailing = core.replace<Metadata>(raw info.metadata, Metadata());
+                        call.trailing = core.Exchange<Metadata>.replace(info.metadata, Metadata());
                     }
                 },
                 http2.EventKind.Data => {

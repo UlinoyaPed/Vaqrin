@@ -73,7 +73,7 @@ pub func compareBytes(a: []const u8, b: []const u8) cmp.Ordering {
     }
     var lhs = a.len();
     var rhs = b.len();
-    cmp.compare(raw lhs, raw rhs)
+    cmp.compare(lhs, rhs)
 }
 
 pub func swap<T: Movable>(a: *T, b: *T) void { core.swap(a, b); }

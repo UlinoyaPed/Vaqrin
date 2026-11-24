@@ -1,5 +1,5 @@
 package errors
-import (iter as iterator, coll, io, mem, text, log)
+import (core, iter as iterator, coll, io, text, log)
 
 pub enum ErrorSeverity { Info, Warning, Error, Fatal }
 
@@ -211,7 +211,7 @@ pub class ErrorSink {
     pub const func isEmpty() bool { reports.isEmpty() }
     pub func clear() void { reports.clear(); }
     pub func drain() ReportDrain {
-        var owned = mem.replace<coll.Vec<Report>>(raw reports, coll.Vec<Report>());
+        var owned = core.Exchange<coll.Vec<Report>>.replace(reports, coll.Vec<Report>());
         owned.reverse();
         ReportDrain(move(owned))
     }

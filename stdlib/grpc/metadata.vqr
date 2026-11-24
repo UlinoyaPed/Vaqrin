@@ -22,8 +22,7 @@ func metadataKey(name: str) bool {
 }
 
 func base64Options() encoding.Base64Options {
-    encoding.Base64Options{alphabet: encoding.Base64Alphabet.Standard, padding: false,
-                           lineWidth: 0, ignoreWhitespace: false}
+    encoding.Base64Options(encoding.Base64Alphabet.Standard, false, 0, false)
 }
 
 pub class Metadata {

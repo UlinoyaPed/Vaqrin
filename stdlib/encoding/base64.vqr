@@ -8,6 +8,9 @@ pub class Base64Options {
     pub var padding: bool;
     pub var lineWidth: usize;
     pub var ignoreWhitespace: bool;
+
+    pub func init(alphabet: Base64Alphabet, padding: bool, lineWidth: usize, ignoreWhitespace: bool)
+        : alphabet(alphabet), padding(padding), lineWidth(lineWidth), ignoreWhitespace(ignoreWhitespace) {}
 }
 
 pub func base64EncodedLen(n: usize) !usize {

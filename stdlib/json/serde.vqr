@@ -48,7 +48,7 @@ pub class JsonDomSerializer {
         if frames.isEmpty() { return JsonSerdeError.InvalidState; }
         var frame = frames.pop().unwrap();
         if frame.objectMode { return JsonSerdeError.InvalidState; }
-        appendValue(Value.Array(core.replace<JsonArray>(raw frame.array, JsonArray())))
+        appendValue(Value.Array(core.Exchange<JsonArray>.replace(frame.array, JsonArray())))
     }
     pub func beginMap(length: ?usize) !void { frames.push(JsonWriteFrame(true))!; }
     pub func writeKey(value: str) !void {
@@ -61,11 +61,11 @@ pub class JsonDomSerializer {
         if frames.isEmpty() { return JsonSerdeError.InvalidState; }
         var frame = frames.pop().unwrap();
         if !frame.objectMode || frame.pendingKey != null { return JsonSerdeError.InvalidState; }
-        appendValue(Value.Object(core.replace<JsonObject>(raw frame.object, JsonObject())))
+        appendValue(Value.Object(core.Exchange<JsonObject>.replace(frame.object, JsonObject())))
     }
     pub func takeValue() !Value {
         if !frames.isEmpty() { return JsonSerdeError.InvalidState; }
-        core.replace<?Value>(raw root, null) ?? { return JsonSerdeError.MissingRoot; }
+        core.Exchange<?Value>.replace(root, null) ?? { return JsonSerdeError.MissingRoot; }
     }
     func appendValue(value: Value) !void {
         if frames.isEmpty() {

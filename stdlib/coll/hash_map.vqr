@@ -738,7 +738,7 @@ pub class Entry<K: Movable, V: Movable> {
         __vqr_optional_pointer(raw query) ?? { panic("hash map entry has already been consumed"); }
     }
     func takeKey() K {
-        var value = core.replace<?K>(raw query, null);
+        var value = core.Exchange<?K>.replace(query, null);
         move(value).unwrap()
     }
 }

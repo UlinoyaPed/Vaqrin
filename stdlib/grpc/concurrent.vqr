@@ -8,7 +8,7 @@ class ConcurrentInput {
     pub func init(handler: *const ConcurrentUnaryHandler, request: UnaryRequest)
         : handler(handler), request(move(request)) {}
     pub func run(limit: usize) !ConcurrentOutput {
-        var input = core.replace<UnaryRequest>(raw request,
+        var input = core.Exchange<UnaryRequest>.replace(request,
             UnaryRequest("", Metadata(), null, coll.Vec<u8>()));
         var result = handler.call(move(input)) catch {
             var code = if task.isCancelled() { StatusCode.Cancelled } else { StatusCode.Internal };

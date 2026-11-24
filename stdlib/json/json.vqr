@@ -115,9 +115,9 @@ pub class JsonObject {
     }
     pub func insert(key: string, value: Value) core.ResultOptional<Value> {
         for index in usize(0)..entries.len() {
-            var entry = entries.getMutPtr(index).unwrap();
+            var entry = entries.getMut(index).unwrap();
             if entry.key == key {
-                var previous = core.replace<Value>(raw entry.value, move(value));
+                var previous = core.Exchange<Value>.replace(entry.value, move(value));
                 return some(move(previous));
             }
         }
@@ -131,7 +131,7 @@ pub class JsonObject {
                 var removed = entries.remove(index);
                 switch move(removed) {
                     null => return null,
-                    some(entry) => { return some(core.replace<Value>(raw entry.value, Value.Null)); },
+                    some(entry) => { return some(core.Exchange<Value>.replace(entry.value, Value.Null)); },
                 }
             }
         }

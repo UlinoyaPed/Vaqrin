@@ -21,7 +21,12 @@ func receive(connection: *grpc.ClientConn, call: *grpc.Call, expected: i32) !voi
 func finish(connection: *grpc.ClientConn, call: *grpc.Call) !void {
     if connection.recvMessage(call)! != null { return StreamTestError.BadValue; }
     var complete = call.complete()!;
-    require(complete.status.isOk())
+    require(complete.status.isOk())!;
+    var repeated = call.complete() catch (reason) {
+        require(reason == grpc.RpcError.CallClosed)!;
+        return;
+    };
+    StreamTestError.BadValue
 }
 
 func main() !void {

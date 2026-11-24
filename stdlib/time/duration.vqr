@@ -61,8 +61,8 @@ pub class Duration {
     }
 
     pub const func compare(other: Self) cmp.Ordering {
-        if whole != other.whole { return cmp.compare<i64>(raw whole, raw other.whole); }
-        cmp.compare<i32>(raw fraction, raw other.fraction)
+        if whole != other.whole { return cmp.compare<i64>(whole, other.whole); }
+        cmp.compare<i32>(fraction, other.fraction)
     }
     const func total() i128 { i128(whole) * nanosPerSecond + i128(fraction) }
 

@@ -1,5 +1,5 @@
 package io
-import (bytes, coll, mem)
+import (core, bytes, coll, mem)
 
 pub class MemoryReader {
     #implements: Reader, Seeker
@@ -46,7 +46,7 @@ pub class MemoryWriter {
     pub func flush() !void {}
     pub const func asSlice() []const u8 { buffer.asSlice() }
     pub static func intoBytes(value: Self) coll.Vec<u8> {
-        bytes.Buffer.intoVec(mem.replace<bytes.Buffer>(raw value.buffer, bytes.Buffer()))
+        bytes.Buffer.intoVec(core.Exchange<bytes.Buffer>.replace(value.buffer, bytes.Buffer()))
     }
 }
 

@@ -28,7 +28,7 @@ pub class AsyncTcpStream {
         AsyncTcpStream(move(socket))
     }
     pub static func intoTcp(value: Self) TcpStream {
-        core.replace<TcpStream>(raw value.stream, TcpStream(Socket(-1)))
+        core.Exchange<TcpStream>.replace(value.stream, TcpStream(Socket(-1)))
     }
     pub const func systemDescriptor() !i32 { stream.systemDescriptor() }
     pub const func localAddr() !SocketAddr { stream.localAddr() }

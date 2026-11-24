@@ -54,7 +54,7 @@ class Queue<T: Movable> {
     pub func takeBuffer() coll.Vec<?T> {
         used = 0;
         head = 0;
-        core.replace<coll.Vec<?T>>(raw slots, coll.Vec<?T>())
+        core.Exchange<coll.Vec<?T>>.replace(slots, coll.Vec<?T>())
     }
     const func index(offset: usize) usize {
         var beforeWrap = slots.len() - head;

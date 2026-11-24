@@ -59,8 +59,8 @@ pub class ServerStream {
               Compression.Gzip
           } else { Compression.Identity }),
           timeout(options.timeout), ended(false), acknowledged(false), cancelled(false),
-          path(core.replace<string>(raw request.path, "")),
-          metadata(core.replace<Metadata>(raw request.metadata, Metadata())), deadline(request.deadline),
+          path(core.Exchange<string>.replace(request.path, "")),
+          metadata(core.Exchange<Metadata>.replace(request.metadata, Metadata())), deadline(request.deadline),
           initial(Metadata()), trailing(Metadata()) {
         if (request.encoding ?? MessageEncoding.Identity) == MessageEncoding.Gzip {
             decoder.useCompression(Compression.Gzip);
@@ -122,8 +122,8 @@ pub class ServerStream {
             encodeStatus(raw trailers, raw result)!;
             session.sendTrailers(id, raw trailers)!;
         } else {
-            var headers = core.replace<Metadata>(raw initial, Metadata());
-            var trailers = core.replace<Metadata>(raw trailing, Metadata());
+            var headers = core.Exchange<Metadata>.replace(initial, Metadata());
+            var trailers = core.Exchange<Metadata>.replace(trailing, Metadata());
             var response = UnaryResponse(move(headers), move(trailers), move(result), null);
             sendResponse(session, id, raw response, limit, Compression.Identity)!;
         }

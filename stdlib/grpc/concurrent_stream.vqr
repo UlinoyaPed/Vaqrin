@@ -47,8 +47,8 @@ pub class ConcurrentServerStream {
           compression(if head.acceptsCompressed && options.compressResponses {
               Compression.Gzip
           } else { Compression.Identity }),
-          acknowledged(false), finished(false), path(core.replace<string>(raw head.path, "")),
-          metadata(core.replace<Metadata>(raw head.metadata, Metadata())), deadline(head.deadline),
+          acknowledged(false), finished(false), path(core.Exchange<string>.replace(head.path, "")),
+          metadata(core.Exchange<Metadata>.replace(head.metadata, Metadata())), deadline(head.deadline),
           initial(Metadata()), trailing(Metadata()) {}
 
     pub const func maxMessageBytes() usize { limit }
@@ -108,7 +108,7 @@ pub class ConcurrentServerStream {
         if unsafe { __vqr_rt_signal_completion_fd(descriptor) } != 0 { return RpcError.ConnectionClosed; }
         var reply = replies.recv() catch { return RpcError.Cancelled; };
         var response = move(reply) ?? { return RpcError.Cancelled; };
-        var result = core.replace<StreamResult>(raw response.result, StreamResult.End);
+        var result = core.Exchange<StreamResult>.replace(response.result, StreamResult.End);
         switch result {
             StreamResult.Failure(reason) => { return reason; },
             _ => {},
@@ -192,7 +192,7 @@ class PendingStream {
         if outbound != null { return; }
         switch requests.tryRecv() {
             channel.TryRecv.Value(command) => {
-                var operation = core.replace<StreamOperation>(raw command.operation, StreamOperation.Receive);
+                var operation = core.Exchange<StreamOperation>.replace(command.operation, StreamOperation.Receive);
                 switch move(operation) {
                     StreamOperation.Receive => {
                         reading = true;

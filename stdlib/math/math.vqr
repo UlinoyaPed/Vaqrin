@@ -368,10 +368,10 @@ pub func minNum<T>(a: T, b: T) T {
     if a < b { a } else { b }
 }
 pub func totalMin<T>(a: T, b: T) T {
-    if cmp.totalCmp(raw a, raw b) == cmp.Ordering.Greater { b } else { a }
+    if cmp.totalCmp(a, b) == cmp.Ordering.Greater { b } else { a }
 }
 pub func totalMax<T>(a: T, b: T) T {
-    if cmp.totalCmp(raw a, raw b) == cmp.Ordering.Less { b } else { a }
+    if cmp.totalCmp(a, b) == cmp.Ordering.Less { b } else { a }
 }
 pub func clamp<T>(x: T, low: T, high: T) T {
     if isNan(low) || isNan(high) || low > high { panic("invalid clamp bounds"); }

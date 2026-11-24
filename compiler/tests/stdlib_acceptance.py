@@ -259,7 +259,7 @@ class StandardLibraryAcceptance(CompilerCase):
                 random.fillSystem(two[:])!;
                 io.println(!bytes.equal(one[:], two[:]))!;
 
-                var seed = hash.HashSeed{low: 0x0706050403020100, high: 0x0f0e0d0c0b0a0908};
+                var seed = hash.HashSeed(0x0706050403020100, 0x0f0e0d0c0b0a0908);
                 var sip = hash.SipHasher(seed);
                 io.println(sip.finish64() == 0x726fdb47dd0e0e31u64)!;
                 var input = [15]u8{0,1,2,3,4,5,6,7,8,9,10,11,12,13,14};
@@ -590,7 +590,7 @@ class StandardLibraryAcceptance(CompilerCase):
                     io.println(pcg.nextU64())!;
                     io.println(xoshiro.nextU64())!;
                 }
-                var hasher = hash.SipHasher(hash.HashSeed{low: 1, high: 2});
+                var hasher = hash.SipHasher(hash.HashSeed(1, 2));
                 hasher.write("DATA".asBytes());
                 io.println(hasher.finish64())!;
             }
@@ -1193,6 +1193,29 @@ class StandardLibraryAcceptance(CompilerCase):
         self.assertEqual(json.loads(lines[1]), expected)
         self.assertEqual(json.loads("\n".join(lines[2:-5])), expected)
         self.assertEqual(lines[-5:], ["true", "true", "1", "true", "true"])
+
+    def test_json_object_replaces_and_returns_owned_payload(self):
+        self.hosted("""
+            import (json)
+            func main() !void {
+                var object = json.JsonObject();
+                var initial: string = "old";
+                if object.insert("key", json.Value.String(move(initial)))! != null {
+                    panic("initial insertion replaced an entry");
+                }
+                var previous = object.insert("key", json.Value.Bool(true))!.unwrap();
+                switch move(previous) {
+                    json.Value.String(value) => { io.println(value)!; },
+                    _ => panic("replacement lost the old owned string"),
+                }
+                var removed = object.remove("key").unwrap();
+                switch move(removed) {
+                    json.Value.Bool(value) => { io.println(value)!; },
+                    _ => panic("removal did not return the new value"),
+                }
+                io.println(object.len() == 0 && object.remove("key") == null)!;
+            }
+        """, "old\ntrue\ntrue\n")
 
     def test_json_encoder_options(self):
         expected = "\n".join([

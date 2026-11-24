@@ -9,6 +9,8 @@
 | `num`、`linalg` | 大整数和有理数的迁移运算，以及已迁移的矩阵乘法、LU、QR 和求解，使用 `in` 借用只读操作数，不再让调用方为了这些操作创建裸指针。 | [num](../../stdlib/num)、[linalg](../../stdlib/linalg) |
 | `coll` | Vec 的追加、插入和替换，以及 HashMap、BTreeMap 的已迁移插入接口，按类型的 `Copyable` 能力选择复制或显式转移。单个实例不会仅靠参数模式区分多个同名入口。 | [coll](../../stdlib/coll)、[容器验收](../../compiler/tests/coll_acceptance.py) |
 
+| `cmp` | `partialCmp`、`compare`、`totalCmp` 和 `between` 的操作数使用 `in T`。只读借用支持变量、临时值和安全引用，调用方不再传 `raw x`。此切片不含 `eq`、`ne`、接口或算法回调。 | [cmp.vqr](../../stdlib/cmp/cmp.vqr) |
+
 开发分支仍以 `0.1.5` 构建并报告版本。全局 Copyable 检查、所有裸指针解引用的 `unsafe` 检查和一般容器借用还未达到正式交付标准。
 
 正式发版时，从最终源码更新 API 记录；同步配置中的项目版本和编译器自报版本，并在安装后的二进制上断言 `vaqc --version` 的值。仅运行版本命令并检查退出码不能证明版本正确。应以最终接口重跑配对 I/O 基准；若在宿主环境验证 DAP，须确认真实 `lldb-dap` 用例执行而非跳过。

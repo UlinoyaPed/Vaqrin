@@ -4,12 +4,14 @@ import (bits)
 pub class HashSeed {
     pub var low: u64;
     pub var high: u64;
+
+    pub func init(low, high: u64) : low(low), high(high) {}
 }
 
 extern "C" func __vqr_io_hash_seed(low: *u64, high: *u64) i32;
 
 pub func processSeed() !HashSeed {
-    var seed = HashSeed{low: 0, high: 0};
+    var seed = HashSeed(0, 0);
     var status = unsafe { __vqr_io_hash_seed(raw seed.low, raw seed.high) };
     if status != 0 { return __vqr_encode_system_error(status); }
     seed

@@ -2858,12 +2858,12 @@ class Acceptance(CompilerCase):
                 var present: ?i32 = some(21);
                 {
                     var unused = [ref mut counter]() ErrorId => { counter++; Lookup.Missing };
-                    io.println(opt.okOrElse(present, move(unused))!)!;
+                    io.println(opt.okOrElseMut(present, unused)!)!;
                 }
                 var missing: ?i32 = null;
                 {
                     var failure = [ref mut counter]() ErrorId => { counter++; Lookup.Missing };
-                    opt.okOrElse(missing, move(failure)) catch (reason) {
+                    opt.okOrElseMut(missing, failure) catch (reason) {
                         if reason != Lookup.Missing { return reason; }
                         0
                     };
@@ -2901,6 +2901,30 @@ class Acceptance(CompilerCase):
             with self.subTest(code=code):
                 source = self.source("invalid.vqr", code)
                 self.assertIn(message, self.process(VAQC, "check", source, good=False).stderr.decode())
+
+    def test_v020_ok_or_else_mut_lends_reason_without_eager_call(self):
+        self.hosted("""
+            import (opt, result)
+            error Lookup { Missing }
+            func ordinaryReason() ErrorId { Lookup.Missing }
+            func main() !void {
+                var present: ?i32 = some(21);
+                var missing: ?i32 = null;
+                var pointerCase = opt.okOrElse(missing, ordinaryReason);
+                io.println(result.errorOf(raw pointerCase).unwrap() == Lookup.Missing)!;
+                calls := 0;
+                {
+                    reason := [ref mut calls]() ErrorId => { calls++; Lookup.Missing };
+                    var success: !i32 = opt.okOrElseMut(present, reason);
+                    io.println(success!)!;
+                    var failure: !i32 = opt.okOrElseMut(missing, reason);
+                    io.println(result.errorOf(raw failure).unwrap() == Lookup.Missing)!;
+                    io.println(opt.okOrElseMut(present, reason)!)!;
+                }
+                io.println(present.unwrap())!;
+                io.println(calls)!;
+            }
+        """, "true\n21\ntrue\n21\n21\n1\n")
 
     def test_unwrap_trap_diagnostics(self):
         source = self.source("unwrap.vqr", "func main() i32 { var absent: ?i32 = null; absent.unwrap() }\n")
@@ -3748,6 +3772,75 @@ class Acceptance(CompilerCase):
                 diagnostic = self.process(VAQC, "check", entry, good=False).stderr
                 self.assertIn(expected, diagnostic)
 
+    def test_optional_inspect_reborrows_scoped_observers_and_keeps_function_values(self):
+        self.hosted("""
+            import (opt)
+            class Resource {
+                #copy: disabled
+                pub var label: i32;
+                func deinit() void { io.println(label) catch {}; }
+            }
+            func expectFour(value: *const i32) void {
+                if unsafe { *value } != 4 { panic("inspection passed the wrong payload"); }
+            }
+            func expectFourBorrowed(value: in i32) void {
+                if value != 4 { panic("inspection passed the wrong borrowed payload"); }
+            }
+            func main() !void {
+                var seen = 0;
+                var present: ?i32 = some(4);
+                {
+                    var held = Resource{label: 71};
+                    var observer = [ref mut seen, move(held)](value: in i32) void => {
+                        if held.label != 71 { panic("inspection consumed the observer"); }
+                        seen += value;
+                    };
+                    if opt.inspectMut<i32>(null, observer) != null { panic("absence changed"); }
+                    var copy = opt.inspectMut(present, observer);
+                    if copy.unwrap() != 4 || present.unwrap() != 4 {
+                        panic("inspection changed a Copyable payload");
+                    }
+                    if opt.inspectMut<i32>(some(5), observer).unwrap() != 5 {
+                        panic("inspection lost the copied payload");
+                    }
+                }
+                io.println(seen)!;
+                var plain = opt.inspect(present, expectFour);
+                var indirect: func(*const i32) void = expectFour;
+                var viaPointer = opt.inspect(present, indirect);
+                var borrowed: func(in i32) void = expectFourBorrowed;
+                var viaBorrow = opt.inspectMut(present, borrowed);
+                var lambda = opt.inspect<i32>(present, (value: *const i32) void => expectFour(value));
+                if plain.unwrap() != 4 || viaPointer.unwrap() != 4 ||
+                   viaBorrow.unwrap() != 4 || lambda.unwrap() != 4 {
+                    panic("routine callback inspection changed its payload");
+                }
+            }
+        """, "71\n9\n", "-O2")
+        source = self.source("observer/main.vqr", """
+            import (opt)
+            func f() void {
+                var state = 0;
+                var observer = [ref mut state](value: in i32) void => { state += value; };
+                opt.inspectMut<i32>(1, move(observer));
+            }
+        """)
+        diagnostic = self.process(VAQC, "check", source, good=False).stderr
+        self.assertIn(b"name its whole local environment", diagnostic)
+        escape = self.source("escape/main.vqr", """
+            import (opt)
+            func f() void {
+                var observed = 0;
+                var observer = [ref mut observed](value: in i32) void => {
+                    var retained = new ref i32(ref value) catch { panic("allocation failed"); };
+                    observed = value;
+                };
+                opt.inspectMut<i32>(1, observer);
+            }
+        """)
+        diagnostic = self.process(VAQC, "check", escape, good=False).stderr
+        self.assertIn(b"references cannot be stored in Box allocations", diagnostic)
+
     def test_optional_core_and_iterator_contracts(self):
         self.hosted("""
             import (core, opt, iter, coll)
@@ -3778,8 +3871,10 @@ class Acceptance(CompilerCase):
                 io.println(opt.andThen<i32, i32>(o, move(transform)).unwrap())!;
                 filtered := opt.filter(o, bumped);
                 seen := 0;
-                observe := [ref mut seen](p: *const i32) void => { seen = *p; };
-                opt.inspect(filtered, move(observe));
+                {
+                    observe := [ref mut seen](item: in i32) void => { seen = item; };
+                    opt.inspectMut(filtered, observe);
+                }
                 io.println(seen)!;
                 x, y := opt.unzip<i32, i32>(opt.zip<i32, i32>(o, some(4)));
                 io.println(opt.zipWith<i32, i32, i32>(x, y, sum).unwrap())!;
@@ -3890,11 +3985,15 @@ class Acceptance(CompilerCase):
                 io.println(result.unwrapOrElse(failed, recoverValue))!;
                 io.println(result.expect(original, "failed"))!;
                 seen := 0;
-                observe := [ref mut seen](p: *const i32) void => { seen += *p; };
-                result.inspect(original, move(observe))!;
-                onError := [ref mut seen](e: ErrorId) void => { if e == Problem.Missing { seen += 7; } };
-                var checked = result.inspectErr(failed, move(onError));
-                io.println(result.isErr(raw checked))!;
+                {
+                    observe := [ref mut seen](item: in i32) void => { seen += item; };
+                    result.inspectMut(original, observe)!;
+                }
+                {
+                    onError := [ref mut seen](e: ErrorId) void => { if e == Problem.Missing { seen += 7; } };
+                    var checked = result.inspectErrMut(failed, onError);
+                    io.println(result.isErr(raw checked))!;
+                }
                 io.println(seen)!;
                 var missing: !?i32 = null;
                 var absent = result.transpose(missing);
@@ -3909,6 +4008,34 @@ class Acceptance(CompilerCase):
                 io.println(collected[0] + collected[1])!;
             }
         """, "true\ntrue\ntrue\n2\n3\n4\n10\n6\n11\n2\ntrue\n9\ntrue\n9\n13\n9\n")
+
+    def test_v020_result_inspect_scoped_callbacks_preserve_value_and_error(self):
+        self.hosted("""
+            import (result)
+            error Problem { Missing }
+            func rawObserver(value: *const i32) void {
+                if *value != 5 { panic("wrong raw observer payload"); }
+            }
+            func main() !void {
+                var original: !i32 = 5;
+                var failed: !i32 = Problem.Missing;
+                io.println(result.inspect(original, rawObserver)!)!;
+                seen := 0;
+                {
+                    observe := [ref mut seen](item: in i32) void => { seen += item; };
+                    io.println(result.inspectMut(original, observe)!)!;
+                    var errorAgain = result.inspectMut(failed, observe);
+                    io.println(result.errorOf(raw errorAgain).unwrap() == Problem.Missing)!;
+                }
+                {
+                    onError := [ref mut seen](e: ErrorId) void => { if e == Problem.Missing { seen += 7; } };
+                    io.println(result.inspectErrMut(original, onError)!)!;
+                    var errorAgain = result.inspectErrMut(failed, onError);
+                    io.println(result.errorOf(raw errorAgain).unwrap() == Problem.Missing)!;
+                }
+                io.println(seen)!;
+            }
+        """, "5\n5\ntrue\n5\ntrue\n12\n")
 
     def test_v020_ordering_helpers_borrow_operands(self):
         self.hosted("""
@@ -5194,12 +5321,12 @@ class Acceptance(CompilerCase):
                 var tried = 0;
                 {
                     var fail = [ref mut tried]() !i32 => { tried++; Failure.Once };
-                    var failed = once.getOrTryInit(move(fail));
+                    var failed = once.getOrTryInitMut(fail);
                     io.println(core.isErr(raw failed))!;
                 }
                 {
                     var succeed = [ref mut tried]() !i32 => { tried++; 21 };
-                    io.println(*once.getOrTryInit(move(succeed))!)!;
+                    io.println(*once.getOrTryInitMut(succeed)!)!;
                 }
                 if tried != 2 { panic("once retry did not call the factory"); }
                 var callback = [tried]() !i32 => {
@@ -5225,6 +5352,87 @@ class Acceptance(CompilerCase):
             }
         """,
                     "6\n4\n7\ntrue\ntrue\n20\n12\n17\n12\ntrue\n21\n21\n21\n3\ntrue\n12\n4\n12\ntrue\nfalse\n11\n")
+
+    def test_once_cell_borrows_factory_for_retry_and_skips_published_value(self):
+        self.hosted("""
+            import (cell, result)
+            error Failure { Retry }
+            class Resource {
+                #copy: disabled
+                pub var label: i32;
+                func deinit() void { io.println(label) catch {}; }
+            }
+            func reject() !i32 { Failure.Retry }
+            func accept() !i32 { 27 }
+            func main() !void {
+                var storage = cell.OnceCell<i32>.new();
+                var calls = 0;
+                {
+                    var held = Resource{label: 71};
+                    var make = [ref mut calls, move(held)]() !i32 => {
+                        if held.label != 71 { panic("initializer was consumed"); }
+                        calls++;
+                        if calls == 1 { return Failure.Retry; }
+                        41
+                    };
+                    var failed = storage.getOrTryInitMut(make);
+                    if result.errorOf(raw failed).unwrap() != Failure.Retry || storage.get() != null {
+                        panic("failed initializer was published");
+                    }
+                    var first = storage.getOrTryInitMut(make)!;
+                    var again = storage.getOrTryInitMut(make)!;
+                    if first != again || unsafe { *again } != 41 {
+                        panic("the initialized value changed");
+                    }
+                }
+                io.println(calls)!;
+
+                var legacy = cell.OnceCell<i32>.new();
+                var legacyFailure = legacy.getOrTryInit(reject);
+                if result.errorOf(raw legacyFailure).unwrap() != Failure.Retry { panic("legacy retry"); }
+                var legacyFirst = legacy.getOrTryInit(accept)!;
+                if legacy.getOrTryInit(reject)! != legacyFirst || unsafe { *legacyFirst } != 27 {
+                    panic("legacy factory should not run when ready");
+                }
+
+                var reentrant = cell.OnceCell<i32>.new();
+                var address = raw reentrant;
+                var make = [address]() !i32 => {
+                    // Deliberately re-enter this local cell through a raw alias.
+                    // The inner callback must never run while initialization is active.
+                    var forbidden = () !i32 => { panic("ran a recursive initializer"); };
+                    var rejected = unsafe { (*address).getOrTryInitMut(forbidden) };
+                    if result.errorOf(raw rejected).unwrap() != cell.CellError.RecursiveInitialization {
+                        panic("missed recursive initialization");
+                    }
+                    if unsafe { (*address).set(7) }.unwrap() != 7 ||
+                       unsafe { (*address).take() } != null {
+                        panic("an operation bypassed the initialization guard");
+                    }
+                    23
+                };
+                var published = reentrant.getOrTryInitMut(make)!;
+                io.println(unsafe { *published })!;
+
+                {
+                    var owned = cell.OnceCell<Resource>.new();
+                    var make = () !Resource => Resource{label: 17};
+                    var published = owned.getOrTryInitMut(make)!;
+                    if unsafe { (*published).label } != 17 { panic("lost the published owner"); }
+                }
+            }
+        """, "71\n2\n23\n17\n", "-O2")
+        source = self.source("moved_factory/main.vqr", """
+            import (cell)
+            func f() !void {
+                var seen = 0;
+                var stored = cell.OnceCell<i32>.new();
+                var make = [ref mut seen]() !i32 => { seen++; seen };
+                stored.getOrTryInitMut(move(make))!;
+            }
+        """)
+        diagnostic = self.process(VAQC, "check", source, good=False).stderr
+        self.assertIn(b"name its whole local environment", diagnostic)
 
     def test_once_lock_publishes_once_across_native_threads(self):
         source = self.source("once.vqr", '''

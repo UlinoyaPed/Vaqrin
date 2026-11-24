@@ -129,6 +129,17 @@ pub func inspect<T: Movable, F: Movable>(value: ?T, observer: F) ?T {
     }
 }
 
+// The observer is only invoked here; its environment stays with the caller.
+pub func inspectMut<T: Copyable + Movable, F>(value: ?T, observer: mut F) ?T {
+    switch move(value) {
+        null => null,
+        some(item) => {
+            observer(ref item);
+            some(move(item))
+        },
+    }
+}
+
 pub func zip<A: Movable, B: Movable>(a: ?A, b: ?B) ?(A, B) {
     switch move(a) {
         null => null,
@@ -170,6 +181,14 @@ pub func okOr<T: Movable>(value: ?T, reason: ErrorId) !T {
 }
 
 pub func okOrElse<T: Movable, F: Movable>(value: ?T, reason: F) !T {
+    ok(move(value) ?? {
+        var failure: ErrorId = reason();
+        return failure;
+    })
+}
+
+// Borrow a scoped callback only for this conversion. Some does not call it.
+pub func okOrElseMut<T: Copyable + Movable, F>(value: ?T, reason: mut F) !T {
     ok(move(value) ?? {
         var failure: ErrorId = reason();
         return failure;

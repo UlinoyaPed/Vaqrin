@@ -33,6 +33,21 @@ pub func inspectErr<T: Movable, F: Movable>(value: !T, observer: F) !T {
     ok(move(item))
 }
 
+// Observe a copied Result through an immediate loan of the callback.
+pub func inspectMut<T: Copyable + Movable, F>(value: !T, observer: mut F) !T {
+    var item = move(value)!;
+    observer(ref item);
+    ok(move(item))
+}
+
+pub func inspectErrMut<T: Copyable + Movable, F>(value: !T, observer: mut F) !T {
+    var item = move(value) catch (errorId) {
+        observer(errorId);
+        return errorId;
+    };
+    ok(move(item))
+}
+
 pub func unwrapOr<T: Movable>(value: !T, fallback: T) T { move(value) catch move(fallback) }
 pub func unwrapOrElse<T: Movable, F: Movable>(value: !T, fallback: F) T {
     move(value) catch (errorId) { fallback(errorId) }

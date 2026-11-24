@@ -45,19 +45,46 @@ pub class OnceCell<T: Movable> {
         }
     }
 
+    // A null success grants this caller the attempt; either a published
+    // address or a recursive error leaves the state exactly as it was.
+    func prepareTryInit() core.ResultOptional<*const T> {
+        var published = get();
+        if published != null { return published; }
+        if initializing { return CellError.RecursiveInitialization; }
+        initializing = true;
+        null
+    }
+
+    func finishTryInit() *const T {
+        initializing = false;
+        get().unwrap()
+    }
+
     pub func getOrTryInit<F: Movable>(factory: F) !*const T {
-        switch get() {
+        switch prepareTryInit()! {
             some(ptr) => ptr,
             null => {
-                if initializing { return CellError.RecursiveInitialization; }
-                initializing = true;
                 var value = factory() catch (reason) {
                     initializing = false;
                     return reason;
                 };
                 slot = some(move(value));
-                initializing = false;
-                get().unwrap()
+                finishTryInit()
+            },
+        }
+    }
+
+    // The factory stays with the caller and is only invoked for a new attempt.
+    pub func getOrTryInitMut<F>(factory: mut F) !*const T {
+        switch prepareTryInit()! {
+            some(ptr) => ptr,
+            null => {
+                var value = factory() catch (reason) {
+                    initializing = false;
+                    return reason;
+                };
+                slot = some(move(value));
+                finishTryInit()
             },
         }
     }

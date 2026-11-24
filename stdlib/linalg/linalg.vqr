@@ -65,8 +65,8 @@ pub class Vector<T: Copyable> {
     }
     pub static func fromSlice(values: []const T) !Self { Vector<T>(coll.Vec<T>.fromSlice(values)!) }
     pub const func len() usize { values.len() }
-    pub const func get(index: usize) ?*const T { values.getPtr(index) }
-    pub func getMut(index: usize) ?*T { values.getMutPtr(index) }
+    pub const func get(index: usize) ?ref T from self { values.get(index) }
+    pub func getMut(index: usize) ?ref mut T from self { values.getMut(index) }
     pub const func asSlice() []const T { values.asConstSlice() }
     pub func asMutSlice() []T { values.asSlice() }
     pub const func clone() !Self { Vector<T>(values.clone()!) }
@@ -121,13 +121,13 @@ pub class Matrix<T: Copyable> {
     pub const func rows() usize { height }
     pub const func cols() usize { width }
     pub const func shape() (usize,usize) { (height, width) }
-    pub const func get(row: usize, col: usize) ?*const T {
+    pub const func get(row: usize, col: usize) ?ref T from self {
         if row >= height || col >= width { return null; }
-        values.getPtr(row * width + col)
+        values.get(row * width + col)
     }
-    pub func getMut(row: usize, col: usize) ?*T {
+    pub func getMut(row: usize, col: usize) ?ref mut T from self {
         if row >= height || col >= width { return null; }
-        values.getMutPtr(row * width + col)
+        values.getMut(row * width + col)
     }
     pub const func at(row: usize, col: usize) T { *get(row, col).unwrap() }
     pub func set(row: usize, col: usize, value: T) void { *getMut(row, col).unwrap() = value; }

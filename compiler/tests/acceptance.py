@@ -699,6 +699,66 @@ class Acceptance(CompilerCase):
         """)
         self.assertIn(b"conflicts with active borrow", self.process(VAQC, "check", invalid, good=False).stderr)
 
+    def test_v020_defer_checked_reference_captures(self):
+        program = """
+            func log(value: i32) void { io.println(value) catch {}; }
+            class Record {
+                pub var left: i32;
+                pub var right: i32;
+                pub var spare: i32;
+                pub func init() : left(3), right(4), spare(5) {}
+                func deinit() void { log(100 + right); }
+            }
+            func main() void {
+                var record = Record();
+                {
+                    ref a = record.left;
+                    ref mut b = record.right;
+                    var shared = [ref a](amount: i32) void => { log(a + amount); };
+                    var exclusive = [ref a, ref mut b]() void => { b += a; log(b); };
+                    defer shared(1);
+                    defer shared(2);
+                    defer { exclusive(); }
+                    record.spare++;
+                    log(record.spare);
+                }
+                log(record.right);
+                {
+                    var direct = [ref mut record]() void => { record.right++; log(record.right); };
+                    defer direct();
+                }
+                {
+                    var separately = 20;
+                    var moved = [ref mut separately]() void => { separately++; log(separately); };
+                    defer move(moved)();
+                    log(19);
+                }
+            }
+        """
+        for level in ("-O0", "-O2"):
+            with self.subTest(level=level):
+                self.hosted(program, "6\n7\n5\n4\n7\n8\n19\n21\n108\n", level)
+
+    def test_v020_defer_checked_reference_capture_rejections(self):
+        prelude = "import (io); func log(value: i32) void { io.println(value) catch {}; }\n"
+        cases = {
+            "repeat_exclusive": ("var n = 1; var f = [ref mut n]() void => { n++; }; "
+                                 "defer f(); defer f();", "active borrow of 'f'"),
+            "call_exclusive_before_cleanup": ("var n = 1; var f = [ref mut n]() void => { n++; }; "
+                                              "defer f(); f();", "active borrow of 'f'"),
+            "call_after_deferred_block": ("var n = 1; var f = [ref mut n]() void => { n++; }; "
+                                          "defer { f(); } f();", "active borrow of 'f'"),
+            "move_shared": ("var n = 1; var f = [ref n]() void => log(n); "
+                            "defer f(); var g = move(f);", "active borrow of 'f'"),
+            "overlapping_argument": ("var n = 1; var f = [ref mut n](x: mut i32) void => { n++; x++; }; "
+                                     "defer f(n);", "active borrow of 'n'"),
+            "expired_capture": ("defer ({ var n = 1; [ref n]() void => log(n) })();", "outlive"),
+        }
+        for name, (body, diagnostic) in cases.items():
+            with self.subTest(name=name):
+                source = self.source(name + "/main.vqr", prelude + "func main() void { " + body + " }")
+                self.assertIn(diagnostic.encode(), self.process(VAQC, "check", source, good=False).stderr)
+
     def test_v020_closure_environment_mutation_preserves_shared_referents(self):
         self.hosted("""
             class View {
@@ -2028,7 +2088,7 @@ class Acceptance(CompilerCase):
             export "C" func allocate_explicit() c_int {
                 var backing = mem.zeroedBytes<64>();
                 var allocator = mem.FixedBufferAllocator(backing[:]);
-                var v = coll.Vec<u8>.withAllocator(raw allocator);
+                var v = coll.Vec<u8>.withAllocator(unsafe { mem.AllocatorRef.fromRaw(raw allocator) });
                 v.push(19) catch { return 3; };
                 v.push(10) catch { return 4; };
                 i32(v[0]) + i32(v[1])
@@ -3291,6 +3351,19 @@ class Acceptance(CompilerCase):
                 bad = self.source("bad-reference.vqr", "import (coll)\n" + code)
                 self.assertIn(diagnostic, self.process(VAQC, "check", bad, good=False).stderr.decode())
 
+    def test_unchecked_storage_replacement_apis_removed(self):
+        for package in ("core", "mem"):
+            with self.subTest(package=package):
+                source = self.source("unchecked-replacement.vqr", f"""
+                    import ({package})
+                    func main() void {{
+                        var slot = 1;
+                        var old = {package}.replace<i32>(raw slot, 2);
+                    }}
+                """)
+                failure = self.process(VAQC, "check", source, good=False)
+                self.assertIn(f"unknown value '{package}'".encode(), failure.stderr)
+
     def test_optional_core_and_iterator_contracts(self):
         self.hosted("""
             import (core, opt, iter, coll)
@@ -3303,7 +3376,7 @@ class Acceptance(CompilerCase):
             func main() !void {
                 a := 18; b := 2;
                 core.swap(raw a, raw b); core.swap(raw a, raw a);
-                io.println(core.replace(raw b, core.identity(a)))!;
+                io.println(core.Exchange<i32>.replace(b, core.identity(a)))!;
                 core.drop(b);
                 var o: ?i32 = null;
                 io.println(opt.isNone(raw o))!;
@@ -3311,8 +3384,8 @@ class Acceptance(CompilerCase):
                 *value += 2;
                 opt.getOrInsertWith(raw o, seven);
                 io.println(*opt.asPtr(raw o).unwrap())!;
-                io.println(opt.replace(raw o, 8).unwrap())!;
-                io.println(opt.take(raw o).unwrap())!;
+                io.println(opt.Storage<i32>.replace(o, 8).unwrap())!;
+                io.println(opt.take(o).unwrap())!;
                 io.println(opt.isNone(raw o))!;
                 var newValue = opt.insert(raw o, 9);
                 (*newValue)--;
@@ -3343,7 +3416,7 @@ class Acceptance(CompilerCase):
                 io.println(*cursor.nextBack().unwrap())!;
                 io.println(cursor.remaining())!;
                 io.println(*cursor.next().unwrap())!;
-                var once = opt.intoIter<i32>(opt.take(raw o));
+                var once = opt.intoIter<i32>(opt.take(o));
                 io.println(once.next().unwrap())!;
                 var exhausted = once.next(); io.println(opt.isNone(raw exhausted))!;
                 var listed = iter.iter(items.asConstSlice());
@@ -4015,6 +4088,76 @@ class Acceptance(CompilerCase):
                 src = self.source("bad.vqr", program)
                 self.assertIn(error.encode(), self.process(VAQC, "check", src, good=False).stderr)
 
+    def test_custom_allocator_requires_explicit_admission(self):
+        positive = self.source("live/main.vqr", """
+            package main
+            import (coll, mem)
+            func main() !i32 {
+                var allocator = mem.GlobalAllocator();
+                {
+                    var holder = unsafe { mem.AllocatorRef.fromRaw(raw allocator) };
+                    var values = coll.Vec<i32>.withAllocator(holder);
+                    values.push(17)!;
+                    if values[0] != 17 { return 1; }
+                }
+                0
+            }
+        """)
+        for optimization in ("-O0", "-O2"):
+            self.process(VAQC, "build", optimization, positive, "-o", "allocator-client")
+            self.process("./allocator-client")
+        for name, statement, expected in (
+            ("admit", "var capability = mem.AllocatorRef.fromRaw(raw allocator);", b"E240"),
+            ("construct", "var capability = mem.AllocatorRef(raw allocator);", b"E202"),
+            ("empty_constructor", "var capability = mem.AllocatorRef();", b"E202"),
+            ("field_constructor", "var capability = mem.AllocatorRef{address: raw allocator};", b"E200"),
+            ("uninitialized", """
+                var capability: mem.AllocatorRef;
+                var copy = capability;
+            """, b"E230"),
+            ("private_field", """
+                var capability = unsafe { mem.AllocatorRef.fromRaw(raw allocator) };
+                var address = capability.address;
+            """, b"E200"),
+            ("raw_address", """
+                var capability = unsafe { mem.AllocatorRef.fromRaw(raw allocator) };
+                var address = capability.rawAddress();
+            """, b"E240"),
+            ("pass_raw", "var values = coll.Vec<i32>.withAllocator(raw allocator);", b"E202"),
+            ("free", """
+                var capability = unsafe { mem.AllocatorRef.fromRaw(raw allocator) };
+                var layout = mem.Layout.fromSizeAlign(16, 8) catch { return; };
+                var bytes = capability.alloc(layout) catch { return; };
+                switch bytes {
+                    null => {},
+                    some(address) => { capability.free(address, layout); },
+                }
+            """, b"E240"),
+        ):
+            with self.subTest(name=name):
+                source = self.source(name + "/main.vqr", """
+                    package main
+                    import (coll, mem)
+                    func main() void {
+                        var allocator = mem.GlobalAllocator();
+                """ + statement + "}")
+                result = self.process(VAQC, "check", source, good=False)
+                self.assertIn(b"error[" + expected + b"]", result.stderr)
+
+        returned = self.source("returned/main.vqr", """
+            package main
+            import (mem)
+            func reject(address: *mem.Allocator) mem.AllocatorRef {
+                mem.AllocatorRef(address)
+            }
+            func main() void {
+                var allocator = mem.GlobalAllocator();
+                var capability = reject(raw allocator);
+            }
+        """)
+        result = self.process(VAQC, "check", returned, good=False)
+        self.assertIn(b"error[E202]: no accessible overload matches", result.stderr)
+
     def test_custom_box_allocator_and_raw_parts(self):
         self.hosted("""
             import (core, mem)
@@ -4029,9 +4172,9 @@ class Acceptance(CompilerCase):
                     if refuse { return Trouble.Refused; }
                     defaultAllocator.alloc(layout)
                 }
-                pub func free(ptr: *u8, layout: mem.Layout) void {
+                pub unsafe func free(ptr: *u8, layout: mem.Layout) void {
                     releases++;
-                    defaultAllocator.free(ptr, layout);
+                    unsafe { defaultAllocator.free(ptr, layout); }
                 }
             }
             class Guarded {
@@ -4043,33 +4186,34 @@ class Acceptance(CompilerCase):
                 pub func deinit() void { io.println(number) catch {}; }
             }
             func check(ref: mem.AllocatorRef) !i32 {
-                var value = new(ref) i32(33)!;
-                *value.asPtr()
+                var value = unsafe { new(*ref.rawAddress()) i32(33) }!;
+                *value
             }
             func main() !void {
                 var heap = Tracker();
                 {
-                    var first = new(heap) Guarded(19)!;
+                    var first = unsafe { new(heap) Guarded(19) }!;
                     ptr, context := Box.intoRawParts(move(first));
                     var restored = unsafe { Box<Guarded>.fromRawParts(ptr, move(context)) };
-                    io.println(restored.asPtr().get())!;
+                    io.println((*restored).get())!;
                     io.println(heap.releases)!;
                 }
                 io.println(heap.releases)!;
-                var failed = new(raw heap) Guarded(-1);
+                var address = raw heap;
+                var failed = unsafe { new(*address) Guarded(-1) };
                 io.println(core.isErr(raw failed))!;
                 io.println(heap.releases)!;
-                io.println(check(raw heap)!)!;
+                io.println(check(unsafe { mem.AllocatorRef.fromRaw(raw heap) })!)!;
                 io.println(heap.releases)!;
                 {
-                    var boxed = new(heap) Guarded(41)!;
+                    var boxed = unsafe { new(heap) Guarded(41) }!;
                     var taken = boxed.intoInner();
                     io.println(heap.releases)!;
                     io.println(taken.get())!;
                 }
                 io.println(heap.releases)!;
                 heap.refuse = true;
-                var disabled = new(heap) i32(4);
+                var disabled = unsafe { new(heap) i32(4) };
                 var refused = move(disabled) catch (e) {
                     io.println(e == Trouble.Refused)!;
                     return;
@@ -4081,14 +4225,40 @@ class Acceptance(CompilerCase):
         bare = self.source("fixed.vqr", """
             import (mem)
             export "C" func allocate(buffer: *[64]u8) c_int {
-                var arena = mem.FixedBufferAllocator((*buffer)[:]);
-                var value = new(arena) i32(97) catch { return -1; };
-                *value.asPtr()
+                var arena = mem.FixedBufferAllocator(unsafe { (*buffer)[:] });
+                var value = unsafe { new(arena) i32(97) } catch { return -1; };
+                *value
             }
         """)
         flags = ("--target", "thumbv7m-none-eabi", "--cpu", "cortex-m3", "--profile", "freestanding")
         self.process(VAQC, bare, *flags, "--emit=obj", "-O2", "-o", "fixed.o")
         self.assertEqual(self.process("llvm-nm", "-u", "fixed.o").stdout, b"")
+
+    def test_custom_box_requires_explicit_allocator_contract(self):
+        for name, allocator in (("owner", "allocator"), ("pointer", "raw allocator")):
+            with self.subTest(allocator=name):
+                source = self.source(name + "/main.vqr", """
+                    package main
+                    import (mem)
+                    func main() !void {
+                        var allocator = mem.GlobalAllocator();
+                        var item = new(""" + allocator + """) i32(17)!;
+                    }
+                """)
+                result = self.process(VAQC, "check", source, good=False)
+                self.assertIn(b"error[E240]: custom Box allocator requires unsafe", result.stderr)
+
+        implicit = self.source("implicit/main.vqr", """
+            package main
+            import (mem)
+            func main() !void {
+                var allocator = mem.GlobalAllocator();
+                var address = raw allocator;
+                var item = unsafe { new(address) i32(17) }!;
+            }
+        """)
+        result = self.process(VAQC, "check", implicit, good=False)
+        self.assertIn(b"error[E230]: using a raw pointer allocator requires explicit dereference", result.stderr)
 
     def test_simd_scalar_lanes(self):
         self.hosted("""

@@ -284,7 +284,7 @@ private:
   void registerDefer(CallInst *call, Span span, DeferRegistration &registration);
   void registerDeferBlock(const Ast &block, Span span, DeferRegistration &registration);
   void holdDeferCapture(int local, bool write, Span span, std::size_t scope);
-  void validateDeferredBorrow(ValueAt value, Span span, std::size_t scope);
+  void validateDeferredBorrow(ValueAt value, Span span, std::size_t scope, bool closureEnvironment = false);
   void retainDeferredLocal(int index, std::size_t scope);
   void requireInit(ValueAt v, Span span);
   void checkAccess(ValueAt v, bool write, Span span);

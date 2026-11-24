@@ -135,7 +135,7 @@ pub class Parser {
                 110 => output.push(10)!,
                 114 => output.push(13)!,
                 116 => output.push(9)!,
-                117 => appendUnicodeEscape(raw output)!,
+                117 => appendUnicodeEscape(output)!,
                 _ => return JsonError.InvalidEscape,
             }
         }
@@ -155,7 +155,7 @@ pub class Parser {
         value
     }
 
-    func appendUnicodeEscape(output: *coll.Vec<u8>) !void {
+    func appendUnicodeEscape(output: mut coll.Vec<u8>) !void {
         var first = readHex4()!;
         var scalar = first;
         if 0xd800 <= first && first <= 0xdbff {
@@ -225,8 +225,9 @@ pub class Parser {
                     DuplicateKeyPolicy.Reject => return JsonError.DuplicateKey,
                     DuplicateKeyPolicy.KeepFirst => {},
                     DuplicateKeyPolicy.KeepLast => {
-                        var target = output.getMut(key).unwrap();
-                        *target = move(value);
+                        // Insert on an existing key replaces its value in place
+                        // and returns the previous owner for normal cleanup.
+                        var previous = output.insert(move(key), move(value))!;
                     },
                 }
             } else {
@@ -253,7 +254,7 @@ func hexValue(byte: u8) ?u8 {
     null
 }
 
-func appendScalar(output: *coll.Vec<u8>, scalar: u32) !void {
+func appendScalar(output: mut coll.Vec<u8>, scalar: u32) !void {
     if scalar > 0x10ffff || (0xd800 <= scalar && scalar <= 0xdfff) {
         return JsonError.InvalidUnicode;
     }

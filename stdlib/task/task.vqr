@@ -44,7 +44,7 @@ class Job<T: Movable + Sendable, F: Movable + Sendable> {
 
     pub func run() void {
         var own = unsafe { Box<Job<T, F>>.fromRaw(self) };
-        var ready = opt.take<F>(raw callback);
+        var ready = opt.take<F>(callback);
         var input = move(ready).unwrap();
         var outcome: !T = move(input)();
         switch result.errorOf<T>(raw outcome) {
@@ -84,7 +84,8 @@ pub class Task<T: Movable + Sendable> {
 
     pub func deinit() void { unsafe { __vqr_rt_task_release(handle); } }
     func takeResult() !T {
-        var outcome = opt.take<!T>(raw completion.value);
+        // join/tryJoin completed the task; its writer can no longer access the slot.
+        var outcome = unsafe { opt.takeRaw<!T>(raw completion.value) };
         move(outcome).unwrap()
     }
 }

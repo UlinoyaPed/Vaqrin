@@ -154,7 +154,7 @@ class Ticket<T: Movable + Sendable> {
     }
 
     pub func deinit() void { unlink(); }
-    pub func take() ?T { opt.take<T>(raw node.value) }
+    pub func take() ?T { opt.take<T>(node.value) }
 
     pub func probe() void {
         var channel = state.asPtr();

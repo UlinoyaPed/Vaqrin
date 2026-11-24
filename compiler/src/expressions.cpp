@@ -1800,11 +1800,17 @@ ValueAt Body::allocate(const Ast &n) {
   Value *storage = nullptr;
   Value *error = ir.getInt32(0xfffffffc);
   if (n->tail) {
+    // A custom Box stores the allocator address, not an owning or
+    // lifetime-tracked loan. The caller must guarantee the allocator
+    // stays stable and valid until the Box's storage is released.
+    if (!unsafeDepth) fail(n->tail->span, "custom Box allocator requires unsafe", "E240");
     auto placed = expression(n->tail);
     if (!live()) return neverValue();
     if (placed.type->kind == Kind::Box)
       fail(n->tail->span, "using a boxed allocator requires explicit dereference", "E230");
-    auto *owner = placed.type->kind == Kind::Pointer ? placed.type->parts[0] : placed.type;
+    if (placed.type->kind == Kind::Pointer)
+      fail(n->tail->span, "using a raw pointer allocator requires explicit dereference", "E230");
+    auto *owner = placed.type;
     auto allocatorInterface = [](Type *candidate) {
       return candidate->kind == Kind::Interface && candidate->def.file->standard &&
              candidate->def.file->package == "mem" && candidate->def.decl->name == "Allocator";
@@ -1821,10 +1827,8 @@ ValueAt Body::allocate(const Ast &n) {
         }
     }
     if (!allocator) fail(n->tail->span, "new requires an allocator implementing mem.Allocator");
-    if (placed.type->kind != Kind::Pointer) {
-      if (!placed.address) fail(n->tail->span, "allocator must be a live storage location");
-      placed = asPointer(placed, n->tail->span);
-    }
+    if (!placed.address) fail(n->tail->span, "allocator must be a live storage location");
+    placed = asPointer(placed, n->tail->span);
     auto view = coerce(placed, p.pointer(allocator, false), n->tail->span);
     auto *address = read(view, n->tail->span);
     auto [layoutType, layout] = p.boxLayout(t, allocator);
@@ -2235,11 +2239,13 @@ ValueAt Body::call(const Ast &n, Type *expected, DeferRegistration *defer) {
     const bool writableEnvironment = std::ranges::any_of(target.type->captures, [](const auto &c) {
       return c.writable && !c.reference;
     });
+    const bool exclusiveInvocation = writableEnvironment ||
+        std::ranges::any_of(target.type->captures, [](const auto &c) { return c.reference && c.writable; });
     // The payload origin describes the referents captured by the closure.
     // Invoking it accesses those borrows but writes writable captures in the
     // environment itself, not through the independent read-only referents.
     checkAccess(target, false, n->span);
-    if (defer) validateDeferredBorrow(target, callee->span, defer->scope);
+    if (defer) validateDeferredBorrow(target, callee->span, defer->scope, true);
     Value *env = target.address;
     if (!env) {
       auto i = bind(" <closure>", target.type, true, read(target, n->span), n->span);
@@ -2253,11 +2259,11 @@ ValueAt Body::call(const Ast &n, Type *expected, DeferRegistration *defer) {
       if (target.local >= 0 && !locals[target.local].reference
           && (locals[target.local].slot == env || p.hasReference(locals[target.local].type)))
         environment.origin = {target.local};
-      checkAccess(environment, writableEnvironment, n->span);
+      checkAccess(environment, exclusiveInvocation, n->span);
       if (defer) {
         // The closure's own storage must stay live even when the callable
         // also carries shared borrows of an independent source.
-        auto loan = borrow(environment, p.reference(target.type, !writableEnvironment), callee->span, false);
+        auto loan = borrow(environment, p.reference(target.type, !exclusiveInvocation), callee->span, false);
         validateDeferredBorrow(loan, callee->span, defer->scope);
         deferredLoans.push_back(pinBorrow(loan, callee->span, scopes.size() - 1));
       }

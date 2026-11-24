@@ -6,6 +6,8 @@
 | --- | --- | --- |
 | `in &const T` | `in T` | 显式解引用裸指针和 Box。安全引用可直接重借用 |
 | 用指针参数修改调用者对象 | `mut T` 或 `*T` | 安全借用用前者，ABI 和底层存储使用后者 |
+| `opt.take(raw slot)`、`opt.replace(raw slot, value)` | `opt.take(slot)`、`opt.Storage<T>.replace(slot, value)` | 传入可独占借用的可选槽；不可复制的具名替换值须显式 `move`。仅持有裸指针时，`opt.takeRaw` 须在 `unsafe` 中满足独占、有效且已初始化的存储约定 |
+| `core.replace<T>(raw place, value)`、`mem.replace<T>(raw place, value)` | `core.Exchange<T>.replace(place, value)` | 删除旧的普通指针接口。替换目标须可独占借用；不可复制的具名替换值须显式 `move` |
 | 非 Copy 形参写 `T` | `move T` | 移动具名对象须写 `move(expr)` |
 | `&T`、`&const T` | `ref mut T`、`ref T` | 对于安全位置用 `ref mut place` 或 `ref place` 建立借用 |
 | `&place` | `raw place` | 仅获取原始地址。任何裸指针解引用都须位于 `unsafe` |

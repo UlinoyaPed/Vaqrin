@@ -39,7 +39,7 @@ pub class Mutex<T: Movable + Sendable> {
     }
 
     pub static func intoInner(value: Self) T {
-        var item = opt.take<T>(raw value.value);
+        var item = opt.take<T>(value.value);
         move(item).unwrap()
     }
 

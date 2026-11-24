@@ -793,7 +793,13 @@ void Body::holdDeferCapture(int id, bool write, Span span, std::size_t scope) {
   ValueAt value{source.type, nullptr, source.slot, source.writable, id, true, false, source.origin,
                 source.noBorrowPayload};
   requireInit(value, span);
-  if (!self && !source.reference) validateDeferredBorrow(value, span, scope);
+  if (!self && !source.reference) {
+    if (source.type->kind == Kind::Closure && value.origin.captures) {
+      value.origin.via = id; // The retained environment owns these capture loans.
+      checkAccess(value, false, span);
+    }
+    validateDeferredBorrow(value, span, scope, source.type->kind == Kind::Closure);
+  }
   if (source.reference) {
     value.origin.via = id;
     value.origin.raw = false;
@@ -884,7 +890,9 @@ void Body::registerDeferBlock(const Ast &syntax, Span span, DeferRegistration &r
   registerDefer(call, span, registration);
 }
 
-void Body::validateDeferredBorrow(ValueAt value, Span span, std::size_t scope) {
+void Body::validateDeferredBorrow(ValueAt value, Span span, std::size_t scope, bool closureEnvironment) {
+  const bool checkedCaptureEnvironment = closureEnvironment && value.type->kind == Kind::Closure &&
+      value.origin.captures && !value.origin.captures->empty() && !value.origin.raw;
   // A tracked reference elsewhere in an aggregate does not prove that its
   // raw addresses, string views or slices will remain valid until cleanup.
   std::set<Type *> seen;
@@ -912,7 +920,13 @@ void Body::validateDeferredBorrow(ValueAt value, Span span, std::size_t scope) {
       });
     case Kind::Closure:
       return std::ranges::any_of(type->captures, [&](const auto &capture) {
-        return capture.reference || component(capture.type);
+        // Only the top-level environment being retained may use its actual
+        // per-place loans. A closure elsewhere in an aggregate does not.
+        return (capture.reference &&
+                (!checkedCaptureEnvironment || type != value.type || !capture.scoped ||
+                 (capture.writable &&
+                  std::ranges::none_of(*value.origin.captures, &CapturedLoan::exclusive)))) ||
+               component(capture.type);
       });
     default:
       return false;

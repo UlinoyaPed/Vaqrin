@@ -101,7 +101,7 @@ pub class Vec<T: Movable> {
             some(owner) => {
                 var layout = allocationLayout(capacity) catch { panic("invalid stored Vec capacity"); };
                 var bytes = unsafe { ptrCast<*u8>(address) };
-                owner.free(bytes, layout);
+                unsafe { owner.free(bytes, layout); }
             },
         }
     }
@@ -417,7 +417,8 @@ pub class Vec<T: Movable> {
                 null => Vec<T>.withCapacity(length)!,
                 some(owner) => Vec<T>.withCapacityAndAllocator(length, owner)!,
             };
-            for item in iterRef() { result.push(*item)!; }
+            var source = asConstSlice();
+            for index in usize(0)..source.len() { result.push(source[index])!; }
             move(result)
         }
     }

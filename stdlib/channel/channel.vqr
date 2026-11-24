@@ -30,7 +30,7 @@ class Mailbox<T: Movable + Sendable> {
 
     pub func receiveQueue() TryRecv<T> {
         if offer == Offer.Committed || (offer == Offer.Pending && !closed && !hasExpired(sendDeadline)) {
-            var item = opt.take<T>(raw handoff);
+            var item = opt.take<T>(handoff);
             offer = if offer == Offer.Pending { Offer.Claimed } else { Offer.Empty };
             return TryRecv<T>.Value(move(item).unwrap());
         }
@@ -72,7 +72,7 @@ class Mailbox<T: Movable + Sendable> {
         }
     }
 
-    pub func deliverToChoice(value: *?T) bool {
+    pub func deliverToChoice(value: mut ?T) bool {
         if choices == null { return false; }
         var guard = ChoiceLock();
         var receiver = findChoice(false, null) ?? { return false; };
@@ -181,7 +181,7 @@ pub class Sender<T: Movable + Sendable> {
             if data.readyReceiver() { data.deliver(move(value), Offer.Committed, null); }
             else {
                 var offered = some(move(value));
-                if !data.deliverToChoice(raw offered) { return TrySendResult<T>.Full(move(offered).unwrap()); }
+                if !data.deliverToChoice(offered) { return TrySendResult<T>.Full(move(offered).unwrap()); }
             }
         } else {
             if data.queue.isFull() { return TrySendResult<T>.Full(move(value)); }
@@ -260,7 +260,7 @@ pub class Sender<T: Movable + Sendable> {
                 }
                 if hasExpired(deadline) { return SendResult<T>.Cancelled(move(value)); }
                 var offered = some(move(value));
-                if data.deliverToChoice(raw offered) {
+                if data.deliverToChoice(offered) {
                     state.notifyAll();
                     return SendResult<T>.Sent;
                 }
@@ -284,7 +284,8 @@ pub class Sender<T: Movable + Sendable> {
             }
             var closed = data.closed;
             if closed || __vqr_task_channel_cancelled() || hasExpired(deadline) {
-                var recovered = opt.take<T>(raw data.handoff);
+                // The mailbox guard still holds the exclusive lock on the handoff slot.
+                var recovered = unsafe { opt.takeRaw<T>(raw data.handoff) };
                 data.offer = Offer.Empty;
                 state.notifyAll();
                 if closed { return SendResult<T>.Closed(move(recovered).unwrap()); }
@@ -360,7 +361,8 @@ pub class Receiver<T: Movable + Sendable> {
         var unread = data.queue.takeBuffer();
         var completed: ?T = null;
         if data.offer == Offer.Committed {
-            completed = opt.take<T>(raw data.handoff);
+            // The closing receiver still holds the exclusive mailbox lock.
+            completed = unsafe { opt.takeRaw<T>(raw data.handoff) };
             data.offer = Offer.Empty;
         }
         state.notifyAll();

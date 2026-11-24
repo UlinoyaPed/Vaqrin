@@ -24,14 +24,6 @@ pub func swap<T: Movable>(a: *T, b: *T) void {
     }
 }
 
-pub func replace<T: Movable>(dst: *T, value: T) T {
-    unsafe {
-        var previous = __vqr_slot_take<T>(dst);
-        __vqr_slot_write<T>(dst, move(value));
-        move(previous)
-    }
-}
-
 // Replace an initialized, exclusively borrowed place and return its former
 // owner. The replacement is already owned before the slot is touched.
 pub class Exchange<T: Movable> {

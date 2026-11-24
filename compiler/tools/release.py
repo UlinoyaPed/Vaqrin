@@ -230,6 +230,16 @@ func main() !i32 {
             raise RuntimeError("installed POSIX runtime smoke test failed")
 
 
+def smoke_version(compiler, llvm_version):
+    version = (ROOT / "compiler" / "VERSION").read_text(encoding="utf-8").strip()
+    expected = f"vaqc {version} (Vaqrin {version}, LLVM {llvm_version})\n"
+    result = subprocess.run([str(compiler), "--version"], capture_output=True, text=True, check=True)
+    if result.stdout != expected or result.stderr:
+        raise RuntimeError(f"unexpected installed compiler version: expected {expected!r}, "
+                           f"got stdout={result.stdout!r}, stderr={result.stderr!r}")
+    print(result.stdout, end="")
+
+
 def package():
     platform_id = os.environ["VAQRIN_RELEASE_PLATFORM"]
     reported = platform.machine().lower()
@@ -252,7 +262,7 @@ def package():
     run("cmake", "--build", output, "--parallel", "2")
     run("cmake", "--install", output, "--prefix", prefix)
     compiler = prefix / "bin" / ("vaqc.exe" if WINDOWS else "vaqc")
-    run(compiler, "--version")
+    smoke_version(compiler, "20.1.8")  # Required by VAQRIN_REQUIRE_BASELINE.
     smoke(compiler, prefix)
     shutil.copy2(ROOT / "README.md", prefix)
     shutil.copy2(ROOT / "LICENSE", prefix)

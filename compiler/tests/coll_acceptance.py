@@ -10,6 +10,48 @@ class ContainerAcceptance(CompilerCase):
         self.process(VAQC, "build", entry, "-O2", "-o", "containers")
         return self.process("./containers").stdout.decode().splitlines()
 
+    def test_optional_storage_checked_ownership_and_raw_admission(self):
+        definitions = """
+            import (opt)
+            class Owned {
+                #copy: disabled
+                pub var id: i32;
+                pub func init(id: i32) : id(id) {}
+                func deinit() void { io.println(id) catch {}; }
+            }
+        """
+        result = self.run_container(definitions + """
+            func main() !void {
+                var integers: ?i32 = some(3);
+                var copy = 4;
+                if opt.Storage<i32>.replace(integers, copy).unwrap() != 3 || copy != 4 ||
+                   opt.take(integers).unwrap() != 4 || integers != null { panic("wrong copy/take"); }
+
+                var slot: ?Owned = some(Owned(11));
+                var value = Owned(12);
+                var old = opt.Storage<Owned>.replace(slot, move(value)).unwrap();
+                var owned = opt.take(slot).unwrap();
+                if old.id != 11 || owned.id != 12 || slot != null { panic("wrong ownership"); }
+                slot = some(Owned(13));
+                var rawOwned = unsafe { opt.takeRaw(raw slot) }.unwrap();
+                if rawOwned.id != 13 || slot != null { panic("raw take failed to leave a valid slot"); }
+            }
+        """)
+        self.assertEqual(sorted(map(int, result)), [11, 12, 13])
+        for operation, diagnostic in (
+            ("opt.take(raw slot);", "no accessible overload"),
+            ("opt.takeRaw(raw slot);", "requires an unsafe block"),
+            ("opt.Storage<Owned>.replace(slot, value);", "move parameter requires move(object)"),
+            ("var other = ref slot; opt.take(slot);", "active borrow"),
+        ):
+            with self.subTest(operation=operation):
+                entry = self.source("opt-storage.vqr", "import (io)\n" + definitions + """
+                    func main() void {
+                        var slot: ?Owned = null;
+                        var value = Owned(21);
+                """ + operation + "\n}")
+                self.assertIn(diagnostic.encode(), self.process(VAQC, "check", entry, good=False).stderr)
+
     def test_checked_replacement_copies_or_consumes_and_returns_previous_owner(self):
         definitions = """
             class Counted {
@@ -335,7 +377,7 @@ class ContainerAcceptance(CompilerCase):
                 pub func alloc(layout: mem.Layout) core.ResultOptional<*u8> {
                     mem.AllocationError.OutOfMemory
                 }
-                pub func free(ptr: *u8, layout: mem.Layout) void { panic("unallocated storage"); }
+                pub unsafe func free(ptr: *u8, layout: mem.Layout) void { panic("unallocated storage"); }
             }
         """
         output = self.run_container(definitions + """
@@ -370,7 +412,7 @@ class ContainerAcceptance(CompilerCase):
                 var member = Owned(4, 41);
                 if !set.insert(move(member))! { panic("move-only set insert failed"); }
                 var allocator = RefusingAllocator();
-                var refused = coll.HashMap<Owned, Owned>.withAllocator(keyHash, keyEquals, raw allocator);
+                var refused = coll.HashMap<Owned, Owned>.withAllocator(keyHash, keyEquals, unsafe { mem.AllocatorRef.fromRaw(raw allocator) });
                 refused.getOrInsert(Owned(5, 51), Owned(5, 52)) catch (reason) {
                     if reason != mem.AllocationError.OutOfMemory || !refused.isEmpty() {
                         panic("failed allocation changed the map");
@@ -420,6 +462,28 @@ class ContainerAcceptance(CompilerCase):
             }
         """)
         self.assertEqual(sorted(output), ["1", "2", "3", "4", "5"])
+
+    def test_vec_clone_copies_each_element_once(self):
+        self.assertEqual(self.run_container("""
+            class Counted {
+                #copy: enable
+                pub var id: i32;
+                pub func init(id: i32) : id(id) {}
+                pub const func copy() Self {
+                    io.println(id) catch {};
+                    Counted(id)
+                }
+            }
+            func main() !void {
+                var input = coll.Vec<Counted>();
+                input.push(Counted(1))!;
+                input.push(Counted(2))!;
+                var output = input.clone()!;
+                if input.len() != 2 || output.len() != 2 {
+                    panic("cloning changed the number of elements");
+                }
+            }
+        """), ["1", "2"])
 
     def test_vec_push_selects_copy_or_move(self):
         self.assertEqual(self.run_container(r"""
@@ -906,9 +970,9 @@ class ContainerAcceptance(CompilerCase):
                     if allocation != null { live += layout.size(); }
                     allocation
                 }
-                pub func free(ptr: *u8, layout: mem.Layout) void {
+                pub unsafe func free(ptr: *u8, layout: mem.Layout) void {
                     live -= layout.size();
-                    owner.free(ptr, layout);
+                    unsafe { owner.free(ptr, layout); }
                 }
             }
             class Probe { #copy: disabled; pub var id: i32; }
@@ -917,7 +981,7 @@ class ContainerAcceptance(CompilerCase):
             func main() !void {
                 var allocator = Allocator();
                 {
-                    var values = coll.Vec<Probe>.withCapacityAndAllocator(1, raw allocator)!;
+                    var values = coll.Vec<Probe>.withCapacityAndAllocator(1, unsafe { mem.AllocatorRef.fromRaw(raw allocator) })!;
                     values.push(Probe{id: 7})!;
                     allocator.fail = true;
                     switch values.pushPreserving(Probe{id: 8}) {
@@ -943,7 +1007,7 @@ class ContainerAcceptance(CompilerCase):
                 }
                 if allocator.live != 0 { panic("allocation/free layouts differed"); }
                 {
-                    var deque = coll.VecDeque<Probe>.withAllocator(raw allocator);
+                    var deque = coll.VecDeque<Probe>.withAllocator(unsafe { mem.AllocatorRef.fromRaw(raw allocator) });
                     deque.reserve(1)!;
                     deque.pushBack(Probe{id: 31})!;
                     allocator.fail = true;
@@ -964,7 +1028,7 @@ class ContainerAcceptance(CompilerCase):
                 }
                 if allocator.live != 0 { panic("deque growth leaked storage"); }
                 {
-                    var map = coll.HashMap<i32, Probe>.withAllocator(hash.hashI32, hash.eqI32, raw allocator);
+                    var map = coll.HashMap<i32, Probe>.withAllocator(hash.hashI32, hash.eqI32, unsafe { mem.AllocatorRef.fromRaw(raw allocator) });
                     allocator.fail = true;
                     switch map.insertPreserving(1, Probe{id: 2}) {
                         coll.InsertResult.Failed(reason, key, item) => {
@@ -1011,7 +1075,7 @@ class ContainerAcceptance(CompilerCase):
                 }
                 if allocator.live != 0 { panic("map allocation/free layouts differed"); }
                 {
-                    var map = coll.HashMap<Probe, Probe>.withAllocator(hashProbe, equalProbe, raw allocator);
+                    var map = coll.HashMap<Probe, Probe>.withAllocator(hashProbe, equalProbe, unsafe { mem.AllocatorRef.fromRaw(raw allocator) });
                     allocator.fail = true;
                     var key = Probe{id: 71};
                     var value = Probe{id: 81};

@@ -158,7 +158,7 @@ class PendingStream {
         replyable = false;
         job.cancel();
         replies.close();
-        opt.take<coll.Vec<u8>>(raw outbound);
+        opt.take<coll.Vec<u8>>(outbound);
     }
 
     pub func abort(session: *http2.Connection, code: StatusCode) !void {
@@ -222,7 +222,7 @@ class PendingStream {
         if sentBytes != 0 && session.hasPendingData(id)! { return false; }
         var bytes = opt.asPtr<coll.Vec<u8>>(raw outbound).unwrap().asConstSlice();
         if sentBytes == bytes.len() {
-            opt.take<coll.Vec<u8>>(raw outbound);
+            opt.take<coll.Vec<u8>>(outbound);
             sentBytes = 0;
             reply(StreamResult.Sent)!;
             return false;

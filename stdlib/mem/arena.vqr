@@ -51,7 +51,7 @@ pub class Arena {
         carve(link, request)
     }
 
-    pub func free(ptr: *u8, request: Layout) void {}
+    pub unsafe func free(ptr: *u8, request: Layout) void {}
 
     pub const func mark() ArenaMark {
         switch first {
@@ -99,7 +99,7 @@ pub class Arena {
         occupied -= block.cursor - block.start;
         reserved -= block.allocation.size() - block.start;
         var memory = unsafe { ptrCast<*u8>(block) };
-        backing.free(memory, block.allocation);
+        unsafe { backing.free(memory, block.allocation); }
     }
 
     func clearBlocks() void {

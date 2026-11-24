@@ -74,9 +74,9 @@ pub class TomlDomSerializer {
             root = some(move(value));
             return;
         }
-        var frame = frames.getMutPtr(frames.len() - 1).unwrap();
+        var frame = frames.getMut(frames.len() - 1).unwrap();
         if frame.mapMode {
-            var key = opt.take<string>(raw frame.pendingKey) ?? { return TomlSerdeError.InvalidState; };
+            var key = opt.take<string>(frame.pendingKey) ?? { return TomlSerdeError.InvalidState; };
             frame.table.insertUnique(move(key), move(value))!;
         } else {
             frame.array.push(move(value))!;

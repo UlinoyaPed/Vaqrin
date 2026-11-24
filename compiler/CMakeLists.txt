@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.24)
-project(Vaqrin VERSION 0.1.5 LANGUAGES C CXX)
+set(vaqrin_version_file "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${vaqrin_version_file}")
+file(READ "${vaqrin_version_file}" vaqrin_version)
+string(STRIP "${vaqrin_version}" vaqrin_version)
+project(Vaqrin VERSION "${vaqrin_version}" LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -17,6 +21,8 @@ if(LLVM_PACKAGE_VERSION VERSION_LESS 20.1.8)
 endif()
 
 add_executable(vaqc src/driver.cpp src/inputs.cpp src/source.cpp src/syntax_cache.cpp src/tooling.cpp src/parser.cpp src/compiler.cpp src/generic_interface.cpp src/derive_serde.cpp src/c_abi.cpp src/body.cpp src/expressions.cpp src/select.cpp src/patterns.cpp src/numeric.cpp src/ctfe.cpp src/stdlib.cpp src/std_bits.cpp src/std_atomic.cpp src/std_thread.cpp src/std_task.cpp)
+set_property(SOURCE src/driver.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+    "VAQRIN_VERSION=\"${PROJECT_VERSION}\"")
 target_include_directories(vaqc SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 separate_arguments(llvm_definitions NATIVE_COMMAND "${LLVM_DEFINITIONS}")
 target_compile_options(vaqc PRIVATE ${llvm_definitions}

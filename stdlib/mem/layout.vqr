@@ -77,7 +77,6 @@ pub func compareBytes(a: []const u8, b: []const u8) cmp.Ordering {
 }
 
 pub func swap<T: Movable>(a: *T, b: *T) void { core.swap(a, b); }
-pub func replace<T: Movable>(dst: *T, value: T) T { core.replace(dst, move(value)) }
 pub unsafe func dropInPlace<T>(ptr: *T) void { unsafe { __vqr_slot_drop<T>(ptr); } }
 pub unsafe func take<T: Movable>(ptr: *T) T { unsafe { __vqr_slot_take<T>(ptr) } }
 pub unsafe func write<T: Movable>(ptr: *T, value: T) void {

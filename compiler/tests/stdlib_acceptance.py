@@ -212,7 +212,7 @@ class StandardLibraryAcceptance(CompilerCase):
             import (mem)
             func main() !void {
                 var allocator = mem.GlobalAllocator();
-                var arena = mem.Arena(raw allocator);
+                var arena = mem.Arena(unsafe { mem.AllocatorRef.fromRaw(raw allocator) });
                 var tight = mem.Layout.fromSizeAlign(32, 32)!;
                 var memory = arena.alloc(tight)!.unwrap();
                 io.println(mem.isAligned(memory, 32) && arena.used() == 32)!;
@@ -225,7 +225,7 @@ class StandardLibraryAcceptance(CompilerCase):
                 unsafe { arena.reset(); }
                 io.println(arena.used() == 0 && arena.capacity() == 0)!;
 
-                var pool = mem.Pool<i64>(raw allocator);
+                var pool = mem.Pool<i64>(unsafe { mem.AllocatorRef.fromRaw(raw allocator) });
                 var first = pool.acquire()!.unwrap();
                 unsafe { mem.write<i64>(first, 7); }
                 io.println(*first == 7 && pool.allocated() == 1 && pool.live() == 1)!;
@@ -934,6 +934,58 @@ class StandardLibraryAcceptance(CompilerCase):
         result = self.process(VAQC, "check", source, good=False)
         self.assertIn(b"no accessible overload", result.stderr)
 
+    def test_linalg_element_references_are_tied_to_owner(self):
+        self.hosted("""
+            import (linalg)
+            func main() !void {
+                var vector = linalg.Vector<f64>.zeros(2)!;
+                {
+                    var slot: ref mut f64 = vector.getMut(1).unwrap();
+                    slot = 7.0;
+                }
+                {
+                    var slot: ref f64 = vector.get(1).unwrap();
+                    io.println(slot == 7.0)!;
+                }
+                vector.resize(3, 2.0)!;
+                io.println(*vector.get(2).unwrap() == 2.0)!;
+
+                var matrix = linalg.Matrix<f64>.zeros(2, 2)!;
+                {
+                    var slot: ref mut f64 = matrix.getMut(1, 1).unwrap();
+                    slot = 3.0;
+                }
+                {
+                    var slot: ref f64 = matrix.get(1, 1).unwrap();
+                    io.println(slot == 3.0)!;
+                }
+                matrix.set(0, 0, 5.0);
+                io.println(matrix.at(0, 0) == 5.0)!;
+            }
+        """, "true\n" * 4)
+        for case, program in (
+            ("resize", """
+                var vector = linalg.Vector<f64>.zeros(2)!;
+                var shared: ref f64 = vector.get(0).unwrap();
+                vector.resize(4, 1.0)!;
+                io.println(shared)!;
+            """),
+            ("matrix_write", """
+                var matrix = linalg.Matrix<f64>.zeros(2, 2)!;
+                var shared: ref f64 = matrix.get(1, 1).unwrap();
+                matrix.set(1, 1, 2.0);
+                io.println(shared)!;
+            """),
+        ):
+            with self.subTest(case=case):
+                source = self.source(case + "/main.vqr", """
+                    package main
+                    import (io, linalg)
+                    func main() !void {
+                """ + program + "}")
+                result = self.process(VAQC, "check", source, good=False)
+                self.assertIn(b"error[E230]: access conflicts with active borrow", result.stderr)
+
     def test_qr_least_squares(self):
         self.hosted(r"""
             import (linalg, math, result)
@@ -1193,6 +1245,42 @@ class StandardLibraryAcceptance(CompilerCase):
         self.assertEqual(json.loads(lines[1]), expected)
         self.assertEqual(json.loads("\n".join(lines[2:-5])), expected)
         self.assertEqual(lines[-5:], ["true", "true", "1", "true", "true"])
+
+    def test_json_parser_uses_owned_output_and_duplicate_slots(self):
+        self.hosted(r"""
+            import (json)
+
+            func printString(value: move json.Value) !void {
+                switch move(value) {
+                    json.Value.String(text) => { io.println(text)!; },
+                    _ => panic("expected a JSON string"),
+                }
+            }
+
+            func parseDuplicate(policy: json.DuplicateKeyPolicy) !void {
+                var options = json.ParseOptions();
+                options.duplicateKeys = policy;
+                var parsed = json.parseWithOptions("{\"a\":\"old\",\"\\u0061\":\"new\"}", options)!;
+                switch move(parsed) {
+                    json.Value.Object(object) => {
+                        if object.len() != 1 { panic("duplicate produced an extra entry"); }
+                        printString(object.remove("a").unwrap())!;
+                    },
+                    _ => panic("expected a JSON object"),
+                }
+            }
+
+            func main() !void {
+                printString(json.parse("\"\\u0041\\u00e9\\u6c34\\ud83d\\ude80\"")!)!;
+                parseDuplicate(json.DuplicateKeyPolicy.KeepFirst)!;
+                parseDuplicate(json.DuplicateKeyPolicy.KeepLast)!;
+                var rejected = json.parse("{\"a\":\"old\",\"\\u0061\":\"new\"}") catch (reason) {
+                    io.println(reason == json.JsonError.DuplicateKey)!;
+                    return;
+                };
+                panic("duplicate keys were not rejected");
+            }
+        """, "Aé水🚀\nold\nnew\ntrue\n")
 
     def test_json_object_replaces_and_returns_owned_payload(self):
         self.hosted("""

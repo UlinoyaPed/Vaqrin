@@ -57,7 +57,7 @@
 - `HashMap<K, V>` 的 `insert`、`insertPreserving` 和 `getOrInsert` 系列按各自键和值是否 Copyable 选择形参模式。探测或扩容时只借用键；`insertPreserving` 失败时归还两项输入，覆盖时返回旧值并销毁旧键。现有键的 `getOrInsert` 不覆盖旧值。私有转移和扩容不再次复制；`HashSet.insert`、`entry` 的键与 `Entry.orInsert` 的值也采用相应模式。Entry 的现有 unsafe 生命周期约定没有改变。方法自身的泛型工厂、回调仍待迁移。
 - `BTreeMap<K, V>.insert` 也分别判定 K 与 V。查找、节点分裂和插槽选择期间只借用键，确定位置后再搬入整对输入；失败时销毁收到的所有者，保留已存在的键和值。`BTreeSet.insert` 和底层 `FixedVec.insert` 按各自元素的 Copyable 能力选择单一签名。
 - `MaybeUninit<T>.write` 与 `ManuallyDrop<T>.new` 按 T 选择 Copy/Move 参数。手动存储容器始终不可复制，`ManuallyDrop.intoInner` 消费整个容器；初始化、提取与手动销毁的既有契约不变。deque、链表、共享存储和 OnceLock 的存储调用已使用显式移动或临时值。
-- 原有的标准库替换调用已迁到 `core.Exchange<T>.replace`：目标必须通过受检查的 `mut` 借用进入，替换值按类型选择 Copy/Move，结果返回原所有者。此迁移包括 JSON 的 Vec 可写元素借用；没有将裸地址当作所有权证明。旧 `core.replace` 的三个内部调用仍来自接受指针的 `mem.replace`、`opt.take`、`opt.replace` 公开接口。它们的调用契约尚未迁移，类成员的条件签名也不能直接套用到这些独立函数。
+- 标准库已将有可写位置证明的替换改用 `core.Exchange<T>.replace`：目标通过受检查的 `mut` 借用进入，替换值按类型选择 Copy/Move，结果返回原所有者。可选槽的 `opt.take` 和 `opt.Storage<T>.replace` 使用相同规则；任务／线程已 join 的结果槽、channel 锁保护的投递槽仍由单独的 `unsafe opt.takeRaw` 处理。它要求指针指向活着、已初始化且对此调用独占的可选槽，不产生安全引用。已删除旧的 `core.replace` 和 `mem.replace` 指针入口；其他 opt 指针辅助接口不在此次迁移内。
 - 启用全局检查前，声明检查必须证明普通泛型参数 Copyable，包括包装类型的结构推导和条件成员的受控分支。一个具体实例恰好 Copyable 不是无约束声明的证明；若采用条件分支作为证明，必须确认分支受真实 Copyable 判定支配，不能仅根据函数名推断。
 - 一次未合入的实验在共用参数降低入口拒绝非 Copyable Value，不作标准库豁免。容器 11 项里有 10 项失败，标准库 43 项里有 39 项失败。首批诊断涉及容器、JSON、HTTP、正则、线代、文件与网络等。这仅是调用点实验，不是完整签名验证。签名验证还需要覆盖声明、函数类型、Lambda 和接口，以及示例和代码生成器。
 

@@ -6,10 +6,15 @@
 | --- | --- | --- |
 | `opt` | `asRef<T>(value: in ?T) ?ref T`；`asMutRef<T>(value: mut ?T) ?ref mut T`。使用可检查的借用，而非旧式指针形参。 | [opt.vqr](../../stdlib/opt/opt.vqr) |
 | `bufio` | `Token.text() str from self`。文本视图受 Token 来源限制；这不等于 `ByteToken.bytes()` 或一般切片都已有相同契约。 | [bufio.vqr](../../stdlib/bufio/bufio.vqr) |
-| `num`、`linalg` | 大整数和有理数的迁移运算，以及已迁移的矩阵乘法、LU、QR 和求解，使用 `in` 借用只读操作数，不再让调用方为了这些操作创建裸指针。 | [num](../../stdlib/num)、[linalg](../../stdlib/linalg) |
+| `num`、`linalg` | 大整数和有理数的迁移运算，以及已迁移的矩阵乘法、LU、QR 和求解，使用 `in` 借用只读操作数，不再让调用方为了这些操作创建裸指针。矩阵和向量的 `get/getMut` 返回随本体存活的 `?ref T` / `?ref mut T`；现有 Slice 接口尚未同步迁移。 | [num](../../stdlib/num)、[linalg](../../stdlib/linalg) |
 | `coll` | Vec 的追加、插入和替换，以及 HashMap、BTreeMap 的已迁移插入接口，按类型的 `Copyable` 能力选择复制或显式转移。单个实例不会仅靠参数模式区分多个同名入口。 | [coll](../../stdlib/coll)、[容器验收](../../compiler/tests/coll_acceptance.py) |
 
 | `cmp` | `partialCmp`、`compare`、`totalCmp` 和 `between` 的操作数使用 `in T`。只读借用支持变量、临时值和安全引用，调用方不再传 `raw x`。此切片不含 `eq`、`ne`、接口或算法回调。 | [cmp.vqr](../../stdlib/cmp/cmp.vqr) |
+
+| `mem` 和自定义容器分配器 | `AllocatorRef` 不再是 `*Allocator` 的别名，而是持有私有地址的非拥有句柄；调用者通过 `unsafe { mem.AllocatorRef.fromRaw(raw allocator) }` 明确承担地址稳定、调用序列化和分配器/后备存储的生命周期责任。已有容器及 Arena/Pool 的分配器入口接收该句柄。原始释放必须使用 `unsafe` 并提供同一分配器、原布局、未释放的分配。默认分配不变。 | [allocator.vqr](../../stdlib/mem/allocator.vqr) |
+| `json` 解析 | Unicode 转义写入由解析器局部拥有的缓冲区，通过 `mut` 传递；保留最后一个重复键时，就地替换并释放旧值。编码器、借用 Reader 的入口及通用 JSON 字段指针接口不在此切片。 | [parser.vqr](../../stdlib/json/parser.vqr) |
+
+自定义分配器必须比句柄的所有副本、从中派生的容器和尚未释放的块活得更久。该契约是调用者的显式保证，不是编译器验证的引用生命周期。Box 的定制分配形式 `new(allocator) T(...)` 也要求显式 `unsafe`，若来源是原始指针，必须先显式解引用。编译器仍不追踪 Box 中的定制分配器地址，调用者必须保证分配器及后备存储一直有效，直到最后一个使用该分配器的 Box 或其拆分后的释放上下文完成释放。默认 `new T(...)` 不需 `unsafe`。
 
 开发分支仍以 `0.1.5` 构建并报告版本。全局 Copyable 检查、所有裸指针解引用的 `unsafe` 检查和一般容器借用还未达到正式交付标准。
 

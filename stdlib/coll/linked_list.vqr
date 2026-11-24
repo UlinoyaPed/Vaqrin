@@ -119,7 +119,7 @@ pub class LinkedList<T: Movable> {
     func newNode(value: T) !^ListNode<T> {
         switch allocator {
             null => defaultNode(move(value))!,
-            some(source) => new(source) ListNode<T>(move(value))!,
+            some(source) => unsafe { new(*source.rawAddress()) ListNode<T>(move(value)) }!,
         }
     }
 

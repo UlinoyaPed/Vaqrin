@@ -1,5 +1,5 @@
 package opt
-import (core, coll, iter as iterator)
+import (core, coll, iter as iterator, meta)
 
 pub func flatten<T: Movable>(value: core.NestedOptional<T>) ?T {
     switch move(value) {
@@ -109,8 +109,29 @@ pub func contains<T>(value: *const ?T, needle: *const T) bool {
     switch asPtr(value) { null => false, some(ptr) => *ptr == *needle }
 }
 
-pub func take<T: Movable>(value: *?T) ?T { core.replace<?T>(value, null) }
-pub func replace<T: Movable>(slot: *?T, value: T) ?T { core.replace<?T>(slot, some(move(value))) }
+pub func take<T: Movable>(slot: mut ?T) ?T { core.Exchange<?T>.replace(slot, null) }
+
+// slot must address a live, aligned and initialized optional with exclusive
+// read/write access for this call. Used at lock/join boundaries.
+pub unsafe func takeRaw<T: Movable>(slot: *?T) ?T {
+    unsafe {
+        var previous = __vqr_slot_take<?T>(slot);
+        __vqr_slot_write<?T>(slot, null);
+        move(previous)
+    }
+}
+
+pub class Storage<T: Movable> {
+    comptime if meta.isCopyable<T>() {
+        pub static func replace(slot: mut ?T, value: T) ?T {
+            core.Exchange<?T>.replace(slot, some(move(value)))
+        }
+    } else {
+        pub static func replace(slot: mut ?T, value: move T) ?T {
+            core.Exchange<?T>.replace(slot, some(move(value)))
+        }
+    }
+}
 
 pub func insert<T: Movable>(slot: *?T, value: T) *T {
     *slot = some(move(value));

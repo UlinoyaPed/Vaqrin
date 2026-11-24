@@ -73,9 +73,9 @@ pub class JsonDomSerializer {
             root = some(move(value));
             return;
         }
-        var frame = frames.getMutPtr(frames.len() - 1).unwrap();
+        var frame = frames.getMut(frames.len() - 1).unwrap();
         if frame.objectMode {
-            var key = opt.take<string>(raw frame.pendingKey) ?? { return JsonSerdeError.InvalidState; };
+            var key = opt.take<string>(frame.pendingKey) ?? { return JsonSerdeError.InvalidState; };
             if frame.object.containsKey(key) { return serde.SerdeError.DuplicateKey; }
             frame.object.insert(move(key), move(value))!;
         } else {

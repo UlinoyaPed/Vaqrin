@@ -63,7 +63,7 @@ pub class Pool<T> {
             var node = nodes.unwrap();
             nodes = node.all;
             var memory = unsafe { ptrCast<*u8>(node) };
-            backing.free(memory, allocation);
+            unsafe { backing.free(memory, allocation); }
         }
         available = null;
         count = 0;

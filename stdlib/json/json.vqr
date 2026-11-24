@@ -94,8 +94,7 @@ pub class JsonObject {
     pub const func isEmpty() bool { entries.isEmpty() }
     pub const func containsKey(key: str) bool {
         for index in usize(0)..entries.len() {
-            var entry = entries.getPtr(index).unwrap();
-            if entry.key == key { return true; }
+            if entries[index].key == key { return true; }
         }
         false
     }
@@ -126,8 +125,7 @@ pub class JsonObject {
     }
     pub func remove(key: str) ?Value {
         for index in usize(0)..entries.len() {
-            var entry = entries.getPtr(index).unwrap();
-            if entry.key == key {
+            if entries[index].key == key {
                 var removed = entries.remove(index);
                 switch move(removed) {
                     null => return null,

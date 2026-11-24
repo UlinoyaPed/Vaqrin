@@ -34,7 +34,7 @@ class Work<T: Movable + Sendable, F: Movable + Sendable> {
         var owned = unsafe { Box<Work<T, F>>.fromRaw(self) };
         var shared = state;
         __vqr_thread_set_stop(raw shared.stop);
-        var ready = opt.take<F>(raw callback);
+        var ready = opt.take<F>(callback);
         var call = move(ready).unwrap();
         var outcome: !T = move(call)();
         shared.result = some(move(outcome));
@@ -86,7 +86,8 @@ pub class Thread<T: Movable + Sendable> {
         if identity == __vqr_thread_id() && !isFinished() { return ThreadError.SelfJoin; }
         if __vqr_thread_join(handle) != 0 { return ThreadError.JoinFailed; }
         state = null;
-        var result = opt.take<!T>(raw current.result);
+        // Native join succeeded, so this handle is the sole remaining result reader.
+        var result = unsafe { opt.takeRaw<!T>(raw current.result) };
         release<T>(current);
         move(result) ?? ThreadError.MissingResult
     }

@@ -1,5 +1,5 @@
 package cell
-import (opt)
+import (meta, opt)
 
 pub error CellError { Borrowed, RecursiveInitialization }
 
@@ -30,7 +30,7 @@ pub class BorrowMut<T> {
 
     pub func get() *T { pointer }
 
-    pub static func map<U, F: Movable>(value: Self, project: F) BorrowMut<U> {
+    pub static func map<U, F: Movable>(value: move Self, project: F) BorrowMut<U> {
         var target = project(value.pointer);
         var state = value.counter;
         value.ownsBorrow = false;
@@ -48,8 +48,21 @@ pub class RefCell<T: Movable> {
     #copy: disabled
     var value: ?T;
     var count: isize;
-    func init(initial: T) : value(some(move(initial))), count(0) {}
-    pub static func new(value: T) Self { RefCell<T>(move(value)) }
+    comptime if meta.isCopyable<T>() {
+        func init(initial: T) : value(some(move(initial))), count(0) {}
+        pub static func new(value: T) Self { RefCell<T>(move(value)) }
+        pub func replace(replacement: T) !T {
+            if count != 0 { return CellError.Borrowed; }
+            opt.Storage<T>.replace(value, move(replacement)).unwrap()
+        }
+    } else {
+        func init(initial: move T) : value(some(move(initial))), count(0) {}
+        pub static func new(value: move T) Self { RefCell<T>(move(value)) }
+        pub func replace(replacement: move T) !T {
+            if count != 0 { return CellError.Borrowed; }
+            opt.Storage<T>.replace(value, move(replacement)).unwrap()
+        }
+    }
 
     pub func tryBorrow() ?BorrowRef<T> {
         if count < 0 { return null; }
@@ -81,12 +94,7 @@ pub class RefCell<T: Movable> {
         }
     }
 
-    pub func replace(replacement: T) !T {
-        if count != 0 { return CellError.Borrowed; }
-        opt.Storage<T>.replace(value, move(replacement)).unwrap()
-    }
-
-    pub static func intoInner(inner: Self) T {
+    pub static func intoInner(inner: move Self) T {
         if inner.count != 0 { panic("ref cell still borrowed"); }
         opt.take<T>(inner.value).unwrap()
     }

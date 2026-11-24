@@ -5,6 +5,7 @@
 | 模块 | 已实现的变化 | 实现来源 |
 | --- | --- | --- |
 | `opt` | `asRef<T>(value: in ?T) ?ref T`；`asMutRef<T>(value: mut ?T) ?ref mut T`。使用可检查的借用，而非旧式指针形参。 | [opt.vqr](../../stdlib/opt/opt.vqr) |
+| `opt` 映射 | 自由函数 `map`、`andThen` 复制可复制的输入和回调；`Transform<T>.map/andThen` 依 T 选取复制或转移输入。`mapOwned/andThenOwned` 额外接管不可复制的回调。空可选值不执行回调，但仍正常回收已取得的回调。带可写作用域引用捕获的闭包不能通过现有 `mut F` 或 `move F` 安全传递；这不是对原有 `inspect/filter` 的迁移。 | [opt.vqr](../../stdlib/opt/opt.vqr) |
 | `bufio` | `Token.text() str from self`。文本视图受 Token 来源限制；这不等于 `ByteToken.bytes()` 或一般切片都已有相同契约。 | [bufio.vqr](../../stdlib/bufio/bufio.vqr) |
 | `num`、`linalg` | 大整数和有理数的迁移运算，以及已迁移的矩阵乘法、LU、QR 和求解，使用 `in` 借用只读操作数，不再让调用方为了这些操作创建裸指针。矩阵和向量的 `get/getMut` 返回随本体存活的 `?ref T` / `?ref mut T`；现有 Slice 接口尚未同步迁移。 | [num](../../stdlib/num)、[linalg](../../stdlib/linalg) |
 | `coll` | Vec 的追加、插入和替换，以及 HashMap、BTreeMap 的已迁移插入接口，按类型的 `Copyable` 能力选择复制或显式转移。单个实例不会仅靠参数模式区分多个同名入口。 | [coll](../../stdlib/coll)、[容器验收](../../compiler/tests/coll_acceptance.py) |

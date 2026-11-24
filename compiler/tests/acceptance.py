@@ -3521,6 +3521,92 @@ class Acceptance(CompilerCase):
                 """)
                 self.process(VAQC, "check", source, good=False)
 
+    def test_optional_transforms_take_only_the_owners_they_need(self):
+        setup = """
+            class Counted {
+                #copy: enable
+                pub var id: i32;
+                pub const func copy() Self {
+                    io.println(100 + id) catch {};
+                    Counted{id: id}
+                }
+                func deinit() void { io.println(200 + id) catch {}; }
+            }
+            class Owned {
+                #copy: disabled
+                pub var id: i32;
+                func deinit() void { io.println(id) catch {}; }
+            }
+            func takeItem(item: move Owned) i32 { item.id }
+        """
+        self.hosted("import (opt)\n" + setup + """
+            func main() !void {
+                {
+                    var offset = 1;
+                    var read = [ref offset](value: i32) i32 => value + offset;
+                    io.println(opt.map<i32, i32>(some(1), read).unwrap())!;
+                }
+                {
+                    var seed = Counted{id: 1};
+                    var callable = [seed](value: i32) i32 => value + seed.id;
+                    var transformed = opt.map<i32, i32>(some(7), callable);
+                    io.println(transformed.unwrap())!;
+                }
+                {
+                    var capture = Owned{id: 2};
+                    var callback = [move(capture)](value: i32) i32 => {
+                        var owned = move(capture);
+                        value + owned.id
+                    };
+                    io.println(opt.Transform<i32>.mapOwned<i32>(some(7), move(callback)).unwrap())!;
+                }
+                {
+                    var capture = Owned{id: 3};
+                    var callback = [move(capture)](value: i32) ?i32 => {
+                        panic("an absent input must not invoke its callback");
+                    };
+                    if opt.Transform<i32>.andThenOwned<i32>(null, move(callback)) != null {
+                        panic("an absent input must stay absent");
+                    }
+                }
+                {
+                    var payload = some(Owned{id: 4});
+                    var transformed = opt.Transform<Owned>.map<i32>(move(payload), takeItem);
+                    io.println(10 + transformed.unwrap())!;
+                }
+                {
+                    var capture = Owned{id: 5};
+                    var callback = [move(capture)](item: move Owned) ?Owned => {
+                        var independent = move(capture);
+                        some(move(item))
+                    };
+                    var payload = some(Owned{id: 6});
+                    var outcome = opt.Transform<Owned>.andThenOwned<Owned>(move(payload), move(callback));
+                    var retained = move(outcome).unwrap();
+                    if retained.id != 6 { panic("the callback lost its result owner"); }
+                    io.println(16)!;
+                }
+            }
+        """, "2\n101\n101\n201\n8\n201\n201\n2\n9\n3\n4\n14\n5\n16\n6\n", "-O2")
+        cases = (
+            ("payload", "opt.Transform<Owned>.map<i32>(payload, takeItem);",
+             b"move parameter requires move(object) or an owning temporary"),
+            ("callback", "opt.Transform<i32>.mapOwned<i32>(1, callback);",
+             b"move parameter requires move(object) or an owning temporary"),
+            ("copy_as_move", "opt.Transform<Owned>.mapOwned<i32>(move(payload), takeItem);",
+             b"requires an owning, movable, non-Copyable type"),
+        )
+        for name, statement, expected in cases:
+            with self.subTest(name=name):
+                entry = self.source(name + "/main.vqr", "import (io, opt)\n" + setup + """
+                    func f() void {
+                        var capture = Owned{id: 1};
+                        var callback = [move(capture)](value: i32) i32 => value + capture.id;
+                        var payload = some(Owned{id: 2});
+                """ + statement + "\n}")
+                diagnostic = self.process(VAQC, "check", entry, good=False).stderr
+                self.assertIn(expected, diagnostic)
+
     def test_optional_core_and_iterator_contracts(self):
         self.hosted("""
             import (core, opt, iter, coll)
@@ -4897,6 +4983,32 @@ class Acceptance(CompilerCase):
         self.process(VAQC, source, "--target", "thumbv7m-none-eabi", "--cpu", "cortex-m3",
                      "--profile", "freestanding", "--emit=obj", "-O2", "-o", "bare.o")
         self.assertEqual(self.process("llvm-nm", "-u", "bare.o").stdout, b"")
+
+    def test_ref_cell_moves_owned_replacements_and_contents(self):
+        self.hosted("""
+            import (cell)
+            func main() !void {
+                var first = new i32(7)!;
+                var storage = cell.RefCell<^i32>.new(move(first));
+                var old = storage.replace(new i32(8)!)!;
+                io.println(*old)!;
+                var final = cell.RefCell<^i32>.intoInner(move(storage));
+                io.println(*final)!;
+            }
+        """, "7\n8\n")
+        for line in ("cell.RefCell<^i32>.new(owner);",
+                     "storage.replace(owner)!;",
+                     "cell.RefCell<^i32>.intoInner(storage);"):
+            with self.subTest(line=line):
+                source = self.source("implicit_ref_cell_move.vqr", """
+                    import (cell)
+                    func main() !void {
+                        var owner = new i32(2)!;
+                        var storage = cell.RefCell<^i32>.new(new i32(17)!);
+                        """ + line + """
+                    }
+                """)
+                self.process(VAQC, "check", source, good=False)
 
     def test_cells_and_borrow_guards(self):
         self.hosted("""

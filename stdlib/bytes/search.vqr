@@ -133,7 +133,7 @@ pub func splitOnce(data: []const u8, delimiter: []const u8) ?([]const u8, []cons
 pub class BytePattern {
     var needle: coll.Vec<u8>;
     var prefixes: coll.Vec<usize>;
-    func init(pattern: coll.Vec<u8>, table: coll.Vec<usize>) : needle(move(pattern)), prefixes(move(table)) {}
+    func init(pattern: move coll.Vec<u8>, table: move coll.Vec<usize>) : needle(move(pattern)), prefixes(move(table)) {}
     pub static func compile(pattern: []const u8) !Self {
         var needle = coll.Vec<u8>.fromSlice(pattern)!;
         var prefixes = coll.Vec<usize>.withCapacity(pattern.len())!;

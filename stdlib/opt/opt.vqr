@@ -8,14 +8,85 @@ pub func flatten<T: Movable>(value: core.NestedOptional<T>) ?T {
     }
 }
 
-pub func map<T: Movable, U: Movable, F: Movable>(value: ?T, transform: F) ?U {
+// The class selects the payload mode. The explicit Owned methods also
+// consume an owning non-Copyable callable; neither path borrows a callback
+// across the branch or invokes it for an absent optional.
+pub class Transform<T: Movable> {
+    comptime if meta.isCopyable<T>() {
+        pub static func map<U: Movable, F: Copyable + Movable>(
+                value: ?T, transform: F) ?U {
+            switch move(value) {
+                null => null,
+                some(item) => some(transform(move(item))),
+            }
+        }
+
+        pub static func mapOwned<U: Movable, F: Movable>(
+                value: ?T, transform: move F) ?U {
+            switch move(value) {
+                null => null,
+                some(item) => some(move(transform)(move(item))),
+            }
+        }
+
+        pub static func andThen<U: Movable, F: Copyable + Movable>(
+                value: ?T, transform: F) ?U {
+            switch move(value) {
+                null => null,
+                some(item) => transform(move(item)),
+            }
+        }
+
+        pub static func andThenOwned<U: Movable, F: Movable>(
+                value: ?T, transform: move F) ?U {
+            switch move(value) {
+                null => null,
+                some(item) => move(transform)(move(item)),
+            }
+        }
+    } else {
+        pub static func map<U: Movable, F: Copyable + Movable>(
+                value: move ?T, transform: F) ?U {
+            switch move(value) {
+                null => null,
+                some(item) => some(transform(move(item))),
+            }
+        }
+
+        pub static func mapOwned<U: Movable, F: Movable>(
+                value: move ?T, transform: move F) ?U {
+            switch move(value) {
+                null => null,
+                some(item) => some(move(transform)(move(item))),
+            }
+        }
+
+        pub static func andThen<U: Movable, F: Copyable + Movable>(
+                value: move ?T, transform: F) ?U {
+            switch move(value) {
+                null => null,
+                some(item) => transform(move(item)),
+            }
+        }
+
+        pub static func andThenOwned<U: Movable, F: Movable>(
+                value: move ?T, transform: move F) ?U {
+            switch move(value) {
+                null => null,
+                some(item) => move(transform)(move(item)),
+            }
+        }
+    }
+}
+
+pub func map<T: Copyable + Movable, U: Movable, F: Copyable + Movable>(value: ?T, transform: F) ?U {
     switch move(value) {
         null => null,
         some(item) => some(transform(move(item))),
     }
 }
 
-pub func andThen<T: Movable, U: Movable, F: Movable>(value: ?T, transform: F) ?U {
+pub func andThen<T: Copyable + Movable, U: Movable, F: Copyable + Movable>(value: ?T, transform: F) ?U {
     switch move(value) {
         null => null,
         some(item) => transform(move(item)),

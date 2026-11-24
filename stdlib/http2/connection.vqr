@@ -1,5 +1,5 @@
 package http2
-import (coll, io, mem)
+import (core, coll, io, mem)
 
 pub enum Role { Client, Server }
 pub enum EventKind { Headers, Data, EndStream, Closed, GoAway, Settings, Ping, InvalidFrame }
@@ -135,7 +135,7 @@ pub class Connection {
             return reason;
         }
     }
-    pub func next() !?Event {
+    pub func next() core.ResultOptional<Event> {
         if handle == 0 { return Http2Error.ConnectionClosed; }
         var info = [3]u32{0, 0, 0};
         var size: usize = 0;

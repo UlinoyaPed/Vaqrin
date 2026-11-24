@@ -72,7 +72,7 @@ ValueAt Body::selection(const Ast &n, Type *expected) {
     auto endpoint = expression(arm->children[0]);
     if (!live()) { leave(); return neverValue(); }
     if (endpoint.type->kind == Kind::Pointer || endpoint.type->kind == Kind::Box)
-      endpoint = dereference(endpoint, arm->span);
+      fail(arm->span, "select endpoint requires explicit dereference of raw pointers and Box", "E230");
     auto *type = endpoint.type;
     const bool send = arm->text == "send";
     auto *required = declaration(send ? "Sender" : "Receiver").decl;
@@ -97,6 +97,7 @@ ValueAt Body::selection(const Ast &n, Type *expected) {
         int id = operand->kind == NodeKind::Name ? findLocal(operand->text) : -1;
         if (id < 0) fail(input->span, "select send move requires a complete local or parameter", "E230");
         auto local = name(operand);
+        rejectViewEscape(local, input->span);
         requireInit(local, input->span);
         checkAccess(local, true, input->span);
         if (local.type != message || !local.writable || locals[id].refCapture ||
@@ -234,7 +235,9 @@ ValueAt Body::selection(const Ast &n, Type *expected) {
     if (live()) {
       if (!inner) inner = value.type;
       if (p.hasReference(inner)) fail(arm.syntax->span, "reference-valued select requires explicit returns", "E230");
-      auto *raw = read(coerce(value, inner, arm.syntax->span), arm.syntax->span);
+      value = coerce(value, inner, arm.syntax->span);
+      rejectViewEscape(value, arm.syntax->span);
+      auto *raw = read(value, arm.syntax->span);
       auto *type = p.aggregate(Kind::Result, {inner});
       auto packed = wrap(type, raw, true);
       leave();

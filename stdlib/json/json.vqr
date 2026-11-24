@@ -111,7 +111,7 @@ pub class JsonObject {
         }
         null
     }
-    pub func insert(key: string, value: Value) !?Value {
+    pub func insert(key: string, value: Value) core.ResultOptional<Value> {
         for index in usize(0)..entries.len() {
             var entry = entries.getMutPtr(index).unwrap();
             if entry.key == key {

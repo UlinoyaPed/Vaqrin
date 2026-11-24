@@ -46,6 +46,115 @@ class CompilerCase(unittest.TestCase):
 
 
 class Acceptance(CompilerCase):
+    def test_v020_box_payload_requires_explicit_dereference(self):
+        setup = """
+            class Item {
+                pub var number: i32;
+                pub func init(n: i32) : number(n) {}
+                pub const func get() i32 { number }
+            }
+            type Callback = func(i32) i32;
+            func identity(n: i32) i32 { n }
+            class Boxes {
+                pub func init() {}
+                pub func next() ?^Item {
+                    some(new Item(11) catch { panic("allocation failed"); })
+                }
+            }
+        """
+        self.hosted(setup + """
+            func readBox(owner: in ^Item) i32 { (*owner).get() }
+            func main() !void {
+                var owner = new Item(5)!;
+                (*owner).number++;
+                {
+                    var payload: ref Item = ref *owner;
+                    io.println(payload.get())!;
+                    io.println(readBox(owner))!;
+                }
+                io.println(owner.intoInner().get())!;
+                var items = new [2]i32([2]i32{8, 9})!;
+                io.println((*items)[0])!;
+                for item in *items { io.println(item)!; }
+                var callback = new Callback(identity)!;
+                io.println((*callback)(10))!;
+                for owner in Boxes() {
+                    io.println((*owner).get())!;
+                    break;
+                }
+            }
+        """, "6\n6\n6\n8\n8\n9\n10\n11\n", "-O2")
+        for name, body in {
+            "field": "var b = new Item(3)!; var x = b.number;",
+            "assignment": "var b = new Item(3)!; b.number = 4;",
+            "method": "var b = new Item(3)!; var x = b.get();",
+            "index": "var b = new [1]i32([1]i32{3})!; var x = b[0];",
+            "iterate": "var b = new [1]i32([1]i32{3})!; for x in b {}",
+            "borrow": "var b = new Item(3)!; var x: ref Item = b;",
+            "pattern": "var b = some(new Item(3)!); if let some(&x) = b {}",
+            "indirect_iteration_item": "for &item in Boxes() {}",
+            "call": "var b = new Callback(identity)!; var x = b(7);",
+        }.items():
+            with self.subTest(name=name):
+                entry = self.source(name + ".vqr", setup + "func main() !void { " + body + " }")
+                diagnostic = self.process(VAQC, "check", entry, good=False).stderr
+                self.assertIn(b"explicit", diagnostic)
+
+    def test_v020_optional_member_access_does_not_dereference(self):
+        setup = """
+            class Item {
+                pub var number: i32;
+                pub func init(n: i32) : number(n) {}
+                pub const func get() i32 { number }
+            }
+        """
+        self.hosted(setup + """
+            func main() !void {
+                var item = Item(7);
+                var value = some(item);
+                io.println(value?.number.unwrap())!;
+                io.println(value?.get().unwrap())!;
+                var pointer = some(raw item);
+                if let some(p) = pointer { unsafe { io.println((*p).get())!; } }
+                var advanced = unsafe { pointer?.offset(0) }.unwrap();
+                unsafe { io.println((*advanced).get())!; }
+                var boxed = some(new Item(8)!);
+                if let some(ref owner) = boxed { io.println((*owner).get())!; }
+                var address = boxed?.asPtr().unwrap();
+                unsafe { io.println((*address).get())!; }
+            }
+        """, "7\n7\n7\n7\n8\n8\n")
+        for base in ("some(raw item)", "some(new Item(8)!)"):
+            for member in ("number", "get()"):
+                with self.subTest(base=base, member=member):
+                    entry = self.source("optional.vqr", setup + f"""
+                        func main() !void {{
+                            var item = Item(7);
+                            var indirect = {base};
+                            unsafe {{ var value = indirect?.{member}; }}
+                        }}
+                    """)
+                    diagnostic = self.process(VAQC, "check", entry, good=False).stderr
+                    self.assertIn(b"optional member access cannot implicitly dereference", diagnostic)
+
+    def test_v020_select_requires_explicit_dereference(self):
+        program = """
+            import (channel)
+            func main() !void {
+                writer, reader := channel.bounded<i32>(1)!;
+                writer.send(19)!;
+                var address = raw reader;
+                var received = unsafe { select {
+                    item := TARGET.recv() => item.unwrap(),
+                } }!;
+                io.println(received)!;
+            }
+        """
+        self.hosted(program.replace("TARGET", "(*address)"), "19\n", "-O2")
+        entry = self.source("indirect_select.vqr", "import (io)\n" + program.replace("TARGET", "address"))
+        diagnostic = self.process(VAQC, "check", entry, good=False).stderr
+        self.assertIn(b"select endpoint requires explicit dereference", diagnostic)
+
     def test_v020_parameter_modes_and_reference_sources(self):
         source = self.source("modes.vqr", '''
             package main;
@@ -170,6 +279,72 @@ class Acceptance(CompilerCase):
                 }
             }
         ''', "1\n2\n3\n3\n5\n6\n")
+
+    def test_v020_explicit_capture_modes(self):
+        self.hosted("""
+            func main() !void {
+                var count = 5;
+                var scale = 2;
+                {
+                    var first = [ref count, ref scale]() i32 => count * scale;
+                    var second = [ref count]() i32 => count + 1;
+                    var copy = first;
+                    io.println(first() + second() + copy())!;
+                    var borrowed = ref second;
+                    io.println(borrowed())!;
+                    io.println(count)!;
+                }
+                {
+                    var increment = [ref mut count, scale](by: i32) i32 => {
+                        count += by * scale;
+                        count
+                    };
+                    io.println(increment(3))!;
+                    var transferred = move(increment);
+                    io.println(transferred(2))!;
+                }
+                count++;
+                io.println(count)!;
+            }
+        """, "26\n6\n5\n11\n15\n16\n")
+
+    def test_v020_explicit_capture_rejections(self):
+        cases = {
+            "legacy": ("var n = 0; var f = [&n]() i32 => n;",
+                       b"legacy closure capture"),
+            "write_through_shared": ("var n = 0; var f = [ref n]() void => { n++; };",
+                                     b"assignment requires a writable location"),
+            "write_during_shared": ("var n = 0; var f = [ref n]() i32 => n; n++;",
+                                    b"access conflicts with active borrow"),
+            "read_during_exclusive": ("var n = 0; var f = [ref mut n]() void => { n++; }; var copy = n;",
+                                      b"access conflicts with active borrow"),
+            "overlap": ("var n = 0; var f = [ref n]() i32 => n; var g = [ref mut n]() i32 => n;",
+                        b"access conflicts with active borrow"),
+            "immutable_exclusive": ("const n = 1; var f = [ref mut n]() i32 => n;",
+                                    b"cannot borrow a read-only object mutably"),
+            "copy_exclusive": ("var n = 0; var f = [ref mut n]() i32 => n; var copy = f;",
+                               b"cannot copy"),
+            "escaping": ("var f = { var n = 0; [ref n]() i32 => n };",
+                         b"reference would outlive its owner"),
+            "escaping_environment": ("var n = 0; var f = { var g = [ref n]() i32 => n; ref g };",
+                                     b"reference would outlive its owner"),
+            "move_borrowed_environment": ("var n = 0; var f = [ref n]() i32 => n; "
+                                          "var alias = ref f; var moved = move(f);",
+                                          b"access conflicts with active borrow of 'f'"),
+            "raw_bypass": ("var n = 0; var f = [ref mut n]() *i32 => raw n;",
+                           b"use toRaw() to convert a safe reference"),
+            "raw_pointer_capture": ("var n = 0; var p = raw n; var f = [ref p]() i32 => *p;",
+                                    b"capture requires a place without untracked or nested borrows"),
+            "copy_owner": ("var owner = new i32(4)!; var f = [owner]() i32 => *owner;",
+                           b"copy capture requires a Copyable value"),
+            "multiple_exclusive": ("var a = 1; var b = 2; var f = [ref mut a, ref mut b]() i32 => a + b;",
+                                   b"cannot yet capture additional borrows"),
+        }
+        for name, (body, diagnostic) in cases.items():
+            with self.subTest(name=name):
+                source = self.source(f"{name}/main.vqr", "func run() !void { " + body + " }")
+                result = self.process(VAQC, "check", source, good=False)
+                self.assertIn(diagnostic, result.stderr, result.stderr.decode())
 
     def test_v020_deferred_calls_capture_and_unwind(self):
         program = """
@@ -498,6 +673,42 @@ class Acceptance(CompilerCase):
         """)
         self.assertIn(b"active borrow of 'update'", self.process(VAQC, "check", invalid, good=False).stderr)
 
+    def test_v020_return_borrow_sources_require_actual_borrow_modes(self):
+        self.hosted("""
+            import (opt);
+            type MaybeAlias = ?ref mut i32;
+            func borrowAlias(value: mut ?i32) !MaybeAlias { opt.asMutRef(value) }
+            func main() !void {
+                var number: ?i32 = some(41);
+                (*borrowAlias(number)!.unwrap())++;
+                io.println(number.unwrap())!;
+            }
+        """, "42\n")
+        cases = {
+            "value_ref": ("func f(value: ref i32) ref i32 { value }",
+                          "valid borrow source"),
+            "value_optional": ("func f(value: ?ref i32) ?ref i32 { value }",
+                               "valid borrow source"),
+            "value_explicit": ("func f(value: ref i32) ref i32 from value { value }",
+                               "valid borrow source"),
+            "move": ("func f(value: move ^i32) ref i32 { ref *value }", "valid borrow source"),
+            "function_value": ("type F = func(value: ref i32) ref i32 from value; func f(fn: F) void {}",
+                               "from must identify an in or mut parameter"),
+            "function_implicit": ("type F = func(ref i32) ref i32; func f(fn: F) void {}",
+                                  "requires an 'in' or 'mut' parameter"),
+            "readonly_wrapped": ("type MaybeAlias = ?ref mut i32; func f(value: in i32) !MaybeAlias { null }",
+                                 "requires a mutable source"),
+            "readonly_callable": ("type MaybeAlias = ?ref mut i32; "
+                                  "type F = func(value: in i32) !MaybeAlias from value; "
+                                  "func f(fn: F) void {}", "requires a mutable source"),
+            "readonly_self": ("class C { pub var n: i32; pub const func f() ?ref mut i32 from self { null } } "
+                              "func g(c: in C) void { c.f(); }", "requires a mutable source"),
+        }
+        for name, (body, diagnostic) in cases.items():
+            with self.subTest(case=name):
+                source = self.source(name + "/main.vqr", "package main; " + body + " func main() void {}")
+                self.assertIn(diagnostic.encode(), self.process(VAQC, "check", source, good=False).stderr)
+
     def test_v020_borrow_projections(self):
         prelude = '''
             class Pair {
@@ -595,6 +806,138 @@ class Acceptance(CompilerCase):
             with self.subTest(case=name):
                 source = self.source(name + "/main.vqr", prelude + "func main() !void { " + body + " }")
                 self.assertIn(b"active borrow", self.process(VAQC, "check", source, good=False).stderr)
+
+    def test_v020_checked_readonly_view_contracts(self):
+        source = self.source("views.vqr", """
+            package main;
+            import (io);
+            func word(value: in string) str from value { value }
+            func bytes(value: in [3]u8) []const u8 from value { value[0..3] }
+            func wordAgain(value: in string) str from value {
+                if true { word(value) } else { value }
+            }
+            class Label {
+                var contents: string;
+                pub func init(value: string) : contents(move(value)) {}
+                pub const func text() str from self { contents }
+                pub const func bytes() []const u8 from self { contents.asBytes() }
+            }
+            func main() !void {
+                var message: string = "label";
+                var indirect: func(source: in string) str from source = wordAgain;
+                {
+                    var view = indirect(message);
+                    var forwarded = view;
+                    io.println(forwarded)!;
+                    io.println(view.asBytes()[1..4].len())!;
+                }
+                message = "another";
+                io.println(word(message).byteLen())!;
+                var letters = [3]u8{1, 2, 3};
+                {
+                    var tail = bytes(letters)[1..3];
+                    io.println(tail[0])!;
+                }
+                letters[1] = 4;
+                var label = Label("owned");
+                io.println(label.text())!;
+                io.println(label.bytes()[0])!;
+                io.println(Label("temporary").text().byteLen())!;
+            }
+        """)
+        for level in ("-O0", "-O2"):
+            with self.subTest(optimization=level):
+                self.process(VAQC, "build", level, source, "-o", "checked-view")
+                self.assertEqual(self.process("./checked-view").stdout,
+                                 b"label\n3\n7\n2\nowned\n111\n9\n")
+
+    def test_v020_checked_view_rejects_unproven_origins_and_escapes(self):
+        prelude = """
+            package main;
+            func word(value: in string) str from value { value }
+            func bytes(value: in [3]u8) []const u8 from value { value[0..3] }
+            func untracked(value: str) str { value }
+        """
+        cases = {
+            "wrong_source": ("func bad(a: in string, b: in string) str from a { b }", "declared source"),
+            "literal": ('func bad(a: in string) str from a { "literal" }', "declared source"),
+            "raw_result": ("func bad(a: in i32) *const i32 from a { raw a }", "checked readonly view"),
+            "untracked_call": ('func bad(a: in string) str { untracked(word(a)) }', "untracked storage or call"),
+            "untracked_return": ('func bad(a: in string) str { word(a) }', "untracked storage or call"),
+            "replace_owner": ('func bad() void { var s: string = "first"; var v = word(s); s = "second"; }',
+                              "active borrow"),
+            "move_owner": ('func bad() void { var s: string = "first"; var v = word(s); var t = move(s); }',
+                           "active borrow"),
+            "replace_array": ('func bad() void { var a = [3]u8{0, 1, 2}; var v = bytes(a); a[0] = 3; }',
+                              "active borrow"),
+            "temporary": ('func bad() void { var v = word("temporary"); }', "borrow from a temporary"),
+            "block_local": ('func bad() void { var v = { var s: string = "local"; word(s) }; }',
+                            "outlive its owner"),
+            "aggregate": ('func bad(a: in string) void { var bad = (word(a), 1); }', "untracked storage or call"),
+            "assignment": ('func bad(a: in string) void { var v: str = "untracked"; v = word(a); }',
+                           "untracked storage or call"),
+            "optional": ('func bad(a: in string) ?str { some(word(a)) }', "untracked storage or call"),
+            "result": ('func bad(a: in string) !str { word(a) }', "untracked storage or call"),
+            "member": ('class Holder { pub var value: str; } '
+                       'func bad(a: in string) void { var h = Holder{value: word(a)}; }',
+                       "untracked storage or call"),
+            "enum": ('enum Holder { Text(str), } '
+                     'func bad(a: in string) void { var h = Holder.Text(word(a)); }',
+                     "untracked storage or call"),
+            "callback": ('func bad(a: in string) str { var f: func(str) str = untracked; f(word(a)) }',
+                         "untracked storage or call"),
+            "capture": ('func bad(a: in string) void { var v = word(a); var f = [v]() usize => v.byteLen(); }',
+                        "untracked storage or call"),
+            "raw_view": ('func bad(a: in string) void { var v = word(a); var p = raw v; }',
+                         "untracked storage or call"),
+            "mixed_branch": ('func bad(a: in string) void { var v = if true { word(a) } else { "literal" }; }',
+                             "checked and untracked views"),
+            "alternate_owner": ('func bad() void { var a: string = "A"; var b: string = "B"; '
+                                'var v = if true { word(a) } else { word(b) }; b = "replaced"; }',
+                                "active borrow"),
+        }
+        for name, (body, diagnostic) in cases.items():
+            with self.subTest(case=name):
+                source = self.source(name + "/main.vqr", prelude + body + "\nfunc main() void {}")
+                self.assertIn(diagnostic.encode(), self.process(VAQC, "check", source, good=False).stderr)
+
+    def test_v020_checked_view_consumers_are_scoped(self):
+        self.hosted("""
+            import (parse);
+            func borrowWord(value: in string) str from value { value }
+            func byteCount(value: in []const u8) usize { value.len() }
+            func measure(value: in str) usize { byteCount(value.asBytes()) }
+            func main() !void {
+                var truth: string = "true";
+                var fn: func(in str) usize = measure;
+                io.println(parse.parseBool(borrowWord(truth))!)!;
+                io.println(fn(borrowWord(truth)))!;
+                io.println(parse.parseBool("false")!)!;
+                io.println(fn(truth))!;
+            }
+        """, "true\n4\nfalse\n4\n")
+        prelude = """
+            package main;
+            func borrowWord(value: in string) str from value { value }
+            func legacy(value: str) str { value }
+            func count(view: in str, extra: usize) usize { view.byteLen() + extra }
+            func sink(view: in str) void {}
+        """
+        cases = {
+            "return": ("func bad(value: in str) str { value }", "untracked storage or call"),
+            "legacy": ("func bad(value: in str) str { legacy(value) }", "untracked storage or call"),
+            "forward": ("func bad(value: in str) str from value { value }", "borrow source"),
+            "callback": ("func bad() void { var fn: func(in str) str = (v: in str) str => v; }",
+                         "untracked storage or call"),
+            "mutate_source": ('func bad() void { var s: string = "truth"; '
+                              'count(s, { s = "other"; 0 }); }', "active borrow"),
+            "defer": ('func bad() void { var s: string = "truth"; var v = borrowWord(s); defer sink(v); }',
+                      "cannot be saved for deferred calls"),
+        }
+        for name, (body, diagnostic) in cases.items():
+            with self.subTest(case=name):
+                source = self.source(name + "/main.vqr", prelude + body + "\nfunc main() void {}")
+                self.assertIn(diagnostic.encode(), self.process(VAQC, "check", source, good=False).stderr)
 
     def test_v020_run_single_file(self):
         source = self.source("test run.vqr", '''
@@ -1050,8 +1393,8 @@ class Acceptance(CompilerCase):
             type WrapperOnEitherSideOfPointer = !?*??i32;
             type GroupedPair = !(?i32);
 
-            func mixed() !?i32 { some(42) }
-            func bump() !?i32 { mixed()!? + 1 }
+            func mixed() GroupedPair { some(42) }
+            func bump() GroupedPair { mixed()!? + 1 }
             func main() !void {
                 var nested: DeepResult = ok(some(some(40)));
                 var outside: ?!i32 = some(ok(41));
@@ -1078,6 +1421,71 @@ class Acceptance(CompilerCase):
                 result = self.process(VAQC, "check", source, good=False)
                 self.assertIn(b"error[E110]", result.stderr)
                 self.assertIn(b"at most two consecutive type wrappers", result.stderr)
+
+        for code in (
+            *(f"func f(value: {outer}{inner}i32) void {{}}"
+              for outer in "?!" for inner in "?!"),
+            "func f() !(?i32) { null }",
+            "func f(value: [2]!?i32) void {}",
+            "interface I { func f() !?i32; }",
+            "class C { var field: (?i32, !?i32); }",
+            "class C { var field: Box<!?i32>; }",
+            "enum E { Variant(!?i32) }",
+            "type Callback = func(?(!i32)) !void;",
+            "type Callback = func() !?i32;",
+            "func f() void { var callback = (x: !?i32) i32 => 0; }",
+            "func f() void { var callback = () !?i32 => null; }",
+        ):
+            with self.subTest(code=code):
+                source = self.source("bad_signature.vqr", code)
+                for mode in ("check", "fmt"):
+                    result = self.process(VAQC, mode, source if mode == "check" else "-", good=False,
+                                          input=code.encode() if mode == "fmt" else None)
+                    self.assertIn(b"error[E110]", result.stderr)
+                    self.assertIn(b"use a named type alias for consecutive wrappers", result.stderr)
+
+    def test_v020_generic_wrapper_aliases_are_transparent(self):
+        self.source("wrappers/types.vqr", """
+            package wrappers
+            pub type LocalOptional<T> = ?T;
+            pub type View<T> = !LocalOptional<T>;
+            pub type Same<T> = View<T>;
+            pub type Cells<T, comptime N: usize> = [N]T;
+        """)
+        self.hosted("""
+            import (core, wrappers)
+            type Deep<T> = core.ResultOptional<core.OptionalResult<T>>;
+            type Layer<T> = ?T;
+            func peel<T: Copyable>(value: Layer<Layer<T>>) ?T { value? }
+            func infer<T: Copyable>(value: wrappers.Same<T>) ?T {
+                value catch null
+            }
+            func inferArray<T: Copyable, comptime N: usize>(cells: wrappers.Cells<T, N>) T {
+                cells[N-1]
+            }
+            func produce() core.ResultOptional<i32> { some(42) }
+            func main() !void {
+                var callback: func() wrappers.View<i32> = produce;
+                var lambda = () core.ResultOptional<i32> => some(7);
+                var deep: Deep<i32> = ok(some(some(ok(9))));
+                var fromCallback = callback();
+                var fromLambda = lambda();
+                io.println(infer(fromCallback) ?? 1)!;
+                io.println(infer(fromLambda) ?? 2)!;
+                var cells = [_]i32{3, 4};
+                io.println(inferArray(cells))!;
+                io.println(deep!.unwrap().unwrap()!)!;
+                var both: Layer<Layer<i32>> = some(some(8));
+                io.println(peel(both) ?? 0)!;
+            }
+        """, "42\n7\n4\n9\n8\n")
+
+        cycle = self.source("cycle.vqr", """
+            type A<T> = B<T>;
+            type B<T> = ?A<T>;
+            func invalid() void { var value: A<i32>; }
+        """)
+        self.assertIn(b"cyclic type alias", self.process(VAQC, "check", cycle, good=False).stderr)
 
     def test_v020_integer_width_and_overflow(self):
         for level in ("-O0", "-O2"):
@@ -1218,7 +1626,7 @@ class Acceptance(CompilerCase):
                 const sq: func(i32) i32 = n => n*n;
                 io.println(sq(5))!;
                 x := 1;
-                f := [&x](n: i32) i32 => { x += n; x };
+                f := [ref mut x](n: i32) i32 => { x += n; x };
                 io.println(f(8))!;
                 a := new Probe()!;
                 io.println(a.asPtr().get())!;
@@ -1308,13 +1716,13 @@ class Acceptance(CompilerCase):
 
     def test_optional_payloads_and_collection_aliases(self):
         self.hosted('''
-            import (std/opt, coll, std/coll as seq, iter)
+            import (std/opt, coll, std/coll as seq, iter, core)
             func missing(x: i32) ?i32 { null }
             func positive(x: i32) ?i32 {
                 if x > 0 { return x; }
                 null
             }
-            func tag(x: ??i32) i32 {
+            func tag(x: core.NestedOptional<i32>) i32 {
                 switch x { null => 0, some(null) => 1, some(some(_)) => 2 }
             }
             func sequenceLen(v: *seq.Vec<?i32>) usize { v.len() }
@@ -1329,7 +1737,7 @@ class Acceptance(CompilerCase):
                 io.println(tag(v.pop()))!;
                 var nested = opt.map<i32, ?i32>(7, missing);
                 io.println(tag(nested))!;
-                io.println(opt.flatten<i32>(nested) ?? 9)!;
+                io.println(opt.flatten(nested) ?? 9)!;
                 io.println(opt.andThen<i32, i32>(7, missing) ?? 8)!;
                 var data = [_]i32{0, 3};
                 var mapped = iter.map<iter.SliceIter<i32>, i32, ?i32>(iter.iter(data[:]), positive);
@@ -1818,6 +2226,60 @@ class Acceptance(CompilerCase):
                 """)
                 self.assertEqual(self.process(VAQC, "run", entry, good=False).returncode, 10)
 
+    def test_v020_reference_iteration_tracks_array_and_iteration_scope(self):
+        self.hosted("""
+            func main() !void {
+                values := [_]i32{1, 2, 3};
+                increments := [_]i32{10, 20};
+                outer: for ref mut value in values {
+                    for ref increment in increments {
+                        if increment == 10 { value++; continue; }
+                        if value == 3 { continue outer; }
+                        value += increment;
+                    }
+                }
+                sum := 0;
+                for ref left in values {
+                    for ref right in values { sum += left + right; }
+                }
+                io.println(sum)!;
+                values[0] = 1;
+                io.println(values[0])!;
+
+                var owners = [_]^i32{new i32(6)!};
+                for ref mut box in owners { *box += 1; }
+                io.println(*owners[0])!;
+            }
+        """, "294\n1\n7\n")
+
+        cases = (
+            ("for ref item in [_]i32{1} {}", "named, owned fixed array"),
+            ("for ref item in (0..2) {}", "named, owned fixed array"),
+            ("var view = values[:]; for ref item in view {}", "fixed array without borrowed elements"),
+            ("var views = [_][]i32{values[:]}; for ref item in views {}", "fixed array without borrowed elements"),
+            ("var iter = RawItems(); for ref item in iter {}", "fixed array without borrowed elements"),
+            ("const fixed = [_]i32{1}; for ref mut item in fixed {}", "read-only array"),
+            ("for ref item in values { item++; }", "writable"),
+            ("for ref item in values { values[0]++; }", "conflicts with active borrow"),
+            ("for ref mut item in values { values[0]++; }", "conflicts with active borrow"),
+            ("for ref mut item in values { for ref other in values {} }", "conflicts with active borrow"),
+            ("var saved: ?ref i32 = null; for ref item in values { saved = some(ref item); }",
+             "assignment cannot replace reference storage"),
+            ("for ref item in values { var callback = [ref item](argument: in i32) ref i32 => item; }",
+             "returned reference must borrow from its declared source"),
+        )
+        for code, diagnostic in cases:
+            with self.subTest(code=code):
+                source = self.source("ref-iteration-bad.vqr", f"""
+                    class RawItems {{
+                        pub func init() {{}}
+                        pub func next() ?*i32 {{ null }}
+                    }}
+                    func f() void {{ values := [_]i32{{1, 2}}; {code} }}
+                """)
+                result = self.process(VAQC, "check", source, good=False)
+                self.assertIn(diagnostic.encode(), result.stderr, result.stderr.decode())
+
     def test_v020_loop_headers_require_canonical_spelling(self):
         for header, diagnostic in (
             ("for i < 3", "use while for a condition-only loop"),
@@ -2026,7 +2488,7 @@ class Acceptance(CompilerCase):
 
     def test_optional_propagation(self):
         program = """
-            import (opt, coll)
+            import (opt, coll, core)
             error Lookup { Missing, Broken }
             class Item { pub var id: i32; }
             class Probe {
@@ -2035,24 +2497,24 @@ class Acceptance(CompilerCase):
                 pub func init(value: i32) : id(value) {}
                 func deinit() void { io.println(id) catch {}; }
             }
-            func lookup(mode: i32) !?i32 {
+            func lookup(mode: i32) core.ResultOptional<i32> {
                 if mode < 0 { return Lookup.Broken; }
                 if mode == 0 { return null; }
                 mode
             }
-            func increment(mode: i32) !?i32 { lookup(mode)!? + 1 }
-            func nested(value: ??i32) ??i32 { some(value?) }
-            func peel(value: ??i32) ?i32 { (value?)? }
-            func outside(value: ?!i32) ?!i32 { some(value?) }
+            func increment(mode: i32) core.ResultOptional<i32> { lookup(mode)!? + 1 }
+            func nested(value: core.NestedOptional<i32>) core.NestedOptional<i32> { some(value?) }
+            func peel(value: core.NestedOptional<i32>) ?i32 { (value?)? }
+            func outside(value: core.OptionalResult<i32>) core.OptionalResult<i32> { some(value?) }
             func field(value: ?Item) ?i32 { (value?).id }
             func owned(value: ?^Probe) ?i32 {
                 var outer = Probe(90);
                 var inner = move(value)?;
-                inner.id
+                (*inner).id
             }
             func record(counter: *i32) ?i32 { (*counter)++; null }
             func once(counter: *i32) ?i32 { record(counter)? }
-            func borrowed(value: ?ref i32) !?ref i32 { value? }
+            func borrowed(value: in ?ref i32) core.ResultOptional<ref i32> { value? }
             comptime func atCompileTime(value: ?i32) ?i32 { value? + 1 }
             comptime const answer = atCompileTime(some(40));
             func main() !void {
@@ -2080,21 +2542,28 @@ class Acceptance(CompilerCase):
                 io.println(once(raw counter) ?? counter)!;
                 io.println(owned(some(new Probe(7)!)) ?? 0)!;
                 io.println(owned(null) ?? 0)!;
-                var failure = [&counter]() ErrorId => { counter++; Lookup.Missing };
                 var present: ?i32 = some(21);
-                io.println(opt.okOrElse(present, failure)!)!;
+                {
+                    var unused = [ref mut counter]() ErrorId => { counter++; Lookup.Missing };
+                    io.println(opt.okOrElse(present, move(unused))!)!;
+                }
                 var missing: ?i32 = null;
-                io.println(opt.okOrElse(missing, failure) catch (reason) {
-                    if reason != Lookup.Missing { return reason; }
-                    counter
-                })!;
+                {
+                    var failure = [ref mut counter]() ErrorId => { counter++; Lookup.Missing };
+                    opt.okOrElse(missing, move(failure)) catch (reason) {
+                        if reason != Lookup.Missing { return reason; }
+                        0
+                    };
+                }
+                io.println(counter)!;
                 var map = coll.i32Map<i32>();
                 map.insert(5, 30)!;
                 {
-                    var r = opt.okOr(map.get(5), Lookup.Missing)!;
+                    var r = map.get(5) ?? { return Lookup.Missing; };
                     io.println(r)!;
                 }
-                switch borrowed(map.get(6))! { null => {}, some(_) => panic("unexpected reference") }
+                var absent = map.get(6);
+                switch borrowed(absent)! { null => {}, some(_) => panic("unexpected reference") }
                 var pointer: ?*i32 = some(raw counter);
                 var unwrapped = (x: ?*i32) ?*i32 => x?;
                 io.println(*unwrapped(pointer).unwrap())!;
@@ -2109,7 +2578,7 @@ class Acceptance(CompilerCase):
             ("func f() ?i32 { 2? }", "requires an Optional operand"),
             ("func f(v: ?i32) i32 { v? }", "requires an Optional return channel"),
             ("func f(v: ?i32) !i32 { v? }", "LookupError.NotFound"),
-            ("type Maybe = ?i32; func f(v: ?i32) !!Maybe { v? }", "requires '?U' or '!?U'"),
+            ("type Maybe = ?i32; type StackedError = !!Maybe; func f(v: ?i32) StackedError { v? }", "requires '?U' or '!?U'"),
             ("func f(v: ?^i32) ?^i32 { v? }", "move(value)?"),
             ("comptime const n = some(2)?;", "error[E220]"),
             ("func read(x: in i32) ?ref i32 { x } "
@@ -2183,10 +2652,10 @@ class Acceptance(CompilerCase):
                 pub var second: ref T;
                 pub var tag: i32;
             }
-            func pair(value: ref i32) View<i32> {
+            func pair(value: in i32) View<i32> {
                 View<i32>{first: value, second: value, tag: 1}
             }
-            func first(value: View<i32>) ref i32 { value.first }
+            func first(value: in View<i32>) ref i32 { value.first }
             func main() !void {
                 var number = 11;
                 var alternate = 30;
@@ -2237,7 +2706,7 @@ class Acceptance(CompilerCase):
                 var view = View{owner: raw x, tag: 3};
                 var pointer = raw view;
             }""",
-            "escape": """func bad(source: ref Owner) View {
+            "escape": """func bad(source: in Owner) View {
                 var x = Owner{number: 1};
                 View{owner: raw x, tag: 3}
             }""",
@@ -2265,7 +2734,7 @@ class Acceptance(CompilerCase):
                 #borrowed: scoped
                 pub var item: ref i32;
             }
-            func forward<T>(value: T) T { value }
+            func forward<T: Copyable>(value: in T) T { value }
             func main() !void {
                 var left = 10;
                 var right = 20;
@@ -2273,7 +2742,7 @@ class Acceptance(CompilerCase):
                     var view = View{item: raw left};
                     var other: ref i32 = raw right;
                     var bias = 3;
-                    var reader = [view, &other, bias]() i32 => *view.item + other + bias;
+                    var reader = [view, ref other, bias]() i32 => *view.item + other + bias;
                     var get = forward(reader);
                     var copy = get;
                     io.println(get() + copy())!;
@@ -2284,6 +2753,13 @@ class Acceptance(CompilerCase):
             }
         """, "66\n32\n")
         cases = {
+            "value_return_source": """func forward<T: Copyable>(value: T) T { value }
+                func bad() void {
+                    var number = 10;
+                    var view = View{item: ref number};
+                    var callback = [view]() i32 => *view.item;
+                    var copied = forward(callback);
+                }""",
             "owner_change": """func bad() i32 {
                 var number = 10;
                 var view = View{item: raw number};
@@ -2295,24 +2771,24 @@ class Acceptance(CompilerCase):
                 var callback = {
                     var number = 10;
                     var loan: ref i32 = raw number;
-                    [&loan]() i32 => loan
+                    [ref loan]() i32 => loan
                 };
             }""",
             "captured_return": """func bad() void {
                 var number = 10;
                 var loan: ref i32 = raw number;
-                var callback = [&loan](argument: ref i32) ref i32 => loan;
+                var callback = [ref loan](argument: in i32) ref i32 => loan;
             }""",
             "mutable_capture": """func bad() void {
                 var number = 10;
                 var loan: ref mut i32 = raw number;
-                var callback = [&loan]() i32 => loan;
+                var callback = [ref loan]() i32 => loan;
             }""",
             "mixed_capture": """func bad() void {
                 var number = 10;
                 var regular = 7;
                 var loan: ref i32 = raw number;
-                var callback = [&loan, &regular]() i32 => loan + regular;
+                var callback = [ref loan, ref mut regular]() i32 => loan + regular;
             }""",
         }
         view = "class View { #borrowed: scoped; pub var item: ref i32; }\n"
@@ -2325,7 +2801,7 @@ class Acceptance(CompilerCase):
     def test_readonly_reference_tuples(self):
         self.hosted(r"""
             type Same = (ref i32, ref i32);
-            func twice(value: ref i32) Same { (value, value) }
+            func twice(value: in i32) Same { (value, value) }
             func main() !void {
                 var first = 17;
                 var second = 25;
@@ -2373,7 +2849,7 @@ class Acceptance(CompilerCase):
 
     def test_readonly_reference_arrays_index_and_iterate(self):
         self.hosted(r"""
-            func twice(number: ref i32) [2]ref i32 {
+            func twice(number: in i32) [2]ref i32 {
                 [_]ref i32{number, number}
             }
             func main() !void {
@@ -2441,15 +2917,15 @@ class Acceptance(CompilerCase):
                 Empty = 7,
                 Match(ref i32, i32),
             }
-            func find(value: ref i32, found: bool) Hit {
+            func find(value: in i32, found: bool) Hit {
                 var empty = Hit.Empty;
                 if found { Hit.Match(value, 3) } else { empty }
             }
-            func fallback(hit: ?Hit) Hit {
+            func fallback(hit: in ?Hit) Hit {
                 var empty = Hit.Empty;
                 hit ?? empty
             }
-            func increment(hit: Hit) Hit {
+            func increment(hit: in Hit) Hit {
                 switch hit {
                     Hit.Empty => Hit.Empty,
                     Hit.Match(&number, count) => Hit.Match(number, count + 1),
@@ -2464,9 +2940,12 @@ class Acceptance(CompilerCase):
             func main() !void {
                 var number = 40;
                 var view: ref i32 = raw number;
-                print(increment(find(view, true)))!;
-                print(increment(find(view, false)))!;
-                print(fallback(some(Hit.Match(view, 3))))!;
+                var match = find(view, true);
+                print(increment(match))!;
+                var empty = find(view, false);
+                print(increment(empty))!;
+                var wrapped = some(Hit.Match(view, 3));
+                print(fallback(wrapped))!;
             }
         """, "44\nempty\n43\n")
         cases = [
@@ -2478,7 +2957,7 @@ class Acceptance(CompilerCase):
                    switch selected { Hit.Empty => 0, Hit.Match(&result) => result, }
                }""",
             """enum Hit { #borrowed: scoped; Empty, Match(ref i32), }
-               func bad(source: ref i32) Hit {
+               func bad(source: in i32) Hit {
                    var number = 42;
                    Hit.Match(raw number)
                }""",
@@ -2503,10 +2982,10 @@ class Acceptance(CompilerCase):
                 var right: ref i32 = raw number;
                 var checked: ref i32 = forward(call, left, right);
                 io.println(checked)!;
-                var identity = [](value: ref i32) ref i32 => value;
+                var identity = [](value: in i32) ref i32 => value;
                 io.println(*identity(checked))!;
                 var bias = 1;
-                var closure = [bias](value: ref i32) ref i32 => {
+                var closure = [bias](value: in i32) ref i32 => {
                     if bias == 1 { return value; }
                     value
                 };
@@ -2520,9 +2999,9 @@ class Acceptance(CompilerCase):
         """)
         self.process(VAQC, "check", mismatched, good=False)
         escapes = self.source("escapes.vqr", r"""
-            func identity(value: ref i32) ref i32 { value }
-            func invalid(other: ref i32) ref i32 {
-                var call: func(ref i32) ref i32 = identity;
+            func identity(value: in i32) ref i32 { value }
+            func invalid(other: in i32) ref i32 {
+                var call: func(in i32) ref i32 = identity;
                 var value = 42;
                 var loan: ref i32 = raw value;
                 call(loan)
@@ -2577,7 +3056,7 @@ class Acceptance(CompilerCase):
                 }
             }
             func main() !void {
-                for &value in Items() { value++; io.println(value)!; }
+                for owner in Items() { (*owner)++; io.println(*owner)!; }
                 key, owner := (7, new i32(34)!);
                 {
                     ref mut value = *owner;
@@ -2615,10 +3094,10 @@ class Acceptance(CompilerCase):
             ("func f(r: ref i32) void {} func g() void { var n = 0; f(raw n); }", "no accessible overload"),
             ("func f(r: ref i32) void { var p: ref mut i32 = r; }", "read-only"),
             ("func f() void { var n = 0; var p: ref mut i32 = raw n; var q: ref mut i32 = raw n; }", "active borrow"),
-            ("func f(x: ref i32) ref i32 { var n = 0; var r: ref i32 = raw n; return r; }",
+            ("func f(x: in i32) ref i32 { var n = 0; var r: ref i32 = raw n; return r; }",
              "declared source"),
             ("func get(x: in i32) ref i32 { x } func f() void { var r = get(7); }", "temporary"),
-            ("func f() !void { var b = new i32(7)!; var r: ref i32 = b; var next = move(b); }",
+            ("func f() !void { var b = new i32(7)!; var r: ref i32 = ref *b; var next = move(b); }",
              "active borrow"),
             ("func f() !void { var v = coll.Vec<i32>(); v.push(7)!; var r = v.get(0); v.push(8)!; }",
              "active borrow"),
@@ -2682,7 +3161,7 @@ class Acceptance(CompilerCase):
                 io.println(opt.andThen<i32, i32>(o, move(transform)).unwrap())!;
                 filtered := opt.filter(o, bumped);
                 seen := 0;
-                observe := [&seen](p: *const i32) void => { seen = *p; };
+                observe := [ref mut seen](p: *const i32) void => { seen = *p; };
                 opt.inspect(filtered, move(observe));
                 io.println(seen)!;
                 x, y := opt.unzip<i32, i32>(opt.zip<i32, i32>(o, some(4)));
@@ -2738,9 +3217,9 @@ class Acceptance(CompilerCase):
                 io.println(result.unwrapOrElse(failed, recoverValue))!;
                 io.println(result.expect(original, "failed"))!;
                 seen := 0;
-                observe := [&seen](p: *const i32) void => { seen += *p; };
-                onError := [&seen](e: ErrorId) void => { if e == Problem.Missing { seen += 7; } };
+                observe := [ref mut seen](p: *const i32) void => { seen += *p; };
                 result.inspect(original, move(observe))!;
+                onError := [ref mut seen](e: ErrorId) void => { if e == Problem.Missing { seen += 7; } };
                 var checked = result.inspectErr(failed, move(onError));
                 io.println(result.isErr(raw checked))!;
                 io.println(seen)!;
@@ -3108,15 +3587,14 @@ class Acceptance(CompilerCase):
                 unsafe { slot.write(Probe(21)); slot.assumeInitDrop(); }
                 var manually = mem.ManuallyDrop<Probe>.new(Probe(22));
                 core.drop<Probe>(mem.ManuallyDrop<Probe>.intoInner(move(manually)));
-                var ran = 0;
                 {
-                    var callback = [&ran]() void => { ran++; };
+                    var ran = 0;
+                    var callback = [ran]() void => { io.println(ran + 1) catch {}; };
                     var guard = cleanup(move(callback));
                     io.println(guard.isArmed())!;
                     guard.runNow();
                     guard.dismiss();
                 }
-                io.println(ran)!;
             }
         """, "true\ntrue\n3\n3\n6\n8\n2\n6\ntrue\n13\n13\n11\n11\n12\n21\n22\ntrue\n1\n")
 
@@ -3356,7 +3834,7 @@ class Acceptance(CompilerCase):
                 pub var releases: i32;
                 pub var refuse: bool;
                 pub func init() : defaultAllocator(mem.GlobalAllocator()), releases(0), refuse(false) {}
-                pub func alloc(layout: mem.Layout) !?*u8 {
+                pub func alloc(layout: mem.Layout) core.ResultOptional<*u8> {
                     if refuse { return Trouble.Refused; }
                     defaultAllocator.alloc(layout)
                 }
@@ -3796,18 +4274,25 @@ class Acceptance(CompilerCase):
                 io.println(once.set(17).unwrap())!;
                 io.println(once.take().unwrap())!;
                 var tried = 0;
-                var callback = [&tried]() !i32 => {
+                {
+                    var fail = [ref mut tried]() !i32 => { tried++; Failure.Once };
+                    var failed = once.getOrTryInit(move(fail));
+                    io.println(core.isErr(raw failed))!;
+                }
+                {
+                    var succeed = [ref mut tried]() !i32 => { tried++; 21 };
+                    io.println(*once.getOrTryInit(move(succeed))!)!;
+                }
+                if tried != 2 { panic("once retry did not call the factory"); }
+                var callback = [tried]() !i32 => {
                     tried++;
-                    if tried == 1 { return Failure.Once; }
+                    if tried != 3 { panic("lazy callback ran more than once"); }
                     21
                 };
-                var failed = once.getOrTryInit(callback);
-                io.println(core.isErr(raw failed))!;
-                io.println(*once.getOrTryInit(callback)!)!;
                 var lazy = makeLazy(move(callback));
                 io.println(*lazy.force()!)!;
                 io.println(*lazy.force()!)!;
-                io.println(tried)!;
+                io.println(tried + 1)!;
                 var locked = cell.OnceLock<i32>.new();
                 var callbackFail = () !i32 => Failure.Once;
                 var lockFailure = locked.getOrTryInit(callbackFail);
@@ -3927,7 +4412,7 @@ class Acceptance(CompilerCase):
             import (thread)
             func launch() !void {
                 var counter = 0;
-                var callback = [&counter]() i32 => counter;
+                var callback = [ref counter]() i32 => counter;
                 var worker = thread.Thread<i32>.spawn(move(callback))!;
             }
         ''')
@@ -4023,17 +4508,15 @@ class Acceptance(CompilerCase):
                 io.println(meta.isShareable<sync.Mutex<cell.Cell<i32>>>())!;
                 io.println(meta.isSendable<sync.MutexGuard<Pair>>())!;
                 var once = sync.Once.new();
-                var retries = 0;
-                var fail = [&retries]() !void => { retries++; Failure.Retry };
+                var fail = () !void => { io.println(1)!; Failure.Retry };
                 once.callOnce(fail) catch {};
                 io.println(once.isDone())!;
-                var finish = [&retries]() void => { retries++; };
+                var finish = () !void => io.println(2);
                 once.callOnce(finish)!;
                 once.callOnce(finish)!;
                 io.println(once.isDone())!;
-                io.println(retries)!;
             }
-        ''', 'true\n8\n13\ntrue\nfalse\nfalse\ntrue\n2\n')
+        ''', 'true\n8\n13\ntrue\nfalse\n1\nfalse\n2\ntrue\n')
 
     def test_mutex_condition_and_wait_group_across_threads(self):
         source = self.source("synchronization.vqr", '''

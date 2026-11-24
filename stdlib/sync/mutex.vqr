@@ -91,6 +91,15 @@ pub class MutexGuard<T> {
         MutexGuard<T>(state, place)
     }
 
+    pub unsafe static func unlockWhileValue<R: Movable, F>(guard: Self, wait: F) (Self, R) {
+        var state = guard.word.unwrap();
+        var place = guard.value;
+        guard.unlock();
+        var result: R = wait();
+        lockWord(state);
+        (MutexGuard<T>(state, place), move(result))
+    }
+
     pub func deinit() void { unlock(); }
 }
 

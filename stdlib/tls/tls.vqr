@@ -1,5 +1,5 @@
 package tls
-import (coll, io, mem, net, reactor, task, text, time)
+import (core, coll, io, mem, net, reactor, task, text, time)
 
 pub error TlsError {
     Unavailable, SetupFailed, TrustStore, Certificate, Handshake, Protocol,
@@ -186,7 +186,7 @@ pub class TlsStream {
     pub static func connect(socket: net.TcpStream, host: str, config: *const TlsConfig) !Self {
         config.connect(move(socket), host)
     }
-    pub const func negotiatedProtocol() !?coll.Vec<u8> {
+    pub const func negotiatedProtocol() core.ResultOptional<coll.Vec<u8>> {
         if session == 0 { return io.IoError.Closed; }
         var bytes = mem.zeroedBytes<255>();
         var count = unsafe { __vqr_tls_alpn(session, raw bytes[0]) };

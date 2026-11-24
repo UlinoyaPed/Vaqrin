@@ -1,9 +1,9 @@
 package main
-import (env, fmt, grpc, io, net, protobuf, time, tls)
+import (core, env, fmt, grpc, io, net, protobuf, time, tls)
 
 error StreamTestError { BadValue }
 
-func receive(stream: *grpc.ServerStream) !?i32 {
+func receive(stream: *grpc.ServerStream) core.ResultOptional<i32> {
     var message = stream.recvMessage()! ?? { return null; };
     var reader = protobuf.Reader.open(message.asConstSlice(), protobuf.DecodeLimits())!;
     some(reader.next()!.unwrap().asInt32()!)

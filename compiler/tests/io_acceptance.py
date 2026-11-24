@@ -327,8 +327,8 @@ class IoAcceptance(CompilerCase):
 
     def test_borrowed_scanner_keeps_freestanding_io_independent(self):
         source = self.source("borrowed.vqr", '''
-            import (bufio, io)
-            func first(reader: *io.Reader) !?bufio.ByteToken {
+            import (bufio, io, core)
+            func first(reader: *io.Reader) core.ResultOptional<bufio.ByteToken> {
                 var scanner = bufio.newScanner(reader)!;
                 scanner.nextBytes()
             }

@@ -145,7 +145,7 @@ pub class Server {
         }
         null
     }
-    func incoming(event: *const http2.Event, session: *http2.Connection) !?HeaderInfo {
+    func incoming(event: *const http2.Event, session: *http2.Connection) core.ResultOptional<HeaderInfo> {
         var head = parseHeaders(event) catch {
             sendError(session, event.stream, StatusCode.InvalidArgument)!;
             return null;

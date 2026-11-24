@@ -3,7 +3,7 @@ package parse
 extern "C" func __vqr_decimal_parse_f32(data: *const u8, length: usize, value: *f32, consumed: *usize) i32;
 extern "C" func __vqr_decimal_parse_f64(data: *const u8, length: usize, value: *f64, consumed: *usize) i32;
 
-pub func parseFloatPrefix<T>(value: str) !Parsed<T> {
+pub func parseFloatPrefix<T>(value: in str) !Parsed<T> {
     var source = value.asBytes();
     if source.len() == 0 { return ParseError.InvalidSyntax; }
     var parsed: T = T(0);
@@ -23,7 +23,7 @@ pub func parseFloatPrefix<T>(value: str) !Parsed<T> {
     Parsed<T>(parsed, consumed)
 }
 
-pub func parseFloat<T>(value: str) !T {
+pub func parseFloat<T>(value: in str) !T {
     var parsed = parseFloatPrefix<T>(value)!;
     if parsed.consumed != value.byteLen() { return ParseError.TrailingInput; }
     parsed.value

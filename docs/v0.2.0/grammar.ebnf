@@ -1,0 +1,279 @@
+(* Vaqrin v0.2.0 normative EBNF draft; not a release.
+   "," concatenates; "|" chooses; "[]" is optional; "{}" repeats.
+   Double-quoted text is literal. The compiler scope crosswalk is the final comment.
+   This grammar describes canonical spellings, not deprecated compatibility
+   syntax or the permissive token grammar used by editor highlighting. *)
+
+source-file       = [ package-head ], { import-head }, { declaration }, EOF ;
+package-head      = "package", identifier, [ ";" ] ;
+import-head       = "import", "(", import-item, { ",", import-item }, [ "," ], ")", [ ";" ] ;
+import-item       = package-path, [ "as", identifier ] ;
+package-path      = identifier, { "/", identifier } ;
+qualified-name    = identifier, { ".", identifier } ;
+
+(* ---------- Declarations ---------- *)
+
+declaration       = { attribute }, [ "pub" ], declaration-body ;
+declaration-body  = function | alias | class | interface | enum | error | global ;
+alias             = "type", identifier, [ generic-parameters ], "=", data-type, ";" ;
+class             = "class", identifier, [ generic-parameters ], "{",
+                    { attribute }, { class-member }, "}", [ ";" ] ;
+class-member      = { attribute }, [ "pub" ],
+                    ( method | constructor | field | embedded-field )
+                  | "comptime", "if", expression, "{", { class-member }, "}",
+                    [ "else", "{", { class-member }, "}" ] ;
+field             = ( "var" | "const" ), identifier, binding-spec, ";" ;
+embedded-field    = "embed", ( data-type | identifier, ":", data-type ),
+                    [ "=", expression ], ";" ;
+interface         = "interface", identifier, [ generic-parameters ], "{",
+                    { attribute }, { interface-member }, "}", [ ";" ] ;
+interface-member  = { attribute }, [ "pub" ], [ "const" ],
+                    ( "func", callable-name | "operator", overload-operator ),
+                    [ generic-parameters ], parameter-list, result-type, ";" ;
+enum               = "enum", identifier, [ generic-parameters ], "{",
+                     { attribute }, [ enum-item, { ",", enum-item }, [ "," ] ],
+                     "}", [ ";" ] ;
+enum-item         = identifier, [ "(", [ data-type-list ], ")" ], [ "=", expression ] ;
+error             = "error", identifier, "{", { attribute },
+                    [ identifier, { ",", identifier }, [ "," ] ], "}", [ ";" ] ;
+global            = [ "comptime" ], ( "var" | "const" ), identifier, binding-spec, ";" ;
+binding-spec      = ":", data-type, [ "=", expression ] | "=", expression ;
+attribute         = "#", attribute-name, ":", attribute-value, attribute-end ;
+attribute-name    = identifier | "move" ;
+attribute-value   = attribute-token, { attribute-token } ;
+attribute-end     = ";" | attribute-newline | before-closing-brace ;
+
+function          = [ "comptime" ], [ "unsafe" ],
+                    ( "extern", c-abi, "func", callable-name, [ generic-parameters ],
+                      parameter-list, result-type, ";"
+                    | [ "export", c-abi ], [ "const" ], "func", callable-name,
+                      [ generic-parameters ], parameter-list, result-type, block, [ ";" ] ) ;
+method            = [ "comptime" ], [ "unsafe" ], [ "static" ], [ "const" ],
+                    ( "func", callable-name | "operator", overload-operator ),
+                    [ generic-parameters ], parameter-list, result-type, block, [ ";" ] ;
+constructor       = "func", "init", [ generic-parameters ], parameter-list,
+                    [ result-type ], [ ":", initializer, { ",", initializer } ], block, [ ";" ] ;
+initializer       = ( identifier | "self" ), arguments ;
+callable-name     = identifier | "select" | "new" ;
+parameter-list    = "(", [ parameter-group, { ",", parameter-group }, [ "," ] ], ")" ;
+parameter-group   = [ "comptime" ], identifier-or-ignore, { ",", identifier-or-ignore },
+                    ":", parameter-type ;
+identifier-or-ignore = identifier | "_" ;
+parameter-type    = [ "in" | "mut" | "move" ], data-type ;
+result-type       = data-type, [ "from", ( identifier | "self" ) ] ;
+generic-parameters = "<", generic-parameter, { ",", generic-parameter }, [ "," ], ">" ;
+generic-parameter = identifier, [ ":", constraint ]
+                  | "comptime", identifier, ":", data-type ;
+constraint        = data-type, { "+", data-type } ;
+generic-arguments = "<", generic-argument, { ",", generic-argument }, [ "," ], ">" ;
+generic-argument  = data-type | literal-comptime-argument | "(", expression, ")" ;
+
+(* ---------- Type syntax ---------- *)
+
+data-type         = "?", data-type | "!", data-type | "^", data-type
+                  | "*", [ "const" ], data-type
+                  | "ref", [ "mut" ], data-type
+                  | "const", data-type
+                  | "[", "]", [ "const" ], data-type
+                  | "[", expression, "]", data-type
+                  | "(", data-type, [ ",", [ data-type-list ] ], ")"
+                  | function-type
+                  | qualified-name, [ generic-arguments ] ;
+data-type-list    = data-type, { ",", data-type }, [ "," ] ;
+function-type     = [ "extern", c-abi ], "func", "(",
+                    [ function-type-parameter, { ",", function-type-parameter }, [ "," ] ],
+                    ")", data-type, [ "from", identifier ] ;
+function-type-parameter = [ identifier, ":" ], parameter-type ;
+
+(* In a parameter, result or field type, including an enum payload and a
+   nested function or lambda signature, adjacent ? and ! of any combination
+   require a named alias. Grouping parentheses do not split a wrapper run.
+   A single type expression may spell at most two adjacent wrappers;
+   greater nesting composes aliases. ? and > may consume parts of a longer
+   punctuation token only in a type context, unlike expression ?? and >>.
+   The mode in/mut/move is not a data-type prefix. *)
+
+(* ---------- Blocks, statements, and control ---------- *)
+
+block             = "{", { statement }, [ tail ], "}" ;
+statement         = simple-statement, ";"
+                  | block-expression, [ ";" ]
+                  | loop, [ ";" ]
+                  | defer-statement ;
+simple-statement  = binding | ref-binding | short-binding | assignment
+                  | return-expression | jump | expression ;
+tail              = expression ;
+binding           = ( "var" | "const" | "comptime", "const" ),
+                    identifier-or-ignore, binding-spec ;
+ref-binding       = "ref", [ "mut" ], identifier, "=", place ;
+short-binding     = identifier-or-ignore, { ",", identifier-or-ignore }, ":=", expression ;
+assignment        = place, assignment-operator, expression | place, update-operator ;
+assignment-operator = "=" | "+=" | "-=" | "*=" | "/=" | "%="
+                    | "&=" | "^=" | "|=" | "<<=" | ">>="
+                    | "+%=" | "-%=" | "*%=" | "<<%=" ;
+update-operator   = "++" | "--" ;
+return-expression = "return", [ expression ] ;
+jump              = ( "break" | "continue" ), [ label-use ] ;
+label-use         = identifier ;
+defer-statement   = "defer", ( call-expression, ";" | block, [ ";" ] ) ;
+
+block-expression  = block | if-expression | switch-expression | "unsafe", block ;
+if-expression     = "if", ( header-expression | "let", pattern, "=", header-expression ),
+                    block, [ "else", ( block | if-expression ) ] ;
+loop              = [ identifier, ":" ], ( for-loop | while-loop ) ;
+for-loop          = "for", ( block
+                          | iteration-binding, "in", header-expression, block
+                          | [ simple-statement ], ";", [ expression ], ";",
+                            [ simple-statement ], block ) ;
+while-loop        = "while", header-expression, block ;
+iteration-binding = identifier-or-ignore, { ",", identifier-or-ignore }
+                  | "ref", [ "mut" ], identifier ;
+header-expression = expression ;
+
+switch-expression = "switch", header-expression, "{",
+                    [ switch-arm, { ",", switch-arm }, [ "," ] ], "}" ;
+switch-arm        = ( "else" | pattern, { ",", pattern } ), "=>", expression ;
+pattern           = "_" | "null" | identifier
+                  | "ref", [ "mut" ], identifier
+                  | "(", [ pattern-list ], ")"
+                  | qualified-name, [ "(", [ pattern-list ], ")" ]
+                  | value-pattern ;
+pattern-list      = pattern, { ",", pattern }, [ "," ] ;
+value-pattern     = range-expression ;
+
+select-expression = "select", "{", select-arm, { ",", select-arm }, [ "," ], "}" ;
+select-arm        = ( "else"
+                    | [ identifier, ":=" ], postfix-expression, ".", "recv", "(", ")"
+                    | postfix-expression, ".", "send", "(", expression, ")"
+                    | "after", "(", expression, ")" ), "=>", expression ;
+
+(* Call targets, places and headers are contextual forms. A header must
+   finish before the following block, not consume it as a literal. The loop
+   header cannot have a redundant outer pair of parentheses. An arm's comma
+   belongs to the arm/list syntax, not to an unparenthesized tuple return.
+   A jump label must be on the same line. A tail expression must finish the
+   block and be usable as its value; standalone assignment is not a value.
+   Current parser also tolerates a final unlabeled/labeled jump or return
+   without a semicolon; this is not general automatic semicolon insertion. *)
+
+(* ---------- Expressions and precedence, low to high ---------- *)
+
+expression        = catch-expression ;
+catch-expression  = coalesce-expression,
+                    [ "catch", ( "(", identifier, ")", block | catch-expression ) ] ;
+coalesce-expression = or-expression, [ "??", coalesce-expression ] ;
+or-expression     = and-expression, { "||", and-expression } ;
+and-expression    = bit-or-expression, { "&&", bit-or-expression } ;
+bit-or-expression = bit-xor-expression, { "|", bit-xor-expression } ;
+bit-xor-expression = bit-and-expression, { "^", bit-and-expression } ;
+bit-and-expression = equality-expression, { "&", equality-expression } ;
+equality-expression = ordered-expression, [ ( "==" | "!=" ), ordered-expression ] ;
+ordered-expression = range-expression, { ( "<" | "<=" | ">" | ">=" ), range-expression } ;
+range-expression  = shift-expression, [ ( ".." | "..=" ), shift-expression ] ;
+shift-expression  = sum-expression, { ( "<<" | ">>" | "<<%" ), sum-expression } ;
+sum-expression    = product-expression,
+                    { ( "+" | "-" | "+%" | "-%" ), product-expression } ;
+product-expression = prefix-expression,
+                    { ( "*" | "/" | "%" | "*%" ), prefix-expression } ;
+prefix-expression = ( "!" | "-" | "~" | "*" ), prefix-expression
+                  | "raw", raw-source | "ref", [ "mut" ], ref-source
+                  | postfix-expression ;
+ref-source        = ( identifier | "self" ), { postfix-suffix }
+                  | "*", prefix-expression ;
+raw-source        = ref-source | "(", expression, ")" ;
+postfix-expression = atom, { postfix-suffix } ;
+postfix-suffix    = arguments | generic-call-suffix
+                  | ( "." | "?." ), member-name
+                  | "[", ( ":" | expression ), "]" | "!" | "?" ;
+generic-call-suffix = generic-arguments ;
+member-name       = callable-name | unsigned-integer-token ;
+arguments         = "(", [ expression-list ], ")" ;
+expression-list   = expression, { ",", expression }, [ "," ] ;
+call-expression   = postfix-expression, arguments ;
+place             = prefix-expression ;
+atom              = literal | identifier | "self"
+                  | "(", expression, [ ",", [ expression-list ] ], ")"
+                  | array-literal | block-expression | select-expression | lambda
+                  | "move", "(", expression, ")"
+                  | "new", data-type, arguments
+                  | loop | return-expression | jump ;
+array-literal     = "[", ( "_" | expression ), "]", data-type,
+                    "{", [ expression-list ], "}" ;
+lambda            = identifier, "=>", expression
+                  | [ captures ], "(", [ lambda-parameter, { ",", lambda-parameter },
+                    [ "," ] ], ")", [ data-type ], "=>", expression ;
+lambda-parameter  = identifier-or-ignore, [ ":", parameter-type ] ;
+captures          = "[", [ capture, { ",", capture }, [ "," ] ], "]" ;
+capture           = identifier | "ref", [ "mut" ], identifier
+                  | "move", "(", identifier, ")" ;
+
+(* Catch and ?? associate to the right; other repeated binary levels to
+   the left. Equality and range are nonassociative without grouping.
+   Ordered comparisons may chain and evaluate each tested operand once.
+   A generic expression suffix must resolve as a type/comptime argument
+   list and appear before call/member access. Otherwise < and > can be
+   comparison operators. Reserved member spellings and operator declarations
+   are validated in their own positions. Calls and postfix operators apply
+   left to right. A bare ref/raw keyword-looking identifier is not an
+   operator unless the contextual operand form matches. For a grouped raw
+   place, separate raw from the opening parenthesis (raw (*p), not raw(*p));
+   the unseparated form is an ordinary call to an identifier. *)
+
+(* ---------- Lexical terminals ---------- *)
+
+literal           = number-token | character-token | string-token | "true" | "false" | "null" ;
+literal-comptime-argument = [ "-" ], number-token | character-token | "true" | "false" ;
+number-token      = integer-token | floating-token ;
+integer-token     = unsigned-integer-token, [ integer-suffix ] ;
+unsigned-integer-token = decimal | "0b", binary-digits | "0o", octal-digits | "0x", hex-digits ;
+floating-token    = decimal, ".", decimal, [ exponent ], [ float-suffix ]
+                  | decimal, exponent, [ float-suffix ] | decimal, float-suffix ;
+exponent          = ( "e" | "E" ), [ "+" | "-" ], decimal ;
+integer-suffix    = ( "i" | "u" ), nonzero-digit, { digit } ;
+nonzero-digit     = "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+float-suffix      = "f32" | "f64" ;
+decimal           = digit, { [ "_" ], digit } ;
+digit             = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+binary-digits     = binary-digit, { [ "_" ], binary-digit } ;
+binary-digit      = "0" | "1" ;
+octal-digits      = octal-digit, { [ "_" ], octal-digit } ;
+octal-digit       = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" ;
+hex-digits        = hex-digit, { [ "_" ], hex-digit } ;
+hex-digit         = digit | "a" | "b" | "c" | "d" | "e" | "f"
+                  | "A" | "B" | "C" | "D" | "E" | "F" ;
+character-token   = "'", ( ordinary-character-scalar | escape ), "'" ;
+string-token      = '"', { ordinary-string-scalar | escape }, '"' ;
+escape            = "\", ( "n" | "r" | "t" | "\" | '"' | "'"
+                    | "u", "{", hex-digit, { hex-digit }, "}" ) ;
+c-abi             = string-token ;
+identifier        = identifier-start, { identifier-continue } ;
+identifier-start  = "_" | unicode-xid-start ;
+identifier-continue = "_" | unicode-xid-continue ;
+
+(* EOF, the Unicode XID properties, an unescaped scalar permitted by the
+   enclosing quote, and attribute token/boundary terminals are lexical
+   categories. The c-abi string must decode to C. Reserved words and
+   standalone _ are excluded from identifier. Contextual let, while,
+   ref, mut, raw and from are recognized in their complete constructs.
+   Strings distinguish escapes from raw scalars; decoder checks scalar/byte
+   ranges according to the literal's type. Whitespace (except in bounded
+   attribute/label contexts) and // and non-nesting /* */ comments separate
+   tokens. Punctuation takes the longest lexical token, subject to the
+   documented splits and disambiguation in a type context. *)
+
+overload-operator = "+" | "-" | "*" | "/" | "%" | "==" | "!=" | "<" | "<=" | ">" | ">=" ;
+
+(* Compiler crosswalk at 3f4d6e8:
+   source.cpp: UTF-8, lexing, normalization, punctuation.
+   parser.cpp: file/declaration/members and type/parameterType;
+   checkWrapperSyntax verifies complete committed type syntax;
+   block/statement/loop/match/selection/lambda parse structured forms;
+   primary/postfix/expression perform expression disambiguation/precedence.
+   inputs.cpp resolves file/package identities and explicit build entry;
+   compiler.cpp, body.cpp, expressions.cpp, patterns.cpp, select.cpp and
+   generic_interface.cpp enforce types, regions, ownership and lowering.
+   Compatibility parsing in this snapshot also accepts some removed forms,
+   notably a field-list class construction, legacy indirect patterns and
+   legacy for-& binding. They are not alternate normative productions.
+   The allocation-specific new(allocator) extension is a separate library/
+   compiler mechanism, not another basic construction syntax. *)

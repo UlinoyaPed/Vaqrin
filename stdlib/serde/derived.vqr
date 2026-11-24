@@ -1,5 +1,5 @@
 package serde
-import (convert, fmt, parse)
+import (core, convert, fmt, parse)
 
 comptime func valueKind<T>() u8 { __vqr_serde_value_kind<T>() }
 
@@ -87,7 +87,7 @@ pub func encodeOptional<T>(value: *const ?T, serializer: *Serializer) !void {
     }
 }
 
-pub func decodeOptional<T>(deserializer: *Deserializer) !?T {
+pub func decodeOptional<T>(deserializer: *Deserializer) core.ResultOptional<T> {
     if deserializer.kind()! == DataKind.Null {
         deserializer.readNull()!;
         return null;

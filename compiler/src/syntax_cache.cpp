@@ -107,6 +107,7 @@ template <bool Reading> class Archive {
     auto &node = *value;
     kind(node.kind, NodeKind::Defer);
     fields(node.span, node.text, node.children, node.names, node.parameters, node.type, node.tail, node.bindingSpans);
+    kind(node.iterationBinding, IterationBinding::Exclusive);
     --depth;
   }
 
@@ -253,7 +254,7 @@ SyntaxCache::SyntaxCache(const std::filesystem::path &executable) {
     directory.clear();
     return;
   }
-  compilerKey = "v7\n" + *identity;
+  compilerKey = "v8\n" + *identity;
 }
 
 std::filesystem::path SyntaxCache::entry(const Source &source) const {

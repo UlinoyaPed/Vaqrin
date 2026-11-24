@@ -1,5 +1,5 @@
 package http
-import (coll, fmt, io, mem, parse, text)
+import (core, coll, fmt, io, mem, parse, text)
 
 class ReadBudget {
     pub var remaining: usize;
@@ -217,7 +217,7 @@ func writeFields(writer: *io.Writer, fields: *const HeaderMap, length: ?usize) !
     io.writeString(writer, "\r\n")
 }
 
-func outgoingLength(framing: Framing, size: usize, emitBody: bool) !?usize {
+func outgoingLength(framing: Framing, size: usize, emitBody: bool) core.ResultOptional<usize> {
     if framing.chunked { return HttpError.UnsupportedTransfer; }
     if framing.length != null {
         if emitBody && framing.length.unwrap() != size { return HttpError.InvalidFraming; }

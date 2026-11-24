@@ -1,5 +1,5 @@
 package serde
-import (coll)
+import (core, coll)
 
 pub error SerdeError {
     TypeMismatch, InvalidState, InvalidLength, InvalidValue, UnexpectedEnd,
@@ -83,11 +83,11 @@ pub interface Deserializer {
     func readF64() !f64;
     func readNumber() !string;
     func readString() !string;
-    func beginSeq() !?usize;
+    func beginSeq() core.ResultOptional<usize>;
     func nextElement() !bool;
     func endSeq() !void;
-    func beginMap() !?usize;
-    func nextKey() !?string;
+    func beginMap() core.ResultOptional<usize>;
+    func nextKey() core.ResultOptional<string>;
     func endMap() !void;
 }
 

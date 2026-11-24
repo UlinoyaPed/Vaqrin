@@ -311,7 +311,9 @@ class SourceIndex:
             symbol = Symbol(self.file, name, kind, start, match.end(), signature, owner=owner, type=result_type,
                             public=public, type_parameters=type_parameters,
                             declaration_only=kind == "func" and finish not in self.scopes,
-                            parameters=labels)
+                            parameters=labels,
+                            initializer=self.initializer(bracket + 1)
+                            if kind == "type" and self.code[bracket:bracket + 1] == "=" else "")
             self.symbols.append(symbol)
             if finish in self.scopes and kind in ("class", "interface", "enum", "error"):
                 symbol.scope = (finish, self.scopes[finish])
@@ -538,23 +540,12 @@ class Server:
             return "bool"
         if match := re.fullmatch(r"[-+]?[0-9][0-9_]*(\.[0-9_]+)?([iuf]\d+|[iu]size)?", value):
             return match[2] or ("f64" if match[1] else "i32")
-        def after_postfix(result, tail):
-            if "??" in tail or not re.fullmatch(r"(?:[!?]\s*)*(?:\.unwrap\(\))?", tail):
-                return ""
-            operators = tail.removesuffix(".unwrap()")
-            if tail.endswith(".unwrap()"):
-                operators += "?"
-            for operator in operators:
-                if operator.isspace():
-                    continue
-                if not result.startswith(operator):
-                    return ""
-                result = result[1:]
-            return result
-
         if bare := re.fullmatch(rf"({IDENT})\s*((?:[!?]\s*)*)", value):
             choices = self.resolve(source, symbol.start, bare[1])
-            return after_postfix(self.type_of(source, choices[0], seen), bare[2]) if choices else ""
+            if choices:
+                origin = choices[0]
+                return self.type_after_postfix(self.type_of(source, origin, seen), bare[2], origin)
+            return ""
         call = re.match(rf"({IDENT}(?:\.{IDENT})*)(?:\s*<([^()]*)>)?\s*[({{]", value)
         if call:
             expression = masked(value)
@@ -564,7 +555,7 @@ class Server:
             if close == len(value):
                 return ""
             if call[1] in TYPES:
-                return after_postfix(call[1], tail)
+                return self.type_after_postfix(call[1], tail, symbol)
             path = call[1].split(".")
             choices = self.resolve(source, symbol.start, path[-1], ".".join(path[:-1]), seen)
             if choices:
@@ -576,8 +567,72 @@ class Server:
                         result += f"<{call[2]}>"
                 elif call[2] and origin.type_parameters:
                     result = self.specialize(origin, arguments=generic_arguments(call[2])).type
-                return after_postfix(result, tail)
+                return self.type_after_postfix(result, tail, origin)
         return ""
+
+    def type_after_postfix(self, result, tail, origin):
+        if "??" in tail or not re.fullmatch(r"(?:[!?]\s*)*(?:\.unwrap\(\))?", tail):
+            return ""
+        operations = [op for op in tail.removesuffix(".unwrap()") if not op.isspace()]
+        if tail.endswith(".unwrap()"):
+            operations.append("?")
+        if not operations or not result:
+            return result
+        source = self.source_index(origin.file)
+        offset = origin.start
+        arguments = {}
+        expanded = ()
+        budget = 64
+        for operator in operations:
+            while not result.startswith(operator):
+                result = result.strip()
+                if result.startswith("(") and matching_delimiter(result, 0, "(", ")") == len(result) - 1:
+                    result = result[1:-1].strip()
+                    continue
+                if result in arguments:
+                    result, source, offset, arguments, expanded = arguments[result]
+                    continue
+                head = re.fullmatch(rf"({IDENT}(?:\.{IDENT})*)(?:\s*<(.*)>)?", result)
+                if not head or not budget:
+                    return ""
+                qualifier, _, name = head[1].rpartition(".")
+                aliases = [item for item in self.resolve(source, offset, name, qualifier)
+                           if item.kind == "type" and item.initializer]
+                if len(aliases) != 1:
+                    return ""
+                alias = aliases[0]
+                actual = generic_arguments(head[2]) if head[2] else ()
+                key = (alias.file, alias.start)
+                if key in expanded or len(actual) != len(alias.type_parameters):
+                    return ""
+                budget -= 1
+                arguments = {name: (arg, source, offset, arguments, expanded)
+                             for name, arg in zip(alias.type_parameters, actual)}
+                expanded = (*expanded, key)
+                source = self.source_index(alias.file)
+                offset = alias.start
+                result = masked(alias.initializer).strip()
+            result = result[1:].strip()
+
+        def substitute(text, parameters):
+            nonlocal budget
+            if not parameters:
+                return text
+
+            def resolve(match):
+                nonlocal budget
+                if match[0] not in parameters:
+                    return match[0]
+                if not budget:
+                    return ""
+                budget -= 1
+                arg, _, _, outer, _ = parameters[match[0]]
+                return substitute(arg, outer)
+
+            return re.sub(IDENT, resolve, text)
+
+        result = substitute(result, arguments)
+        return result if budget else ""
 
     def specialize(self, symbol, receiver="", arguments=()):
         substitutions = {}

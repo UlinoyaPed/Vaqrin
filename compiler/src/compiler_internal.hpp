@@ -121,6 +121,7 @@ struct Borrow {
   // A read-only merge conservatively pins every possible source.
   std::shared_ptr<const std::vector<int>> alternatives{};
   std::vector<unsigned> fields{};
+  bool checkedView = false;
 
   bool protects(int owner) const;
   bool overlaps(int owner, const Borrow &access) const;
@@ -244,6 +245,7 @@ private:
   std::vector<Loop> loops;
   bool constructing = false;
   int returnRoot = -1;
+  bool checkedViewReturn = false;
   std::set<unsigned> constructed;
   DISubprogram *debug = nullptr;
 
@@ -326,6 +328,9 @@ private:
   void freeAllocation(Value *address, bool aligned);
   void releaseBox(Value *address, Value *context);
   Value *textView(ValueAt value, Span span);
+  Borrow viewOrigin(ValueAt source, bool ownsStorage, bool force = false) const;
+  ValueAt trackView(ValueAt value, Span span);
+  void rejectViewEscape(ValueAt value, Span span);
   void disposeTemporary(ValueAt value, Span span);
   ValueAt match(const Ast &n, Type *expected);
   ValueAt selection(const Ast &n, Type *expected);
@@ -396,6 +401,10 @@ public:
   Type *pointer(Type *t, bool readOnly);
   Type *reference(Type *t, bool readOnly, ParameterMode mode = ParameterMode::Value);
   bool hasReference(Type *t);
+  bool readonlyView(Type *t) const;
+  bool scopedViewInput(Type *t) const;
+  bool canAdaptViewInput(Type *from, Type *target) const;
+  bool viewContractSource(Type *parameter) const;
   int borrowParameter(Definition def, const std::vector<Type *> &parameters, Type *result, bool receiver);
   Type *slice(Type *t, bool readOnly);
   Type *box(Type *t);

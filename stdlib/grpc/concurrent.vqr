@@ -14,7 +14,7 @@ class ConcurrentInput {
             var code = if task.isCancelled() { StatusCode.Cancelled } else { StatusCode.Internal };
             reply(status(code, ""))
         };
-        ConcurrentOutput(raw result, limit)
+        ConcurrentOutput(result, limit)
     }
 }
 
@@ -23,11 +23,11 @@ class ConcurrentInput {
 class ConcurrentOutput {
     #copy: disabled
     pub var result: UnaryResponse;
-    pub func init(source: *const UnaryResponse, limit: usize) !void
+    pub func init(source: in UnaryResponse, limit: usize) !void
         : result(copyResponse(source, limit)!) {}
 }
 
-func copyResponse(source: *const UnaryResponse, limit: usize) !UnaryResponse {
+func copyResponse(source: in UnaryResponse, limit: usize) !UnaryResponse {
     var content: ?coll.Vec<u8> = null;
     switch source.body {
         some(ref body) => {

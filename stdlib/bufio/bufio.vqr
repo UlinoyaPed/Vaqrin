@@ -71,7 +71,7 @@ pub class BufferedReader {
         lastByte = some(dst[count - 1]);
         count
     }
-    pub func readByte() !?u8 {
+    pub func readByte() core.ResultOptional<u8> {
         var one = mem.zeroedBytes<1>();
         var count = read(one[:])!;
         if count == 0 { return null; }
@@ -113,7 +113,7 @@ pub class BufferedReader {
         lastByte = null;
         skipped
     }
-    pub func readUntil(delimiter: u8, maxBytes: usize) !?coll.Vec<u8> {
+    pub func readUntil(delimiter: u8, maxBytes: usize) core.ResultOptional<coll.Vec<u8>> {
         if !pending.isEmpty() && pendingDelimiter != delimiter { return BufferError.PendingRead; }
         pendingDelimiter = delimiter;
         if pending.len() > maxBytes { return BufferError.PendingRead; }
@@ -143,14 +143,14 @@ pub class BufferedReader {
             }
         }
     }
-    pub func readString(delimiter: u8, maxBytes: usize) !?string {
+    pub func readString(delimiter: u8, maxBytes: usize) core.ResultOptional<string> {
         var bytes = readUntil(delimiter, maxBytes)!;
         switch move(bytes) {
             null => null,
             some(value) => some(text.fromBytes(value.asConstSlice())!),
         }
     }
-    pub func readLine(maxBytes: usize) !?string {
+    pub func readLine(maxBytes: usize) core.ResultOptional<string> {
         var line = readUntil(10, maxBytes)!;
         switch move(line) {
             null => null,
@@ -255,7 +255,7 @@ pub class Token {
     var last: u64;
     pub func init(value: string, start: u64, end: u64)
         : contents(move(value)), first(start), last(end) {}
-    pub const func text() str { unsafe { __vqr_text_borrow_utf8(contents.asBytes()) } }
+    pub const func text() str from self { contents }
     pub const func start() u64 { first }
     pub const func end() u64 { last }
 }
@@ -289,7 +289,7 @@ pub class Scanner {
     pub func setMaxToken(value: usize) void { maximum = value; }
     pub func setSplitMode(value: SplitMode) void { mode = value; }
     pub const func position() u64 { consumed }
-    pub func nextBytes() !?ByteToken {
+    pub func nextBytes() core.ResultOptional<ByteToken> {
         for {
             var next = reader.readByte()!;
             switch next {
@@ -325,19 +325,19 @@ pub class Scanner {
         var bytes = core.replace<coll.Vec<u8>>(raw pending, coll.Vec<u8>());
         ByteToken(move(bytes), tokenStart, end)
     }
-    pub func next() !?Token {
+    pub func next() core.ResultOptional<Token> {
         var item = nextBytes()! ?? { return null; };
         var textValue = text.fromBytes(item.bytes())!;
         some(Token(move(textValue), item.start, item.end))
     }
-    pub func nextString() !?string {
+    pub func nextString() core.ResultOptional<string> {
         var item = next()!;
         switch item {
             null => null,
             some(value) => some(text.fromBytes(value.text().asBytes())!),
         }
     }
-    pub func nextInt<T>() !?T {
+    pub func nextInt<T>() core.ResultOptional<T> {
         var item = next()!;
         switch move(item) {
             null => null,
@@ -347,7 +347,7 @@ pub class Scanner {
     pub func readInt<T>() !T {
         nextInt<T>()! ?? { return io.IoError.UnexpectedEof; }
     }
-    pub func nextFloat<T>() !?T {
+    pub func nextFloat<T>() core.ResultOptional<T> {
         var item = next()!;
         switch move(item) {
             null => null,
@@ -373,11 +373,11 @@ pub func newWriter(writer: *io.Writer, capacity: usize) !BufferedWriter {
 }
 pub func newScanner(reader: *io.Reader) !Scanner { Scanner(reader) }
 pub func newScanner(reader: io.HostFile) !Scanner { Scanner(move(reader)) }
-pub func readLine(reader: *BufferedReader, maxBytes: usize) !?string {
+pub func readLine(reader: *BufferedReader, maxBytes: usize) core.ResultOptional<string> {
     reader.readLine(maxBytes)
 }
 
-pub func readLine(reader: *io.Reader, maxBytes: usize) !?string {
+pub func readLine(reader: *io.Reader, maxBytes: usize) core.ResultOptional<string> {
     // A borrowed unbuffered source cannot safely be read past its delimiter.
     var result = coll.Vec<u8>();
     var byte = [1]u8{0};

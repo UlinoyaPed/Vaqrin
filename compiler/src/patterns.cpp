@@ -139,6 +139,8 @@ void Body::checkPattern(const Ast &pat, ValueAt subject, BasicBlock *failure,
       fail(pat->span, "duplicate pattern binding");
     if (pat->kind != NodeKind::PatternName) {
       if (pat->kind == NodeKind::PatternIndirect) {
+        if (subject.type->kind == Kind::Box)
+          fail(pat->span, "bind the Box owner, then explicitly dereference its payload", "E230");
         subject = dereference(subject, pat->span);
       } else if (p.hasReference(subject.type)) {
         fail(pat->span, "use '&' to borrow through a reference payload", "E230");
@@ -358,8 +360,8 @@ ValueAt Body::match(const Ast &n, Type *expected) {
   auto *phi = ir.CreatePHI(resultType->ir, edges.size());
   for (auto [v, b] : edges)
     phi->addIncoming(v, b);
-  return {resultType, phi, nullptr, false, -1, false, temporaryBorrow, origin,
-          p.hasReference(resultType) && !borrowPayload};
+  return trackView({resultType, phi, nullptr, false, -1, false, temporaryBorrow, origin,
+                    p.hasReference(resultType) && !borrowPayload}, n->span);
 }
 
 } // namespace vqr::detail

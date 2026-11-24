@@ -1,5 +1,5 @@
 package csv
-import (coll, io, text)
+import (core, coll, io, text)
 
 pub error CsvError {
     InvalidOptions, InvalidQuote, UnexpectedAfterQuote, UnterminatedQuote,
@@ -45,7 +45,7 @@ pub class CsvReader {
         validateOptions(raw options)!;
     }
 
-    pub func readRecord() !?coll.Vec<string> {
+    pub func readRecord() core.ResultOptional<coll.Vec<string>> {
         for {
             var row = readRawRecord()!;
             switch move(row) {
@@ -79,7 +79,7 @@ pub class CsvReader {
     pub const func position() (usize, usize) { (recordNumber, byteOffset) }
     pub func close() void {}
 
-    func nextByte() !?u8 {
+    func nextByte() core.ResultOptional<u8> {
         switch pendingByte {
             some(value) => { pendingByte = null; return some(value); },
             null => {},
@@ -98,7 +98,7 @@ pub class CsvReader {
         some(buffer[0])
     }
 
-    func finishField(fields: *coll.Vec<string>, field: *coll.Vec<u8>) !void {
+    func finishField(fields: mut coll.Vec<string>, field: mut coll.Vec<u8>) !void {
         var value = text.fromBytes(field.asConstSlice()) catch { return CsvError.InvalidUtf8; };
         fields.push(move(value))!;
         field.clear();
@@ -110,7 +110,7 @@ pub class CsvReader {
         if recordBytes > options.maxRecordBytes { return CsvError.RecordLimit; }
     }
 
-    func readRawRecord() !?coll.Vec<string> {
+    func readRawRecord() core.ResultOptional<coll.Vec<string>> {
         var fields = coll.Vec<string>();
         var field = coll.Vec<u8>();
         var inQuotes = false;
@@ -124,7 +124,7 @@ pub class CsvReader {
                 null => {
                     if inQuotes { return CsvError.UnterminatedQuote; }
                     if !sawInput { return null; }
-                    finishField(raw fields, raw field)!;
+                    finishField(fields, field)!;
                     break;
                 },
                 some(byte) => {
@@ -151,10 +151,10 @@ pub class CsvReader {
                         }
                     } else if afterQuote {
                         if byte == options.delimiter {
-                            finishField(raw fields, raw field)!;
+                            finishField(fields, field)!;
                             afterQuote = false;
                         } else if byte == 10 {
-                            finishField(raw fields, raw field)!;
+                            finishField(fields, field)!;
                             break;
                         } else if byte == 13 {
                             var lookahead = nextByte()!;
@@ -165,7 +165,7 @@ pub class CsvReader {
                                 },
                                 null => {},
                             }
-                            finishField(raw fields, raw field)!;
+                            finishField(fields, field)!;
                             break;
                         } else {
                             return CsvError.UnexpectedAfterQuote;
@@ -174,9 +174,9 @@ pub class CsvReader {
                         if field.len() != 0 { return CsvError.InvalidQuote; }
                         inQuotes = true;
                     } else if byte == options.delimiter {
-                        finishField(raw fields, raw field)!;
+                        finishField(fields, field)!;
                     } else if byte == 10 {
-                        finishField(raw fields, raw field)!;
+                        finishField(fields, field)!;
                         break;
                     } else if byte == 13 {
                         var lookahead = nextByte()!;
@@ -187,7 +187,7 @@ pub class CsvReader {
                             },
                             null => {},
                         }
-                        finishField(raw fields, raw field)!;
+                        finishField(fields, field)!;
                         break;
                     } else {
                         field.push(byte)!;

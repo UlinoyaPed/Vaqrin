@@ -23,10 +23,25 @@ stdlib coverage.
 
 ## Benchmark
 
-Run `python3 compiler/tools/bench_io.py --compiler build/local/vaqc
---baseline /path/to/baseline-worktree` from the candidate checkout.
-Each variant compiles at `-O2` with the same compiler and its own
-runtime cache. Samples use a 16 MiB cached file with 64-byte lines.
+For a v0.1 baseline and a v0.2 candidate, use each compiler with the
+SDK source tree from the same revision:
+
+```sh
+python3 compiler/tools/bench_io.py \
+  --baseline-compiler /path/to/v0.1/vaqc --baseline-sdk /path/to/v0.1/source \
+  --candidate-compiler /path/to/v0.2/vaqc --candidate-sdk /path/to/v0.2/source
+```
+
+Both variants compile at `-O2` with independent source files, runtime/AST
+caches, and output directories. The only workload source difference is the
+raw-address spelling (`&input` in v0.1, `raw input` in v0.2). Each reads an
+identical 16 MiB file with 64-byte lines and checks both the printed byte
+count and the resulting copy's contents. The destination is reset before
+each timed copy. The first run of each workload is a warm-up.
+
+The historical table below used one compiler with two I/O SDK revisions
+from the same grammar. It is not a result of the paired v0.1/v0.2 run and
+is not directly comparable to it.
 The table reports seven-run medians except for the first build of each
 variant. The host exposed nine logical CPU slots and ran Linux 6.18.57
 with glibc 2.41.

@@ -1,5 +1,5 @@
 package grpc
-import (binary, coll)
+import (core, binary, coll)
 
 pub func frame(message: []const u8, limit: usize) !coll.Vec<u8> {
     frameWire(message, limit, 0)
@@ -57,7 +57,7 @@ pub class MessageReader {
         }
         for byte in fragment { data.push(byte)!; }
     }
-    pub func next() !?coll.Vec<u8> {
+    pub func next() core.ResultOptional<coll.Vec<u8>> {
         var available = data.len() - offset;
         if available < 5 { return null; }
         var flag = data[offset];

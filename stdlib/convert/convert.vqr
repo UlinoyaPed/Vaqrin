@@ -1,4 +1,5 @@
 package convert
+import (core)
 
 pub enum Rounding { TowardZero, Floor, Ceil, NearestEven, AwayFromZero }
 pub enum OverflowMode { Checked, Wrap, Saturate }
@@ -16,7 +17,7 @@ pub func roundToInt<T, F>(value: F) !T { __vqr_convert_round<T>(value) }
 pub func toFloat<T, U>(value: U) T { __vqr_convert_float<T>(value) }
 pub func bitCast<T, U>(value: U) T { __vqr_convert_bit_cast<T>(value) }
 
-pub func checkedCast<T, U>(value: U) !?T {
+pub func checkedCast<T, U>(value: U) core.ResultOptional<T> {
     var converted: !T = T(value);
     var out = move(converted) catch (reason) {
         if reason == NumericError.OutOfRange { return null; }

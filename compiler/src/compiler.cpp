@@ -126,46 +126,102 @@ bool Program::hasReference(Type *t) {
   return std::ranges::any_of(t->parts, [&](auto *part) { return hasReference(part); });
 }
 
+static bool returnBorrowSource(Type *t) {
+  return t->kind == Kind::Reference &&
+         (t->parameterMode == ParameterMode::In || t->parameterMode == ParameterMode::Mut);
+}
+
+static bool mutableReferenceResult(Type *t) {
+  if (t->kind == Kind::Reference) return !t->readOnly;
+  if (t->kind != Kind::Optional && t->kind != Kind::Result && t->kind != Kind::Array &&
+      t->kind != Kind::Tuple)
+    return false;
+  return std::ranges::any_of(t->parts, mutableReferenceResult);
+}
+
+bool Program::readonlyView(Type *t) const {
+  if (!t) return false;
+  if (t == viewTy) return true;
+  if (t->kind != Kind::Slice || !t->readOnly) return false;
+  auto kind = t->parts[0]->kind;
+  return kind == Kind::Int || kind == Kind::Bool || kind == Kind::Char || kind == Kind::Float;
+}
+
+bool Program::scopedViewInput(Type *t) const {
+  return t->kind == Kind::Reference && t->parameterMode == ParameterMode::In && readonlyView(t->parts[0]);
+}
+
+bool Program::canAdaptViewInput(Type *from, Type *target) const {
+  if (!from) return false;
+  if (from->kind == Kind::Reference) from = from->parts[0];
+  return (target == viewTy && from == textTy) ||
+         (target->kind == Kind::Slice && target->readOnly && from->kind == Kind::Slice &&
+          !from->readOnly && from->parts == target->parts);
+}
+
+bool Program::viewContractSource(Type *parameter) const {
+  if (parameter->kind != Kind::Reference || parameter->parameterMode != ParameterMode::In) return false;
+  auto *source = parameter->parts[0];
+  return source == textTy || source->kind == Kind::Array || source->kind == Kind::Class;
+}
+
 int Program::borrowParameter(Definition def, const std::vector<Type *> &params, Type *result, bool receiver) {
   const auto &source = def.decl->borrowSource;
-  if (!hasReference(result)) {
-    if (!source.empty()) fail(def.decl->span, "borrow source requires a reference result", "E230");
+  const bool view = !source.empty() && readonlyView(result);
+  if (view && (def.decl->external || def.decl->comptime))
+    fail(def.decl->span, "checked view source requires a runtime Vaqrin function", "E230");
+  if (!hasReference(result) && !view) {
+    if (!source.empty()) fail(def.decl->span, "borrow source requires a reference or checked readonly view result", "E230");
     return -1;
   }
-  if (receiver && source == "self") return 0;
+  if (receiver && source == "self") {
+    if (view && !def.decl->readOnly)
+      fail(def.decl->span, "a checked view from self requires a const method", "E230");
+    if (def.decl->readOnly && mutableReferenceResult(result))
+      fail(def.decl->span, "mutable reference result requires a mutable source", "E230");
+    return 0;
+  }
   int found = -1;
   for (unsigned i = 0; i < def.decl->params.size(); ++i) {
     auto *param = params[i + receiver];
-    if (!hasReference(param) || (!def.decl->borrowSource.empty() && param->parameterMode == ParameterMode::Value))
-      continue;
+    if (view ? !viewContractSource(param) : !returnBorrowSource(param)) continue;
     if (!source.empty() && def.decl->params[i].name != source) continue;
     if (found >= 0)
       fail(def.decl->span, "reference result requires an explicit borrow source", "E230");
     found = i + receiver;
   }
   if (found < 0)
-    fail(def.decl->span, "reference result requires a valid borrow source", "E230");
+    fail(def.decl->span, "reference result requires a valid borrow source ('in', 'mut', or 'from self')", "E230");
+  if (params[found]->readOnly && mutableReferenceResult(result))
+    fail(def.decl->span, "mutable reference result requires a mutable source", "E230");
   return found;
 }
 
 std::size_t Program::functionBorrow(ArrayRef<Type *> parameters, Type *result, std::size_t explicitSource,
                                     Span span) {
   if (!hasReference(result)) {
-    if (explicitSource) fail(span, "borrow source requires a reference result", "E230");
-    return 0;
+    if (!explicitSource) return 0;
+    if (!readonlyView(result) || explicitSource > parameters.size() ||
+        !viewContractSource(parameters[explicitSource - 1]))
+      fail(span, "checked readonly view requires a named 'in' source with owning storage", "E230");
+    return explicitSource;
   }
   if (explicitSource != 0) {
-    if (explicitSource > parameters.size() || !hasReference(parameters[explicitSource - 1]))
-      fail(span, "borrow source must identify a reference parameter", "E230");
+    if (explicitSource > parameters.size() || !returnBorrowSource(parameters[explicitSource - 1]))
+      fail(span, "borrow source must identify an 'in' or 'mut' parameter", "E230");
+    if (parameters[explicitSource - 1]->readOnly && mutableReferenceResult(result))
+      fail(span, "mutable reference result requires a mutable source", "E230");
     return explicitSource;
   }
   std::size_t source = 0;
   for (std::size_t i = 0; i < parameters.size(); ++i) {
-    if (!hasReference(parameters[i])) continue;
+    if (!returnBorrowSource(parameters[i])) continue;
     if (source) fail(span, "reference result requires 'from name' to identify its source", "E230");
     source = i + 1;
   }
-  if (!source) fail(span, "reference result requires a reference parameter", "E230");
+  if (!source) fail(span, "reference result requires an 'in' or 'mut' parameter", "E230");
+  if (parameters[source - 1]->readOnly && mutableReferenceResult(result))
+    fail(span, "mutable reference result requires a mutable source", "E230");
   return source;
 }
 
@@ -446,7 +502,10 @@ Type *Program::type(const Ast &n, const File &file, const Types &generics, const
         fail(n->span, "move parameter requires an owning, movable, non-Copyable type", "E230");
       return inner;
     }
-    if (n->text != "?" && n->text != "!" && hasReference(inner))
+    // A call-scoped read-only borrow of a copyable reference aggregate
+    // preserves its existing provenance; pointers and exclusive borrows do not.
+    if (n->text != "?" && n->text != "!" && hasReference(inner) &&
+        !(mode == ParameterMode::In && inner->kind != Kind::Reference && copyable(inner) && !drops(inner)))
       fail(n->span, "indirect storage of a reference-bearing type is not supported", "E230");
     if (n->text == "*" || n->text == "*const") return pointer(inner, n->text == "*const");
     if (n->text == "ref" || n->text == "ref mut" ||
@@ -783,7 +842,7 @@ void Program::validateInterfaces(Type *type) {
           auto actual = parameters(found, methodTypes, nullptr, owner->comptimeArguments);
           if (actual != expected) continue;
           if (this->type(method.type, *found.file, methodTypes, owner->comptimeArguments) != result) continue;
-          if (hasReference(result)) {
+          if (hasReference(result) || readonlyView(result)) {
             actual.insert(actual.begin(), pointer(owner, method.readOnly));
             auto expectedReceiver = expected;
             expectedReceiver.insert(expectedReceiver.begin(), pointer(interface, requirement.readOnly));
@@ -877,7 +936,9 @@ bool Program::copyable(Type *t) {
   if (t->kind == Kind::Interface) return false;
   if (t->kind == Kind::Box || t->kind == Kind::Allocation || t->kind == Kind::RawStorage) return false;
   if (t->kind == Kind::Closure)
-    return std::ranges::all_of(t->captures, [&](const auto &c) { return c.reference || copyable(c.type); });
+    return std::ranges::all_of(t->captures, [&](const auto &c) {
+      return c.reference ? !c.writable : copyable(c.type);
+    });
   if (t->kind == Kind::Class) {
     auto mode = attribute(*t->def.decl, "copy");
     if (mode == "disabled") return false;

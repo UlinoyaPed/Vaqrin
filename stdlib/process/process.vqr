@@ -1,5 +1,5 @@
 package process
-import (coll, env, fs, io, path, reactor, task, text, time)
+import (core, coll, env, fs, io, path, reactor, task, text, time)
 
 pub error ProcessError { InvalidProgram, InvalidArgument, InvalidDirectory, OutputLimit }
 
@@ -174,7 +174,7 @@ pub class ChildOutput {
     pub func close() !void { unsafe { __vqr_process_child_close(handle, stream); } }
 }
 
-func waitState(handle: usize, mode: i32) !?ExitStatus {
+func waitState(handle: usize, mode: i32) core.ResultOptional<ExitStatus> {
     var ready: i32 = 0;
     var code: i32 = 0;
     var signal: i32 = 0;
@@ -209,7 +209,7 @@ pub class Child {
         var pipe: ref mut ChildOutput = raw errorPipe;
         some(pipe)
     }
-    pub func tryWait() !?ExitStatus { waitState(handle, 1) }
+    pub func tryWait() core.ResultOptional<ExitStatus> { waitState(handle, 1) }
     pub func wait() !ExitStatus { waitState(handle, 0)!.unwrap() }
     pub func waitWithOutput(limit: usize) !Output {
         var reason: i32 = 0;
@@ -370,7 +370,7 @@ pub func output(program: path.Path, args: []const str, limit: usize) !Output {
 
 pub func pid() u64 { unsafe { __vqr_process_pid() } }
 
-pub func parentPid() !?u64 {
+pub func parentPid() core.ResultOptional<u64> {
     var id = unsafe { __vqr_process_parent_pid() };
     if id == 0 { null } else { some(id) }
 }

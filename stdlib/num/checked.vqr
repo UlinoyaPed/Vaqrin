@@ -1,5 +1,5 @@
 package num
-import (convert, meta)
+import (core, convert, meta)
 
 pub func checkedAdd<T>(a: T, b: T) !T {
     var minimum = minValue<T>();
@@ -237,7 +237,7 @@ pub func product<T: Copyable + Movable>(values: []const T) !T {
     result
 }
 
-pub func average<T: Copyable + Movable>(values: []const T) !?T {
+pub func average<T: Copyable + Movable>(values: []const T) core.ResultOptional<T> {
     if values.len() == 0 { return null; }
     var total = BigInt.zero();
     for value in values {

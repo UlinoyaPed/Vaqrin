@@ -1,5 +1,5 @@
 package reactor
-import (coll, io, time)
+import (core, coll, io, time)
 
 pub error ReactorError { InvalidInterest, UnknownWatch, WatchLimit, InvalidTimeout }
 
@@ -98,7 +98,7 @@ pub class Reactor {
         watches.swapRemove(index);
         unsafe { __vqr_io_reactor_close(descriptor); }
     }
-    pub func wait(timeout: ?time.Duration) !?Event {
+    pub func wait(timeout: ?time.Duration) core.ResultOptional<Event> {
         if epoll < 0 { return io.IoError.Closed; }
         var deadline: ?time.Deadline = null;
         if timeout != null {

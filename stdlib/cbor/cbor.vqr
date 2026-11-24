@@ -227,8 +227,8 @@ pub class Decoder {
         require(serde.DataKind.String)!;
         readText()
     }
-    pub func beginSeq() !?usize { begin(4, serde.DataKind.Sequence) }
-    pub func beginMap() !?usize { begin(5, serde.DataKind.Map) }
+    pub func beginSeq() core.ResultOptional<usize> { begin(4, serde.DataKind.Sequence) }
+    pub func beginMap() core.ResultOptional<usize> { begin(5, serde.DataKind.Map) }
     pub func endSeq() !void { end(4) }
     pub func endMap() !void { end(5) }
     pub func nextElement() !bool {
@@ -236,7 +236,7 @@ pub class Decoder {
         ready = true;
         true
     }
-    pub func nextKey() !?string {
+    pub func nextKey() core.ResultOptional<string> {
         if !available(5)! { return null; }
         var key = readText()!;
         ready = true;
@@ -310,7 +310,7 @@ pub class Decoder {
         var length = convert.narrow<usize>(rawLength) catch { return serde.SerdeError.ByteLimit; };
         text.fromBytes(readBytes(length)!)
     }
-    func begin(major: u8, expected: serde.DataKind) !?usize {
+    func begin(major: u8, expected: serde.DataKind) core.ResultOptional<usize> {
         require(expected)!;
         budget.enter()!;
         var head = readByte()!;

@@ -166,7 +166,7 @@ pub class Reader {
         Reader(data, limits)
     }
     pub const func remaining() usize { cursor.remaining() }
-    pub func next() !?Field {
+    pub func next() core.ResultOptional<Field> {
         if remaining() == 0 { return null; }
         var start = cursor.position;
         var tag = cursor.varint()!;

@@ -1,4 +1,5 @@
 package iter
+import (core)
 
 pub class MapIter<I: Movable, T: Movable, U: Movable, F: Movable> {
     var source: I;
@@ -54,7 +55,7 @@ pub class TryMapIter<I: Movable, T: Movable, U: Movable, F: Movable> {
     var source: I;
     var transform: F;
     pub func init(source: I, transform: F) : source(move(source)), transform(move(transform)) {}
-    pub func next() !?U {
+    pub func next() core.ResultOptional<U> {
         switch source.next() {
             null => null,
             some(item) => some(transform(move(item))!),
@@ -66,7 +67,7 @@ pub class TryFilterIter<I: Movable, T: Movable, F: Movable> {
     var source: I;
     var predicate: F;
     pub func init(source: I, predicate: F) : source(move(source)), predicate(move(predicate)) {}
-    pub func next() !?T {
+    pub func next() core.ResultOptional<T> {
         for {
             switch source.next() {
                 null => return null,

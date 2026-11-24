@@ -1,4 +1,5 @@
 package mem
+import (core)
 
 class ArenaBlock {
     pub var next: ?*ArenaBlock;
@@ -26,7 +27,7 @@ pub class Arena {
     pub const func used() usize { occupied }
     pub const func capacity() usize { reserved }
 
-    pub func alloc(request: Layout) !?*u8 {
+    pub func alloc(request: Layout) core.ResultOptional<*u8> {
         if request.size() == 0 { return null; }
         switch first {
             some(block) => {
@@ -78,7 +79,7 @@ pub class Arena {
     pub unsafe func reset() void { clearBlocks(); }
     pub func deinit() void { clearBlocks(); }
 
-    func carve(block: *ArenaBlock, request: Layout) !?*u8 {
+    func carve(block: *ArenaBlock, request: Layout) core.ResultOptional<*u8> {
         var address = __vqr_pointer_address(block);
         if block.cursor > ~usize(0) - address { return LayoutError.Overflow; }
         var aligned = alignUp(address + block.cursor, request.align())! - address;

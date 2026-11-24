@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <initializer_list>
 #include <iostream>
+#include <optional>
 #include <utility>
 
 namespace vqr {
@@ -15,6 +16,61 @@ Ast make(NodeKind kind, Span span, std::string text = {}, std::vector<Ast> child
   node->text = std::move(text);
   node->children = std::move(children);
   return node;
+}
+
+bool isWrapper(const Ast &node) {
+  return node->kind == NodeKind::TypePrefix && (node->text == "?" || node->text == "!");
+}
+
+void checkWrapperSyntax(const File &file) {
+  // Validate the committed syntax tree, not speculative parses of lambdas or
+  // parenthesized generic arguments. Grouping parentheses are already gone.
+  std::vector<const Decl *> declarations;
+  std::vector<std::pair<const Node *, bool>> nodes;
+  auto push = [&](const Ast &node, bool signature = false) {
+    if (node) nodes.emplace_back(node.get(), signature);
+  };
+  auto addDecls = [&](const std::vector<Decl> &items) {
+    for (auto it = items.rbegin(); it != items.rend(); ++it) declarations.push_back(&*it);
+  };
+  addDecls(file.declarations);
+  while (!declarations.empty()) {
+    const auto &decl = *declarations.back();
+    declarations.pop_back();
+    addDecls(decl.otherwise);
+    addDecls(decl.members);
+    push(decl.body);
+    for (const auto &[name, value] : decl.initializers) push(value);
+    for (const auto &attribute : decl.attributes)
+      for (const auto &type : attribute.types) push(type);
+    for (const auto &generic : decl.generics) push(generic.type);
+    for (const auto &param : decl.params) push(param.type, true);
+    push(decl.type, decl.kind == DeclKind::Function || decl.kind == DeclKind::Field);
+
+    while (!nodes.empty()) {
+      auto [node, signature] = nodes.back();
+      nodes.pop_back();
+      if (node->kind == NodeKind::TypePrefix && (node->text == "?" || node->text == "!") &&
+          isWrapper(node->children.front())) {
+        const auto &inner = node->children.front();
+        if (isWrapper(inner->children.front()))
+          fail(inner->children.front()->span,
+               "at most two consecutive type wrappers; use a type alias for deeper nesting", "E110");
+        if (signature)
+          fail(inner->span, "use a named type alias for consecutive wrappers in a signature or field", "E110");
+      }
+      const bool function = node->kind == NodeKind::TypeFunction;
+      const bool lambda = node->kind == NodeKind::Lambda;
+      push(node->tail);
+      push(node->type, function || lambda);
+      for (const auto &param : node->parameters) push(param.type, lambda);
+      for (std::size_t i = node->children.size(); i-- > 0;) {
+        const bool typeChild = node->kind == NodeKind::TypeName || node->kind == NodeKind::TypeTuple ||
+                               node->kind == NodeKind::TypePrefix || (node->kind == NodeKind::TypeArray && i == 1);
+        push(node->children[i], function || (signature && typeChild));
+      }
+    }
+  }
 }
 
 struct Operator {
@@ -175,6 +231,7 @@ File Parser::file() {
   }
   while (current().kind != TokenKind::End)
     f.declarations.push_back(declaration());
+  checkWrapperSyntax(f);
   return f;
 }
 
@@ -442,14 +499,6 @@ Ast Parser::type(bool inferArray) {
     auto key = start.text == "??" ? "?" : start.text;
     if (key == "*" && eat("const")) key = "*const";
     auto inner = type();
-    const auto isWrapper = [](const Ast &node) {
-      return node->kind == NodeKind::TypePrefix && (node->text == "?" || node->text == "!");
-    };
-    // Grouping parentheses have already been removed by type(). A named
-    // alias, unlike parentheses, stops the directly written wrapper chain.
-    if ((key == "?" || key == "!") && isWrapper(inner) && isWrapper(inner->children.front()))
-      fail(inner->children.front()->span, "at most two consecutive type wrappers; use a type alias for deeper nesting",
-           "E110");
     return make(NodeKind::TypePrefix, start.span, key, {inner});
   }
   if (eat("[")) {
@@ -658,13 +707,26 @@ Ast Parser::loop() {
   if (wrappedLoopHeader())
     fail(current().span, "omit parentheses around the for header; use while for a condition-only loop", "E110");
   if (at("{")) return make(NodeKind::For, t.span, "", {nullptr, nullptr, nullptr, block()});
-  if (bindingAhead(true)) {
+  const bool explicitRef = atWord("ref");
+  const bool shared = explicitRef && current(1).kind == TokenKind::Name && current(2).text == "in";
+  const bool exclusive = explicitRef && current(1).text == "mut" &&
+                         current(2).kind == TokenKind::Name && current(3).text == "in";
+  if (shared || exclusive || bindingAhead(true)) {
     auto n = make(NodeKind::ForIn, t.span);
-    do {
-      auto binding = iterationBindingName();
+    if (shared || exclusive) {
+      take(); // contextual ref
+      if (exclusive) take(); // contextual mut
+      auto binding = name();
       n->names.push_back(binding.text);
       n->bindingSpans.push_back(binding.span);
-    } while (eat(","));
+      n->iterationBinding = exclusive ? IterationBinding::Exclusive : IterationBinding::Shared;
+    } else {
+      do {
+        auto binding = iterationBindingName();
+        n->names.push_back(binding.text);
+        n->bindingSpans.push_back(binding.span);
+      } while (eat(","));
+    }
     require("in");
     n->children.push_back(expression(1, true));
     n->children.push_back(block());
@@ -796,6 +858,7 @@ Ast Parser::lambda(bool excludeFields) {
   auto oldPos = pos;
   auto oldSplit = split;
   auto node = make(NodeKind::Lambda, start.span);
+  std::optional<Span> legacyCapture;
   try {
     if (eat("[")) {
       list("]", [&] {
@@ -806,10 +869,17 @@ Ast Parser::lambda(bool excludeFields) {
           node->children.push_back(
               make(NodeKind::Move, t.span, "", {make(NodeKind::Name, id.span, id.text)}));
           require(")");
-        } else if (eat("&")) {
+        } else if (atWord("ref") && current(1).kind == TokenKind::Name) {
+          take();
+          const bool writable = atWord("mut") && current(1).kind == TokenKind::Name;
+          if (writable) take();
+          const auto mode = writable ? "ref mut" : "ref";
           auto id = name();
           node->children.push_back(
-              make(NodeKind::Unary, t.span, "&", {make(NodeKind::Name, id.span, id.text)}));
+              make(NodeKind::Unary, t.span, mode, {make(NodeKind::Name, id.span, id.text)}));
+        } else if (eat("&")) {
+          name();
+          legacyCapture = t.span;
         } else {
           auto id = name();
           node->children.push_back(make(NodeKind::Name, id.span, id.text));
@@ -834,6 +904,8 @@ Ast Parser::lambda(bool excludeFields) {
     split = oldSplit;
     return nullptr;
   }
+  if (legacyCapture)
+    fail(*legacyCapture, "legacy closure capture; use 'ref name' or 'ref mut name'", "E110");
   node->tail = expression(1, excludeFields);
   return node;
 }

@@ -17,7 +17,7 @@ func digit(byte: u8) u32 {
     36
 }
 
-func scanInteger<T>(source: []const u8, radix: u8, allowNegative: bool, allowPrefix: bool) !Parsed<T> {
+func scanInteger<T>(source: in []const u8, radix: u8, allowNegative: bool, allowPrefix: bool) !Parsed<T> {
     if radix < 2 || radix > 36 { return ParseError.InvalidRadix; }
     if source.len() == 0 { return ParseError.InvalidSyntax; }
     var negative = source[0] == 45;
@@ -49,13 +49,13 @@ func scanInteger<T>(source: []const u8, radix: u8, allowNegative: bool, allowPre
     Parsed<T>(__vqr_parse_bits<T>(bits), position)
 }
 
-func wholeInteger<T>(value: str, radix: u8, allowNegative: bool, allowPrefix: bool) !T {
+func wholeInteger<T>(value: in str, radix: u8, allowNegative: bool, allowPrefix: bool) !T {
     var result = scanInteger<T>(value.asBytes(), radix, allowNegative, allowPrefix)!;
     if result.consumed != value.byteLen() { return ParseError.TrailingInput; }
     result.value
 }
 
-pub func parseInt<T>(value: str, radix: u8) !T { wholeInteger<T>(value, radix, true, false) }
+pub func parseInt<T>(value: in str, radix: u8) !T { wholeInteger<T>(value, radix, true, false) }
 pub func parseUint<T>(value: str, radix: u8) !T { wholeInteger<T>(value, radix, false, false) }
 pub func parseIntPrefix<T>(value: str, radix: u8) !Parsed<T> {
     scanInteger<T>(value.asBytes(), radix, true, false)
@@ -75,7 +75,7 @@ pub func isInt(value: str, radix: u8) bool {
     true
 }
 
-pub func parseBool(value: str) !bool {
+pub func parseBool(value: in str) !bool {
     if value == "true" { return true; }
     if value == "false" { return false; }
     ParseError.InvalidSyntax
@@ -91,5 +91,5 @@ pub func parseChar(value: str) !char {
 
 pub func parseWith<T, F>(value: str, parser: F) !T { parser(value) }
 
-pub func parseInt<T>(value: str) !T { parseInt<T>(value, 10) }
+pub func parseInt<T>(value: in str) !T { parseInt<T>(value, 10) }
 pub func parseUint<T>(value: str) !T { parseUint<T>(value, 10) }

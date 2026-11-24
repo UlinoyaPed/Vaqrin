@@ -46,6 +46,34 @@ class ContainerAcceptance(CompilerCase):
         diagnostic = self.process(VAQC, "check", implicit, good=False).stderr
         self.assertIn(b"move parameter requires move(object)", diagnostic)
 
+    def test_conditional_copy_and_deinit_are_resolved_when_requested(self):
+        self.assertEqual(self.run_container(r"""
+            import (meta)
+            class Marker { #copy: disabled; }
+            class Value<T> {
+                #copy: enable
+                pub var number: i32;
+                pub func init(n: i32) : number(n) {}
+                comptime if meta.isCopyable<T>() {
+                    pub const func copy() Self {
+                        io.println(100 + number) catch {};
+                        Value<T>(number)
+                    }
+                    func deinit() void { io.println(number) catch {}; }
+                } else {
+                    pub const func copy() Self { Value<T>(number) }
+                }
+            }
+            func main() void {
+                var first = Value<i32>(7);
+                var duplicate = first;
+                duplicate.number += 1;
+                if first.number != 7 { panic("copy aliased its source"); }
+                var silent = Value<Marker>(3);
+                var alsoSilent = silent;
+            }
+        """), ["107", "8", "7"])
+
     def test_map_entry_lazy_insert_and_remove(self):
         output = self.run_container(r"""
             func main() !void {
@@ -439,7 +467,7 @@ class ContainerAcceptance(CompilerCase):
                 pub var fail: bool;
                 pub var live: usize;
                 pub func init() : owner(mem.GlobalAllocator()), fail(false), live(0) {}
-                pub func alloc(layout: mem.Layout) !?*u8 {
+                pub func alloc(layout: mem.Layout) core.ResultOptional<*u8> {
                     if fail { return Injected.Exhausted; }
                     var allocation = owner.alloc(layout)!;
                     if allocation != null { live += layout.size(); }

@@ -1,5 +1,5 @@
 package channel
-import (atomic, mem, opt, sync, time)
+import (core, atomic, mem, opt, sync, time)
 
 pub error ChannelError { Closed, OutOfMemory, Cancelled, Timeout }
 pub enum SendResult<T> { Sent, Closed(T), Cancelled(T), OutOfMemory(T) }
@@ -304,10 +304,10 @@ pub class Receiver<T: Movable + Sendable> {
         Ticket<T>(shared.clone(), choice, index, null)
     }
 
-    pub func recv() !?T { recvBefore(null) }
-    pub func recvTimeout(timeout: time.Duration) !?T { recvBefore(some(time.Deadline.after(timeout)!)) }
+    pub func recv() core.ResultOptional<T> { recvBefore(null) }
+    pub func recvTimeout(timeout: time.Duration) core.ResultOptional<T> { recvBefore(some(time.Deadline.after(timeout)!)) }
 
-    func recvBefore(deadline: ?time.Deadline) !?T {
+    func recvBefore(deadline: ?time.Deadline) core.ResultOptional<T> {
         var state = shared.asPtr();
         var guard = state.lock();
         for {
@@ -382,6 +382,6 @@ pub class Drain<T: Movable + Sendable> {
 pub func bounded<T: Movable + Sendable>(capacity: usize) !(Sender<T>, Receiver<T>) { Channel<T>.bounded(capacity) }
 pub func unbounded<T: Movable + Sendable>() !(Sender<T>, Receiver<T>) { Channel<T>.unbounded() }
 pub func send<T: Movable + Sendable>(tx: *const Sender<T>, value: T) !void { tx.send(move(value)) }
-pub func recv<T: Movable + Sendable>(rx: *Receiver<T>) !?T { rx.recv() }
+pub func recv<T: Movable + Sendable>(rx: *Receiver<T>) core.ResultOptional<T> { rx.recv() }
 pub func trySend<T: Movable + Sendable>(tx: *const Sender<T>, value: T) TrySendResult<T> { tx.trySend(move(value)) }
 pub func tryRecv<T: Movable + Sendable>(rx: *Receiver<T>) TryRecv<T> { rx.tryRecv() }

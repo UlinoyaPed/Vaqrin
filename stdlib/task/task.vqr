@@ -1,5 +1,5 @@
 package task
-import (io, opt, result, time)
+import (core, io, opt, result, time)
 
 pub error TaskError { StartFailed, BadWorkerCount, AlreadyJoined, GroupClosed, JoinInterrupted, SelfJoin, Cancelled }
 
@@ -30,7 +30,7 @@ func joinError(status: c_int) ErrorId {
 }
 
 class Completion<T: Movable + Sendable> {
-    pub var value: ?!T;
+    pub var value: core.OptionalResult<T>;
     pub func init() : value(null) {}
 }
 
@@ -71,7 +71,7 @@ pub class Task<T: Movable + Sendable> {
         takeResult()
     }
 
-    pub func tryJoin() !?T {
+    pub func tryJoin() core.ResultOptional<T> {
         var status = unsafe { __vqr_rt_task_join(handle, 0) };
         if status == 1 { return null; }
         if status != 0 { return joinError(status); }

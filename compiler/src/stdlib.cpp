@@ -216,7 +216,8 @@ ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::v
     if (!live()) return neverValue();
     auto *slice = read(data, n->span);
     auto *view = ir.CreateInsertValue(UndefValue::get(p.viewTy->ir), ir.CreateExtractValue(slice, 0), 0);
-    return {p.viewTy, ir.CreateInsertValue(view, ir.CreateExtractValue(slice, 1), 1)};
+    return trackView({p.viewTy, ir.CreateInsertValue(view, ir.CreateExtractValue(slice, 1), 1),
+                      nullptr, false, -1, false, data.temporaryBorrow, data.origin}, n->span);
   }
   if (key == "__vqr_char_code") {
     arity(1);
@@ -521,6 +522,7 @@ ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::v
   } else {
     auto value = expression(n->children[2], element);
     if (!live()) return neverValue();
+    rejectViewEscape(value, n->span);
     ir.CreateStore(read(value, n->span), address);
   }
   return voidValue();

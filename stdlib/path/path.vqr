@@ -1,5 +1,5 @@
 package path
-import (coll, text)
+import (core, coll, text)
 
 pub error PathError { Empty, InvalidComponent, Capacity }
 
@@ -48,7 +48,7 @@ pub class Path {
         some(unsafe { __vqr_text_borrow_utf8(bytes[start..end]) })
     }
 
-    pub const func parent() !?Path {
+    pub const func parent() core.ResultOptional<Path> {
         var bytes = value.asBytes();
         var end = bytes.len();
         while end > 0 && bytes[end - 1] == 47u8 { end--; }
@@ -146,7 +146,7 @@ pub func join(base: Path, child: Path) !Path {
 }
 pub func normalize(value: Path) !Path { value.normalize() }
 pub func filename(value: *const Path) ?str { value.filename() }
-pub func parent(value: *const Path) !?Path { value.parent() }
+pub func parent(value: *const Path) core.ResultOptional<Path> { value.parent() }
 pub func extension(value: *const Path) ?str { value.extension() }
 pub func stem(value: *const Path) ?str { value.stem() }
 pub func isAbsolute(value: Path) bool { value.isAbsolute() }

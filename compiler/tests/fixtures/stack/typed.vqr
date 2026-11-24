@@ -15,18 +15,17 @@ func inputs() !void {
     var merge = input.f_scores.getPtr(0).unwrap();
     require(merge.f_key == "key")!;
     switch merge.f_value {
-        some(&part) => { require(part.f_left == 200)!; },
+        some(ref part) => { require((*part).f_left == 200)!; },
         null => { return TestError.Unexpected; },
     };
     switch input.choice_payload {
         types.Choice_Input_payload.F_nested(ref part) => {
-            var pointer = part.asPtr();
-            require(pointer.f_left == 3 && pointer.f_right == 4)!;
+            require((*part).f_left == 3 && (*part).f_right == 4)!;
         },
         _ => { return TestError.Unexpected; },
     };
     switch input.f_branch {
-        some(&branch) => { require(branch.f_count.unwrap() == 3)!; },
+        some(ref branch) => { require((*branch).f_count.unwrap() == 3)!; },
         null => { return TestError.Unexpected; },
     };
     require(input.f_mode == 99 && input.f_type == "keyword")!;

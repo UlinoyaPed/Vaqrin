@@ -42,7 +42,7 @@ pub func expect<T: Movable>(value: !T, message: str) T { move(value) catch panic
 pub func okValue<T>(value: *const !T) ?*const T { __vqr_result_pointer(value) }
 pub func errorOf<T>(value: *const !T) ?ErrorId { __vqr_result_error(value) }
 
-pub func transpose<T: Movable>(value: !?T) ?!T {
+pub func transpose<T: Movable>(value: core.ResultOptional<T>) core.OptionalResult<T> {
     var item = move(value) catch (errorId) {
         var failure: !T = errorId;
         return some(move(failure));

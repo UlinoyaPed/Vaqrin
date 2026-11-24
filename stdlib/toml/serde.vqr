@@ -157,7 +157,7 @@ pub class TomlDomDeserializer {
             _ => serde.SerdeError.TypeMismatch,
         }
     }
-    pub func beginSeq() !?usize {
+    pub func beginSeq() core.ResultOptional<usize> {
         var parent = current ?? { return serde.SerdeError.InvalidState; };
         switch *parent {
             Value.Array(ref array) => {
@@ -185,7 +185,7 @@ pub class TomlDomDeserializer {
         if frame.index != array.len() { return serde.SerdeError.InvalidLength; }
         current = some(frame.parent);
     }
-    pub func beginMap() !?usize {
+    pub func beginMap() core.ResultOptional<usize> {
         var parent = current ?? { return serde.SerdeError.InvalidState; };
         switch *parent {
             Value.Table(ref table) => {
@@ -195,7 +195,7 @@ pub class TomlDomDeserializer {
             _ => serde.SerdeError.TypeMismatch,
         }
     }
-    pub func nextKey() !?string {
+    pub func nextKey() core.ResultOptional<string> {
         if frames.isEmpty() { return TomlSerdeError.InvalidState; }
         var frame = frames.getMutPtr(frames.len() - 1).unwrap();
         if !frame.mapMode { return TomlSerdeError.InvalidState; }

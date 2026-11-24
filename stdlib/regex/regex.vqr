@@ -121,9 +121,9 @@ pub class Regex {
         found != null
     }
 
-    pub const func find(value: str) !?Match { findAt(value, 0) }
+    pub const func find(value: str) core.ResultOptional<Match> { findAt(value, 0) }
 
-    pub const func findAt(value: str, byteOffset: usize) !?Match {
+    pub const func findAt(value: str, byteOffset: usize) core.ResultOptional<Match> {
         if value.byteLen() > maxInputBytes { return RegexError.InputTooLarge; }
         if byteOffset > value.byteLen() { return RegexError.InvalidOffset; }
         if byteOffset < value.byteLen() && (value.asBytes()[byteOffset] & 0xc0) == 0x80 {
@@ -136,9 +136,9 @@ pub class Regex {
         }
     }
 
-    pub const func captures(value: str) !?Captures { capturesAt(value, 0) }
+    pub const func captures(value: str) core.ResultOptional<Captures> { capturesAt(value, 0) }
 
-    pub const func capturesAt(value: str, byteOffset: usize) !?Captures {
+    pub const func capturesAt(value: str, byteOffset: usize) core.ResultOptional<Captures> {
         if value.byteLen() > maxInputBytes { return RegexError.InputTooLarge; }
         if byteOffset > value.byteLen() { return RegexError.InvalidOffset; }
         if byteOffset < value.byteLen() && (value.asBytes()[byteOffset] & 0xc0) == 0x80 {
@@ -242,7 +242,7 @@ pub class FindIter {
     pub func init(regex: *const Regex, source: str)
         : regex(regex), source(source), offset(0), done(false) {}
 
-    pub func next() !?Match {
+    pub func next() core.ResultOptional<Match> {
         if done { return null; }
         var found = regex.findAt(source, offset)!;
         switch move(found) {
@@ -270,7 +270,7 @@ pub class CaptureIter {
     pub func init(regex: *const Regex, source: str)
         : regex(regex), source(source), offset(0), done(false) {}
 
-    pub func next() !?Captures {
+    pub func next() core.ResultOptional<Captures> {
         if done { return null; }
         var found = regex.capturesAt(source, offset)!;
         switch move(found) {
@@ -301,7 +301,7 @@ pub class SplitIter {
     pub func init(regex: *const Regex, source: str)
         : regex(regex), source(source), cursor(0), search(0), done(false), trailingEmpty(false) {}
 
-    pub func next() !?str {
+    pub func next() core.ResultOptional<str> {
         if done { return null; }
         if trailingEmpty {
             trailingEmpty = false;
@@ -372,13 +372,13 @@ func appendReplacement(replacement: str, captures: *const Captures, output: *col
 
 pub func compile(pattern: str) !Regex { Regex.compile(pattern) }
 pub func isMatch(pattern: str, value: str) !bool { Regex.compile(pattern)!.isMatch(value) }
-pub func find(pattern: str, value: str) !?Match {
+pub func find(pattern: str, value: str) core.ResultOptional<Match> {
     Regex.compile(pattern)!.find(value)
 }
-pub func findAt(pattern: str, value: str, byteOffset: usize) !?Match {
+pub func findAt(pattern: str, value: str, byteOffset: usize) core.ResultOptional<Match> {
     Regex.compile(pattern)!.findAt(value, byteOffset)
 }
-pub func captures(pattern: str, value: str) !?Captures {
+pub func captures(pattern: str, value: str) core.ResultOptional<Captures> {
     Regex.compile(pattern)!.captures(value)
 }
 pub func replaceAll(pattern: str, value: str, replacement: str) !string {

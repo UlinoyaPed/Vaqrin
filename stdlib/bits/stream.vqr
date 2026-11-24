@@ -1,4 +1,5 @@
 package bits
+import (core)
 
 pub enum BitOrder { LsbFirst, MsbFirst }
 
@@ -20,7 +21,7 @@ pub class BitReader {
     pub func init(source: []const u8, order: BitOrder)
         : source(source), order(order), cursor(0), end(bitLength(source.len())) {}
 
-    pub const func peekBits(count: usize) !?u64 {
+    pub const func peekBits(count: usize) core.ResultOptional<u64> {
         if count > 64 { return BitError.OutOfRange; }
         if count > remaining() { return null; }
         var value = 0u64;
@@ -34,7 +35,7 @@ pub class BitReader {
         some(value)
     }
 
-    pub func readBits(count: usize) !?u64 {
+    pub func readBits(count: usize) core.ResultOptional<u64> {
         switch peekBits(count)! {
             null => null,
             some(value) => { cursor += count; some(value) },

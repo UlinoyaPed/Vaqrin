@@ -7,18 +7,17 @@ func encodeAttributes(values: []const Attr, depth: usize) !json.JsonObject {
     if depth >= 128 { return json.JsonError.DepthLimit; }
     var attributes = json.JsonObject();
     for i in usize(0)..values.len() {
-        var attr = raw values[i];
-        var encoded = switch attr.kind() {
-            AttrKind.String => keyword(attr.asString().unwrap())!,
+        var encoded = switch values[i].kind() {
+            AttrKind.String => keyword(values[i].asString().unwrap())!,
             AttrKind.Int => {
-                var raw = formatInt(attr.asInt().unwrap())!;
+                var raw = formatInt(values[i].asInt().unwrap())!;
                 json.Value.Number(json.JsonNumber.parse(raw)!)
             },
-            AttrKind.Bool => json.Value.Bool(attr.asBool().unwrap()),
+            AttrKind.Bool => json.Value.Bool(values[i].asBool().unwrap()),
             AttrKind.Error => keyword("ErrorId")!,
-            AttrKind.Group => json.Value.Object(encodeAttributes(attr.asGroup(), depth + 1)!),
+            AttrKind.Group => json.Value.Object(encodeAttributes(values[i].asGroup(), depth + 1)!),
         };
-        var previous = attributes.insert(text.fromBytes(attr.key().asBytes())!, move(encoded))!;
+        var previous = attributes.insert(text.fromBytes(values[i].key().asBytes())!, move(encoded))!;
     }
     move(attributes)
 }

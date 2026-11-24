@@ -406,7 +406,7 @@ pub class HashMap<K: Movable, V: Movable> {
         }
     }
 
-    pub func insert(key: K, value: V) !?V {
+    pub func insert(key: K, value: V) core.ResultOptional<V> {
         switch insertPreserving(move(key), move(value)) {
             InsertResult.Inserted => null,
             InsertResult.Replaced(previous) => some(move(previous)),

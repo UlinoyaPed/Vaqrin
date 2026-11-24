@@ -1,5 +1,5 @@
 package io
-import (coll, text, mem)
+import (core, coll, text, mem)
 
 extern "C" func __vqr_io_open(path: *const u8, flags: u32, mode: u32, status: *i32) i32;
 extern "C" func __vqr_io_file_read(fd: i32, dst: *u8, length: usize, status: *i32) isize;
@@ -346,7 +346,7 @@ pub class HostDirectory {
         }
     }
 
-    pub func next() !?HostDirEntry {
+    pub func next() core.ResultOptional<HostDirEntry> {
         if handle == 0 { return IoError.Closed; }
         var directory = unsafe { ptrFromInt<*u8>(handle) };
         var storage = __vqr_uninitialized<[4096]u8>();

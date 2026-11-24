@@ -1,5 +1,5 @@
 package serde
-import (coll, convert, opt, parse, text)
+import (core, coll, convert, opt, parse, text)
 
 pub class BoolCodec {
     pub func encode(value: *const bool, serializer: *Serializer) !void { serializer.writeBool(*value) }
@@ -78,7 +78,7 @@ pub class OptionalCodec<T> {
             some(ref item) => element.encode(item.toRaw(), serializer),
         }
     }
-    pub func decode(deserializer: *Deserializer) !?T {
+    pub func decode(deserializer: *Deserializer) core.ResultOptional<T> {
         if deserializer.kind()! == DataKind.Null {
             deserializer.readNull()!;
             return null;

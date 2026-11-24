@@ -1,6 +1,9 @@
 package core
 
 pub type Box<T> = ^T;
+pub type ResultOptional<T> = !?T;
+pub type OptionalResult<T> = ?!T;
+pub type NestedOptional<T> = ??T;
 
 pub func isSome<T>(value: *const ?T) bool { __vqr_optional_present(value) }
 pub func isNone<T>(value: *const ?T) bool { !isSome(value) }

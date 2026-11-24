@@ -1,5 +1,5 @@
 package coll
-import (mem)
+import (core, mem)
 
 pub class Stack<T: Movable> {
     var values: Vec<T>;
@@ -174,7 +174,7 @@ pub class BinaryHeap<T: Movable> {
         some(move(result))
     }
 
-    pub func replaceTop(value: T) !?T {
+    pub func replaceTop(value: T) core.ResultOptional<T> {
         if values.isEmpty() {
             values.push(move(value))!;
             return null;

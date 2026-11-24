@@ -313,8 +313,8 @@ func sample(value: i32) !i32 {
             signatures = request("signatureHelp", position=position(12, '"7"'))
             self.assertEqual(signatures["activeParameter"], 0)
             active = signatures["signatures"][signatures["activeSignature"]]
-            self.assertEqual(parameter_labels(active), ["value: str"])
-            self.assertIn("parseInt<i32>(value: str) !i32", active["label"])
+            self.assertEqual(parameter_labels(active), ["value: in str"])
+            self.assertIn("parseInt<i32>(value: in str) !i32", active["label"])
             self.assertTrue(any("radix: u8" in parameter_labels(item) for item in signatures["signatures"]))
             existing_call = request("completion", position=position(12, "<i32>"))
             self.assertNotIn("insertText", next(item for item in existing_call if item["label"] == "parseInt"))
@@ -415,12 +415,14 @@ func query(scanner: *bufio.Scanner) !void {
                                                "end": {"line": 6, "character": 0}})
             self.assertIn((5, ":i32"), [(item["position"]["line"], item["label"]) for item in hints])
 
-            source = """func lookup(value: ?i32) !?i32 { value }
-func forward(value: ?i32) !?i32 {
+            source = """func lookup(value: ?i32) Maybe<i32> { value }
+func forward(value: ?i32) Maybe<i32> {
     var a = value?;
     var b = lookup(value)!?;
     a + b
 }
+type Maybe<T> = !(MaybeValue<T>);
+type MaybeValue<T> = ?T;
 """
             send("textDocument/didChange", {"textDocument": {"uri": uri, "version": 6},
                                            "contentChanges": [{"text": source}]})
@@ -519,7 +521,7 @@ func test() !i32 {
             self.assertEqual(parameter_labels(signature), ["call: func(i32, i32) i32", "pair: (i32, i32)", "fallback: i32"])
             self.assertEqual(signature_at(7, "8),")[0], 1)
             active, signature = signature_at(8, '"7"')
-            self.assertEqual((active, parameter_labels(signature)), (0, ["value: str", "radix: u8"]))
+            self.assertEqual((active, parameter_labels(signature)), (0, ["value: in str", "radix: u8"]))
             _, signature = signature_at(10, "0)!")
             self.assertIn("!coll.Vec<i32>", signature["label"])
             active, signature = signature_at(11, "11)")

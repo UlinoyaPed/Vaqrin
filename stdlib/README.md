@@ -128,6 +128,11 @@ LinkedList 使用双向节点和独立 Box 所有权表，节点地址在插入�
 和十进制指数，例如 `+12.5e-2` 和 `.5`。前缀输入 `1e+` 消费 `1`，整串解析
 返回 `TrailingInput`。空串和缺少数字的前缀返回 `InvalidSyntax`，溢出或非零值
 舍入为零返回 `OutOfRange`。识别范围限于有限十进制数，输入不跳过空白。
+
+`bufio.Token.text()` 返回来自其自有字符串的已检查视图（`str from self`）。可在完整表达式内读临时 Token 的文本，例如 `parse.parseInt<i32>(scanner.next()!.unwrap().text())!`；要保存视图，先绑定 Token。视图存活期间不能移动或覆盖 Token。`parseInt`、`parseFloat`、`parseFloatPrefix`、`parseBool` 与字节复制入口 `text.fromBytes` 接收非逃逸的只读视图。浮点解析只在同步调用中借用字节，原生实现只返回数字和字节计数。
+
+`ByteToken.bytes()` 仍通过 `Vec` 的旧式切片描述符；不能据此声称已完成该返回值的生命周期追踪。
+
 `bufio.Scanner.nextFloat<T>()` 在 EOF 时返回 `null`，`readFloat<T>()` 返回
 `IoError.UnexpectedEof`。十进制转换在原生链接时需要 hosted GNU/Linux x86-64
 或 AArch64，以及支持浮点 charconv 的 libstdc++。链接静态库的外部程序需要链接

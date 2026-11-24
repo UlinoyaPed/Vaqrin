@@ -69,7 +69,7 @@ pub class ConcurrentServerStream {
         sendHeaders()!;
         send(StreamOperation.Data(move(data)))
     }
-    pub func recvMessage() !?coll.Vec<u8> {
+    pub func recvMessage() core.ResultOptional<coll.Vec<u8>> {
         switch transact(StreamOperation.Receive)! {
             StreamResult.Message(bytes) => some(move(bytes)),
             StreamResult.End => null,

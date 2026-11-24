@@ -16,7 +16,7 @@ class DeferredEvents {
         events.push(move(event))!;
         buffered += size;
     }
-    pub func next(session: *http2.Connection) !?http2.Event {
+    pub func next(session: *http2.Connection) core.ResultOptional<http2.Event> {
         if events.len() != 0 { return take(0); }
         session.next()
     }
@@ -91,7 +91,7 @@ pub class ServerStream {
         session.sendData(id, data.asConstSlice(), false)!;
         flush()
     }
-    pub func recvMessage() !?coll.Vec<u8> {
+    pub func recvMessage() core.ResultOptional<coll.Vec<u8>> {
         for {
             checkDeadline()!;
             var payload = decoder.next()!;

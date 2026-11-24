@@ -1,14 +1,14 @@
-import (io, opt)
+import (core, io, opt)
 
 error LookupError { Unavailable, NotFound }
 
-func lookup(id: i32, available: bool) !?i32 {
+func lookup(id: i32, available: bool) core.ResultOptional<i32> {
     if !available { return LookupError.Unavailable; }
     if id < 0 { return null; }
     id
 }
 
-func nextId(id: i32, available: bool) !?i32 {
+func nextId(id: i32, available: bool) core.ResultOptional<i32> {
     var current = lookup(id, available)!?;
     current + 1
 }

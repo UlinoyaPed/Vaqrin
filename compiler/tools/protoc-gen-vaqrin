@@ -488,6 +488,7 @@ class Generator:
         p.line()
 
     def client_stream(self, suffix, input_type, output_type, encoder, decoder):
+        self.imports.add("core")
         p = self.out
         p.start(f"pub class Call_{suffix}")
         p.line("#copy: disabled")
@@ -499,7 +500,7 @@ class Generator:
         p.line(f"var message = protobuf.encode<{input_type}>(input, raw codec, connection.maxMessageBytes())!;")
         p.line("connection.sendMessage(raw call, message.asConstSlice())")
         p.end()
-        p.start(f"pub func recv() !?{output_type}")
+        p.start(f"pub func recv() core.ResultOptional<{output_type}>")
         p.line("var raw = connection.recvMessage(raw call)! ?? { return null; };")
         p.line(f"var codec = {decoder}{{}};")
         p.line(f"some(protobuf.decode<{output_type}>(raw.asConstSlice(), raw codec, protobuf.DecodeLimits())!)")
@@ -511,11 +512,12 @@ class Generator:
         p.line()
 
     def server_stream(self, wrapper, raw, input_type, output_type, encoder, decoder):
+        self.imports.add("core")
         p = self.out
         p.start(f"pub class {wrapper}")
         p.line(f"pub var raw: *{raw};")
         p.line(f"pub func init(raw: *{raw}) : raw(raw) {{}}")
-        p.start(f"pub func recv() !?{input_type}")
+        p.start(f"pub func recv() core.ResultOptional<{input_type}>")
         p.line("var bytes = raw.recvMessage()! ?? { return null; };")
         p.line(f"var codec = {encoder}{{}};")
         p.line(f"var value = protobuf.decode<{input_type}>(bytes.asConstSlice(), raw codec, protobuf.DecodeLimits()) catch {{")

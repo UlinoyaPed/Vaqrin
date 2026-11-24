@@ -21,7 +21,7 @@ pub class Pool<T> {
     pub const func live() usize { active }
 
     // The returned slot is raw storage. The caller manages the T stored there.
-    pub func acquire() !?*T {
+    pub func acquire() core.ResultOptional<*T> {
         var node: *PoolNode<T>;
         switch available {
             some(cached) => {

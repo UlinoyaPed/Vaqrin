@@ -1,5 +1,5 @@
 package fs
-import (io, path, text, coll)
+import (core, io, path, text, coll)
 
 pub error FsError { InvalidOptions, NotFound, NotDirectory, IsDirectory, SameFile, InvalidPath, WalkLimit }
 pub enum FileType { File, Directory, Symlink, Device, Socket, Other }
@@ -107,7 +107,7 @@ pub class Directory {
     var handle: io.HostDirectory;
     var base: path.Path;
     pub func init(handle: io.HostDirectory, base: path.Path) : handle(move(handle)), base(base) {}
-    pub func next() !?DirectoryEntry {
+    pub func next() core.ResultOptional<DirectoryEntry> {
         var item = handle.next()!;
         switch item {
             null => null,

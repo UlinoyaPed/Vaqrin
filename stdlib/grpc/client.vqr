@@ -130,7 +130,7 @@ pub class ClientConn {
         wire.setTimeout(timeout)!;
         connection.flush(raw wire)
     }
-    pub func recvMessage(call: *Call) !?coll.Vec<u8> {
+    pub func recvMessage(call: *Call) core.ResultOptional<coll.Vec<u8>> {
         if call.cancelled { return RpcError.Cancelled; }
         if call.remoteEnd { return null; }
         requireActive(call)!;
@@ -237,7 +237,7 @@ pub class ClientConn {
         removeCall(call.stream);
         drainCallEvents(call.stream);
     }
-    func readMessage(call: *Call) !?coll.Vec<u8> {
+    func readMessage(call: *Call) core.ResultOptional<coll.Vec<u8>> {
         for {
             var message = call.decoder.next()!;
             if message != null { return move(message); }

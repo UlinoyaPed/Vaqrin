@@ -1,5 +1,5 @@
 package http2
-import (binary, coll, text)
+import (core, binary, coll, text)
 
 pub error Http2Error { Protocol, ResourceLimit, InvalidArgument, StreamClosed, ConnectionClosed, WrongEvent }
 
@@ -25,7 +25,7 @@ pub class Header {
 pub class HeaderReader {
     var reader: binary.Reader;
     pub func init(value: []const u8) : reader(binary.Reader(value, binary.Endian.Big)) {}
-    pub func next() !?Header {
+    pub func next() core.ResultOptional<Header> {
         if reader.remaining() == 0 { return null; }
         var label = reader.readU32()!;
         var size = reader.readU32()!;

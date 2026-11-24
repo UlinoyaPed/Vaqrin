@@ -61,6 +61,7 @@ enum class NodeKind {
 struct Node;
 using Ast = std::shared_ptr<Node>;
 enum class ParameterMode { Value, In, Mut, Move };
+enum class IterationBinding { Value, Shared, Exclusive };
 inline ParameterMode parameterMode(const Ast &syntax);
 struct Parameter {
   std::string name;
@@ -78,6 +79,7 @@ struct Node {
   Ast type;
   Ast tail;
   std::vector<Span> bindingSpans;
+  IterationBinding iterationBinding = IterationBinding::Value;
 };
 
 inline ParameterMode parameterMode(const Ast &syntax) {

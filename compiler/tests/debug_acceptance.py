@@ -38,7 +38,7 @@ class Counter {
 }
 func main() !void {
     var owner = new Counter(35)!;
-    var total: i32 = owner.value + 7;
+    var total: i32 = (*owner).value + 7;
     io.println(total)!;
     io.println(total + 1)!;
     io.eprintln("enter a number")!;

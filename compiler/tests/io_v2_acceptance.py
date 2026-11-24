@@ -11,6 +11,34 @@ from acceptance import CompilerCase, VAQC
 
 
 class IoV2Acceptance(CompilerCase):
+    def test_token_text_borrows_its_actual_owning_storage(self):
+        self.hosted("""
+            import (bufio, parse);
+            func main() !void {
+                var source = io.MemoryReader("true 42 1.5 done".asBytes());
+                var scanner = bufio.newScanner(raw source)!;
+                io.println(parse.parseBool(scanner.next()!.unwrap().text())!)!;
+                io.println(scanner.readInt<i32>()!)!;
+                io.println(scanner.readFloat<f64>()! == 1.5)!;
+                io.println(scanner.nextString()!.unwrap())!;
+            }
+        """, "true\n42\ntrue\ndone\n")
+        prelude = "package main; import (bufio, io);"
+        cases = {
+            "temporary": ("func main() !void { var scanner = bufio.newScanner(io.stdin())!; "
+                          "var view = scanner.next()!.unwrap().text(); }", "borrow from a temporary"),
+            "moved": ('func main() void { var item = bufio.Token("word", 0, 4); '
+                      "var view = item.text(); var moved = move(item); }", "active borrow"),
+            "replaced": ('func main() void { var item = bufio.Token("word", 0, 4); '
+                         'var view = item.text(); item = bufio.Token("other", 0, 5); }' , "active borrow"),
+            "returned": ("func leak(item: in bufio.Token) str { item.text() } func main() void {}",
+                         "untracked storage or call"),
+        }
+        for name, (body, diagnostic) in cases.items():
+            with self.subTest(case=name):
+                source = self.source(name + "/main.vqr", prelude + body)
+                self.assertIn(diagnostic.encode(), self.process(VAQC, "check", source, good=False).stderr)
+
     def test_copy_uses_open_file_identity_and_reports_failures(self):
         original = self.root / "source"
         original.write_bytes(b"binary\x00payload")

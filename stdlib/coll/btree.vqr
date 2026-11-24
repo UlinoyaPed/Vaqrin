@@ -1,4 +1,5 @@
 package coll
+import (core)
 
 const btreeMinimumDegree: usize = 4;
 const btreeMaximumEntries: usize = 7;
@@ -289,7 +290,7 @@ pub class BTreeMap<K: Movable, V: Movable> {
 
     func insertNonFull(
         node: *BTreeNode<K, V>, key: K, value: V
-    ) !?V {
+    ) core.ResultOptional<V> {
         var index = btreeLowerIndex<K, V>(node, raw key, less);
         if index < node.entryCount() {
             var existing = raw node.entryAt(index).0;
@@ -453,7 +454,7 @@ pub class BTreeMap<K: Movable, V: Movable> {
         current.entryAt(current.entryCount() - 1)
     }
 
-    pub func insert(key: K, value: V) !?V {
+    pub func insert(key: K, value: V) core.ResultOptional<V> {
         switch root {
             null => {
                 var node = allocateBTreeNode<K, V>(true)!;

@@ -1,5 +1,5 @@
 package thread
-import (atomic, opt, time)
+import (core, atomic, opt, time)
 
 pub error ThreadError { StartFailed, Closed, JoinFailed, SelfJoin, MissingResult }
 
@@ -11,7 +11,7 @@ class State<T: Movable + Sendable> {
     pub var references: atomic.Atomic<u8>;
     pub var finished: atomic.Atomic<u8>;
     pub var stop: atomic.Atomic<u8>;
-    pub var result: ?!T;
+    pub var result: core.OptionalResult<T>;
     pub func init() : references(atomic.Atomic<u8>(2)), finished(atomic.Atomic<u8>(0)),
                   stop(atomic.Atomic<u8>(0)), result(null) {}
 }

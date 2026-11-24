@@ -224,7 +224,7 @@ func accepts(regex: *const Regex, state: State, cp: u32) bool {
 
 func buildSearchResult(candidate: ?Thread, endByte: usize, input: str,
                        history: *coll.Vec<CaptureHistory>, captureCount: usize,
-                       captureOutput: bool) !?SearchResult {
+                       captureOutput: bool) core.ResultOptional<SearchResult> {
     switch candidate {
         null => null,
         some(thread) => {
@@ -266,7 +266,7 @@ func buildSearchResult(candidate: ?Thread, endByte: usize, input: str,
     }
 }
 
-func runNfa(regex: *const Regex, input: str, start: usize, captureOutput: bool) !?SearchResult {
+func runNfa(regex: *const Regex, input: str, start: usize, captureOutput: bool) core.ResultOptional<SearchResult> {
     if input.byteLen() > regex.inputLimit() { return RegexError.InputTooLarge; }
     if start > input.byteLen() { return RegexError.InvalidOffset; }
     if start < input.byteLen() && (input.asBytes()[start] & 0xc0) == 0x80 {

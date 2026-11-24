@@ -307,7 +307,9 @@ ValueAt Body::member(const Ast &n) {
     ir.SetInsertPoint(some);
     enter();
     auto inner = payload(optional, 1, optional.type->parts[0]);
-    Type *obj = inner.type->kind == Kind::Pointer ? inner.type->parts[0] : inner.type;
+    if (inner.type->kind == Kind::Pointer || inner.type->kind == Kind::Box)
+      fail(n->span, "optional member access cannot implicitly dereference raw pointers or Box", "E230");
+    Type *obj = inner.type;
     p.ensureSized(obj, n->span);
     unsigned index;
     Type *fieldType;
@@ -322,8 +324,6 @@ ValueAt Body::member(const Ast &n) {
       index = f->index;
       fieldType = f->type;
     }
-    if (inner.type->kind == Kind::Pointer)
-      inner = {obj, nullptr, read(inner, n->span), !inner.type->readOnly, -1, true};
     auto field = payload(inner, index, fieldType);
     auto *type = p.aggregate(Kind::Optional, {fieldType});
     auto value = wrap(type, read(field, n->span), true);
@@ -386,9 +386,11 @@ ValueAt Body::member(const Ast &n) {
   else
     v = expression(base);
   if (v.type == p.neverTy) return v;
-  if (!v.borrowed && p.drops(v.type) && v.type->kind != Kind::Box)
+  if (v.type->kind == Kind::Box)
+    fail(n->span, "Box payload member access requires explicit dereference", "E230");
+  if (!v.borrowed && p.drops(v.type))
     fail(n->span, "bind a resource-owning temporary before projecting one of its fields", "E290");
-  if (v.type->kind == Kind::Pointer || v.type->kind == Kind::Box || v.type->kind == Kind::Reference)
+  if (v.type->kind == Kind::Pointer || v.type->kind == Kind::Reference)
     v = dereference(v, n->span);
   p.ensureSized(v.type, n->span);
   if (v.type->kind == Kind::Tuple) {
@@ -422,6 +424,8 @@ ValueAt Body::index(const Ast &n) {
   if (v.type == p.neverTy) return v;
   requireInit(v, n->span);
   auto *t = v.type;
+  if (t->kind == Kind::Box)
+    fail(n->span, "indexing a Box payload requires explicit dereference", "E230");
   if (!v.borrowed && p.drops(t))
     fail(n->span, "bind a resource-owning array before indexing or borrowing it", "E290");
   if (t->kind == Kind::Class && t->def.file->standard && t->def.file->package == "coll" &&
@@ -504,7 +508,9 @@ ValueAt Body::index(const Ast &n) {
   }
   auto *slice = p.slice(element, !writable);
   auto *out = ir.CreateInsertValue(Constant::getNullValue(slice->ir), offset(lo), 0);
-  return {slice, ir.CreateInsertValue(out, ir.CreateSub(hi, lo), 1), nullptr, false, -1, false, v.temporaryBorrow};
+  auto origin = p.readonlyView(slice) ? viewOrigin(v, t->kind == Kind::Array) : Borrow{};
+  return trackView({slice, ir.CreateInsertValue(out, ir.CreateSub(hi, lo), 1), nullptr, false, -1,
+                    false, v.temporaryBorrow, origin}, n->span);
 }
 
 ValueAt Body::unary(const Ast &n, Type *expected) {
@@ -894,6 +900,7 @@ ValueAt Body::builtin(std::string_view key, const Ast &n, const std::vector<Ast>
       target = target->parts[0];
     auto value = expression(n->children[1], target && target->kind == kind ? target->parts[0] : nullptr);
     if (!live()) return neverValue();
+    rejectViewEscape(value, n->span);
     auto wrapped = wrap(p.aggregate(kind, {value.type}), read(value, n->span), true);
     wrapped.temporaryBorrow = value.temporaryBorrow;
     wrapped.origin = value.origin;
@@ -1072,53 +1079,85 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
     }
     bool consistent = true;
     Constants inferredValues;
-    auto inferValue = [&](const Ast &pattern, std::pair<Type *, Constant *> value) -> void {
-      if (!pattern || (pattern->kind != NodeKind::TypeName && pattern->kind != NodeKind::Name) ||
+    struct AliasPattern {
+      const Definition &definition;
+      const std::vector<Ast> &arguments;
+      const AliasPattern *parent;
+    };
+    auto expandParameter = [](Ast &pattern, const AliasPattern *&alias) {
+      while (alias && pattern && pattern->children.empty() &&
+             (pattern->kind == NodeKind::TypeName || pattern->kind == NodeKind::Name)) {
+        const auto &parameters = alias->definition.decl->generics;
+        auto parameter = std::ranges::find(parameters, pattern->text, &Parameter::name);
+        if (parameter == parameters.end()) break;
+        pattern = alias->arguments[parameter - parameters.begin()];
+        alias = alias->parent;
+      }
+    };
+    auto inferValue = [&](Ast pattern, std::pair<Type *, Constant *> value, const AliasPattern *alias) {
+      expandParameter(pattern, alias);
+      if (alias || !pattern || (pattern->kind != NodeKind::TypeName && pattern->kind != NodeKind::Name) ||
           !pattern->children.empty() || !valueNames.contains(pattern->text))
         return;
       auto [it, inserted] = inferredValues.emplace(pattern->text, value);
       consistent &= inserted || it->second == value;
     };
-    auto infer = [&](auto &&recurse, const Ast &pattern, Type *actual) -> void {
+    auto infer = [&](auto &&recurse, Ast pattern, Type *actual, const AliasPattern *alias = nullptr) -> void {
       if (!actual) return;
-      if (pattern->kind == NodeKind::TypeName && typeNames.contains(pattern->text)) {
+      expandParameter(pattern, alias);
+      if (pattern->kind == NodeKind::TypeName && !alias && pattern->children.empty() &&
+          typeNames.contains(pattern->text)) {
         auto [it, inserted] = subst.emplace(pattern->text, actual);
         consistent &= inserted || it->second == actual;
-      } else if (pattern->kind == NodeKind::TypeName && !pattern->children.empty() &&
-                 (actual->kind == Kind::Class || actual->kind == Kind::Enum)) {
-        auto matches = p.resolve(*def.file, pattern->text, pattern->span);
-        if (matches.size() != 1 || matches.front().decl != actual->def.decl) return;
+      } else if (pattern->kind == NodeKind::TypeName && !pattern->children.empty()) {
+        const auto &patternFile = *(alias ? alias->definition.file : def.file);
+        auto matches = p.resolve(patternFile, pattern->text, pattern->span);
+        if (matches.size() != 1) return;
+        const auto &match = matches.front();
+        if (match.decl->kind == DeclKind::Alias) {
+          if (pattern->children.size() != match.decl->generics.size()) return;
+          for (auto *outer = alias; outer; outer = outer->parent)
+            if (outer->definition.decl == match.decl) return; // Instantiation diagnoses cyclic aliases.
+          AliasPattern expansion{match, pattern->children, alias};
+          recurse(recurse, match.decl->type, actual, &expansion);
+          return;
+        }
+        if ((actual->kind != Kind::Class && actual->kind != Kind::Enum) || match.decl != actual->def.decl)
+          return;
         const auto &parameters = actual->def.decl->generics;
         if (pattern->children.size() != parameters.size()) return;
         std::size_t typeIndex = 0;
         for (std::size_t i = 0; i < parameters.size(); ++i) {
           if (parameters[i].comptime)
-            inferValue(pattern->children[i], actual->comptimeArguments.at(parameters[i].name));
+            inferValue(pattern->children[i], actual->comptimeArguments.at(parameters[i].name), alias);
           else
-            recurse(recurse, pattern->children[i], actual->parts[typeIndex++]);
+            recurse(recurse, pattern->children[i], actual->parts[typeIndex++], alias);
         }
       } else if (pattern->kind == NodeKind::TypeArray && actual->kind == Kind::Array) {
-        inferValue(pattern->children[0], {p.sizeTy, ConstantInt::get(p.sizeTy->ir, actual->count)});
-        recurse(recurse, pattern->children[1], actual->parts[0]);
+        inferValue(pattern->children[0], {p.sizeTy, ConstantInt::get(p.sizeTy->ir, actual->count)}, alias);
+        recurse(recurse, pattern->children[1], actual->parts[0], alias);
+      } else if (pattern->kind == NodeKind::TypeTuple && actual->kind == Kind::Tuple &&
+                 pattern->children.size() == actual->parts.size()) {
+        for (std::size_t i = 0; i < pattern->children.size(); ++i)
+          recurse(recurse, pattern->children[i], actual->parts[i], alias);
       } else if (pattern->kind == NodeKind::TypeFunction && actual->kind == Kind::Function &&
                  pattern->children.size() + 1 == actual->parts.size()) {
         for (std::size_t i = 0; i < pattern->children.size(); ++i)
-          recurse(recurse, pattern->children[i], actual->parts[i]);
-        recurse(recurse, pattern->type, actual->parts.back());
+          recurse(recurse, pattern->children[i], actual->parts[i], alias);
+        recurse(recurse, pattern->type, actual->parts.back(), alias);
       } else if (pattern->kind == NodeKind::TypePrefix) {
         const auto &op = pattern->text;
         if (parameterMode(pattern) == ParameterMode::Move)
-          recurse(recurse, pattern->children[0], actual);
+          recurse(recurse, pattern->children[0], actual, alias);
         else if (parameterMode(pattern) == ParameterMode::In ||
                  parameterMode(pattern) == ParameterMode::Mut)
-          recurse(recurse, pattern->children[0], actual->kind == Kind::Reference ? actual->parts[0] : actual);
+          recurse(recurse, pattern->children[0], actual->kind == Kind::Reference ? actual->parts[0] : actual, alias);
         else if (!actual->parts.empty() && (((op == "*" || op == "*const") && actual->kind == Kind::Pointer) ||
-                 ((op == "ref" || op == "ref mut") &&
-                  actual->kind == Kind::Reference) ||
+                 ((op == "ref" || op == "ref mut") && actual->kind == Kind::Reference) ||
                  ((op == "[]" || op == "[]const") && actual->kind == Kind::Slice) ||
                  (op == "?" && actual->kind == Kind::Optional) ||
                  (op == "!" && actual->kind == Kind::Result) || (op == "^" && actual->kind == Kind::Box)))
-          recurse(recurse, pattern->children[0], actual->parts[0]);
+          recurse(recurse, pattern->children[0], actual->parts[0], alias);
       }
     };
     if (args.size() < d.generics.size()) {
@@ -1192,7 +1231,8 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
       auto *from = t->kind == Kind::Reference ? referenceHint(a) : hint(a);
       if (t->parameterMode != ParameterMode::Value) {
         if (!from || from == t->parts[0] ||
-            (from->kind == Kind::Reference && from->parts == t->parts && (t->readOnly || !from->readOnly))) {
+            (from->kind == Kind::Reference && from->parts == t->parts && (t->readOnly || !from->readOnly)) ||
+            (p.scopedViewInput(t) && p.canAdaptViewInput(from, t->parts[0]))) {
           c.ranks.push_back(from == t->parts[0] ? 1 : 2);
           continue;
         }
@@ -1313,6 +1353,7 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
   if (defer && (returnType != p.voidTy || d.comptime))
     fail(n->span, "defer requires a runtime void call; handle errors within the deferred function", "E231");
   int borrowFrom = p.borrowParameter(best->definition, best->parameters, returnType, receiver.has_value());
+  const bool viewResult = borrowFrom >= 0 && p.readonlyView(returnType);
   Borrow returnOrigin{};
   bool returnTemporary = false;
   if (dynamic) {
@@ -1335,9 +1376,11 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
     checkAccess(*receiver, !d.readOnly, n->span);
     if (borrowFrom == 0) {
       returnOrigin = receiver->origin;
+      if (viewResult && returnOrigin.raw)
+        fail(n->span, "checked readonly view requires a receiver with a proven owner", "E230");
       if (returnOrigin.root < 0) returnOrigin.root = receiver->local;
       if (returnOrigin.root >= 0 && locals[returnOrigin.root].refCapture &&
-          !locals[returnOrigin.root].reference)
+          !locals[returnOrigin.root].reference && !(viewResult && locals[returnOrigin.root].name == "self"))
         returnOrigin = {};
       returnOrigin.raw = false;
       returnTemporary = receiver->temporaryBorrow;
@@ -1398,6 +1441,9 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
       leave();
       return neverValue();
     }
+    if (defer && p.scopedViewInput(t))
+      fail(n->children[i]->span, "scoped view input cannot be saved for deferred calls", "E230");
+    if (!p.scopedViewInput(t)) rejectViewEscape(value, n->children[i]->span);
     if (defer) validateDeferredBorrow(value, n->children[i]->span, defer->scope);
     auto *raw = read(value, n->span);
     if (borrowFrom == static_cast<int>(i - 1 + offset)) {
@@ -1457,17 +1503,12 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
   }
   if (returnType == p.neverTy) ir.CreateUnreachable();
   leave();
-  return returnType == p.voidTy
-             ? voidValue()
-             : ValueAt{returnType,
-                       called,
-                       nullptr,
-                       false,
-                       -1,
-                       false,
-                       p.hasReference(returnType) ? returnTemporary || returnOrigin.root < 0
-                                                  : temporaryBorrow && carriesBorrow(returnType),
-                       returnOrigin};
+  if (returnType == p.voidTy) return voidValue();
+  returnOrigin.checkedView = viewResult;
+  return trackView({returnType, called, nullptr, false, -1, false,
+                    (p.hasReference(returnType) || viewResult) ? returnTemporary || returnOrigin.root < 0
+                                                              : temporaryBorrow && carriesBorrow(returnType),
+                    returnOrigin}, n->span);
 }
 
 ValueAt Body::construct(const Ast &n, Type *t, const std::vector<Definition> &defs) {
@@ -1526,6 +1567,7 @@ ValueAt Body::construct(const Ast &n, Type *t, const std::vector<Definition> &de
       leave();
       return neverValue();
     }
+    rejectViewEscape(v, initializer->span);
     auto *data = read(v, n->span);
     if (f.type->kind == Kind::Reference) {
       holdBorrow(origin, v, data, initializer->span);
@@ -1589,6 +1631,7 @@ ValueAt Body::lambda(const Ast &n, Type *expected) {
   std::vector<Capture> captures;
   std::vector<llvm::Type *> fields;
   std::set<std::string> names;
+  bool hasMutableCapture = false;
   if (hasCaptures) {
     for (const auto &item : n->children) {
       auto original = item->kind == NodeKind::Name ? item : item->children[0];
@@ -1598,16 +1641,28 @@ ValueAt Body::lambda(const Ast &n, Type *expected) {
       auto &local = locals[i];
       indexSymbol(original->span, local.declaration);
       const bool reference = item->kind == NodeKind::Unary;
-      auto *safeAlias = reference ? local.reference : nullptr;
+      if (reference && item->text != "ref" && item->text != "ref mut")
+        fail(item->span, "legacy closure capture; use 'ref name' or 'ref mut name'", "E110");
+      const bool mutableCapture = reference && item->text == "ref mut";
       const bool referenceValue = p.hasReference(local.type);
-      const bool scoped = safeAlias || (referenceValue && item->kind == NodeKind::Name);
-      if ((local.reference && item->kind != NodeKind::Name && !safeAlias) ||
-          (safeAlias && !safeAlias->readOnly) ||
+      Type *safeAlias = nullptr;
+      if (reference) {
+        if (local.type->kind == Kind::Interface || referenceValue || carriesBorrow(local.type))
+          fail(item->span, "capture requires a place without untracked or nested borrows", "E230");
+        if (local.reference && !local.reference->readOnly)
+          fail(item->span, "capturing through an existing exclusive borrow is not supported", "E230");
+        safeAlias = p.reference(local.type, !mutableCapture);
+        hasMutableCapture |= mutableCapture;
+      }
+      const bool scoped = reference || (referenceValue && item->kind == NodeKind::Name);
+      if ((local.reference && item->kind == NodeKind::Move) ||
           (referenceValue && (!scoped || !p.copyable(local.type) || p.drops(local.type))))
-        fail(item->span, "scoped closure captures require a read-only borrow", "E230");
+        fail(item->span, "scoped closure captures require a tracked borrow", "E230");
+      if (item->kind == NodeKind::Name && !p.copyable(local.type))
+        fail(item->span, "copy capture requires a Copyable value; use move(name) or ref name", "E230");
       if (!reference && !p.movable(local.type))
         fail(item->span, "immovable values require a reference capture", "E290");
-      const bool writable = local.writable && !scoped;
+      const bool writable = reference ? mutableCapture : local.writable && !scoped;
       captures.push_back({original->text, local.type, reference, writable,
                           static_cast<unsigned>(fields.size()), local.declaration, safeAlias, scoped});
       fields.push_back(p.storage(reference ? p.pointer(local.type, !writable) : local.type));
@@ -1617,6 +1672,10 @@ ValueAt Body::lambda(const Ast &n, Type *expected) {
     t->captures = captures;
     t->scopedBorrow = std::ranges::any_of(captures, &Capture::scoped);
     if (t->scopedBorrow) {
+      // The existing origin union only records independent read-only loans.
+      // Do not collapse distinct exclusive origins into an untracked capture.
+      if (hasMutableCapture && std::ranges::count_if(captures, &Capture::scoped) > 1)
+        fail(n->span, "a closure with an exclusive capture cannot yet capture additional borrows", "E230");
       for (const auto &capture : captures) {
         if (capture.scoped) continue;
         const auto kind = capture.type->kind;
@@ -1649,8 +1708,10 @@ ValueAt Body::lambda(const Ast &n, Type *expected) {
     body.indexLocal(id, param.span);
     parameterLocals.push_back(id);
     if (p.hasReference(signature[i])) body.locals[id].origin.root = id;
+    body.locals[id].origin.checkedView = p.scopedViewInput(signature[i]);
   }
   auto source = result ? p.functionBorrow(signature, result, expected ? expected->count : 0, n->span) : 0;
+  body.checkedViewReturn = source && p.readonlyView(result);
   if (source) body.returnRoot = parameterLocals[source - 1];
   auto returned = body.expression(n->tail, result);
   if (!result) {
@@ -1684,15 +1745,14 @@ ValueAt Body::lambda(const Ast &n, Type *expected) {
   for (unsigned i = 0; i < captures.size(); ++i) {
     const auto &capture = captures[i];
     const auto &item = n->children[i];
-    // Legacy capture syntax is not an address expression. Lower its selected
-    // location directly so removing unary '&' does not change capture semantics.
-    auto v = capture.safeAlias ? referenceName(findLocal(capture.name), item->span)
-             : capture.reference ? asPointer(this->name(item->children.front()), item->span)
-                                 : expression(item);
+    auto v = capture.reference
+                 ? borrow(this->name(item->children.front()), capture.safeAlias, item->span, false)
+                 : expression(item);
     if (!live()) {
       leave();
       return neverValue();
     }
+    rejectViewEscape(v, n->children[i]->span);
     auto *stored = read(v, n->span);
     if (capture.scoped) {
       holdBorrow(origin, v, stored, n->children[i]->span);
@@ -1723,6 +1783,8 @@ ValueAt Body::allocate(const Ast &n) {
   if (n->tail) {
     auto placed = expression(n->tail);
     if (!live()) return neverValue();
+    if (placed.type->kind == Kind::Box)
+      fail(n->tail->span, "using a boxed allocator requires explicit dereference", "E230");
     auto *owner = placed.type->kind == Kind::Pointer ? placed.type->parts[0] : placed.type;
     auto allocatorInterface = [](Type *candidate) {
       return candidate->kind == Kind::Interface && candidate->def.file->standard &&
@@ -1800,6 +1862,7 @@ ValueAt Body::allocate(const Ast &n) {
   } else {
     if (n->children.size() != 1) fail(n->span, "new with a non-class type takes one initializer");
     auto value = expression(n->children[0], t);
+    rejectViewEscape(value, n->span);
     if (live() && t != p.voidTy) ir.CreateStore(read(value, n->span), storage);
   }
   std::vector<std::pair<Value *, BasicBlock *>> edges{{failure.value, initialBlock}};
@@ -1992,6 +2055,7 @@ ValueAt Body::call(const Ast &n, Type *expected, DeferRegistration *defer) {
           leave();
           return neverValue();
         }
+        rejectViewEscape(v, syntax->span);
         auto *raw = read(v, n->span);
         if (field->kind == Kind::Reference) holdBorrow(origin, v, raw, syntax->span);
         if (p.drops(v.type))
@@ -2070,7 +2134,8 @@ ValueAt Body::call(const Ast &n, Type *expected, DeferRegistration *defer) {
         return {p.sizeTy, length};
       }
       if ((v.type == p.viewTy || v.type == p.textTy) && member == "asBytes" && n->children.size() == 1)
-        return {p.slice(p.integer(8, false), true), textView(v, n->span), nullptr, false, -1, false, v.temporaryBorrow};
+        return trackView({p.slice(p.integer(8, false), true), textView(v, n->span), nullptr, false, -1, false,
+                          v.temporaryBorrow, viewOrigin(v, v.type == p.textTy)}, n->span);
       if (v.type->kind == Kind::Pointer && member == "offset" && n->children.size() == 2) {
         if (!unsafeDepth) fail(n->span, "pointer offset requires an unsafe block", "E240");
         if (!v.type->ir->isPointerTy()) fail(n->span, "interface views do not support pointer arithmetic");
@@ -2084,7 +2149,11 @@ ValueAt Body::call(const Ast &n, Type *expected, DeferRegistration *defer) {
             ir.CreateIntCast(read(amount, n->span), p.integer(p.pointerBits(), true)->ir, amount.type->sign);
         return {v.type, ir.CreateGEP(p.storage(v.type->parts[0]), address, index)};
       }
-      if (v.type->kind == Kind::Pointer || v.type->kind == Kind::Reference || v.type->kind == Kind::Box)
+      if (guarded && (v.type->kind == Kind::Pointer || v.type->kind == Kind::Box))
+        fail(callee->span, "optional member access cannot implicitly dereference raw pointers or Box", "E230");
+      if (v.type->kind == Kind::Box)
+        fail(callee->span, "Box payload method calls require explicit dereference", "E230");
+      if (v.type->kind == Kind::Pointer || v.type->kind == Kind::Reference)
         v = dereference(v, n->span);
       if (v.type->kind != Kind::Class && v.type->kind != Kind::Interface)
         fail(n->span, "unknown method '" + member + "'");
@@ -2104,6 +2173,7 @@ ValueAt Body::call(const Ast &n, Type *expected, DeferRegistration *defer) {
     };
     auto result = invokeMember();
     if (!guarded) return result;
+    rejectViewEscape(result, n->span);
     if (!live()) fail(n->span, "optional method call needs a normally completing invocation", "E290");
     auto *optional = p.aggregate(Kind::Optional, {result.type});
     auto some = wrap(optional, read(result, n->span), true);
@@ -2120,6 +2190,8 @@ ValueAt Body::call(const Ast &n, Type *expected, DeferRegistration *defer) {
   }
   auto target = expression(callee);
   if (!live()) return neverValue();
+  if (target.type->kind == Kind::Box)
+    fail(callee->span, "calling a boxed function requires explicit dereference", "E230");
   bool closureCall = target.type->kind == Kind::Closure;
   if ((!closureCall && target.type->kind != Kind::Function) || !types.empty())
     fail(n->span, "expression is not callable");
@@ -2184,6 +2256,9 @@ ValueAt Body::call(const Ast &n, Type *expected, DeferRegistration *defer) {
       leave();
       return neverValue();
     }
+    if (defer && p.scopedViewInput(parts[i]))
+      fail(n->children[i + 1]->span, "scoped view input cannot be saved for deferred calls", "E230");
+    if (!p.scopedViewInput(parts[i])) rejectViewEscape(v, n->children[i + 1]->span);
     if (defer) validateDeferredBorrow(v, n->children[i + 1]->span, defer->scope);
     auto *value = read(v, n->span);
     temporaryBorrow |= v.temporaryBorrow;
@@ -2236,12 +2311,13 @@ ValueAt Body::call(const Ast &n, Type *expected, DeferRegistration *defer) {
     ir.CreateUnreachable();
     return neverValue();
   }
-  return ret == p.voidTy
-             ? voidValue()
-             : ValueAt{ret, f, nullptr, false, -1, false,
-                       p.hasReference(ret) ? returnTemporary || returnOrigin.root < 0
-                                           : temporaryBorrow && carriesBorrow(ret),
-                       returnOrigin};
+  if (ret == p.voidTy) return voidValue();
+  const bool viewResult = target.type->count && p.readonlyView(ret);
+  returnOrigin.checkedView = viewResult;
+  return trackView({ret, f, nullptr, false, -1, false,
+                    (p.hasReference(ret) || viewResult) ? returnTemporary || returnOrigin.root < 0
+                                                       : temporaryBorrow && carriesBorrow(ret),
+                    returnOrigin}, n->span);
 }
 
 } // namespace vqr::detail

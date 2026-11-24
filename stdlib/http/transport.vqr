@@ -73,7 +73,7 @@ pub class Client {
         var target = parseUrl(address)!;
         sendTo(raw target, request)
     }
-    pub const func request(address: str, method: Method, body: Body) !Response {
+    pub const func request(address: str, method: Method, body: move Body) !Response {
         var target = parseUrl(address)!;
         var path = pathTarget(raw target)!;
         var message = Request.new(method, path)!;
@@ -82,7 +82,7 @@ pub class Client {
     }
     pub const func get(address: str) !Response { request(address, Method.GET, Body()) }
     pub const func head(address: str) !Response { request(address, Method.HEAD, Body()) }
-    pub const func post(address: str, body: Body) !Response { request(address, Method.POST, move(body)) }
+    pub const func post(address: str, body: move Body) !Response { request(address, Method.POST, move(body)) }
     const func sendTo(target: *const Url, request: *Request) !Response {
         var secure = sameName(target.scheme(), "https");
         if !secure && !sameName(target.scheme(), "http") { return HttpError.UnsupportedScheme; }
@@ -108,14 +108,14 @@ pub class Client {
 }
 
 pub interface Handler {
-    func handle(request: Request) !Response;
+    func handle(request: move Request) !Response;
 }
 
 pub class Server {
     #copy: disabled
     var listener: net.TcpListener;
     pub var limits: HttpLimits;
-    func init(value: net.TcpListener) : listener(move(value)), limits(HttpLimits()) {}
+    func init(value: move net.TcpListener) : listener(move(value)), limits(HttpLimits()) {}
     pub static func bind(address: net.SocketAddr) !Self { Server(net.listenTcp(address)!) }
     pub const func localAddr() !net.SocketAddr { listener.localAddr() }
     pub func close() !void { listener.close() }
@@ -134,4 +134,4 @@ pub class Server {
 
 pub func get(address: str) !Response { Client().get(address) }
 pub func head(address: str) !Response { Client().head(address) }
-pub func post(address: str, body: Body) !Response { Client().post(address, move(body)) }
+pub func post(address: str, body: move Body) !Response { Client().post(address, move(body)) }

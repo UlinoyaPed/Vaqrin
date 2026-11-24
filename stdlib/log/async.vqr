@@ -54,7 +54,7 @@ pub class AsyncHandler {
             if failure != null { return failure.unwrap(); }
             final
         };
-        var worker = group.spawn<void>(move(run))!;
+        var worker = group.spawnOwned<void>(move(run))!;
         AsyncHandler(move(tx), move(worker), move(group))
     }
 

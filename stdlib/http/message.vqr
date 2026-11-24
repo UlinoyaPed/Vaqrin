@@ -165,7 +165,7 @@ pub class Body {
     var position: usize;
     pub func init() : data(coll.Vec<u8>()), position(0) {}
     pub static func fromBytes(value: []const u8) !Self { Body.fromOwned(coll.Vec<u8>.fromSlice(value)!) }
-    pub static func fromOwned(value: coll.Vec<u8>) Self {
+    pub static func fromOwned(value: move coll.Vec<u8>) Self {
         var body = Body();
         body.data = move(value);
         move(body)
@@ -229,7 +229,7 @@ pub class Request {
     pub const func header(name: str) ?str { fields.get(name) }
     pub const func bodyBytes() []const u8 { payload.bytes() }
     pub func body() *Body { raw payload }
-    pub func setBody(body: Body) void { payload = move(body); }
+    pub func setBody(body: move Body) void { payload = move(body); }
 }
 
 pub class Response {
@@ -244,7 +244,7 @@ pub class Response {
     pub const func header(name: str) ?str { fields.get(name) }
     pub const func bodyBytes() []const u8 { payload.bytes() }
     pub func body() *Body { raw payload }
-    pub func setBody(body: Body) void { payload = move(body); }
+    pub func setBody(body: move Body) void { payload = move(body); }
     pub func close() !void { payload.close() }
 }
 

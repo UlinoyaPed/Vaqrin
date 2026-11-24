@@ -68,7 +68,7 @@ pub class TomlDomSerializer {
         if !frames.isEmpty() { return TomlSerdeError.InvalidState; }
         core.Exchange<?Value>.replace(root, null) ?? { return TomlSerdeError.MissingRoot; }
     }
-    func appendValue(value: Value) !void {
+    func appendValue(value: move Value) !void {
         if frames.isEmpty() {
             if root != null { return TomlSerdeError.InvalidState; }
             root = some(move(value));
@@ -97,7 +97,7 @@ pub class TomlDomDeserializer {
     var root: Value;
     var current: ?*const Value;
     var frames: coll.Vec<TomlReadFrame>;
-    pub func init(value: Value)
+    pub func init(value: move Value)
         : root(move(value)), current(null), frames(coll.Vec<TomlReadFrame>()) {
         current = some(raw root);
     }

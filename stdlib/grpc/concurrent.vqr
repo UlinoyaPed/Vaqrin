@@ -120,7 +120,7 @@ class ConcurrentCalls {
             var owned = move(input);
             owned.run(limit)
         };
-        var job = group.spawn<ConcurrentOutput>(move(run))!;
+        var job = group.spawnOwned<ConcurrentOutput>(move(run))!;
         running.push(PendingCall(stream, deadline, move(job), compression))
     }
 
@@ -142,7 +142,7 @@ class ConcurrentCalls {
             var owned = move(input);
             owned.run()
         };
-        var job = group.spawn<void>(move(run))!;
+        var job = group.spawnOwned<void>(move(run))!;
         streaming.push(PendingStream(id, alarm, move(job), move(commands), move(reply), move(decoder)))
     }
 

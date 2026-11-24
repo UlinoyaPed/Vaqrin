@@ -4466,6 +4466,43 @@ class Acceptance(CompilerCase):
             }
         """, "2\ntrue\nfalse\ntrue\ntrue\n4\n9\n18\n1\n3\n4\n9\n13\n2\n11\n3\ntrue\n4\n2\n10\n2000\n")
 
+    def test_into_bytes_consumes_memory_writer_and_buffer(self):
+        self.hosted("""
+            import (bytes)
+            func main() !void {
+                var writer = io.MemoryWriter();
+                writer.write("owned".asBytes())!;
+                var data = io.MemoryWriter.intoBytes(move(writer));
+                writer = io.MemoryWriter();
+                io.println(bytes.equal(data.asConstSlice(), "owned".asBytes()) &&
+                    writer.asSlice().len() == 0)!;
+                var empty = io.MemoryWriter.intoBytes(io.MemoryWriter());
+                io.println(empty.isEmpty())!;
+
+                var buffer = bytes.Buffer();
+                buffer.write("prefix".asBytes())!;
+                buffer.advance(2)!;
+                var all = bytes.Buffer.intoVec(move(buffer));
+                io.println(bytes.equal(all.asConstSlice(), "prefix".asBytes()))!;
+            }
+        """, "true\n" * 3)
+
+        for case, statement, expected in (
+            ("writer", "var bytes = io.MemoryWriter.intoBytes(writer);", b"move parameter requires move(object)"),
+            ("buffer", "var data = bytes.Buffer.intoVec(buffer);", b"move parameter requires move(object)"),
+            ("reuse", "var data = io.MemoryWriter.intoBytes(move(writer)); writer.flush()!;", b"not initialized"),
+        ):
+            with self.subTest(case=case):
+                source = self.source(case + "/main.vqr", """
+                    package main
+                    import (bytes, io)
+                    func main() !void {
+                        var writer = io.MemoryWriter();
+                        var buffer = bytes.Buffer();
+                """ + statement + "}")
+                result = self.process(VAQC, "check", source, good=False)
+                self.assertIn(expected, result.stderr)
+
     def test_stream_protocols_and_partial_io(self):
         self.hosted("""
             import (core)
@@ -5559,7 +5596,7 @@ class Acceptance(CompilerCase):
                     (select { item := reader.recv() => item.unwrap() })!
                 };
                 var a = group.spawn<i32>(move(sending))!;
-                var b = group.spawn<i32>(move(listening))!;
+                var b = group.spawnOwned<i32>(move(listening))!;
                 io.println(a.join()! + b.join()!)!;
 
                 ordinaryTx, selectedRx := channel.bounded<i32>(0)!;
@@ -5567,7 +5604,7 @@ class Acceptance(CompilerCase):
                     var reader = move(selectedRx);
                     (select { item := reader.recv() => item.unwrap() })!
                 };
-                var observe = group.spawn<i32>(move(received))!;
+                var observe = group.spawnOwned<i32>(move(received))!;
                 ordinaryTx.send(52)!;
                 io.println(observe.join()!)!;
 
@@ -5588,7 +5625,7 @@ class Acceptance(CompilerCase):
                         got := reader.recv() => 3,
                     })!
                 };
-                var waiting = group.spawn<i32>(move(both))!;
+                var waiting = group.spawnOwned<i32>(move(both))!;
                 var checkpoint = () !void => {};
                 var fence = group.spawn<void>(move(checkpoint))!;
                 fence.join()!;
@@ -5617,13 +5654,13 @@ class Acceptance(CompilerCase):
                     first + next
                 };
                 if receiveFirst {
-                    var reader = group.spawn<i32>(move(get))!;
+                    var reader = group.spawnOwned<i32>(move(get))!;
                     var writer = group.spawn<void>(move(put))!;
                     io.println(reader.join()!)!;
                     writer.join()!;
                 } else {
                     var writer = group.spawn<void>(move(put))!;
-                    var reader = group.spawn<i32>(move(get))!;
+                    var reader = group.spawnOwned<i32>(move(get))!;
                     io.println(reader.join()!)!;
                     writer.join()!;
                 }
@@ -5641,7 +5678,7 @@ class Acceptance(CompilerCase):
                     reader.recv() catch (reason) { return reason == channel.ChannelError.Cancelled; };
                     false
                 };
-                var receiver = group.spawn<bool>(move(waitReceiver))!;
+                var receiver = group.spawnOwned<bool>(move(waitReceiver))!;
                 var marker = () bool => true;
                 var parked = group.spawn<bool>(marker)!;
                 if !parked.join()! { panic("worker did not make progress"); }
@@ -5673,7 +5710,7 @@ class Acceptance(CompilerCase):
                     };
                     false
                 };
-                var timer = group.spawn<bool>(move(timeout))!;
+                var timer = group.spawnOwned<bool>(move(timeout))!;
                 io.println(timer.join()!)!;
 
                 timedTx, timedRx := channel.bounded<i32>(1)!;
@@ -5718,6 +5755,95 @@ class Acceptance(CompilerCase):
         source = self.source("spec.vqr", example)
         self.process(VAQC, "build", source, "-o", "spec")
         self.assertEqual(self.process("./spec").stdout.decode(), "".join(f"{i*i}\n" for i in range(10)))
+
+    def test_task_submission_copies_only_copyable_and_reclaims_rejected_owners(self):
+        self.hosted("""
+            import (task, time)
+            class Counted {
+                #copy: enable
+                pub var id: i32;
+                pub const func copy() Self {
+                    io.println(100 + id) catch {};
+                    Counted{id: id}
+                }
+                func deinit() void { io.println(200 + id) catch {}; }
+            }
+            class Owned {
+                #copy: disabled
+                pub var id: i32;
+                func deinit() void { io.println(id) catch {}; }
+            }
+            func typed() i32 { 5 }
+            func main() !void {
+                var group = task.TaskGroup.withWorkers(1)!;
+                var ordinary = task.spawn<i32, func() i32>(group, typed)!;
+                io.println(ordinary.join()!)!;
+                {
+                    var seed = Counted{id: 3};
+                    var callback = [seed]() i32 => seed.id;
+                    io.println(8)!;
+                    var copied = group.spawn<i32>(callback)!;
+                    io.println(copied.join()!)!;
+                    var forwarded = task.spawn<i32>(group, callback)!;
+                    io.println(forwarded.join()!)!;
+                    io.println(callback())!;
+                }
+                {
+                    var owned = Owned{id: 31};
+                    var callback = [move(owned)]() i32 => owned.id;
+                    var submitted = group.spawnOwned<i32>(move(callback))!;
+                    io.println(submitted.join()!)!;
+                }
+                {
+                    var owned = Owned{id: 32};
+                    var callback = [move(owned)]() i32 => owned.id;
+                    var submitted = group.spawnOwned<i32>({ move(callback) })!;
+                    io.println(submitted.join()!)!;
+                }
+                {
+                    var owned = Owned{id: 33};
+                    var callback = [move(owned)]() !i32 => {
+                        task.sleep(time.Duration.fromSeconds(30))!;
+                        owned.id
+                    };
+                    var sleeper = group.spawnOwned<i32>(move(callback))!;
+                    sleeper.cancel();
+                    io.println(sleeper.join() catch (reason) {
+                        if reason != task.TaskError.Cancelled { return reason; }
+                        34
+                    })!;
+                }
+                group.close()!;
+                var owned = Owned{id: 41};
+                var callback = [move(owned)]() void => { io.println(999) catch {}; };
+                group.spawnOwned<void>(move(callback)) catch (reason) {
+                    if reason != task.TaskError.GroupClosed { return reason; }
+                    io.println(51)!;
+                    return;
+                };
+                panic("a closed group accepted work");
+            }
+        """, "5\n103\n8\n103\n203\n3\n103\n203\n3\n3\n203\n203\n31\n31\n32\n32\n33\n34\n41\n51\n", "-O2")
+        for name, body, expected in (
+            ("named_owner", "group.spawnOwned<i32>(callback);", b"move parameter requires move(object)"),
+            ("value_owner", "group.spawn<i32>(move(callback));", b"no accessible overload"),
+            ("value_as_move", "group.spawnOwned<i32>(plain);", b"requires an owning, movable, non-Copyable type"),
+        ):
+            with self.subTest(name=name):
+                source = self.source(name + "/main.vqr", """
+                    import (task)
+                    class Transfer {
+                        #copy: disabled
+                        pub var id: i32;
+                    }
+                    func plain() i32 { 5 }
+                    func f() !void {
+                        var group = task.TaskGroup();
+                        var owner = Transfer{id: 6};
+                        var callback = [move(owner)]() i32 => owner.id;
+                """ + body + "\n}")
+                diagnostic = self.process(VAQC, "check", source, good=False).stderr
+                self.assertIn(expected, diagnostic)
 
     def test_lightweight_tasks_yield_sleep_cancel_and_join(self):
         self.hosted('''
@@ -5764,7 +5890,7 @@ class Acceptance(CompilerCase):
                 io.println(tick.join()!)!;
                 var carried = Resource{code: 71};
                 var make = [move(carried)]() Resource => move(carried);
-                var unclaimed = group.spawn<Resource>(move(make))!;
+                var unclaimed = group.spawnOwned<Resource>(move(make))!;
                 group.joinAll()!;
                 io.println(group.activeCount())!;
                 group.close()!;

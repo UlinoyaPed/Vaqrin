@@ -52,7 +52,7 @@ pub class Match {
 pub class Captures {
     var groups: coll.Vec<?(usize, usize)>;
     var source: str;
-    pub func init(source: str, groups: coll.Vec<?(usize, usize)>)
+    pub func init(source: str, groups: move coll.Vec<?(usize, usize)>)
         : groups(move(groups)), source(source) {}
 
     pub const func len() usize { groups.len() }
@@ -78,8 +78,8 @@ pub class Regex {
     var captureNames: coll.Vec<CaptureName>;
     var startState: i32;
 
-    pub func init(states: coll.Vec<State>, classes: coll.Vec<CharacterClass>,
-              ranges: coll.Vec<CharRange>, pattern: string, flags: u8,
+    pub func init(states: move coll.Vec<State>, classes: move coll.Vec<CharacterClass>,
+              ranges: move coll.Vec<CharRange>, pattern: string, flags: u8,
               maxInputBytes: usize, maxSteps: usize, captureCount: usize, startState: i32)
         : states(move(states)), classes(move(classes)), ranges(move(ranges)),
           patternText(move(pattern)), flags(flags), maxInputBytes(maxInputBytes),
@@ -91,10 +91,10 @@ pub class Regex {
     }
 
     pub const func pattern() str { patternText }
-    pub func init(states: coll.Vec<State>, classes: coll.Vec<CharacterClass>,
-              ranges: coll.Vec<CharRange>, pattern: string, flags: u8,
+    pub func init(states: move coll.Vec<State>, classes: move coll.Vec<CharacterClass>,
+              ranges: move coll.Vec<CharRange>, pattern: string, flags: u8,
               maxInputBytes: usize, maxSteps: usize, captureCount: usize, startState: i32,
-              names: coll.Vec<CaptureName>)
+              names: move coll.Vec<CaptureName>)
         : self(move(states), move(classes), move(ranges), move(pattern), flags,
                maxInputBytes, maxSteps, captureCount, startState) {
         captureNames = move(names);

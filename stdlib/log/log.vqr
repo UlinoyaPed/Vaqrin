@@ -157,7 +157,7 @@ pub class Record {
     pub const func timestamp() ?time.Instant { timestampValue }
     pub const func message() str { messageValue }
     pub const func attrs() []const Attr { attrsValue.asConstSlice() }
-    pub static func fromOwned(level: Level, message: str, attrs: coll.Vec<Attr>) !Self {
+    pub static func fromOwned(level: Level, message: str, attrs: move coll.Vec<Attr>) !Self {
         var empty = [0]Attr{};
         var record = Record(level, message, empty[:])!;
         record.attrsValue = move(attrs);
@@ -178,7 +178,7 @@ pub interface Handler {
 }
 
 func emitRecord(handler: *Handler, level: Level, message: str,
-    attrs: coll.Vec<Attr>, clock: ?*time.Clock) !void {
+    attrs: move coll.Vec<Attr>, clock: ?*time.Clock) !void {
     var record = Record.fromOwned(level, message, move(attrs))!;
     switch clock {
         some(source) => {

@@ -1206,7 +1206,7 @@ class StandardLibraryAcceptance(CompilerCase):
 
             class Echo {
                 #implements: http.Handler
-                pub func handle(request: http.Request) !http.Response {
+                pub func handle(request: move http.Request) !http.Response {
                     var response = http.Response.new(201)!;
                     response.setBody(http.Body.fromBytes(request.bodyBytes())!);
                     move(response)
@@ -1500,12 +1500,67 @@ class StandardLibraryAcceptance(CompilerCase):
         row = 'alpha,"contains,comma","line one\nline two"\r\n'
         self.assertEqual(lines, ["2", "3", '"value,with,commas"', str(len(row))])
 
+    def test_csv_counts_crlf_and_escaped_quotes_at_record_limit(self):
+        self.hosted(r"""
+            import (csv, text)
+            func main() !void {
+                var options = csv.CsvOptions();
+                options.maxRecordBytes = 8;
+                var decoded = csv.parseRecord("\"a\"\"b\"\r\n", options)!;
+                io.println(decoded.len() == 1 && text.equal(decoded[0], "a\"b"))!;
+                options.maxRecordBytes = 7;
+                csv.parseRecord("\"a\"\"b\"\r\n", options) catch (reason) {
+                    io.println(reason == csv.CsvError.RecordLimit)!;
+                    return;
+                };
+                panic("expected the record limit");
+            }
+        """, "true\ntrue\n")
+
     def test_toml(self):
         lines = self.example("stdlib/toml/examples/toml_smoke.vqr").splitlines()
         self.assertEqual(lines[:2], ["7", "8080"])
         self.assertIn("ratio = 1.25", lines)
         self.assertIn("when = 1979-05-27T07:32:00Z", lines)
         self.assertEqual(lines[-2:], ["true", "true"])
+
+    def test_toml_dom_mutation_takes_value_ownership(self):
+        self.hosted("""
+            import (serde, toml)
+            func main() !void {
+                var table = toml.Document();
+                var initial = toml.Value.Integer(11);
+                table.set("number", move(initial))!;
+                table.set("number", toml.Value.Integer(27))!;
+                var inner = toml.Value.Bool(true);
+                table.setPath("nested.active", move(inner))!;
+                var root = toml.Value.Table(move(table));
+                var reader = toml.TomlDomDeserializer(move(root));
+                reader.beginMap()!;
+                io.println(reader.nextKey()!.unwrap())!;
+                io.println(reader.readI64()!)!;
+                io.println(reader.nextKey()!.unwrap())!;
+                reader.beginMap()!;
+                io.println(reader.nextKey()!.unwrap())!;
+                io.println(reader.readBool()!)!;
+                reader.endMap()!;
+                reader.endMap()!;
+            }
+        """, "number\n27\nnested\nactive\ntrue\n")
+
+        for operation in ('table.set("key", value)!;', 'table.insertUnique("key", value)!;',
+                          'table.setPath("outer.key", value)!;', 'toml.TomlDomDeserializer(value);'):
+            with self.subTest(operation=operation):
+                source = self.source("named_toml_value.vqr", """
+                    import (toml)
+                    func main() !void {
+                        var table = toml.Document();
+                        var value = toml.Value.Integer(7);
+                        """ + operation + """
+                    }
+                """)
+                error = self.process(VAQC, "check", source, good=False).stderr
+                self.assertIn(b"move parameter requires move(object) or an owning temporary", error)
 
     def test_codec_round_trip(self):
         lines = self.example("stdlib/serde/examples/manual_codec.vqr").splitlines()
@@ -1567,6 +1622,55 @@ class StandardLibraryAcceptance(CompilerCase):
             }
         ''')
         self.assertEqual(self.run_program(program), "e\u0301\nAfi\nAe\u0301\n3\ntrue\n")
+
+    def test_record_and_reports_transfer_owned_values(self):
+        self.hosted("""
+            import (coll, errors, log, text)
+
+            func main() !void {
+                var attrs = coll.Vec<log.Attr>();
+                var nested = [1]log.Attr{log.Attr.bool("ready", true)!};
+                attrs.push(log.Attr.group("stage", nested[:])!)!;
+                var record = log.Record.fromOwned(log.Level.Warn, "checkpoint", move(attrs))!;
+                var output = io.MemoryWriter();
+                var handler = log.JsonHandler.new(raw output);
+                handler.handle(raw record)!;
+                handler.flush()!;
+                var line = text.fromBytes(output.asSlice())!;
+                io.print(line)!;
+
+                const first = errors.Report.new("left")!;
+                var cause = errors.Report.new("right")!;
+                var combined = first.join(move(cause))!;
+                var sink = errors.ErrorSink();
+                sink.push(move(combined))!;
+                var backlog = sink.drain();
+                var report = backlog.next().unwrap();
+                var formatted = report.formatString()!;
+                io.print(formatted)!;
+                io.println(first.message())!;
+            }
+        """, '{"level":"WARN","message":"checkpoint","attrs":{"stage":{"ready":true}}}\n'
+             'multiple errors\n  left\n  right\nleft\n')
+
+        for case, call in (
+            ("record", 'var record = log.Record.fromOwned(log.Level.Info, "", attrs)!;'),
+            ("cause", "first.addCause(second)!;"),
+            ("sink", "sink.push(first)!;"),
+            ("join", "var combined = errors.join(first, move(second))!;"),
+        ):
+            with self.subTest(case=case):
+                source = self.source(case + "/main.vqr", """
+                    package main
+                    import (coll, errors, log)
+                    func main() !void {
+                        var attrs = coll.Vec<log.Attr>();
+                        var first = errors.Report.new("first")!;
+                        var second = errors.Report.new("second")!;
+                        var sink = errors.ErrorSink();
+                """ + call + "}")
+                result = self.process(VAQC, "check", source, good=False)
+                self.assertIn(b"move parameter requires move(object)", result.stderr)
 
     def test_log_and_error_nested_attributes_keep_order_and_ownership(self):
         self.hosted("""

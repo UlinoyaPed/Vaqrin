@@ -20,7 +20,7 @@ pub class Event {
     pub var stream: i32;
     pub var code: u32;
     var payloadBytes: coll.Vec<u8>;
-    pub func init(kind: EventKind, stream: i32, code: u32, payload: coll.Vec<u8>)
+    pub func init(kind: EventKind, stream: i32, code: u32, payload: move coll.Vec<u8>)
         : kind(kind), stream(stream), code(code), payloadBytes(move(payload)) {}
     pub const func payload() []const u8 { payloadBytes.asConstSlice() }
     pub const func headers() !HeaderReader {

@@ -88,8 +88,8 @@ pub class Report {
         result.addContext(message)!;
         move(result)
     }
-    pub func addCause(report: Report) !void { children.push(move(report))!; }
-    pub func join(other: Report) !Self {
+    pub func addCause(report: move Report) !void { children.push(move(report))!; }
+    pub const func join(other: move Report) !Self {
         var result = Report.new("multiple errors")!;
         result.reserveCauses(2)!;
         result.addCause(clone()!)!;
@@ -207,7 +207,7 @@ func formatU32(value: u32) !string {
 pub class ErrorSink {
     var reports: coll.Vec<Report>;
     pub func init() : reports(coll.Vec<Report>()) {}
-    pub func push(report: Report) !void { reports.push(move(report))!; }
+    pub func push(report: move Report) !void { reports.push(move(report))!; }
     pub const func len() usize { reports.len() }
     pub const func isEmpty() bool { reports.isEmpty() }
     pub func clear() void { reports.clear(); }
@@ -231,7 +231,7 @@ pub class ErrorSink {
 
 pub class ReportDrain {
     var items: coll.Vec<Report>;
-    pub func init(items: coll.Vec<Report>) : items(move(items)) {}
+    pub func init(items: move coll.Vec<Report>) : items(move(items)) {}
     pub func next() ?Report { items.pop() }
 }
 
@@ -242,8 +242,8 @@ pub func withContext(cause: ErrorId, message: str) !Report {
     report.addContext(message)!;
     move(report)
 }
-pub func addCause(report: *Report, cause: Report) !void { report.addCause(move(cause)) }
-pub func join(a: Report, b: Report) !Report { a.join(move(b)) }
+pub func addCause(report: *Report, cause: move Report) !void { report.addCause(move(cause)) }
+pub func join(a: move Report, b: move Report) !Report { a.join(move(b)) }
 pub func rootError(report: *const Report) ?ErrorId { report.rootError() }
 pub func causes(report: *const Report) ReportCauseIter { report.causes() }
 pub func matches(report: *const Report, cause: ErrorId) bool { report.matches(cause) }

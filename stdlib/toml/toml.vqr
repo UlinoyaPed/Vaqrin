@@ -46,7 +46,7 @@ pub class TomlOptions {
 pub class Entry {
     pub var key: string;
     pub var value: Value;
-    pub func init(key: string, value: Value) : key(move(key)), value(move(value)) {}
+    pub func init(key: string, value: move Value) : key(move(key)), value(move(value)) {}
 }
 
 enum TableKind { Implicit, Explicit, Dotted, Inline, ArrayElement }
@@ -76,7 +76,7 @@ pub class Document {
         null
     }
 
-    pub func set(key: string, value: Value) !void {
+    pub func set(key: string, value: move Value) !void {
         for index in usize(0)..entries.len() {
             var entry = entries.getMutPtr(index).unwrap();
             if entry.key == key { entry.value = move(value); return; }
@@ -84,7 +84,7 @@ pub class Document {
         entries.push(Entry(move(key), move(value)))!
     }
 
-    pub func insertUnique(key: string, value: Value) !void {
+    pub func insertUnique(key: string, value: move Value) !void {
         if get(key) != null { return TomlError.DuplicateKey; }
         entries.push(Entry(move(key), move(value)))!
     }
@@ -110,7 +110,7 @@ pub class Document {
     }
 
     pub const func getPath(path: str) ?*const Value { lookupPath(self, path) }
-    pub func setPath(path: str, value: Value) !void {
+    pub func setPath(path: str, value: move Value) !void {
         var keys = parseKeyPath(path)!;
         setDotted(self, keys.asConstSlice(), move(value), true)
     }
@@ -428,7 +428,7 @@ func lookupPath(document: *const Document, path: str) ?*const Value {
     null
 }
 
-func setDotted(document: *Document, path: []const string, value: Value, rejectDuplicate: bool) !void {
+func setDotted(document: *Document, path: []const string, value: move Value, rejectDuplicate: bool) !void {
     if path.len() == 0 { return TomlError.InvalidKey; }
     var current = document;
     for index in usize(0)..(path.len() - 1) {

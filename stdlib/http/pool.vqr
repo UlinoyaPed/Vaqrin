@@ -6,7 +6,7 @@ class IdleConnection {
     pub var authority: string;
     pub var connection: AsyncConnection;
     pub var expires: time.Deadline;
-    pub func init(secure: bool, authority: string, connection: AsyncConnection, expires: time.Deadline)
+    pub func init(secure: bool, authority: string, connection: move AsyncConnection, expires: time.Deadline)
         : secure(secure), authority(move(authority)), connection(move(connection)), expires(expires) {}
 }
 
@@ -19,11 +19,11 @@ pub class AsyncPool {
     var capacity: usize;
     var idleTimeout: time.Duration;
     var closed: bool;
-    func init(client: AsyncClient, entries: coll.Vec<IdleConnection>, capacity: usize,
+    func init(client: move AsyncClient, entries: move coll.Vec<IdleConnection>, capacity: usize,
               idleTimeout: time.Duration)
         : client(move(client)), entries(move(entries)), capacity(capacity), idleTimeout(idleTimeout),
           closed(false) {}
-    pub static func new(client: AsyncClient, capacity: usize, idleTimeout: time.Duration) !Self {
+    pub static func new(client: move AsyncClient, capacity: usize, idleTimeout: time.Duration) !Self {
         if idleTimeout.isNegative() { return io.IoError.InvalidArgument; }
         var entries = coll.Vec<IdleConnection>.withCapacity(capacity)!;
         AsyncPool(move(client), move(entries), capacity, idleTimeout)
@@ -34,7 +34,7 @@ pub class AsyncPool {
         entries.clear();
     }
 
-    pub func request(address: str, method: Method, body: Body) !Response {
+    pub func request(address: str, method: Method, body: move Body) !Response {
         var target = parseUrl(address)!;
         var path = pathTarget(raw target)!;
         var request = Request.new(method, path)!;
@@ -86,7 +86,7 @@ pub class AsyncPool {
         (secure, move(authority), move(connection))
     }
 
-    func recycle(secure: bool, authority: string, connection: AsyncConnection) void {
+    func recycle(secure: bool, authority: string, connection: move AsyncConnection) void {
         if capacity == 0 || idleTimeout.isZero() || !connection.isOpen() { return; }
         var expiry = time.Deadline.after(idleTimeout) catch { return; };
         if entries.len() == capacity { var evicted = entries.remove(0); }

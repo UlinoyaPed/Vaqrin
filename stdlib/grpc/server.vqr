@@ -29,11 +29,11 @@ pub class ServeOptions {
         shutdownTimeout(time.Duration.fromSeconds(15)) {}
 }
 
-pub func reply(status: Status) UnaryResponse {
+pub func reply(status: move Status) UnaryResponse {
     UnaryResponse(Metadata(), Metadata(), move(status), null)
 }
 
-pub func response(body: coll.Vec<u8>) UnaryResponse {
+pub func response(body: move coll.Vec<u8>) UnaryResponse {
     UnaryResponse(Metadata(), Metadata(), status(StatusCode.Ok, ""), some(move(body)))
 }
 

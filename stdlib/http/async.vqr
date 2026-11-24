@@ -32,7 +32,7 @@ pub class AsyncConnection {
     var authority: string;
     var limits: HttpLimits;
     var usable: bool;
-    pub func init(plain: ?net.AsyncTcpStream, encrypted: ?tls.TlsStream, authority: string, limits: HttpLimits)
+    pub func init(plain: move ?net.AsyncTcpStream, encrypted: move ?tls.TlsStream, authority: string, limits: HttpLimits)
         : plain(move(plain)), encrypted(move(encrypted)), authority(move(authority)), limits(limits), usable(true) {}
     pub const func isOpen() bool { usable }
 
@@ -176,7 +176,7 @@ pub class AsyncClient {
         var target = parseUrl(address)!;
         sendTo(raw target, request)
     }
-    pub const func request(address: str, method: Method, body: Body) !Response {
+    pub const func request(address: str, method: Method, body: move Body) !Response {
         var target = parseUrl(address)!;
         var path = pathTarget(raw target)!;
         var message = Request.new(method, path)!;
@@ -185,7 +185,7 @@ pub class AsyncClient {
     }
     pub const func get(address: str) !Response { request(address, Method.GET, Body()) }
     pub const func head(address: str) !Response { request(address, Method.HEAD, Body()) }
-    pub const func post(address: str, body: Body) !Response { request(address, Method.POST, move(body)) }
+    pub const func post(address: str, body: move Body) !Response { request(address, Method.POST, move(body)) }
     const func sendTo(target: *const Url, request: *Request) !Response {
         var deadline = some(time.Deadline.after(limits.timeout)!);
         var secure = sameName(target.scheme(), "https");
@@ -218,7 +218,7 @@ pub class AsyncServer {
     #copy: disabled
     var listener: net.AsyncTcpListener;
     pub var limits: HttpLimits;
-    func init(value: net.AsyncTcpListener) : listener(move(value)), limits(HttpLimits()) {}
+    func init(value: move net.AsyncTcpListener) : listener(move(value)), limits(HttpLimits()) {}
     pub static func bind(address: net.SocketAddr) !Self { AsyncServer(net.AsyncTcpListener.bind(address)!) }
     pub const func localAddr() !net.SocketAddr { listener.localAddr() }
     pub func close() !void { listener.close() }

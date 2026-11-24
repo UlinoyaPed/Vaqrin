@@ -7,7 +7,7 @@ class Transport {
     #copy: disabled
     #implements: io.Reader, io.Writer
     var stream: StreamSocket;
-    pub func init(socket: StreamSocket) : stream(move(socket)) {}
+    pub func init(socket: move StreamSocket) : stream(move(socket)) {}
     pub func read(dst: []u8) !usize {
         switch stream {
             StreamSocket.Clear(ref mut raw) => raw.read(dst),

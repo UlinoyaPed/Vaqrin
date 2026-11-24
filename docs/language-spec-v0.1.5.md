@@ -616,7 +616,7 @@ func main() !void {
             }
         }
     };
-    var consumer = group.spawn<void>(move(consume))!;
+    var consumer = group.spawnOwned<void>(move(consume))!;
 
     producer.join()!;
     consumer.join()!;

@@ -88,30 +88,30 @@ pub class TlsConfig {
         protocols.push(u8(name.len())!)!;
         for byte in name { protocols.push(byte)!; }
     }
-    pub const func connect(socket: net.TcpStream, host: str) !TlsStream {
+    pub const func connect(socket: move net.TcpStream, host: str) !TlsStream {
         var name = cString(host)!;
         var empty: u8 = 0;
         open(move(socket), raw name[0], raw empty, raw empty, false, null)
     }
-    pub const func accept(socket: net.TcpStream, cert: str, key: str) !TlsStream {
+    pub const func accept(socket: move net.TcpStream, cert: str, key: str) !TlsStream {
         var certificate = cString(cert)!;
         var privateKey = cString(key)!;
         var empty: u8 = 0;
         open(move(socket), raw empty, raw certificate[0], raw privateKey[0], false, null)
     }
-    pub const func connectAsync(socket: net.AsyncTcpStream, host: str, deadline: ?time.Deadline) !TlsStream {
+    pub const func connectAsync(socket: move net.AsyncTcpStream, host: str, deadline: ?time.Deadline) !TlsStream {
         var name = cString(host)!;
         var empty: u8 = 0;
         open(net.AsyncTcpStream.intoTcp(move(socket)), raw name[0], raw empty, raw empty, true, deadline)
     }
-    pub const func acceptAsync(socket: net.AsyncTcpStream, cert: str, key: str,
+    pub const func acceptAsync(socket: move net.AsyncTcpStream, cert: str, key: str,
                            deadline: ?time.Deadline) !TlsStream {
         var certificate = cString(cert)!;
         var privateKey = cString(key)!;
         var empty: u8 = 0;
         open(net.AsyncTcpStream.intoTcp(move(socket)), raw empty, raw certificate[0], raw privateKey[0], true, deadline)
     }
-    const func open(socket: net.TcpStream, host: *const u8,
+    const func open(socket: move net.TcpStream, host: *const u8,
                     cert: *const u8, key: *const u8, suspendable: bool, deadline: ?time.Deadline) !TlsStream {
         if requireProtocol && protocols.len() == 0 { return TlsError.InvalidProtocol; }
         var empty: u8 = 0;
@@ -142,17 +142,17 @@ pub class TlsAcceptor {
     var config: TlsConfig;
     var certificate: string;
     var privateKey: string;
-    func init(options: TlsConfig, cert: string, key: string)
+    func init(options: move TlsConfig, cert: string, key: string)
         : config(move(options)), certificate(move(cert)), privateKey(move(key)) {}
-    pub static func fromPem(cert: str, key: str, options: TlsConfig) !Self {
+    pub static func fromPem(cert: str, key: str, options: move TlsConfig) !Self {
         var certificate = text.fromBytes(cert.asBytes())!;
         var privateKey = text.fromBytes(key.asBytes())!;
         TlsAcceptor(move(options), move(certificate), move(privateKey))
     }
-    pub const func accept(socket: net.TcpStream) !TlsStream {
+    pub const func accept(socket: move net.TcpStream) !TlsStream {
         config.accept(move(socket), certificate, privateKey)
     }
-    pub const func acceptAsync(socket: net.AsyncTcpStream, deadline: ?time.Deadline) !TlsStream {
+    pub const func acceptAsync(socket: move net.AsyncTcpStream, deadline: ?time.Deadline) !TlsStream {
         config.acceptAsync(move(socket), certificate, privateKey, deadline)
     }
 }
@@ -166,7 +166,7 @@ pub class TlsStream {
     var readDeadline: ?time.Deadline;
     var writeDeadline: ?time.Deadline;
     func deinit() void { close() catch {}; }
-    pub func init(socket: net.TcpStream, native: NativeSession)
+    pub func init(socket: move net.TcpStream, native: move NativeSession)
         : stream(move(socket)), session(native.value), suspendable(false), readDeadline(null), writeDeadline(null) {}
     pub func startAsync(deadline: ?time.Deadline) !void {
         TlsReadiness.check(deadline)!;
@@ -183,7 +183,7 @@ pub class TlsStream {
     }
     pub func setReadDeadline(value: ?time.Deadline) void { readDeadline = value; }
     pub func setWriteDeadline(value: ?time.Deadline) void { writeDeadline = value; }
-    pub static func connect(socket: net.TcpStream, host: str, config: *const TlsConfig) !Self {
+    pub static func connect(socket: move net.TcpStream, host: str, config: *const TlsConfig) !Self {
         config.connect(move(socket), host)
     }
     pub const func negotiatedProtocol() core.ResultOptional<coll.Vec<u8>> {

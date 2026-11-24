@@ -103,6 +103,47 @@ class ProtocolAcceptance(CompilerCase):
                 if server.poll() is None:
                     server.kill()
 
+    def test_http_connection_and_body_transfer_owners(self):
+        source = self.source("http_move.vqr", r"""
+            import (bytes, coll, http, io, net)
+            extern "C" func fcntl(fd: c_int, command: c_int) c_int;
+
+            func main() !void {
+                var listener = net.TcpListener.bind(net.parseSocketAddr("127.0.0.1:0")!)!;
+                var socket = net.AsyncTcpStream.fromTcp(net.TcpStream.connect(listener.localAddr()!)!)!;
+                var descriptor = socket.systemDescriptor()!;
+                var optional: ?net.AsyncTcpStream = some(move(socket));
+                var connection = http.AsyncConnection(move(optional), null, "localhost", http.HttpLimits());
+                io.println(connection.isOpen() && unsafe { fcntl(descriptor, 1) } >= 0)!;
+                connection.close()!;
+                io.println(!connection.isOpen() && unsafe { fcntl(descriptor, 1) } < 0)!;
+
+                var payload = coll.Vec<u8>.fromSlice("body".asBytes())!;
+                var body = http.Body.fromOwned(move(payload));
+                var request = http.Request.new(http.Method.POST, "/")!;
+                request.setBody(move(body));
+                io.println(bytes.equal(request.bodyBytes(), "body".asBytes()))!;
+            }
+        """)
+        self.process(VAQC, source, "-o", "http-move")
+        self.assertEqual(self.process("./http-move").stdout, b"true\n" * 3)
+
+        for params, call in (
+            ("plain: move ?net.AsyncTcpStream",
+             'var connection = http.AsyncConnection(plain, null, "localhost", http.HttpLimits());'),
+            ("encrypted: move ?tls.TlsStream",
+             'var connection = http.AsyncConnection(null, encrypted, "localhost", http.HttpLimits());'),
+            ("request: mut http.Request, body: move http.Body",
+             "request.setBody(body);"),
+        ):
+            with self.subTest(call=call):
+                source = self.source("named_http_owner.vqr", f"""
+                    import (http, net, tls)
+                    func invalid({params}) void {{ {call} }}
+                """)
+                result = self.process(VAQC, "check", source, good=False)
+                self.assertIn(b"move parameter requires move(object) or an owning temporary", result.stderr)
+
     def test_async_http_stream_and_connection_reuse(self):
         with socket.create_server(("127.0.0.1", 0)) as listener:
             listener.settimeout(5)
@@ -277,7 +318,7 @@ class ProtocolAcceptance(CompilerCase):
 
             class Echo {
                 #implements: http.Handler
-                pub func handle(request: http.Request) !http.Response {
+                pub func handle(request: move http.Request) !http.Response {
                     var reply = http.Response.new(201)!;
                     reply.setBody(http.Body.fromBytes(request.bodyBytes())!);
                     move(reply)
@@ -313,7 +354,7 @@ class ProtocolAcceptance(CompilerCase):
                     var reply = client.post(target, move(request))!;
                     reply.status().value() == 201 && bytes.equal(reply.bodyBytes(), "payload".asBytes())
                 };
-                var serverJob = group.spawn<void>(move(serve))!;
+                var serverJob = group.spawnOwned<void>(move(serve))!;
                 var clientJob = group.spawn<bool>(move(call))!;
                 io.println(clientJob.join()!)!;
                 serverJob.join()!;
@@ -332,7 +373,7 @@ class ProtocolAcceptance(CompilerCase):
                     var outcome = client.get(idleTarget);
                     result.errorOf(raw outcome).unwrap() == io.IoError.DeadlineExceeded
                 };
-                var stalled = group.spawn<void>(move(stall))!;
+                var stalled = group.spawnOwned<void>(move(stall))!;
                 var timed = group.spawn<bool>(move(request))!;
                 io.println(timed.join()!)!;
                 stalled.join()!;
@@ -340,6 +381,51 @@ class ProtocolAcceptance(CompilerCase):
         """.replace("CERT", json.dumps(str(cert))).replace("KEY", json.dumps(str(key))))
         self.process(VAQC, program, "-o", "async-https")
         self.assertEqual(self.process("./async-https").stdout, b"true\n" * 2)
+
+    def test_tls_socket_ownership_on_pre_handshake_errors(self):
+        source = self.source("tls_move.vqr", r"""
+            import (io, net, result, tls)
+            extern "C" func fcntl(fd: c_int, command: c_int) c_int;
+
+            func main() !void {
+                var listener = net.TcpListener.bind(net.parseSocketAddr("127.0.0.1:0")!)!;
+                var address = listener.localAddr()!;
+                var config = tls.TlsConfig();
+
+                var tcp = net.TcpStream.connect(address)!;
+                var fd = tcp.systemDescriptor()!;
+                var invalidName = config.connect(move(tcp), "");
+                io.println(result.errorOf(raw invalidName).unwrap() == tls.TlsError.InvalidName)!;
+                io.println(unsafe { fcntl(fd, 1) } < 0)!;
+
+                var asynchronous = net.AsyncTcpStream.fromTcp(net.TcpStream.connect(address)!)!;
+                fd = asynchronous.systemDescriptor()!;
+                config.requireProtocol = true;
+                var invalidProtocol = config.connectAsync(move(asynchronous), "localhost", null);
+                io.println(result.errorOf(raw invalidProtocol).unwrap() == tls.TlsError.InvalidProtocol)!;
+                io.println(unsafe { fcntl(fd, 1) } < 0)!;
+            }
+        """)
+        self.process(VAQC, source, "-o", "tls-move")
+        self.assertEqual(self.process("./tls-move").stdout, b"true\n" * 4)
+
+        for params, call in (
+            ("config: in tls.TlsConfig, input: move net.TcpStream",
+             'config.connect(input, "localhost")'),
+            ("config: in tls.TlsConfig, input: move net.AsyncTcpStream",
+             'config.connectAsync(input, "localhost", null)'),
+            ("config: move tls.TlsConfig",
+             'tls.TlsAcceptor.fromPem("server.pem", "server.key", config)'),
+        ):
+            with self.subTest(call=call):
+                source = self.source("named_tls_owner.vqr", f"""
+                    import (net, tls)
+                    func invalid({params}) !void {{
+                        var wrapped = {call}!;
+                    }}
+                """)
+                result = self.process(VAQC, "check", source, good=False)
+                self.assertIn(b"move parameter requires move(object) or an owning temporary", result.stderr)
 
     def test_tls_client_alpn(self):
         cert, key = self.make_certificate()
@@ -470,6 +556,39 @@ class ProtocolAcceptance(CompilerCase):
             finally:
                 if server.poll() is None:
                     server.kill()
+
+    def test_http2_event_transfers_payload_and_preserves_header_metadata(self):
+        source = self.source("http2_event_move.vqr", r"""
+            import (bytes, coll, http2, io, result)
+            func main() !void {
+                var payload = coll.Vec<u8>.fromSlice("data".asBytes())!;
+                var data = http2.Event(http2.EventKind.Data, 3, 17, move(payload));
+                io.println(data.kind == http2.EventKind.Data && data.stream == 3 &&
+                           data.code == 17 && bytes.equal(data.payload(), "data".asBytes()))!;
+                var wrong = data.headers();
+                io.println(result.errorOf(raw wrong).unwrap() == http2.Http2Error.WrongEvent)!;
+
+                var block = http2.HeaderBlock();
+                block.addBytes("test", "value".asBytes(), true)!;
+                var event = http2.Event(http2.EventKind.Headers, 3, 0,
+                                       coll.Vec<u8>.fromSlice(block.encoded())!);
+                var reader = event.headers()!;
+                var field = reader.next()!.unwrap();
+                io.println(field.name == "test" && bytes.equal(field.value, "value".asBytes()) &&
+                           field.sensitive && reader.next()! == null)!;
+            }
+        """)
+        self.process(VAQC, source, "-o", "http2-event")
+        self.assertEqual(self.process("./http2-event").stdout, b"true\n" * 3)
+
+        source = self.source("named_http2_payload.vqr", r"""
+            import (coll, http2)
+            func invalid(payload: move coll.Vec<u8>) void {
+                var event = http2.Event(http2.EventKind.Data, 1, 0, payload);
+            }
+        """)
+        result = self.process(VAQC, "check", source, good=False)
+        self.assertIn(b"move parameter requires move(object) or an owning temporary", result.stderr)
 
     def test_http2_client_tls(self):
         from h2.config import H2Configuration

@@ -45,7 +45,7 @@ pub class MemoryWriter {
     pub func write(data: []const u8) !usize { buffer.write(data) }
     pub func flush() !void {}
     pub const func asSlice() []const u8 { buffer.asSlice() }
-    pub static func intoBytes(value: Self) coll.Vec<u8> {
+    pub static func intoBytes(value: move Self) coll.Vec<u8> {
         bytes.Buffer.intoVec(core.Exchange<bytes.Buffer>.replace(value.buffer, bytes.Buffer()))
     }
 }

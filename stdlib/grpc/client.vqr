@@ -69,7 +69,7 @@ pub class ClientConn {
     var lastAccepted: ?i32;
     var terminated: bool;
     var serial: u64;
-    pub func init(wire: Transport, session: http2.Connection, authority: string, secure: bool, options: DialOptions)
+    pub func init(wire: move Transport, session: move http2.Connection, authority: string, secure: bool, options: DialOptions)
         : wire(move(wire)), connection(move(session)), authority(move(authority)), secure(secure),
           timeout(options.timeout), limit(options.maxMessageBytes), active(coll.Vec<ActiveCall>()),
           deferred(DeferredEvents()), maxCalls(options.maxConcurrentCalls), lastAccepted(null),

@@ -450,7 +450,7 @@ class IoV2Acceptance(CompilerCase):
                     var count = sender.sendTo("abcdef".asBytes(), address, null)!;
                     if count != 6 { panic("UDP datagram was split"); }
                 };
-                var recv = group.spawn<bool>(move(collect))!;
+                var recv = group.spawnOwned<bool>(move(collect))!;
                 var send = group.spawn<void>(move(deliver))!;
                 io.println(recv.join()!)!;
                 send.join()!;
@@ -554,7 +554,7 @@ class IoV2Acceptance(CompilerCase):
                     }
                     count
                 };
-                var server = group.spawn<i32>(move(serve))!;
+                var server = group.spawnOwned<i32>(move(serve))!;
                 var calls = coll.Vec<task.Task<bool>>();
                 for index in 0..32 {
                     var call = [address] () !bool => {
@@ -583,7 +583,7 @@ class IoV2Acceptance(CompilerCase):
                     var expired = waiting.accept(some(deadline));
                     result.errorOf(raw expired).unwrap() == io.IoError.DeadlineExceeded
                 };
-                var timer = group.spawn<bool>(move(timeout))!;
+                var timer = group.spawnOwned<bool>(move(timeout))!;
                 io.println(timer.join()!)!;
 
                 var outside = net.AsyncTcpListener.bind(net.parseSocketAddr("127.0.0.1:0")!)!;
@@ -616,7 +616,7 @@ class IoV2Acceptance(CompilerCase):
                         if reason != task.TaskError.Cancelled { return reason; }
                     };
                 };
-                var server = group.spawn<void>(move(accept))!;
+                var server = group.spawnOwned<void>(move(accept))!;
                 var clients = coll.Vec<task.Task<bool>>();
                 for index in 0..64 {
                     var wait = [address] () !bool => {

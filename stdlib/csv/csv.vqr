@@ -104,7 +104,7 @@ pub class CsvReader {
         field.clear();
     }
 
-    func countRecordByte(recordBytes: ref mut usize) !void {
+    func countRecordByte(recordBytes: mut usize) !void {
         if recordBytes == ~usize(0) { return CsvError.InputLimit; }
         recordBytes += 1;
         if recordBytes > options.maxRecordBytes { return CsvError.RecordLimit; }
@@ -116,8 +116,7 @@ pub class CsvReader {
         var inQuotes = false;
         var afterQuote = false;
         var sawInput = false;
-        var byteCount: usize = 0;
-        var recordBytes: ref mut usize = raw byteCount;
+        var recordBytes: usize = 0;
         for {
             var next = nextByte()!;
             switch move(next) {

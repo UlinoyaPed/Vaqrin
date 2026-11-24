@@ -3,6 +3,8 @@
 `TlsStream` owns a connected `net.TcpStream` and implements `io.Reader`,
 `io.Writer` and `io.Closer`. Connect or accept the TCP stream first. Set TCP
 read and write timeouts before handing it to TLS to bound blocking handshake I/O.
+Pass a named socket with `move(socket)`, or pass a newly opened socket directly.
+The TLS call takes ownership even when it fails before the handshake.
 The same timeouts remain active after the handshake and can be changed on the TLS
 stream. Explicit close is idempotent. Scope exit releases the TLS session and TCP
 descriptor in that order.

@@ -40,7 +40,8 @@ class Completion<T: Movable + Sendable> {
 class Job<T: Movable + Sendable, F: Movable + Sendable> {
     var callback: ?F;
     var completion: *Completion<T>;
-    pub func init(callback: F, completion: *Completion<T>) : callback(some(move(callback))), completion(completion) {}
+    pub func init(pending: mut ?F, completion: *Completion<T>)
+        : callback(opt.take<F>(pending)), completion(completion) {}
 
     pub func run() void {
         var own = unsafe { Box<Job<T, F>>.fromRaw(self) };
@@ -107,10 +108,24 @@ pub class TaskGroup {
         TaskGroup(workers)
     }
 
-    pub func spawn<T: Movable + Sendable, F: Movable + Sendable>(callback: F) !Task<T> {
+    // Copy only at the public boundary. The scheduler always owns the
+    // callback it receives, regardless of how the caller acquired it.
+    pub func spawn<T: Movable + Sendable, F: Copyable + Movable + Sendable>(callback: F) !Task<T> {
+        var pending: ?F = some(move(callback));
+        submit<T, F>(pending)
+    }
+
+    pub func spawnOwned<T: Movable + Sendable, F: Movable + Sendable>(callback: move F) !Task<T> {
+        var pending: ?F = some(move(callback));
+        submit<T, F>(pending)
+    }
+
+    // The checked borrow exists only during submission, never in Job.
+    // Before Job takes the callback, pending owns it on all error paths.
+    func submit<T: Movable + Sendable, F: Movable + Sendable>(pending: mut ?F) !Task<T> {
         var scheduler = ensure()!;
         var stored = (new Completion<T>())!;
-        var work = (new Job<T, F>(move(callback), stored.asPtr()))!;
+        var work = (new Job<T, F>(pending, stored.asPtr()))!;
         var state = Box.intoRaw(move(stored));
         var data = Box.intoRaw(move(work));
         var handle = unsafe { __vqr_task_submit<Job<T, F>, Completion<T>>(scheduler, data, state) };
@@ -238,6 +253,6 @@ pub func scope<F: Movable>(callback: F) !void {
     group.joinAll()
 }
 
-pub func spawn<T: Movable + Sendable, F: Movable + Sendable>(group: *TaskGroup, callback: F) !Task<T> {
+pub func spawn<T: Movable + Sendable, F: Copyable + Movable + Sendable>(group: mut TaskGroup, callback: F) !Task<T> {
     group.spawn<T, F>(move(callback))
 }

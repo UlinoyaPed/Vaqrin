@@ -406,7 +406,7 @@ pub class NfaCompiler {
     var flags: u8;
     var maxInput: usize;
     var maxSteps: usize;
-    pub func init(parsed: ParsedPattern, maxStates: usize, flags: u8,
+    pub func init(parsed: move ParsedPattern, maxStates: usize, flags: u8,
               maxInput: usize, maxSteps: usize)
         : root(parsed.root), nodes(core.Exchange<coll.Vec<AstNode>>.replace(parsed.nodes, coll.Vec<AstNode>())), classes(core.Exchange<coll.Vec<CharacterClass>>.replace(parsed.classes, coll.Vec<CharacterClass>())),
           ranges(core.Exchange<coll.Vec<CharRange>>.replace(parsed.ranges, coll.Vec<CharRange>())), states(coll.Vec<State>()),
@@ -450,7 +450,7 @@ pub class NfaCompiler {
         for patch in source.asSlice() { destination.push(patch)!; }
     }
 
-    func concatenate(left: Fragment, right: Fragment) !Fragment {
+    func concatenate(left: move Fragment, right: move Fragment) !Fragment {
         patchAll(raw left.outs, right.start);
         var owned = move(right);
         Fragment(left.start, core.Exchange<coll.Vec<Patch>>.replace(owned.outs, coll.Vec<Patch>()))

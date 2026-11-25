@@ -1,5 +1,7 @@
 #include "compiler_internal.hpp"
 
+#include <llvm/Support/SaveAndRestore.h>
+
 #include <tuple>
 
 namespace vqr::detail {
@@ -313,7 +315,7 @@ ValueAt Body::referenceName(int id, Span span) {
   return {local.reference, local.slot, nullptr, false, -1, false, false, origin};
 }
 
-ValueAt Body::dereference(ValueAt v, Span span) {
+ValueAt Body::dereference(ValueAt v, Span span, bool implicit) {
   auto *t = v.type;
   if (t->kind == Kind::Box) {
     if (!v.address) {
@@ -335,8 +337,10 @@ ValueAt Body::dereference(ValueAt v, Span span) {
   }
   if (t->kind != Kind::Pointer && t->kind != Kind::Reference)
     fail(span, "dereference requires a pointer, reference or Box");
-  if (t->kind == Kind::Pointer && explicitBorrowDepth && !unsafeDepth)
-    fail(span, "borrowing through a raw pointer requires unsafe", "E240");
+  if (t->kind == Kind::Pointer && explicitBorrowDepth) {
+    if (implicit) fail(span, "raw pointer access in a checked borrow requires explicit dereference", "E240");
+    if (!unsafeDepth) fail(span, "borrowing through a raw pointer requires unsafe", "E240");
+  }
   auto origin = t->kind == Kind::Reference || v.origin.raw ? v.origin : Borrow{};
   return {t->parts[0], nullptr, read(v, span, false), !t->readOnly, -1, true, v.temporaryBorrow, origin};
 }
@@ -345,14 +349,15 @@ ValueAt Body::borrow(ValueAt v, Type *t, Span span, bool materialize) {
   if (v.type == p.neverTy) return v;
   if (!p.scopedViewInput(t)) rejectViewEscape(v, span);
   auto *target = t->parts[0];
-  bool raw = v.type->kind == Kind::Pointer && v.type != target;
   auto accepts = [target](Type *source) {
     return source == target || (target->kind == Kind::Interface && source->kind == Kind::Class);
   };
   if (v.type != target) {
     if (v.type->kind == Kind::Box)
       fail(span, "borrowing a Box payload requires explicit dereference", "E230");
-    if (v.type->kind == Kind::Pointer || v.type->kind == Kind::Reference)
+    if (v.type->kind == Kind::Pointer)
+      fail(span, "borrowing a raw pointer's target requires explicit dereference in unsafe", "E240");
+    if (v.type->kind == Kind::Reference)
       v = dereference(v, span);
     if (!accepts(v.type)) fail(span, "cannot borrow '" + v.type->name + "' as '" + t->name + "'", "E201");
   } else if (v.origin.raw && v.local >= 0 && !locals[v.local].reference) {
@@ -412,9 +417,7 @@ ValueAt Body::borrow(ValueAt v, Type *t, Span span, bool materialize) {
     if (!unsafeDepth || t->parameterMode == ParameterMode::Value)
       fail(span, "cannot prove the lifetime of the reference source", "E230");
     v.temporaryBorrow = true;
-  } else if (v.origin.root < 0 && materialize && raw)
-    v.temporaryBorrow = true;
-  else if (v.origin.root < 0 && !unsafeDepth)
+  } else if (v.origin.root < 0 && !unsafeDepth)
     fail(span, "reference source is unproven; borrowing a raw address requires unsafe", "E230");
   auto *address = v.address;
   if (target != v.type) {
@@ -430,6 +433,11 @@ void Body::validateScopedCallArgument(const Ast &arg, Type *parameter) {
   const int local = findLocal(arg->text);
   if (local >= 0 && scopedCallableInput(locals[local].reference))
     (void)name(arg); // Use the same invalid-alias diagnostic as other value uses.
+}
+
+ValueAt Body::borrowExpression(const Ast &n, Type *t) {
+  llvm::SaveAndRestore guard(explicitBorrowDepth, explicitBorrowDepth + 1);
+  return borrow(expression(n), t, n->span, false);
 }
 
 ValueAt Body::argument(const Ast &n, Type *t, bool transfersOwnership) {
@@ -465,11 +473,7 @@ ValueAt Body::argument(const Ast &n, Type *t, bool transfersOwnership) {
     auto *target = t->parts[0];
     if (n->kind == NodeKind::Move)
       fail(n->span, "a borrow parameter does not consume its argument", "E230");
-    struct Guard {
-      unsigned &depth;
-      ~Guard() { --depth; }
-    } guard{explicitBorrowDepth};
-    ++explicitBorrowDepth;
+    llvm::SaveAndRestore guard(explicitBorrowDepth, explicitBorrowDepth + 1);
     auto *hinted = referenceHint(n);
     auto *context = hinted && hinted->kind == Kind::Reference ? hinted
                     : !hinted && (target->kind == Kind::Int || target->kind == Kind::Float) ? target : nullptr;
@@ -1719,6 +1723,7 @@ void Body::statementContents(const Ast &n, std::size_t bindingScope) {
     if (!n->children.empty()) {
       const auto &init = n->children[0];
       if (t && t->kind == Kind::Reference) {
+        llvm::SaveAndRestore guard(explicitBorrowDepth, explicitBorrowDepth + 1);
         auto id = init->kind == NodeKind::Name ? findLocal(init->text) : -1;
         if (id >= 0 && locals[id].reference)
           v = referenceName(id, init->span);
@@ -2270,7 +2275,7 @@ ValueAt Body::expression(const Ast &n, Type *expected) {
       const auto &syntax = n->children[i];
       auto *expectedItem = array ? element : t ? t->parts[i] : nullptr;
       auto item = expectedItem && expectedItem->kind == Kind::Reference
-                      ? borrow(expression(syntax), expectedItem, syntax->span, false)
+                      ? borrowExpression(syntax, expectedItem)
                       : expression(syntax, expectedItem);
       if (!live()) {
         leave();

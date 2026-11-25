@@ -299,9 +299,10 @@ private:
   void checkRootAccess(int root, Borrow origin, bool write, Span span, int carrier = -1);
   Borrow joinBorrow(Borrow left, Borrow right, Type *type, Span span);
   void invalidateOwnedAddresses(ValueAt owner);
-  ValueAt dereference(ValueAt v, Span span);
+  ValueAt dereference(ValueAt v, Span span, bool implicit = false);
   void checkUnwrap(Value *present, Span span);
   ValueAt borrow(ValueAt v, Type *t, Span span, bool materialize);
+  ValueAt borrowExpression(const Ast &n, Type *t);
   void validateScopedCallArgument(const Ast &arg, Type *parameter);
   ValueAt argument(const Ast &n, Type *t, bool transfersOwnership = false);
   ValueAt referenceName(int local, Span span);

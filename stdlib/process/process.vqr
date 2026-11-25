@@ -199,17 +199,17 @@ pub class Child {
     pub const func id() u64 { unsafe { __vqr_process_child_id(handle) } }
     pub func stdin() ?ref mut ChildInput from self {
         if !hasPipe(handle, 0) { return null; }
-        var pipe: ref mut ChildInput = raw inputPipe;
+        var pipe: ref mut ChildInput = inputPipe;
         some(pipe)
     }
     pub func stdout() ?ref mut ChildOutput from self {
         if !hasPipe(handle, 1) { return null; }
-        var pipe: ref mut ChildOutput = raw outputPipe;
+        var pipe: ref mut ChildOutput = outputPipe;
         some(pipe)
     }
     pub func stderr() ?ref mut ChildOutput from self {
         if !hasPipe(handle, 2) { return null; }
-        var pipe: ref mut ChildOutput = raw errorPipe;
+        var pipe: ref mut ChildOutput = errorPipe;
         some(pipe)
     }
     pub func tryWait() core.ResultOptional<ExitStatus> { waitState(handle, 1) }

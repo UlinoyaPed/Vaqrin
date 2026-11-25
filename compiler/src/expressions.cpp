@@ -440,7 +440,7 @@ ValueAt Body::member(const Ast &n) {
   if (!v.borrowed && p.drops(v.type))
     fail(n->span, "bind a resource-owning temporary before projecting one of its fields", "E290");
   if (v.type->kind == Kind::Pointer || v.type->kind == Kind::Reference)
-    v = dereference(v, n->span);
+    v = dereference(v, n->span, true);
   p.ensureSized(v.type, n->span);
   if (v.type->kind == Kind::Tuple) {
     auto index = tupleIndex(v.type);
@@ -1626,7 +1626,7 @@ ValueAt Body::construct(const Ast &n, Type *t, const std::vector<Definition> &de
     }
     if (!initializer) fail(n->span, "missing initializer for '" + f.decl->name + "'");
     auto v = f.type->kind == Kind::Reference
-                 ? borrow(expression(initializer), f.type, initializer->span, false)
+                 ? borrowExpression(initializer, f.type)
                  : expression(initializer, f.type);
     if (!live()) {
       leave();
@@ -2126,7 +2126,7 @@ ValueAt Body::call(const Ast &n, Type *expected, DeferRegistration *defer) {
         const auto &syntax = n->children[i + 1];
         auto *field = variant->fields[i];
         auto v = field->kind == Kind::Reference
-                     ? borrow(expression(syntax), field, syntax->span, false)
+                     ? borrowExpression(syntax, field)
                      : expression(syntax, field);
         if (!live()) {
           leave();
@@ -2231,7 +2231,7 @@ ValueAt Body::call(const Ast &n, Type *expected, DeferRegistration *defer) {
       if (v.type->kind == Kind::Box)
         fail(callee->span, "Box payload method calls require explicit dereference", "E230");
       if (v.type->kind == Kind::Pointer || v.type->kind == Kind::Reference)
-        v = dereference(v, n->span);
+        v = dereference(v, n->span, true);
       if (v.type->kind != Kind::Class && v.type->kind != Kind::Interface)
         fail(n->span, "unknown method '" + member + "'");
       if (v.type->kind == Kind::Class) p.ensureSized(v.type, n->span);

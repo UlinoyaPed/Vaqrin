@@ -261,6 +261,45 @@ class Acceptance(CompilerCase):
         source = self.source("bad_move.vqr", "func f(n: move i32) void {}")
         self.assertIn(b"non-Copyable", self.process(VAQC, "check", source, good=False).stderr)
 
+    def test_v020_checked_borrows_require_explicit_raw_dereference(self):
+        prelude = '''
+            class Record {
+                pub var number: i32;
+                pub const func get() i32 { number }
+            }
+            func read(n: in i32) i32 { n }
+            func bump(n: mut i32) void { n++; }
+            class View { #borrowed: scoped; pub var number: ref i32; }
+            enum Match { #borrowed: scoped; Found(ref i32), Empty, }
+        '''
+        for body, diagnostic in (
+            ("var loan: ref Record = pointer;", b"requires explicit dereference in unsafe"),
+            ("unsafe { var loan: ref Record = pointer; }", b"requires explicit dereference in unsafe"),
+            ("var loan: ref Record = *pointer;", b"requires unsafe"),
+            ("unsafe { var loan: ref Record = *pointer; }", b"cannot prove the lifetime"),
+            ("unsafe { ref field = pointer.number; }", b"checked borrow requires explicit dereference"),
+            ("unsafe { read(pointer.get()); }", b"checked borrow requires explicit dereference"),
+            ("bump((*pointer).number);", b"requires unsafe"),
+            ("unsafe { bump(pointer.number); }", b"checked borrow requires explicit dereference"),
+            ("var items = [_]ref i32{(*pointer).number};", b"requires unsafe"),
+            ("var view = View{number: (*pointer).number};", b"requires unsafe"),
+            ("var found = Match.Found((*pointer).number);", b"requires unsafe"),
+        ):
+            with self.subTest(body=body):
+                source = self.source("raw-borrow.vqr", prelude + '''
+                    func check(pointer: *Record) void { BODY }
+                '''.replace("BODY", body))
+                self.assertIn(diagnostic, self.process(VAQC, "check", source, good=False).stderr)
+        self.hosted(prelude + '''
+            func main() !void {
+                var record = Record{number: 41};
+                var pointer = raw record;
+                unsafe { bump((*pointer).number); }
+                var loan: ref Record = unsafe { ref *pointer };
+                io.println(loan.number)!;
+            }
+        ''', "42\n")
+
     def test_v020_generic_call_infers_explicit_standalone_lambda(self):
         self.hosted("""
             func traced(value: i32) i32 { io.println(value) catch {}; value }
@@ -2899,8 +2938,8 @@ class Acceptance(CompilerCase):
             ("func f(x: i32) void { x move= x; }", "expected"),
             ("func f() i32 { if (true) 7 }", "if branch must be a block"),
             ("func f() never {}", "never"),
-            ("func f() void { var n = 0; var x: ref i32 = raw n; var x: ref i32 = raw n; }", "duplicate local"),
-            ("func f() void { var n = 0; var x: ref i32 = raw n; x = 2; }", "writable"),
+            ("func f() void { var n = 0; var x: ref i32 = n; var x: ref i32 = n; }", "duplicate local"),
+            ("func f() void { var n = 0; var x: ref i32 = n; x = 2; }", "writable"),
             ("func f() void { var n = 0; ref mut x = n; y := move(x); }", "cannot be moved"),
             ("func f(&x: *i32) void {} func f(p: *i32) void {}", "identifier"),
             ("func f(p: *const ?i32) void { switch *p { some(ref x) => { x++; }, null => {} } }", "writable"),
@@ -3097,8 +3136,8 @@ class Acceptance(CompilerCase):
     def test_readonly_reference_joins_pin_all_sources(self):
         self.hosted(r"""
             func choose(a, b: i32, first: bool) !void {
-                var left: ref i32 = raw a;
-                var right: ref i32 = raw b;
+                var left: ref i32 = a;
+                var right: ref i32 = b;
                 var selected: ref i32 = if first { left } else { right };
                 var switched: ref i32 = switch first { true => right, false => selected };
                 io.println(selected)!;
@@ -3115,10 +3154,10 @@ class Acceptance(CompilerCase):
                     var a = 1;
                     var b = 2;
                     var view: ref i32 = if flag {{
-                        var left: ref i32 = raw a;
+                        var left: ref i32 = a;
                         left
                     }} else {{
-                        var right: ref i32 = raw b;
+                        var right: ref i32 = b;
                         right
                     }};
                     {target} = 3;
@@ -3144,13 +3183,13 @@ class Acceptance(CompilerCase):
                 var number = 11;
                 var alternate = 30;
                 {
-                    var both = View<i32>{first: raw number, second: raw alternate, tag: 99};
+                    var both = View<i32>{first: ref number, second: ref alternate, tag: 99};
                     io.println(*both.first + *both.second + both.tag)!;
                     var included: ?View<i32> = some(both);
                     switch included?.first { some(item) => { io.println(item)!; }, null => {} }
                 }
                 number++;
-                var borrow: ref i32 = raw number;
+                var borrow: ref i32 = number;
                 var held = pair(borrow);
                 io.println(*first(held))!;
             }
@@ -3174,33 +3213,33 @@ class Acceptance(CompilerCase):
         cases = {
             "move": """func bad() i32 {
                 var x = Owner{number: 1};
-                var saved = View{owner: raw x, tag: 3};
+                var saved = View{owner: ref x, tag: 3};
                 consume(move(x))
             }""",
             "temporary": """func bad() i32 {
                 var x = Owner{number: 1};
-                inspect(View{owner: raw x, tag: 3}, consume(move(x)))
+                inspect(View{owner: ref x, tag: 3}, consume(move(x)))
             }""",
             "initializer": """func bad() void {
                 var x = Owner{number: 1};
-                var view = View{owner: raw x, tag: consume(move(x))};
+                var view = View{owner: ref x, tag: consume(move(x))};
             }""",
             "address": """func bad() void {
                 var x = Owner{number: 1};
-                var view = View{owner: raw x, tag: 3};
+                var view = View{owner: ref x, tag: 3};
                 var pointer = raw view;
             }""",
             "escape": """func bad(source: in Owner) View {
                 var x = Owner{number: 1};
-                View{owner: raw x, tag: 3}
+                View{owner: ref x, tag: 3}
             }""",
             "container": "func bad() void { var values = coll.Vec<View>(); }",
             "pointer_type": "type Invalid = *View;",
             "rebind": """func bad() void {
                 var owner = Owner{number: 1};
                 var other = Owner{number: 2};
-                var view = View{owner: raw owner, tag: 3};
-                var next: ref Owner = raw other;
+                var view = View{owner: ref owner, tag: 3};
+                var next: ref Owner = other;
                 view.owner = next;
             }""",
             "mutable": "class Invalid { #borrowed: scoped; pub var owner: ref mut Owner; }",
@@ -3364,8 +3403,8 @@ class Acceptance(CompilerCase):
                 var left = 10;
                 var right = 20;
                 {
-                    var view = View{item: raw left};
-                    var other: ref i32 = raw right;
+                    var view = View{item: ref left};
+                    var other: ref i32 = right;
                     var bias = 3;
                     var reader = [view, ref other, bias]() i32 => *view.item + other + bias;
                     var get = forward(reader);
@@ -3387,7 +3426,7 @@ class Acceptance(CompilerCase):
                 }""",
             "owner_change": """func bad() i32 {
                 var number = 10;
-                var view = View{item: raw number};
+                var view = View{item: ref number};
                 var callback = [view]() i32 => *view.item;
                 number++;
                 callback()
@@ -3395,24 +3434,24 @@ class Acceptance(CompilerCase):
             "escaping_owner": """func bad() void {
                 var callback = {
                     var number = 10;
-                    var loan: ref i32 = raw number;
+                    var loan: ref i32 = number;
                     [ref loan]() i32 => loan
                 };
             }""",
             "captured_return": """func bad() void {
                 var number = 10;
-                var loan: ref i32 = raw number;
+                var loan: ref i32 = number;
                 var callback = [ref loan](argument: in i32) ref i32 => loan;
             }""",
             "mutable_capture": """func bad() void {
                 var number = 10;
-                var loan: ref mut i32 = raw number;
+                var loan: ref mut i32 = number;
                 var callback = [ref loan]() i32 => loan;
                 loan++;
             }""",
             "mixed_capture": """func bad() void {
                 var number = 10;
-                var loan: ref i32 = raw number;
+                var loan: ref i32 = number;
                 var callback = [ref loan, ref mut number]() i32 => loan + number;
             }""",
         }
@@ -3431,11 +3470,11 @@ class Acceptance(CompilerCase):
                 var first = 17;
                 var second = 25;
                 {
-                    var pair: (ref i32, ref i32, i32) = (raw first, raw second, 1);
+                    var pair: (ref i32, ref i32, i32) = (ref first, ref second, 1);
                     io.println(*pair.0 + *pair.1 + pair.2)!;
                 }
                 first++;
-                var input: ref i32 = raw first;
+                var input: ref i32 = first;
                 a, b := twice(input);
                 io.println(a + b)!;
             }
@@ -3444,26 +3483,26 @@ class Acceptance(CompilerCase):
             """func bad() i32 {
                 var left = 10;
                 var right = 20;
-                var pair: (ref i32, ref i32) = (raw left, raw right);
+                var pair: (ref i32, ref i32) = (ref left, ref right);
                 right++;
                 *pair.1
             }""",
             """func bad() void {
                 var first = 1;
                 var second = 2;
-                var pair: (ref mut i32, ref mut i32) = (raw first, raw second);
+                var pair: (ref mut i32, ref mut i32) = (ref mut first, ref mut second);
             }""",
             """func bad() void {
                 var outer = 1;
                 var pair = {
                     var inner = 2;
-                    var value: (ref i32, ref i32) = (raw outer, raw inner);
+                    var value: (ref i32, ref i32) = (ref outer, ref inner);
                     value
                 };
             }""",
             """func bad() void {
                 var first = 1;
-                var pair: (ref i32, string) = (raw first, "owned");
+                var pair: (ref i32, string) = (ref first, "owned");
             }""",
         ]
         for index, source in enumerate(cases):
@@ -3521,52 +3560,52 @@ class Acceptance(CompilerCase):
                 var left = 20;
                 var right = 22;
                 {
-                    var items = [_]ref i32{raw left, raw right};
+                    var items = [_]ref i32{ref left, ref right};
                     var total = 0;
                     for item in items { total += item; }
                     io.println(total)!;
                     io.println(*items[1])!;
                 }
                 left++;
-                var input: ref i32 = raw left;
+                var input: ref i32 = left;
                 io.println(*twice(input)[0] + *twice(input)[1])!;
             }
         """, "42\n22\n42\n")
         cases = {
             "mutation": """func bad() void {
                 var number = 42;
-                var values = [_]ref i32{raw number};
+                var values = [_]ref i32{ref number};
                 number++;
             }""",
             "write_in_loop": """func bad() void {
                 var number = 42;
-                for value in [_]ref i32{raw number} { number += value; }
+                for value in [_]ref i32{ref number} { number += value; }
             }""",
             "move_during_loop": """func bad() void {
                 var number = 42;
-                var references = [_]ref i32{raw number};
+                var references = [_]ref i32{ref number};
                 for _ in references { move(references); }
             }""",
             "move_during_index": """func take(items: [1]ref i32) usize { 0 }
                 func bad() i32 {
                     var number = 42;
-                    var references = [_]ref i32{raw number};
+                    var references = [_]ref i32{ref number};
                     *references[take(move(references))]
                 }""",
             "mutable_reference": """func bad() void {
                 var number = 42;
-                var values = [_]ref mut i32{raw number};
+                var values = [_]ref mut i32{ref mut number};
             }""",
             "raw_slice": """func bad() void {
                 var number = 42;
-                var values = [_]ref i32{raw number};
+                var values = [_]ref i32{ref number};
                 var slice = values[:];
             }""",
             "index_side_effect": """class Owner { #copy: disabled; pub var number: i32; }
                 func take(value: Owner) usize { 0 }
                 func bad() void {
                     var owner = Owner{number: 42};
-                    ([_]ref Owner{raw owner})[take(move(owner))];
+                    ([_]ref Owner{ref owner})[take(move(owner))];
                 }""",
         }
         for name, text in cases.items():
@@ -3604,7 +3643,7 @@ class Acceptance(CompilerCase):
             }
             func main() !void {
                 var number = 40;
-                var view: ref i32 = raw number;
+                var view: ref i32 = number;
                 var match = find(view, true);
                 print(increment(match))!;
                 var empty = find(view, false);
@@ -3617,14 +3656,14 @@ class Acceptance(CompilerCase):
             """enum Hit { #borrowed: scoped; Empty, Match(ref i32), }
                func bad() i32 {
                    var number = 42;
-                   var selected = Hit.Match(raw number);
+                   var selected = Hit.Match(ref number);
                    number++;
                    switch selected { Hit.Empty => 0, Hit.Match(result) => result, }
                }""",
             """enum Hit { #borrowed: scoped; Empty, Match(ref i32), }
                func bad(source: in i32) Hit {
                    var number = 42;
-                   Hit.Match(raw number)
+                   Hit.Match(ref number)
                }""",
             """enum Hit { #borrowed: scoped; Match(ref mut i32), }""",
         ]
@@ -3643,8 +3682,8 @@ class Acceptance(CompilerCase):
                 var number = 42;
                 var first = 7;
                 var call: Pick = pick;
-                var left: ref i32 = raw first;
-                var right: ref i32 = raw number;
+                var left: ref i32 = first;
+                var right: ref i32 = number;
                 var checked: ref i32 = forward(call, left, right);
                 io.println(checked)!;
                 var identity = [](value: in i32) ref i32 => value;
@@ -3668,7 +3707,7 @@ class Acceptance(CompilerCase):
             func invalid(other: in i32) ref i32 {
                 var call: func(in i32) ref i32 = identity;
                 var value = 42;
-                var loan: ref i32 = raw value;
+                var loan: ref i32 = value;
                 call(loan)
             }
         """)
@@ -3703,7 +3742,7 @@ class Acceptance(CompilerCase):
                 var impl = Impl{id: 7};
                 var reader: *const Reader = raw impl;
                 io.println(reader.read(owned))!;
-                var checked: ref Reader = raw impl;
+                var checked: ref Reader = impl;
                 io.println(checked.read(owned))!;
                 var value = checked.get();
                 io.println(*second(value, value))!;
@@ -3730,7 +3769,7 @@ class Acceptance(CompilerCase):
                 }
                 var item: ?i32 = some(41);
                 {
-                    var slot: ref mut ?i32 = raw item;
+                    var slot: ref mut ?i32 = item;
                     switch opt.asMutRef(slot) { some(n) => { n++; }, null => {} }
                 }
                 switch opt.asRef(item) { some(n) => { io.println(n)!; }, null => {} }
@@ -3758,8 +3797,8 @@ class Acceptance(CompilerCase):
             ("func f(r: mut i32) void {} func g() void { var n = 0; var r: ref i32 = ref n; f(r); }", "no accessible overload"),
             ("func f(r: ref i32) void {} func g() void { var n = 0; f(raw n); }", "no accessible overload"),
             ("func f(r: ref i32) void { var p: ref mut i32 = r; }", "read-only"),
-            ("func f() void { var n = 0; var p: ref mut i32 = raw n; var q: ref mut i32 = raw n; }", "active borrow"),
-            ("func f(x: in i32) ref i32 { var n = 0; var r: ref i32 = raw n; return r; }",
+            ("func f() void { var n = 0; var p: ref mut i32 = n; var q: ref mut i32 = n; }", "active borrow"),
+            ("func f(x: in i32) ref i32 { var n = 0; var r: ref i32 = n; return r; }",
              "declared source"),
             ("func get(x: in i32) ref i32 { x } func f() void { var r = get(7); }", "temporary"),
             ("func f() !void { var b = new i32(7)!; var r: ref i32 = ref *b; var next = move(b); }",
@@ -3781,15 +3820,15 @@ class Acceptance(CompilerCase):
             ("func f() !void { var v = coll.Vec<i32>(); v.push(7)!; var opt = v.getMut(0);"
              " switch opt { some(value) => { value++; }, null => {}, } }", "cannot copy"),
             ("func f() void { var n = 0; var b = 1; var p = raw n; var pp = raw p;"
-             " *pp = raw b; var r: ref mut i32 = p; }", "source is unproven"),
+             " *pp = raw b; var r: ref mut i32 = unsafe { ref mut *p }; }", "cannot prove the lifetime"),
             ("func set(p: *i32) void { *p = 18; } func f() void { var n = 0; var p = raw n;"
-             " var r: ref i32 = p; set(p); }", "active borrow"),
+             " var r: ref i32 = unsafe { ref *p }; set(p); }", "active borrow"),
             ("func f(use: bool) void { var n = 0; var b = 1; var p: ?*i32 = some(raw n);"
-             " var address = p ?? raw b; var r: ref mut i32 = address; }", "source is unproven"),
+             " var address = p ?? raw b; var r: ref mut i32 = unsafe { ref mut *address }; }", "cannot prove the lifetime"),
             ("func f() !void { var box = new i32(1)!; var p = box.asPtr();"
-             " box = new i32(2)!; var r: ref i32 = p; }", "source is unproven"),
+             " box = new i32(2)!; var r: ref i32 = unsafe { ref *p }; }", "cannot prove the lifetime"),
             ("func f() void { var n = 0; var b = 1; var p = raw n;"
-             " for i in 0..2 { var r: ref i32 = p; p = raw b; } }", "source is unproven"),
+             " for i in 0..2 { var r: ref i32 = unsafe { ref *p }; p = raw b; } }", "cannot prove the lifetime"),
         ]:
             with self.subTest(code=code):
                 bad = self.source("bad-reference.vqr", "import (coll)\n" + code)

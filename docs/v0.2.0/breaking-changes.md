@@ -7,6 +7,7 @@
 | `in &const T` | `in T` | 显式解引用裸指针和 Box。安全引用可直接重借用 |
 | 用指针参数修改调用者对象 | `mut T` 或 `*T` | 安全借用用前者，ABI 和底层存储使用后者 |
 | `opt.take(raw slot)`、`opt.replace(raw slot, value)` | `opt.take(slot)`、`opt.Storage<T>.replace(slot, value)` | 传入可独占借用的可选槽；不可复制的具名替换值须显式 `move`。仅持有裸指针时，`opt.takeRaw` 须在 `unsafe` 中满足独占、有效且已初始化的存储约定 |
+| `opt.filter`、`opt.inspect`、`result.inspect` 接收裸指针载荷回调 | 回调参数写作 `item: in T` | 载荷通过共享借用传入，可直接读取 `item`。需要借用具名观察回调环境时使用 `inspectMut` |
 | `core.replace<T>(raw place, value)`、`mem.replace<T>(raw place, value)` | `core.Exchange<T>.replace(place, value)` | 删除旧的普通指针接口。替换目标须可独占借用；不可复制的具名替换值须显式 `move` |
 | `iter.once(value)`、`iter.onceOptional(value)` | `iter.OnceIter<T>(value)`、`iter.OnceOptional<T>(value)` | 可复制元素按值传入，不可复制的具名元素或可选对象须显式 `move` |
 | `opt.toVec(value)`、`opt.intoIter(value)` | `opt.Collection<T>.toVec(value)`、`opt.Collection<T>.intoIter(value)` | 在类型上选择唯一的 Copy 或 Move 签名；可选载荷的嵌套层数保持不变 |

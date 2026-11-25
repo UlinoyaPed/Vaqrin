@@ -1,7 +1,7 @@
 package opt
 import (core, coll, iter as iterator, meta)
 
-pub func flatten<T: Movable>(value: core.NestedOptional<T>) ?T {
+pub func flatten<T: Copyable + Movable>(value: core.NestedOptional<T>) ?T {
     switch move(value) {
         null => null,
         some(inner) => move(inner),
@@ -112,18 +112,18 @@ pub func asMutRef<T>(value: mut ?T) ?ref mut T {
     }
 }
 
-pub func filter<T: Movable, F: Movable>(value: ?T, pred: F) ?T {
+pub func filter<T: Copyable + Movable, F: Copyable + Movable>(value: ?T, pred: F) ?T {
     switch move(value) {
         null => null,
-        some(item) => if pred(raw item) { some(move(item)) } else { null },
+        some(item) => if pred(ref item) { some(move(item)) } else { null },
     }
 }
 
-pub func inspect<T: Movable, F: Movable>(value: ?T, observer: F) ?T {
+pub func inspect<T: Copyable + Movable, F: Copyable + Movable>(value: ?T, observer: F) ?T {
     switch move(value) {
         null => null,
         some(item) => {
-            observer(raw item);
+            observer(ref item);
             some(move(item))
         },
     }
@@ -140,7 +140,7 @@ pub func inspectMut<T: Copyable + Movable, F>(value: ?T, observer: mut F) ?T {
     }
 }
 
-pub func zip<A: Movable, B: Movable>(a: ?A, b: ?B) ?(A, B) {
+pub func zip<A: Copyable + Movable, B: Copyable + Movable>(a: ?A, b: ?B) ?(A, B) {
     switch move(a) {
         null => null,
         some(x) => switch move(b) {
@@ -150,7 +150,7 @@ pub func zip<A: Movable, B: Movable>(a: ?A, b: ?B) ?(A, B) {
     }
 }
 
-pub func zipWith<A: Movable, B: Movable, U: Movable, F: Movable>(a: ?A, b: ?B, combine: F) ?U {
+pub func zipWith<A: Copyable + Movable, B: Copyable + Movable, U: Movable, F: Copyable + Movable>(a: ?A, b: ?B, combine: F) ?U {
     switch move(a) {
         null => null,
         some(x) => switch move(b) {
@@ -160,27 +160,27 @@ pub func zipWith<A: Movable, B: Movable, U: Movable, F: Movable>(a: ?A, b: ?B, c
     }
 }
 
-pub func unzip<A: Movable, B: Movable>(value: ?(A, B)) (?A, ?B) {
+pub func unzip<A: Copyable + Movable, B: Copyable + Movable>(value: ?(A, B)) (?A, ?B) {
     switch move(value) {
         null => (null, null),
         some((a, b)) => (some(move(a)), some(move(b))),
     }
 }
 
-pub func xor<T: Movable>(a: ?T, b: ?T) ?T {
+pub func xor<T: Copyable + Movable>(a: ?T, b: ?T) ?T {
     if isSome(raw a) == isSome(raw b) { return null; }
     if isSome(raw a) { move(a) } else { move(b) }
 }
 
-pub func unwrapOr<T: Movable>(value: ?T, fallback: T) T { move(value) ?? move(fallback) }
-pub func unwrapOrElse<T: Movable, F: Movable>(value: ?T, fallback: F) T { move(value) ?? fallback() }
-pub func expect<T: Movable>(value: ?T, message: str) T { move(value) ?? panic(message) }
+pub func unwrapOr<T: Copyable + Movable>(value: ?T, fallback: T) T { move(value) ?? move(fallback) }
+pub func unwrapOrElse<T: Copyable + Movable, F: Copyable + Movable>(value: ?T, fallback: F) T { move(value) ?? fallback() }
+pub func expect<T: Copyable + Movable>(value: ?T, message: str) T { move(value) ?? panic(message) }
 
-pub func okOr<T: Movable>(value: ?T, reason: ErrorId) !T {
+pub func okOr<T: Copyable + Movable>(value: ?T, reason: ErrorId) !T {
     ok(move(value) ?? { return reason; })
 }
 
-pub func okOrElse<T: Movable, F: Movable>(value: ?T, reason: F) !T {
+pub func okOrElse<T: Copyable + Movable, F: Copyable + Movable>(value: ?T, reason: F) !T {
     ok(move(value) ?? {
         var failure: ErrorId = reason();
         return failure;
@@ -223,16 +223,16 @@ pub class Storage<T: Movable> {
     }
 }
 
-pub func insert<T: Movable>(slot: *?T, value: T) *T {
+pub func insert<T: Copyable + Movable>(slot: *?T, value: T) *T {
     *slot = some(move(value));
     asMutPtr(slot).unwrap()
 }
 
-pub func getOrInsert<T: Movable>(slot: *?T, value: T) *T {
+pub func getOrInsert<T: Copyable + Movable>(slot: *?T, value: T) *T {
     asMutPtr(slot) ?? insert(slot, move(value))
 }
 
-pub func getOrInsertWith<T: Movable, F: Movable>(slot: *?T, factory: F) *T {
+pub func getOrInsertWith<T: Copyable + Movable, F: Copyable + Movable>(slot: *?T, factory: F) *T {
     asMutPtr(slot) ?? insert(slot, factory())
 }
 
@@ -267,7 +267,7 @@ pub class Collection<T: Movable> {
     }
 }
 
-pub func transpose<T: Movable>(value: core.OptionalResult<T>) core.ResultOptional<T> {
+pub func transpose<T: Copyable + Movable>(value: core.OptionalResult<T>) core.ResultOptional<T> {
     switch move(value) {
         null => null,
         some(inner) => some(move(inner)!),

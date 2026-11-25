@@ -528,6 +528,22 @@ ValueAt Body::index(const Ast &n) {
   if (n->kind == NodeKind::Index) {
     auto *i = bound(n->children[1], false);
     if (!i) return neverValue();
+    Borrow origin;
+    if (t->kind == Kind::Array) {
+      origin = v.origin;
+    } else if (t->readOnly && v.origin.checkedView && v.origin.root >= 0 && !v.origin.raw) {
+      // Scoped view inputs also accept ordinary slice descriptors. Their
+      // parameter slots do not prove the lifetime of the storage underneath.
+      auto isViewInput = [&](int root) {
+        const auto &source = locals[root];
+        return source.reference && source.origin.checkedView && source.origin.root == root;
+      };
+      if (!isViewInput(v.origin.root) &&
+          (!v.origin.alternatives || std::ranges::none_of(*v.origin.alternatives, isViewInput))) {
+        origin = v.origin;
+        origin.checkedView = false; // The element is a regular scalar place.
+      }
+    }
     return {element,
             nullptr,
             offset(i),
@@ -535,7 +551,7 @@ ValueAt Body::index(const Ast &n) {
             t->kind == Kind::Array ? v.local : -1,
             true,
             v.temporaryBorrow,
-            t->kind == Kind::Array ? v.origin : Borrow{}};
+            std::move(origin)};
   }
   Value *lo = zero, *hi = count;
   if (n->children.size() > 1) {

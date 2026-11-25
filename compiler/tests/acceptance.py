@@ -1181,6 +1181,54 @@ class Acceptance(CompilerCase):
                 self.assertEqual(self.process("./checked-view").stdout,
                                  b"label\n3\n7\n2\nowned\n111\n9\n")
 
+    def test_v020_checked_slice_element_references(self):
+        prelude = """
+            func bytes(owner: in [3]u8) []const u8 from owner { owner[0..3] }
+            func byteAt(owner: in [3]u8, index: usize) ref u8 from owner {
+                ref bytes(owner)[index]
+            }
+        """
+        program = prelude + """
+            func main() !void {
+                var owner = [3]u8{3, 5, 8};
+                {
+                    var view = bytes(owner)[1..3];
+                    var a = ref view[0];
+                    var b = byteAt(owner, 2);
+                    io.println(a + b)!;
+                }
+                owner[1] = 10;
+                io.println(*byteAt(owner, 1))!;
+                io.println(*byteAt([3]u8{1, 2, 3}, 0))!;
+            }
+        """
+        for level in ("-O0", "-O2"):
+            with self.subTest(level=level):
+                self.hosted(program, "13\n10\n1\n", level)
+
+        cases = {
+            "untracked": ("func bad(view: []const u8) void { var r = ref view[0]; }",
+                          "cannot prove the lifetime"),
+            "descriptor": ("func bad(view: in []const u8) ref u8 { ref view[0] }",
+                           "cannot prove the lifetime"),
+            "mixed_source": ("func bad(owner: in [3]u8, other: in []const u8, choose: bool) void { "
+                             "var slice = if choose { bytes(owner) } else { other }; "
+                             "var r = ref slice[0]; }", "cannot prove the lifetime"),
+            "exclusive": ("func bad(owner: in [3]u8) void { var r = ref mut bytes(owner)[0]; }",
+                          "cannot borrow a read-only object mutably"),
+            "temporary": ("func bad() void { var r = ref bytes([3]u8{1, 2, 3})[0]; }",
+                          "bind the owner first"),
+            "owner_write": ("func bad() void { var owner = [3]u8{1, 2, 3}; var r = ref bytes(owner)[0]; "
+                            "owner[0]++; }", "active borrow"),
+            "local_escape": ("func bad(owner: in [3]u8) ref u8 { var inner = [3]u8{1, 2, 3}; "
+                             "ref bytes(inner)[0] }", "declared source"),
+        }
+        for name, (body, diagnostic) in cases.items():
+            with self.subTest(name=name):
+                source = self.source(name + "/main.vqr", prelude + body)
+                result = self.process(VAQC, "check", source, good=False)
+                self.assertIn(diagnostic.encode(), result.stderr, result.stderr.decode())
+
     def test_v020_checked_slice_reference_iteration(self):
         self.hosted("""
             func bytes(value: in [4]u8) []const u8 from value { value[0..4] }
@@ -4024,9 +4072,6 @@ class Acceptance(CompilerCase):
                 pub var label: i32;
                 func deinit() void { io.println(label) catch {}; }
             }
-            func expectFour(value: *const i32) void {
-                if unsafe { *value } != 4 { panic("inspection passed the wrong payload"); }
-            }
             func expectFourBorrowed(value: in i32) void {
                 if value != 4 { panic("inspection passed the wrong borrowed payload"); }
             }
@@ -4049,12 +4094,12 @@ class Acceptance(CompilerCase):
                     }
                 }
                 io.println(seen)!;
-                var plain = opt.inspect(present, expectFour);
-                var indirect: func(*const i32) void = expectFour;
+                var plain = opt.inspect(present, expectFourBorrowed);
+                var indirect: func(in i32) void = expectFourBorrowed;
                 var viaPointer = opt.inspect(present, indirect);
                 var borrowed: func(in i32) void = expectFourBorrowed;
                 var viaBorrow = opt.inspectMut(present, borrowed);
-                var lambda = opt.inspect<i32>(present, (value: *const i32) void => expectFour(value));
+                var lambda = opt.inspect<i32>(present, (value: in i32) void => expectFourBorrowed(value));
                 if plain.unwrap() != 4 || viaPointer.unwrap() != 4 ||
                    viaBorrow.unwrap() != 4 || lambda.unwrap() != 4 {
                     panic("routine callback inspection changed its payload");
@@ -4089,7 +4134,7 @@ class Acceptance(CompilerCase):
         self.hosted("""
             import (core, opt, iter, coll)
             error Broken { Stop }
-            func bumped(x: *const i32) bool { *x > 3 }
+            func bumped(x: in i32) bool { x > 3 }
             func sum(x, y: i32) i32 { x + y }
             func seven() i32 { 7 }
             func noReturn(message: str) never { panic(message) }
@@ -4257,13 +4302,20 @@ class Acceptance(CompilerCase):
         self.hosted("""
             import (result)
             error Problem { Missing }
-            func rawObserver(value: *const i32) void {
-                if *value != 5 { panic("wrong raw observer payload"); }
+            func observer(value: in i32) void {
+                if value != 5 { panic("wrong observer payload"); }
+            }
+            func checkError(reason: ErrorId) void {
+                if reason != Problem.Missing { panic("wrong error identity"); }
             }
             func main() !void {
                 var original: !i32 = 5;
                 var failed: !i32 = Problem.Missing;
-                io.println(result.inspect(original, rawObserver)!)!;
+                io.println(result.inspect(original, observer)!)!;
+                var copiedError = result.inspectErr(failed, checkError);
+                if result.errorOf(raw copiedError).unwrap() != Problem.Missing {
+                    panic("inspectErr changed its error");
+                }
                 seen := 0;
                 {
                     observe := [ref mut seen](item: in i32) void => { seen += item; };
@@ -4280,6 +4332,19 @@ class Acceptance(CompilerCase):
                 io.println(seen)!;
             }
         """, "5\n5\ntrue\n5\ntrue\n12\n")
+
+    def test_v020_optional_and_result_observers_reject_raw_payload_callbacks(self):
+        for package, wrapper in (("opt", "?"), ("result", "!")):
+            with self.subTest(package=package):
+                source = self.source(f"{package}.vqr", f"""
+                    import ({package})
+                    func observe(value: *const i32) void {{}}
+                    func check(value: {wrapper}i32) void {{
+                        {package}.inspect(value, observe);
+                    }}
+                """)
+                diagnostic = self.process(VAQC, "check", source, good=False).stderr
+                self.assertIn(b"expected '*const i32', found 'ref i32'", diagnostic)
 
     def test_v020_grpc_typed_response_selects_payload_ownership(self):
         self.hosted("""

@@ -6,26 +6,26 @@ pub enum ResultState { Ok, Err }
 pub func isOk<T>(value: *const !T) bool { core.isOk(value) }
 pub func isErr<T>(value: *const !T) bool { core.isErr(value) }
 
-pub func map<T: Movable, U: Movable, F: Movable>(value: !T, transform: F) !U {
+pub func map<T: Copyable + Movable, U: Movable, F: Copyable + Movable>(value: !T, transform: F) !U {
     ok(transform(move(value)!))
 }
 
-pub func andThen<T: Movable, U: Movable, F: Movable>(value: !T, transform: F) !U {
+pub func andThen<T: Copyable + Movable, U: Movable, F: Copyable + Movable>(value: !T, transform: F) !U {
     transform(move(value)!)
 }
 
-pub func orElse<T: Movable, F: Movable>(value: !T, fallback: F) !T {
+pub func orElse<T: Copyable + Movable, F: Copyable + Movable>(value: !T, fallback: F) !T {
     var item = move(value) catch (errorId) { return fallback(errorId); };
     ok(move(item))
 }
 
-pub func inspect<T: Movable, F: Movable>(value: !T, observer: F) !T {
+pub func inspect<T: Copyable + Movable, F: Copyable + Movable>(value: !T, observer: F) !T {
     var item = move(value)!;
-    observer(raw item);
+    observer(ref item);
     ok(move(item))
 }
 
-pub func inspectErr<T: Movable, F: Movable>(value: !T, observer: F) !T {
+pub func inspectErr<T: Copyable + Movable, F: Copyable + Movable>(value: !T, observer: F) !T {
     var item = move(value) catch (errorId) {
         observer(errorId);
         return errorId;
@@ -48,16 +48,16 @@ pub func inspectErrMut<T: Copyable + Movable, F>(value: !T, observer: mut F) !T 
     ok(move(item))
 }
 
-pub func unwrapOr<T: Movable>(value: !T, fallback: T) T { move(value) catch move(fallback) }
-pub func unwrapOrElse<T: Movable, F: Movable>(value: !T, fallback: F) T {
+pub func unwrapOr<T: Copyable + Movable>(value: !T, fallback: T) T { move(value) catch move(fallback) }
+pub func unwrapOrElse<T: Copyable + Movable, F: Copyable + Movable>(value: !T, fallback: F) T {
     move(value) catch (errorId) { fallback(errorId) }
 }
-pub func expect<T: Movable>(value: !T, message: str) T { move(value) catch panic(message) }
+pub func expect<T: Copyable + Movable>(value: !T, message: str) T { move(value) catch panic(message) }
 
 pub func okValue<T>(value: *const !T) ?*const T { __vqr_result_pointer(value) }
 pub func errorOf<T>(value: *const !T) ?ErrorId { __vqr_result_error(value) }
 
-pub func transpose<T: Movable>(value: core.ResultOptional<T>) core.OptionalResult<T> {
+pub func transpose<T: Copyable + Movable>(value: core.ResultOptional<T>) core.OptionalResult<T> {
     var item = move(value) catch (errorId) {
         var failure: !T = errorId;
         return some(move(failure));
@@ -68,7 +68,7 @@ pub func transpose<T: Movable>(value: core.ResultOptional<T>) core.OptionalResul
     }
 }
 
-pub func collect<T: Movable, I: Movable>(values: I) !coll.Vec<T> {
+pub func collect<T: Movable, I: Copyable + Movable>(values: I) !coll.Vec<T> {
     var out = coll.Vec<T>();
     for item in move(values) { out.push(move(item)!)!; }
     move(out)

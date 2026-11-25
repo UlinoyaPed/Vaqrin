@@ -93,8 +93,10 @@ pub func andThen<T: Copyable + Movable, U: Movable, F: Copyable + Movable>(value
     }
 }
 
-pub func isSome<T>(value: *const ?T) bool { core.isSome(value) }
-pub func isNone<T>(value: *const ?T) bool { core.isNone(value) }
+pub func isSome<T>(value: in ?T) bool {
+    switch value { null => false, some(ref item) => true }
+}
+pub func isNone<T>(value: in ?T) bool { !isSome<T>(value) }
 pub func asPtr<T>(value: *const ?T) ?*const T { __vqr_optional_pointer(value) }
 pub func asMutPtr<T>(value: *?T) ?*T { __vqr_optional_pointer(value) }
 
@@ -168,8 +170,8 @@ pub func unzip<A: Copyable + Movable, B: Copyable + Movable>(value: ?(A, B)) (?A
 }
 
 pub func xor<T: Copyable + Movable>(a: ?T, b: ?T) ?T {
-    if isSome(raw a) == isSome(raw b) { return null; }
-    if isSome(raw a) { move(a) } else { move(b) }
+    if isSome(a) == isSome(b) { return null; }
+    if isSome(a) { move(a) } else { move(b) }
 }
 
 pub func unwrapOr<T: Copyable + Movable>(value: ?T, fallback: T) T { move(value) ?? move(fallback) }
@@ -195,8 +197,8 @@ pub func okOrElseMut<T: Copyable + Movable, F>(value: ?T, reason: mut F) !T {
     })
 }
 
-pub func contains<T>(value: *const ?T, needle: *const T) bool {
-    switch asPtr(value) { null => false, some(ptr) => *ptr == *needle }
+pub func contains<T>(value: in ?T, needle: in T) bool {
+    switch value { null => false, some(ref item) => item == needle }
 }
 
 pub func take<T: Movable>(slot: mut ?T) ?T { core.Exchange<?T>.replace(slot, null) }
@@ -223,17 +225,19 @@ pub class Storage<T: Movable> {
     }
 }
 
-pub func insert<T: Copyable + Movable>(slot: *?T, value: T) *T {
-    *slot = some(move(value));
-    asMutPtr(slot).unwrap()
+pub func insert<T: Copyable + Movable>(slot: mut ?T, value: T) ref mut T from slot {
+    var previous = Storage<T>.replace(slot, move(value));
+    asMutRef<T>(slot).unwrap()
 }
 
-pub func getOrInsert<T: Copyable + Movable>(slot: *?T, value: T) *T {
-    asMutPtr(slot) ?? insert(slot, move(value))
+pub func getOrInsert<T: Copyable + Movable>(slot: mut ?T, value: T) ref mut T from slot {
+    if isNone<T>(slot) { return insert(slot, move(value)); }
+    asMutRef<T>(slot).unwrap()
 }
 
-pub func getOrInsertWith<T: Copyable + Movable, F: Copyable + Movable>(slot: *?T, factory: F) *T {
-    asMutPtr(slot) ?? insert(slot, factory())
+pub func getOrInsertWith<T: Copyable + Movable, F: Copyable + Movable>(slot: mut ?T, factory: F) ref mut T from slot {
+    if isNone<T>(slot) { return insert(slot, factory()); }
+    asMutRef<T>(slot).unwrap()
 }
 
 // Lift an optional into an owning collection. For non-Copyable payloads,

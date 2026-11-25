@@ -4130,6 +4130,56 @@ class Acceptance(CompilerCase):
         diagnostic = self.process(VAQC, "check", escape, good=False).stderr
         self.assertIn(b"references cannot be stored in Box allocations", diagnostic)
 
+    def test_optional_insertion_returns_exclusive_scope_checked_reference(self):
+        program = """
+            import (opt)
+            func seven() i32 { 7 }
+            func unused() i32 { panic("factory must not run for a present value"); }
+            func main() !void {
+                var slot: ?i32 = null;
+                io.println(opt.contains(slot, 7))!;
+                {
+                    var item = opt.getOrInsertWith(slot, seven);
+                    item += 1;
+                }
+                io.println(opt.isSome(slot))!;
+                {
+                    var other = opt.getOrInsertWith(slot, unused);
+                    io.println(other)!;
+                }
+                {
+                    var newValue = opt.insert(slot, 9);
+                    newValue += 1;
+                }
+                io.println(opt.contains(slot, 10))!;
+            }
+        """
+        for optimization in ("-O0", "-O2"):
+            with self.subTest(optimization=optimization):
+                self.hosted(program, "false\ntrue\n8\ntrue\n", optimization)
+        setup = "import (opt)\n"
+        cases = {
+            "pointer": ("var loan = opt.insert(raw slot, 1);", b"no accessible overload"),
+            "mutation": ("var loan = opt.insert(slot, 1); slot = null;", b"access conflicts with active borrow"),
+            "second-loan": ("var loan = opt.insert(slot, 1); var second = opt.getOrInsert(slot, 2);",
+                            b"access conflicts with active borrow"),
+        }
+        for name, (statement, reason) in cases.items():
+            with self.subTest(name=name):
+                source = self.source(name + "/main.vqr", setup + "func main() void { var slot: ?i32 = null; "
+                                     + statement + " }")
+                diagnostic = self.process(VAQC, "check", source, good=False).stderr
+                self.assertIn(reason, diagnostic, diagnostic.decode())
+
+        source = self.source("escape/main.vqr", setup + """
+            func wrong(owner: mut ?i32) ref mut i32 from owner {
+                var local: ?i32 = null;
+                opt.getOrInsert(local, 5)
+            }
+        """)
+        diagnostic = self.process(VAQC, "check", source, good=False).stderr
+        self.assertIn(b"returned reference must borrow from its declared source", diagnostic, diagnostic.decode())
+
     def test_optional_core_and_iterator_contracts(self):
         self.hosted("""
             import (core, opt, iter, coll)
@@ -4144,17 +4194,21 @@ class Acceptance(CompilerCase):
                 core.swap(raw a, raw b); core.swap(raw a, raw a);
                 io.println(core.Exchange<i32>.replace(b, core.identity(a)))!;
                 var o: ?i32 = null;
-                io.println(opt.isNone(raw o))!;
-                var value = opt.getOrInsert(raw o, 3);
-                *value += 2;
-                opt.getOrInsertWith(raw o, seven);
+                io.println(opt.isNone(o))!;
+                {
+                    var value = opt.getOrInsert(o, 3);
+                    value += 2;
+                }
+                opt.getOrInsertWith(o, seven);
                 io.println(*opt.asPtr(raw o).unwrap())!;
                 io.println(opt.Storage<i32>.replace(o, 8).unwrap())!;
                 io.println(opt.take(o).unwrap())!;
-                io.println(opt.isNone(raw o))!;
-                var newValue = opt.insert(raw o, 9);
-                (*newValue)--;
-                io.println(opt.contains(raw o, newValue))!;
+                io.println(opt.isNone(o))!;
+                {
+                    var newValue = opt.insert(o, 9);
+                    newValue--;
+                }
+                io.println(opt.contains(o, 8))!;
                 seed := 3;
                 transform := [seed](n: i32) ?i32 => { if n > seed { some(n) } else { null } };
                 io.println(opt.andThen<i32, i32>(o, move(transform)).unwrap())!;
@@ -4186,7 +4240,7 @@ class Acceptance(CompilerCase):
                 io.println(*cursor.next().unwrap())!;
                 var once = opt.Collection<i32>.intoIter(opt.take(o));
                 io.println(once.next().unwrap())!;
-                var exhausted = once.next(); io.println(opt.isNone(raw exhausted))!;
+                var exhausted = once.next(); io.println(opt.isNone(exhausted))!;
                 var listed = iter.iter(items.asConstSlice());
                 io.println(listed.sizeHint().lower)!;
                 for index, pointer in iter.enumerate<iter.SliceIterMut<i32>, *i32>(items.iterMut()) {

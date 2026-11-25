@@ -1181,6 +1181,42 @@ class Acceptance(CompilerCase):
                 self.assertEqual(self.process("./checked-view").stdout,
                                  b"label\n3\n7\n2\nowned\n111\n9\n")
 
+    def test_v020_checked_explicit_and_implicit_self_share_receiver_provenance(self):
+        prelude = """
+            class Owner {
+                var data: [2]i32;
+                pub func init() : data([2]i32{2, 3}) {}
+                pub const func view() []const i32 from self { self.data[:] }
+                pub const func explicitView() []const i32 from self { self.view() }
+                pub const func implicitView() []const i32 from self { view() }
+                pub const func first() ref i32 from self { ref self.data[0] }
+                pub func setFirst(value: i32) void { self.data[0] = value; }
+            }
+        """
+        for level in ("-O0", "-O2"):
+            with self.subTest(level=level):
+                self.hosted(prelude + """
+                    func main() !void {
+                        var owner = Owner();
+                        {
+                            var a = owner.explicitView();
+                            var b = owner.implicitView();
+                            io.println(a[0] + b[1] + *owner.first())!;
+                        }
+                        owner.setFirst(8);
+                        io.println(owner.explicitView()[0])!;
+                    }
+                """, "7\n8\n", level)
+        for index, (code, diagnostic) in enumerate((
+            ("var owner = Owner(); var liveView = owner.explicitView(); owner.setFirst(4);",
+             "active borrow"),
+            ("var owner = Owner(); var pointer = raw owner; var v = unsafe { (*pointer).view() };",
+             "proven owner"),
+        )):
+            with self.subTest(code=code):
+                source = self.source(f"self-negative/{index}.vqr", prelude + "func main() void {" + code + "}")
+                self.assertIn(diagnostic.encode(), self.process(VAQC, "check", source, good=False).stderr)
+
     def test_v020_checked_slice_element_references(self):
         prelude = """
             func bytes(owner: in [3]u8) []const u8 from owner { owner[0..3] }

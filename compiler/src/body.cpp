@@ -337,18 +337,22 @@ ValueAt Body::dereference(ValueAt v, Span span, bool implicit) {
   }
   if (t->kind != Kind::Pointer && t->kind != Kind::Reference)
     fail(span, "dereference requires a pointer, reference or Box");
-  if (t->kind == Kind::Pointer) {
+  // Only the compiler-bound receiver has this reserved name. Explicit
+  // pointer operations and values copied out of self stay raw.
+  const bool hiddenReceiver = t->kind == Kind::Pointer && implicit && owner &&
+                              t->parts[0] == owner && v.local >= 0 &&
+                              locals[v.local].name == "self";
+  if (t->kind == Kind::Pointer && !hiddenReceiver) {
     if (explicitBorrowDepth) {
       if (implicit) fail(span, "raw pointer access in a checked borrow requires explicit dereference", "E240");
       if (!unsafeDepth) fail(span, "borrowing through a raw pointer requires unsafe", "E240");
-    } else if ((registeringDefer || deferredCleanup) &&
-               !(implicit && owner && v.local >= 0 && locals[v.local].name == "self")) {
-      // The compiler's hidden self address is not a user-supplied raw pointer.
+    } else if (registeringDefer || deferredCleanup) {
       if (implicit) fail(span, "raw pointer access in defer requires explicit dereference", "E240");
       if (!unsafeDepth) fail(span, "raw pointer access in defer requires unsafe", "E240");
     }
   }
-  auto origin = t->kind == Kind::Reference || v.origin.raw ? v.origin : Borrow{};
+  auto origin = t->kind == Kind::Reference || v.origin.raw || hiddenReceiver ? v.origin : Borrow{};
+  if (hiddenReceiver) origin.raw = false;
   return {t->parts[0], nullptr, read(v, span, false), !t->readOnly, -1, true, v.temporaryBorrow, origin};
 }
 

@@ -432,6 +432,12 @@ pub class Vec<T: Movable> {
 
     pub static func intoIter(value: move Self) IntoVecIter<T> { IntoVecIter<T>(move(value)) }
 
+    // A checked, read-only slice for scalar elements. Its lifetime is tied
+    // to this Vec, not to the slice descriptor or the current buffer.
+    pub const func borrowSlice() []const T from self {
+        unsafe { __vqr_borrow_slice_from_self<T>(data, length) }
+    }
+
     pub const func asConstSlice() []const T { asSlice() }
     pub func asPtr() ?*T { if length == 0 { null } else { data } }
     pub const func asConstPtr() ?*const T { if length == 0 { null } else { some(data.unwrap()) } }

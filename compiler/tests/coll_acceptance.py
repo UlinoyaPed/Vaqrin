@@ -10,6 +10,69 @@ class ContainerAcceptance(CompilerCase):
         self.process(VAQC, "build", entry, "-O2", "-o", "containers")
         return self.process("./containers").stdout.decode().splitlines()
 
+    def test_vec_checked_slice_keeps_owner_live(self):
+        prelude = """
+            import (coll)
+            func fromVec(owner: in coll.Vec<i32>) []const i32 from owner {
+                owner.borrowSlice()
+            }
+            func sum(view: in []const i32) i32 {
+                var total = 0;
+                for ref item in view { total += item; }
+                total
+            }
+        """
+        program = prelude + """
+            func main() !void {
+                var owner = coll.Vec<i32>();
+                io.println(owner.borrowSlice().len())!;
+                owner.push(3)!;
+                owner.push(5)!;
+                {
+                    var all = fromVec(owner);
+                    var tail = all[1..2];
+                    var element = ref all[0];
+                    io.println(sum(tail) + element)!;
+                }
+                owner.reserve(128)!;
+                io.println(owner.remove(0).unwrap())!;
+                io.println(sum(owner.borrowSlice()))!;
+                io.println(coll.Vec<i32>().borrowSlice().len())!;
+            }
+        """
+        for level in ("-O0", "-O2"):
+            with self.subTest(level=level):
+                self.hosted(program, "0\n8\n3\n5\n0\n", level)
+
+        cases = {
+            "growth": ("var view = owner.borrowSlice(); owner.reserve(128)!;", "active borrow"),
+            "remove": ("var view = owner.borrowSlice(); owner.remove(0);", "active borrow"),
+            "move": ("var view = owner.borrowSlice(); var moved = move(owner);", "active borrow"),
+            "mutable": ("var view = owner.borrowSlice(); var item = ref mut view[0];",
+                        "cannot borrow a read-only object mutably"),
+            "temporary": ("var view = coll.Vec<i32>().borrowSlice();", "bind the owner first"),
+            "wrong_return_source": ("return owner.borrowSlice();", "declared source"),
+            "untracked_callee": ("var view = owner.borrowSlice(); unchecked(view);", "untracked"),
+            "competing_call": ("conflict(owner.borrowSlice(), owner);", "active borrow"),
+            "mutating_index": ("var view = owner.borrowSlice(); owner[0]++;", "active borrow"),
+            "outlives_owner": ("var outer: []const i32; { var inner = coll.Vec<i32>(); "
+                               "outer = inner.borrowSlice(); }", "outlive"),
+            "non_scalar": ("var composite = coll.Vec<(i32, i32)>(); var view = composite.borrowSlice();",
+                           "checked readonly view"),
+        }
+        for name, (code, diagnostic) in cases.items():
+            with self.subTest(name=name):
+                if name == "wrong_return_source":
+                    body = "func rejected(other: in coll.Vec<i32>) []const i32 from other {"
+                else:
+                    body = "func rejected() !void {"
+                source = self.source(name + "/main.vqr", prelude + """
+                    func unchecked(view: []const i32) void {}
+                    func conflict(view: in []const i32, owner: mut coll.Vec<i32>) void {}
+                """ + body + "var owner = coll.Vec<i32>(); " + code + "}")
+                result = self.process(VAQC, "check", source, good=False)
+                self.assertIn(diagnostic.encode(), result.stderr, result.stderr.decode())
+
     def test_optional_storage_checked_ownership_and_raw_admission(self):
         definitions = """
             import (opt)

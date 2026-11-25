@@ -490,16 +490,29 @@ ValueAt Body::standardIntrinsic(std::string_view key, const Ast &n, const std::v
     phi->addIncoming(out, allocate);
     return {result, phi};
   }
-  if (key == "__vqr_slice" || key == "__vqr_const_slice") {
+  if (key == "__vqr_slice" || key == "__vqr_const_slice" || key == "__vqr_borrow_slice_from_self") {
     arity(2);
+    const bool checked = key == "__vqr_borrow_slice_from_self";
+    auto *slice = p.slice(element, key != "__vqr_slice");
+    Borrow origin;
+    if (checked) {
+      const int self = findLocal("self");
+      if (!unsafeDepth || !file.standard || file.package != "coll" || self < 0 ||
+          self != returnRoot || !checkedViewReturn || result != slice || !locals[self].type->readOnly)
+        fail(n->span, "borrowed storage slice requires an unsafe standard-library const receiver contract", "E240");
+      origin.root = self;
+      origin.checkedView = true;
+    }
     auto data = expression(n->children[1], p.aggregate(Kind::Optional, {ptr}));
     if (!live()) return neverValue();
     auto *raw = read(data, n->span);
     auto length = expression(n->children[2], p.sizeTy);
     if (!live()) return neverValue();
-    auto *slice = p.slice(element, key == "__vqr_const_slice");
     auto *base = ir.CreateInsertValue(Constant::getNullValue(slice->ir), ir.CreateExtractValue(raw, 1), 0);
-    return {slice, ir.CreateInsertValue(base, read(length, n->span), 1)};
+    auto *descriptor = ir.CreateInsertValue(base, read(length, n->span), 1);
+    if (!checked) return {slice, descriptor};
+    return {slice, descriptor, nullptr, false, -1, false,
+            data.temporaryBorrow || length.temporaryBorrow, std::move(origin)};
   }
   if (key != "__vqr_free" && key != "__vqr_slot_take" && key != "__vqr_slot_write" &&
       key != "__vqr_slot_drop")

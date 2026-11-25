@@ -430,9 +430,10 @@ ValueAt Body::member(const Ast &n) {
     }
   }
   ValueAt v;
-  if (constructing && base->kind == NodeKind::Name && base->text == "self")
-    v = {locals[findLocal("self")].type, fn->getArg(0)};
-  else
+  if (constructing && base->kind == NodeKind::Name && base->text == "self") {
+    auto *receiver = locals[findLocal("self")].type;
+    v = {owner, nullptr, fn->getArg(0), !receiver->readOnly, -1, true};
+  } else
     v = expression(base);
   if (v.type == p.neverTy) return v;
   if (v.type->kind == Kind::Box)

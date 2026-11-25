@@ -337,9 +337,16 @@ ValueAt Body::dereference(ValueAt v, Span span, bool implicit) {
   }
   if (t->kind != Kind::Pointer && t->kind != Kind::Reference)
     fail(span, "dereference requires a pointer, reference or Box");
-  if (t->kind == Kind::Pointer && explicitBorrowDepth) {
-    if (implicit) fail(span, "raw pointer access in a checked borrow requires explicit dereference", "E240");
-    if (!unsafeDepth) fail(span, "borrowing through a raw pointer requires unsafe", "E240");
+  if (t->kind == Kind::Pointer) {
+    if (explicitBorrowDepth) {
+      if (implicit) fail(span, "raw pointer access in a checked borrow requires explicit dereference", "E240");
+      if (!unsafeDepth) fail(span, "borrowing through a raw pointer requires unsafe", "E240");
+    } else if ((registeringDefer || deferredCleanup) &&
+               !(implicit && owner && v.local >= 0 && locals[v.local].name == "self")) {
+      // The compiler's hidden self address is not a user-supplied raw pointer.
+      if (implicit) fail(span, "raw pointer access in defer requires explicit dereference", "E240");
+      if (!unsafeDepth) fail(span, "raw pointer access in defer requires unsafe", "E240");
+    }
   }
   auto origin = t->kind == Kind::Reference || v.origin.raw ? v.origin : Borrow{};
   return {t->parts[0], nullptr, read(v, span, false), !t->readOnly, -1, true, v.temporaryBorrow, origin};
@@ -1711,6 +1718,7 @@ void Body::statementContents(const Ast &n, std::size_t bindingScope) {
       registerDeferBlock(action, n->span, registration);
       return;
     }
+    llvm::SaveAndRestore guard(registeringDefer, true);
     auto value = call(action, nullptr, &registration);
     if (!registration.completed && value.type != p.neverTy)
       fail(n->span, "defer currently requires an ordinary void function or method call", "E290");

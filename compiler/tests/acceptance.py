@@ -684,6 +684,64 @@ class Acceptance(CompilerCase):
                 source = self.source(name + ".vqr", prefix + "func main() !void { " + body + " }")
                 self.assertIn(message.encode(), self.process(VAQC, "check", source, good=False).stderr)
 
+    def test_v020_defer_raw_access_requires_explicit_unsafe(self):
+        prelude = '''
+            class Probe {
+                pub var number: i32;
+                pub const func report() void { record(number); }
+                pub const func later() void { defer { record(self.number); } }
+            }
+            func record(n: i32) void { io.println(n) catch {}; }
+        '''
+        cases = (
+            ("defer record((*pointer).number);", b"raw pointer access in defer requires unsafe"),
+            ("unsafe { defer pointer.report(); }", b"raw pointer access in defer requires explicit dereference"),
+            ("unsafe { defer (*pointer).report(); }", b"deferred borrow must have an owner"),
+            ("defer { var n = 1; var p = raw n; record(*p); }", b"raw pointer access in defer requires unsafe"),
+            ("defer { var n = Probe{number: 1}; var p = raw n; "
+             "unsafe { record(p.number); } }", b"raw pointer access in defer requires explicit dereference"),
+        )
+        for body, diagnostic in cases:
+            with self.subTest(body=body):
+                source = self.source("defer-raw.vqr", "import (io)\n" + prelude +
+                                     "func check(pointer: *Probe) void { " + body + " }")
+                self.assertIn(diagnostic, self.process(VAQC, "check", source, good=False).stderr)
+        alias = self.source("defer-receiver-alias.vqr", "import (io)\n" + prelude + '''
+            class Holder {
+                pub const func report() void {}
+                pub const func delayed() void {
+                    var pointer = self;
+                    unsafe { defer pointer.report(); }
+                }
+            }
+            func main() void {}
+        ''')
+        self.assertIn(b"raw pointer access in defer requires explicit dereference",
+                      self.process(VAQC, "check", alias, good=False).stderr)
+        program = prelude + '''
+            class Initialized {
+                var number: i32;
+                pub func init(n: i32) : number(n) { defer record(self.number); }
+            }
+            func main() void {
+                var initialized = Initialized(13);
+                var probe = Probe{number: 7};
+                var pointer = raw probe;
+                defer record(unsafe { (*pointer).number });
+                probe.number = 9;
+                unsafe { defer (*pointer).report(); }
+                probe.later();
+                defer {
+                    var n = 11;
+                    var p = raw n;
+                    record(unsafe { *p });
+                }
+            }
+        '''
+        for level in ("-O0", "-O2"):
+            with self.subTest(level=level):
+                self.hosted(program, "13\n9\n9\n11\n7\n", level)
+
     def test_v020_deferred_blocks_capture_lexical_bindings(self):
         program = """
             error BlockError { Failed }

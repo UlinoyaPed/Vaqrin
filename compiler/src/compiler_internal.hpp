@@ -256,6 +256,7 @@ private:
   std::vector<Local> locals;
   std::vector<DeferredCall> deferredCalls;
   bool deferredCleanup = false;
+  bool registeringDefer = false;
   std::map<int, bool> deferredCaptureWrites;
   std::multiset<int> patternBorrows;
   std::vector<std::vector<int>> scopes;

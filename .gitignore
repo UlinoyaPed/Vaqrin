@@ -67,7 +67,7 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
-/compiler/tests/__pycache__/
+__pycache__
 
 tmp/
 .winc/

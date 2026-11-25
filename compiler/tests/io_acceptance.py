@@ -60,6 +60,7 @@ class IoAcceptance(CompilerCase):
         for data, expected in (
             (b"4 1\n1 1 2 3\n", b"3\n"), (b"4 1\n1 1 2 2\n", b"4\n"),
             (b"3 9\n2 2 2\n", b"0\n"),
+            (b"6 2\n1 1 3 5 5 7\n", b"6\n"),
             (b"100000 1\n" + b"1 " * 50000 + b"2 " * 50000, b"2500000000\n"),
         ):
             self.assertEqual(self.process("./p1102", input=data).stdout, expected)

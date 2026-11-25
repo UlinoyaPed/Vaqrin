@@ -1153,6 +1153,51 @@ class StandardLibraryAcceptance(CompilerCase):
                 result = self.process(VAQC, "check", source, good=False)
                 self.assertIn(b"error[E230]: access conflicts with active borrow", result.stderr)
 
+    def test_linalg_readonly_slices_track_the_matrix_and_vector(self):
+        prelude = """
+            import (linalg)
+            func elements(owner: in linalg.Matrix<f64>) []const f64 from owner {
+                owner.asSlice()
+            }
+            func untracked(slice: []const f64) void {}
+        """
+        program = prelude + """
+            func main() !void {
+                var matrix = linalg.Matrix<f64>.zeros(1, 2)!;
+                matrix.set(0, 0, 3.0);
+                matrix.set(0, 1, 4.0);
+                var vector = linalg.Vector<f64>.zeros(2)!;
+                *vector.getMut(1).unwrap() = 2.0;
+                {
+                    var flat = elements(matrix);
+                    var data = vector.asSlice();
+                    io.println(linalg.dot<f64>(flat, data)! == 8.0)!;
+                    io.println(linalg.norm2<f64>(flat) == 5.0)!;
+                    io.println(linalg.outer<f64>(flat, data)!.at(1, 1) == 8.0)!;
+                }
+                matrix.set(0, 1, 2.0);
+                vector.resize(3, 1.0)!;
+                io.println(matrix.at(0, 1) == 2.0 && vector.len() == 3)!;
+            }
+        """
+        for level in ("-O0", "-O2"):
+            with self.subTest(level=level):
+                self.hosted(program, "true\n" * 4, level)
+        for name, code, diagnostic in (
+            ("write", "var view = elements(matrix); matrix.set(0, 0, 1.0);", "active borrow"),
+            ("resize", "var view = vector.asSlice(); vector.resize(4, 1.0)!;", "active borrow"),
+            ("move", "var view = matrix.asSlice(); var next = move(matrix);", "active borrow"),
+            ("untracked", "untracked(matrix.asSlice());", "untracked"),
+        ):
+            with self.subTest(name=name):
+                source = self.source(name + "/main.vqr", prelude + """
+                    func main() !void {
+                        var matrix = linalg.Matrix<f64>.zeros(2, 2)!;
+                        var vector = linalg.Vector<f64>.zeros(2)!;
+                """ + code + "}")
+                result = self.process(VAQC, "check", source, good=False)
+                self.assertIn(diagnostic.encode(), result.stderr, result.stderr.decode())
+
     def test_qr_least_squares(self):
         self.hosted(r"""
             import (linalg, math, result)

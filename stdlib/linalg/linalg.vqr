@@ -8,22 +8,22 @@ func area(rows: usize, cols: usize) !usize {
     rows * cols
 }
 
-pub func dot<T>(a: []const T, b: []const T) !T { dotSlices<T>(a, b) }
+pub func dot<T>(a: in []const T, b: in []const T) !T { dotSlices<T>(a, b) }
 
-func dotSlices<T>(a: []const T, b: []const T) !T {
+func dotSlices<T>(a: in []const T, b: in []const T) !T {
     if a.len() != b.len() { return LinalgError.ShapeMismatch; }
     var sum = T(0);
     for i in usize(0)..a.len() { sum += a[i] * b[i]; }
     sum
 }
 
-pub func norm2<T>(values: []const T) T {
+pub func norm2<T>(values: in []const T) T {
     var total = T(0);
     for value in values { total = math.hypot<T>(total, value); }
     total
 }
 
-pub func normInf<T>(values: []const T) T {
+pub func normInf<T>(values: in []const T) T {
     var largest = T(0);
     for value in values {
         var magnitude = math.abs<T>(value);
@@ -33,7 +33,7 @@ pub func normInf<T>(values: []const T) T {
     largest
 }
 
-pub func distance<T>(a: []const T, b: []const T) !T {
+pub func distance<T>(a: in []const T, b: in []const T) !T {
     if a.len() != b.len() { return LinalgError.ShapeMismatch; }
     var total = T(0);
     for i in usize(0)..a.len() { total = math.hypot<T>(total, a[i] - b[i]); }
@@ -67,7 +67,7 @@ pub class Vector<T: Copyable + Movable> {
     pub const func len() usize { values.len() }
     pub const func get(index: usize) ?ref T from self { values.get(index) }
     pub func getMut(index: usize) ?ref mut T from self { values.getMut(index) }
-    pub const func asSlice() []const T { values.asConstSlice() }
+    pub const func asSlice() []const T from self { values.borrowSlice() }
     pub func asMutSlice() []T { values.asSlice() }
     pub const func clone() !Self { Vector<T>(values.clone()!) }
     pub func resize(n: usize, value: T) !void {
@@ -141,7 +141,7 @@ pub class Matrix<T: Copyable + Movable> {
         var start = index * width;
         some(values.asSlice()[start..start + width])
     }
-    pub const func asSlice() []const T { values.asConstSlice() }
+    pub const func asSlice() []const T from self { values.borrowSlice() }
     pub func asMutSlice() []T { values.asSlice() }
     pub const func clone() !Self { Matrix<T>(height, width, values.clone()!) }
     pub const func transposeCopy() !Self {
@@ -196,7 +196,7 @@ pub func trace<T: Copyable + Movable>(value: in Matrix<T>) !T {
     sum
 }
 
-pub func outer<T: Copyable + Movable>(a: []const T, b: []const T) !Matrix<T> {
+pub func outer<T: Copyable + Movable>(a: in []const T, b: in []const T) !Matrix<T> {
     var out = Matrix<T>.zeros(a.len(), b.len())!;
     for i in usize(0)..a.len() {
         for j in usize(0)..b.len() { out.set(i, j, a[i] * b[j]); }

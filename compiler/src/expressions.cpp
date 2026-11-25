@@ -2020,8 +2020,12 @@ ValueAt Body::call(const Ast &n, Type *expected, DeferRegistration *defer) {
         self->text = "self";
         self->span = n->span;
         auto v = name(self);
+        // The hidden ABI pointer is not an unproven source-language pointer.
+        // A checked method called on this receiver borrows the enclosing self.
+        auto origin = v.origin;
+        origin.raw = false;
         return invoke(n, ms, types,
-                      ValueAt{owner, nullptr, read(v, n->span), !v.type->readOnly, -1, true, false, v.origin},
+                      ValueAt{owner, nullptr, read(v, n->span), !v.type->readOnly, -1, true, false, origin},
                       owner, false, defer);
       }
     }

@@ -173,9 +173,9 @@ Borrow Body::joinBorrow(Borrow left, Borrow right, Type *type, Span span) {
 }
 
 void Body::checkAccess(ValueAt v, bool write, Span span) {
-  // Payload loans protect referents, not a tuple or closure's own bytes.
+  // Payload loans protect referents, not the carrier's own bytes.
   // Whole local reads must also respect an active loan on its own slot.
-  if (v.local >= 0 && (v.type->kind == Kind::Tuple || v.type->kind == Kind::Closure) &&
+  if (v.local >= 0 && (v.type->kind == Kind::Tuple || v.type->scopedBorrow) &&
       p.hasReference(v.type) &&
       !locals[v.local].reference && v.address == locals[v.local].slot && v.origin.root != v.local)
     checkRootAccess(v.local, {v.local}, write, span);
@@ -1984,6 +1984,8 @@ ValueAt Body::loop(const Ast &n) {
         if (source.type->kind != Kind::Class || p.methods(source.type, "next", false).empty())
           fail(n->span, "iterator requires a next() method returning ?Item");
         int i = bind(" <iterator>", source.type, true, read(source, n->span), n->span);
+        // Keep an iterator's borrow live across the body and all loop back edges.
+        recordBorrow(i, source, n->span);
         iterator = {source.type, nullptr, locals[i].slot, true, i, true};
         nextCall = call;
         if (enumerate) {

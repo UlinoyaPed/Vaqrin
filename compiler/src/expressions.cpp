@@ -1446,6 +1446,7 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
     fail(n->span, "external calls are unavailable during compile-time evaluation", "E220");
   std::vector<Value *> values;
   Value *callee = entry ? entry->ir : nullptr;
+  const bool scopedReceiver = receiver && receiver->type->kind == Kind::Class && receiver->type->scopedBorrow;
   if (receiver) {
     checkAccess(*receiver, !d.readOnly, n->span);
     if (borrowFrom == 0) {
@@ -1459,7 +1460,17 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
       returnOrigin.raw = false;
       returnTemporary = receiver->temporaryBorrow;
     }
-    auto *address = asPointer(*receiver, n->span).value;
+    Value *address;
+    if (scopedReceiver) {
+      // Pass the physical slot for this synchronous const call only. Do not
+      // construct a source-level raw pointer to a reference-bearing record.
+      if (defer || receiver->local < 0 || receiver->address != locals[receiver->local].slot)
+        fail(n->span, "a scoped borrow method requires a whole bound receiver and a direct call", "E230");
+      requireInit(*receiver, n->span);
+      address = receiver->address;
+    } else {
+      address = asPointer(*receiver, n->span).value;
+    }
     if (dynamic) {
       auto *table = ir.CreateExtractValue(address, 1);
       if (!d.generics.empty() || hasComptimeParameters(d)) {
@@ -1490,7 +1501,8 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
     // The receiver has already been evaluated. Keep its storage alive while
     // arguments are evaluated, but allow nested reads until the call starts.
     auto loan = *receiver;
-    if (loan.origin.root < 0) loan.origin.root = loan.local;
+    if (scopedReceiver && !locals[loan.local].reference) loan.origin = {loan.local};
+    else if (loan.origin.root < 0) loan.origin.root = loan.local;
     if (loan.origin.root >= 0) {
       loan.type = p.reference(loan.type, true);
       loan.temporaryBorrow = false; // The reservation ends within this full expression.

@@ -125,6 +125,16 @@ class State<T: Movable + Sendable> {
         notifyChoices();
     }
 
+    pub const func tryReceive() TryRecv<T> {
+        var guard = lock();
+        var outcome = guard.get().receive();
+        switch outcome {
+            TryRecv.Value(ref item) => { notifyAll(); },
+            _ => {},
+        }
+        move(outcome)
+    }
+
     pub const func close() void {
         var guard = lock();
         guard.get().closed = true;
@@ -362,19 +372,10 @@ pub class Receiver<T: Movable + Sendable> {
         }
     }
 
-    pub func tryRecv() TryRecv<T> {
-        var state = shared.asPtr();
-        var guard = state.lock();
-        var outcome = guard.get().receive();
-        switch outcome {
-            TryRecv.Value(ref item) => { state.notifyAll(); },
-            _ => {},
-        }
-        move(outcome)
-    }
+    pub func tryRecv() TryRecv<T> { shared.asPtr().tryReceive() }
 
     pub func close() void { shared.asPtr().close(); }
-    pub func drain() Drain<T> { Drain<T>(self) }
+    pub func drain() Drain<T> from self { Drain<T>.fromShared(shared) }
     pub const func isClosed() bool {
         var guard = shared.asPtr().lock();
         guard.get().closed
@@ -406,10 +407,16 @@ pub class Receiver<T: Movable + Sendable> {
 }
 
 pub class Drain<T: Movable + Sendable> {
-    var source: *Receiver<T>;
-    pub func init(source: *Receiver<T>) : source(source) {}
-    pub func next() ?T {
-        switch source.tryRecv() {
+    #borrowed: scoped
+    var source: ref mem.Shared<State<T>>;
+
+    // Only Receiver can supply its encapsulated mailbox handle.
+    pub static func fromShared(source: in mem.Shared<State<T>>) Drain<T> from source {
+        Drain<T>{source: ref source}
+    }
+
+    pub const func next() ?T {
+        switch source.asPtr().tryReceive() {
             TryRecv.Value(item) => some(move(item)),
             _ => null,
         }

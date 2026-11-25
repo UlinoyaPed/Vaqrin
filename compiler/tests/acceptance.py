@@ -6669,6 +6669,67 @@ class Acceptance(CompilerCase):
             }
         ''', '3\n103\n4\n104\n1\n101\n2\n102\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\nfalse\n')
 
+    def test_channel_drain_keeps_receiver_borrow_until_loop_exit(self):
+        program = """
+            import (channel)
+            func main() !void {
+                tx, rx := channel.bounded<i32>(2)!;
+                tx.send(10)!;
+                tx.send(20)!;
+                for n in rx.drain() {
+                    io.println(n)!;
+                    break;
+                }
+                io.println(rx.recv()!.unwrap())!;
+                tx.send(30)!;
+                {
+                    var drain = rx.drain();
+                    io.println(drain.next().unwrap())!;
+                }
+                rx.close();
+            }
+        """
+        for optimization in ("-O0", "-O2"):
+            with self.subTest(optimization=optimization):
+                self.hosted(program, "10\n20\n30\n", optimization)
+        cases = {
+            "loop-mutation": "for item in rx.drain() { rx.close(); }",
+            "loop-move": "for item in rx.drain() { var moved = move(rx); }",
+            "saved-handle": "var drain = rx.drain(); rx.close(); var item = drain.next();",
+            "second-drain": "var drain = rx.drain(); var second = rx.drain();",
+        }
+        for name, body in cases.items():
+            with self.subTest(name=name):
+                source = self.source(f"{name}/main.vqr", """
+                    import (channel)
+                    func main() !void {
+                        tx, rx := channel.bounded<i32>(2)!;
+                """ + body + "}\n")
+                diagnostic = self.process(VAQC, "check", source, good=False).stderr
+                self.assertIn(b"E230", diagnostic, diagnostic.decode())
+                self.assertIn(b"access conflicts with active borrow", diagnostic, diagnostic.decode())
+
+        source = self.source("escape/main.vqr", """
+            import (channel)
+            func bad(other: in channel.Receiver<i32>) !channel.Drain<i32> from other {
+                tx, rx := channel.bounded<i32>(2)!;
+                rx.drain()
+            }
+        """)
+        diagnostic = self.process(VAQC, "check", source, good=False).stderr
+        self.assertIn(b"returned reference must borrow from its declared source", diagnostic, diagnostic.decode())
+
+        source = self.source("raw/main.vqr", """
+            import (channel)
+            func main() !void {
+                tx, rx := channel.bounded<i32>(2)!;
+                var drain = rx.drain();
+                var pointer = raw drain;
+            }
+        """)
+        diagnostic = self.process(VAQC, "check", source, good=False).stderr
+        self.assertIn(b"a raw address cannot expose reference storage", diagnostic, diagnostic.decode())
+
     def test_channel_native_rendezvous_and_multiple_producers(self):
         self.hosted('''
             import (channel, core, thread)

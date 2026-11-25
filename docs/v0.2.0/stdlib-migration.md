@@ -5,6 +5,7 @@
 | 模块 | 已实现的变化 | 实现来源 |
 | --- | --- | --- |
 | `core.unwrapOr` | `unwrapOr` 复制可复制的可选值；`unwrapOrOwned` 消费不可复制的可选值，具名值需显式 `move`。两者仅在空值时调用原有的函数指针回退。 | [core.vqr](../../stdlib/core/core.vqr) |
+| `channel.Receiver.drain` | 返回借用接收端的 `Drain<T>`，无需裸指针或拥有权转移。迭代器通过原邮箱锁非阻塞地取出元素；迭代期间禁止关闭、移动或再次可变借用接收端，循环耗尽或提前退出后即可继续接收。单独保存的迭代器不能超出接收端作用域。 | [channel.vqr](../../stdlib/channel/channel.vqr) |
 | `opt` | `asRef<T>(value: in ?T) ?ref T`；`asMutRef<T>(value: mut ?T) ?ref mut T`。使用可检查的借用，而非旧式指针形参。 | [opt.vqr](../../stdlib/opt/opt.vqr) |
 | `opt` 映射 | 自由函数 `map`、`andThen` 复制可复制的输入和回调。`Transform<T>.map/andThen` 依 T 选取复制或转移输入。`mapOwned/andThenOwned` 可接管不可复制的拥有型回调。空可选值跳过回调，并正常回收已取得的回调。 | [opt.vqr](../../stdlib/opt/opt.vqr) |
 | `opt` 和 `result` 组合器 | `opt.filter`、`opt.inspect`、`result.inspect` 使用安全共享引用传递载荷，观察回调可声明 `item: in T`。`inspectMut` 通过 `mut F` 临时借用具名回调环境。`result.inspectErr` 和 `inspectErrMut` 保留原错误标识。已迁移的按值组合器显式要求 `Copyable`，仅作为返回值的泛型保持原约束。 | [opt.vqr](../../stdlib/opt/opt.vqr)、[result.vqr](../../stdlib/result/result.vqr) |

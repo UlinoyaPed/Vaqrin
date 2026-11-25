@@ -647,8 +647,13 @@ void Program::fill(Type *t, const Types &substitutions) {
       fail(d.span, "a scoped borrow record cannot declare other class attributes", "E230");
     for (const auto *member : t->members) {
       const auto &m = *member;
-      if (t->scopedBorrow && (m.kind != DeclKind::Field || m.embed))
-        fail(m.span, "a scoped borrow record can only declare fields", "E230");
+      if (t->scopedBorrow && m.kind == DeclKind::Function) {
+        if ((!m.associated && !m.readOnly) || m.name == "init" || m.name == "deinit" ||
+            m.name == "copy" || m.name == "clone")
+          fail(m.span, "a scoped borrow record can only declare const methods and static factories", "E230");
+      } else if (t->scopedBorrow && (m.kind != DeclKind::Field || m.embed)) {
+        fail(m.span, "a scoped borrow record can only declare fields, const methods and static factories", "E230");
+      }
       if (m.kind != DeclKind::Field) continue;
       if (!names.insert(m.name).second) fail(m.span, "duplicate field '" + m.name + "'");
       auto *field = m.type ? type(m.type, *t->def.file, substitutions, t->comptimeArguments)

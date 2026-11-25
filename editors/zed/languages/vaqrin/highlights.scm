@@ -19,8 +19,6 @@
 (import_item "as" @keyword alias: (identifier) @variable.special)
 
 (source_file (identifier) @function . (bracket "("))
-(source_file [(delimiter ".") (operator "?.")] . (identifier) @property)
-(source_file [(delimiter ".") (operator "?.")] . (identifier) @function.method . (bracket "("))
 (source_file (keyword "const") . (identifier) @constant)
 (source_file (keyword "func") . (identifier) @function)
 (source_file (keyword ["class" "interface" "enum" "type" "error"]) . (identifier) @type)
@@ -72,3 +70,8 @@
   [(identifier) (boolean) (null_literal) (number) (character) (string)
    (keyword ["self" "new"]) (operator ["!" "-" "*" "~"]) (bracket "(")])
  (#eq? @keyword "while"))
+
+; A member name after a dot remains an identifier even when its spelling
+; also matches a contextual keyword in the surrounding flat token stream.
+(source_file [(delimiter ".") (operator "?.")] . (identifier) @property)
+(source_file [(delimiter ".") (operator "?.")] . (identifier) @function.method . (bracket "("))

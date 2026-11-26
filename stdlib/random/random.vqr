@@ -497,7 +497,7 @@ pub func sample<R: Rng, T: Copyable + Movable>(items: []const T, count: usize, r
     move(result)
 }
 
-pub func reservoirSample<R: Rng, T: Movable, I: Movable>(items: I, count: usize, rng: *R) !coll.Vec<T> {
+pub func reservoirSample<R: Rng, T: Movable, I: Movable + Copyable>(items: I, count: usize, rng: *R) !coll.Vec<T> {
     var result = coll.Vec<T>.withCapacity(count)!;
     var seen: usize = 0;
     for item in move(items) {

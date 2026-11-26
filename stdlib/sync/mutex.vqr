@@ -80,14 +80,14 @@ pub class MutexGuard<T> {
         }
     }
 
-    pub static func map<U, F>(guard: move Self, transform: F) MappedMutexGuard<U> {
+    pub static func map<U, F: Copyable>(guard: move Self, transform: F) MappedMutexGuard<U> {
         var projected = transform(guard.get());
         var state = guard.word.unwrap();
         guard.word = null;
         unsafe { MutexGuard<U>.fromLocked(state, projected) }
     }
 
-    pub unsafe static func unlockWhile<F>(guard: move Self, wait: F) Self {
+    pub unsafe static func unlockWhile<F: Copyable>(guard: move Self, wait: F) Self {
         var state = guard.word.unwrap();
         var place = guard.value;
         guard.unlock();
@@ -96,7 +96,7 @@ pub class MutexGuard<T> {
         MutexGuard<T>(state, place)
     }
 
-    pub unsafe static func unlockWhileValue<R: Movable, F>(guard: move Self, wait: F) (Self, R) {
+    pub unsafe static func unlockWhileValue<R: Movable, F: Copyable>(guard: move Self, wait: F) (Self, R) {
         var state = guard.word.unwrap();
         var place = guard.value;
         guard.unlock();
@@ -110,7 +110,7 @@ pub class MutexGuard<T> {
 
 pub type MappedMutexGuard<T> = MutexGuard<T>;
 
-pub func withLock<T: Movable + Sendable, F>(mutex: *const Mutex<T>, use: F) !void {
+pub func withLock<T: Movable + Sendable, F: Copyable>(mutex: *const Mutex<T>, use: F) !void {
     var held = mutex.lock()!;
     use(held.get())
 }

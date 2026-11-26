@@ -57,19 +57,19 @@ pub class FuseIter<I: Movable, T: Movable> {
     }
 }
 
-pub func enumerate<I: Movable, T: Movable>(source: I) EnumerateIter<I, T> {
+pub func enumerate<I: Movable + Copyable, T: Movable>(source: I) EnumerateIter<I, T> {
     EnumerateIter<I, T>(move(source))
 }
 
-pub func take<I: Movable, T>(source: I, count: usize) TakeIter<I, T> {
+pub func take<I: Movable + Copyable, T>(source: I, count: usize) TakeIter<I, T> {
     TakeIter<I, T>(move(source), count)
 }
 
-pub func skip<I: Movable, T: Movable>(source: I, count: usize) SkipIter<I, T> {
+pub func skip<I: Movable + Copyable, T: Movable>(source: I, count: usize) SkipIter<I, T> {
     SkipIter<I, T>(move(source), count)
 }
 
-pub func fuse<I: Movable, T: Movable>(source: I) FuseIter<I, T> {
+pub func fuse<I: Movable + Copyable, T: Movable>(source: I) FuseIter<I, T> {
     FuseIter<I, T>(move(source))
 }
 
@@ -112,12 +112,12 @@ pub class RevIter<I: Movable, T> {
     pub func next() ?T { source.nextBack() }
 }
 
-pub func chain<IA: Movable, IB: Movable, T: Movable>(a: IA, b: IB) ChainIter<IA, IB, T> {
+pub func chain<IA: Movable + Copyable, IB: Movable + Copyable, T: Movable>(a: IA, b: IB) ChainIter<IA, IB, T> {
     ChainIter<IA, IB, T>(move(a), move(b))
 }
 
-pub func zip<IA: Movable, IB: Movable, A: Movable, B: Movable>(a: IA, b: IB) ZipIter<IA, IB, A, B> {
+pub func zip<IA: Movable + Copyable, IB: Movable + Copyable, A: Movable, B: Movable>(a: IA, b: IB) ZipIter<IA, IB, A, B> {
     ZipIter<IA, IB, A, B>(move(a), move(b))
 }
 
-pub func rev<I: Movable, T>(source: I) RevIter<I, T> { RevIter<I, T>(move(source)) }
+pub func rev<I: Movable + Copyable, T>(source: I) RevIter<I, T> { RevIter<I, T>(move(source)) }

@@ -108,7 +108,7 @@ pub func abs<T: Copyable>(value: T) !T {
     if value < T(0) { -value } else { value }
 }
 
-func magnitudeU128<T>(value: T) u128 {
+func magnitudeU128<T: Copyable>(value: T) u128 {
     if __vqr_parse_signed<T>() && value < T(0) {
         (convert.checkedCast<u128, T>(~value) catch { panic("invalid integer magnitude"); }).unwrap() + u128(1)
     } else {

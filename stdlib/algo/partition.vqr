@@ -1,7 +1,7 @@
 package algo
 import (core)
 
-pub func partition<T: Movable, F: Movable>(values: []T, predicate: F) usize {
+pub func partition<T: Movable, F: Movable + Copyable>(values: []T, predicate: F) usize {
     var boundary: usize = 0;
     for index in usize(0)..values.len() {
         if predicate(raw values[index]) {
@@ -26,11 +26,11 @@ func stablePartitionRange<T: Movable, F>(values: []T, predicate: *F) usize {
     left + right
 }
 
-pub func stablePartition<T: Movable, F: Movable>(values: []T, predicate: F) !usize {
+pub func stablePartition<T: Movable, F: Movable + Copyable>(values: []T, predicate: F) !usize {
     stablePartitionRange<T, F>(values, raw predicate)
 }
 
-pub func isPartitioned<T, F: Movable>(values: []const T, predicate: F) bool {
+pub func isPartitioned<T, F: Movable + Copyable>(values: []const T, predicate: F) bool {
     var seenRejected = false;
     for index in usize(0)..values.len() {
         if predicate(raw values[index]) {
@@ -42,7 +42,7 @@ pub func isPartitioned<T, F: Movable>(values: []const T, predicate: F) bool {
     true
 }
 
-pub func partitionPoint<T, F: Movable>(values: []const T, predicate: F) usize {
+pub func partitionPoint<T, F: Movable + Copyable>(values: []const T, predicate: F) usize {
     var low: usize = 0;
     var high = values.len();
     while low < high {

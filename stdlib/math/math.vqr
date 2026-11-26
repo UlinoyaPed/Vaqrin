@@ -10,29 +10,29 @@ func fromF32<T>(value: f32) T { (convert.checkedCast<T, f32>(value) catch { pani
 func fromF64<T>(value: f64) T { (convert.checkedCast<T, f64>(value) catch { panic("floating-point conversion failed"); }).unwrap() }
 
 
-func absValue<T>(x: T) T { if signbit(x) { -x } else { x } }
-func copysignValue<T>(x: T, y: T) T { if signbit(x) == signbit(y) { x } else { -x } }
-func sqrtValue<T>(x: T) T {
+func absValue<T: Copyable>(x: T) T { if signbit(x) { -x } else { x } }
+func copysignValue<T: Copyable>(x: T, y: T) T { if signbit(x) == signbit(y) { x } else { -x } }
+func sqrtValue<T: Copyable>(x: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.sqrtf(toF32<T>(x)) }) }
     else { fromF64<T>(unsafe { ffi.sqrt(toF64<T>(x)) }) }
 }
-func expValue<T>(x: T) T {
+func expValue<T: Copyable>(x: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.expf(toF32<T>(x)) }) }
     else { fromF64<T>(unsafe { ffi.exp(toF64<T>(x)) }) }
 }
-func logValue<T>(x: T) T {
+func logValue<T: Copyable>(x: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.logf(toF32<T>(x)) }) }
     else { fromF64<T>(unsafe { ffi.log(toF64<T>(x)) }) }
 }
-func sinValue<T>(x: T) T {
+func sinValue<T: Copyable>(x: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.sinf(toF32<T>(x)) }) }
     else { fromF64<T>(unsafe { ffi.sin(toF64<T>(x)) }) }
 }
-func cosValue<T>(x: T) T {
+func cosValue<T: Copyable>(x: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.cosf(toF32<T>(x)) }) }
     else { fromF64<T>(unsafe { ffi.cos(toF64<T>(x)) }) }
 }
-func midpointValue<T>(a: T, b: T) T {
+func midpointValue<T: Copyable>(a: T, b: T) T {
     if (a < T(0)) != (b < T(0)) {
         a / T(2) + b / T(2)
     } else {
@@ -77,20 +77,20 @@ func signbit64(x: f64) bool {
     (convert.bitCast<u64, f64>(x) & 0x8000000000000000u64) != 0
 }
 
-pub func isNan<T>(x: T) bool {
+pub func isNan<T: Copyable>(x: T) bool {
     if meta.bitWidth<T>() == 32 { nan32(toF32<T>(x)) } else { nan64(toF64<T>(x)) }
 }
-pub func isInfinite<T>(x: T) bool {
+pub func isInfinite<T: Copyable>(x: T) bool {
     if meta.bitWidth<T>() == 32 { infinite32(toF32<T>(x)) } else { infinite64(toF64<T>(x)) }
 }
-pub func isFinite<T>(x: T) bool { !isNan(x) && !isInfinite(x) }
-pub func isNormal<T>(x: T) bool {
+pub func isFinite<T: Copyable>(x: T) bool { !isNan(x) && !isInfinite(x) }
+pub func isNormal<T: Copyable>(x: T) bool {
     if meta.bitWidth<T>() == 32 { normal32(toF32<T>(x)) } else { normal64(toF64<T>(x)) }
 }
-pub func signbit<T>(x: T) bool {
+pub func signbit<T: Copyable>(x: T) bool {
     if meta.bitWidth<T>() == 32 { signbit32(toF32<T>(x)) } else { signbit64(toF64<T>(x)) }
 }
-pub func fpClassify<T>(x: T) FpClass {
+pub func fpClassify<T: Copyable>(x: T) FpClass {
     if isNan(x) { return FpClass.Nan; }
     if isInfinite(x) { return FpClass.Infinite; }
     if x == T(0) { return FpClass.Zero; }
@@ -110,8 +110,8 @@ pub func nan<T>() T {
         fromF64<T>(convert.bitCast<f64, u64>(0x7ff8000000000000u64))
     }
 }
-pub func abs<T>(x: T) T { absValue(x) }
-pub func copysign<T>(x: T, y: T) T { copysignValue(x, y) }
+pub func abs<T: Copyable>(x: T) T { absValue(x) }
+pub func copysign<T: Copyable>(x: T, y: T) T { copysignValue(x, y) }
 
 pub func floor<T: Copyable>(x: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.floorf(toF32<T>(x)) }) }
@@ -164,7 +164,7 @@ pub func roundEven<T: Copyable>(x: T) T {
 }
 
 pub func fract<T: Copyable>(x: T) T { x - trunc(x) }
-pub func modf<T>(x: T) (T, T) {
+pub func modf<T: Copyable>(x: T) (T, T) {
     if meta.bitWidth<T>() == 32 {
         var integer: f32 = 0.0;
         var fraction = unsafe { ffi.modff(toF32<T>(x), raw integer) };
@@ -175,15 +175,15 @@ pub func modf<T>(x: T) (T, T) {
         (fromF64<T>(fraction), fromF64<T>(integer))
     }
 }
-pub func fmod<T>(x: T, y: T) T {
+pub func fmod<T: Copyable>(x: T, y: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.fmodf(toF32<T>(x), toF32<T>(y)) }) }
     else { fromF64<T>(unsafe { ffi.fmod(toF64<T>(x), toF64<T>(y)) }) }
 }
-pub func remainder<T>(x: T, y: T) T {
+pub func remainder<T: Copyable>(x: T, y: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.remainderf(toF32<T>(x), toF32<T>(y)) }) }
     else { fromF64<T>(unsafe { ffi.remainder(toF64<T>(x), toF64<T>(y)) }) }
 }
-pub func remQuo<T>(x: T, y: T) (T, i32) {
+pub func remQuo<T: Copyable>(x: T, y: T) (T, i32) {
     var quotient: i32 = 0;
     if meta.bitWidth<T>() == 32 {
         var result = fromF32<T>(unsafe { ffi.remquof(toF32<T>(x), toF32<T>(y), raw quotient) });
@@ -194,20 +194,20 @@ pub func remQuo<T>(x: T, y: T) (T, i32) {
     }
 }
 
-pub func sqrt<T>(x: T) T { sqrtValue(x) }
-pub func cbrt<T>(x: T) T {
+pub func sqrt<T: Copyable>(x: T) T { sqrtValue(x) }
+pub func cbrt<T: Copyable>(x: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.cbrtf(toF32<T>(x)) }) }
     else { fromF64<T>(unsafe { ffi.cbrt(toF64<T>(x)) }) }
 }
-pub func hypot<T>(x: T, y: T) T {
+pub func hypot<T: Copyable>(x: T, y: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.hypotf(toF32<T>(x), toF32<T>(y)) }) }
     else { fromF64<T>(unsafe { ffi.hypot(toF64<T>(x), toF64<T>(y)) }) }
 }
-pub func pow<T>(x: T, y: T) T {
+pub func pow<T: Copyable>(x: T, y: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.powf(toF32<T>(x), toF32<T>(y)) }) }
     else { fromF64<T>(unsafe { ffi.pow(toF64<T>(x), toF64<T>(y)) }) }
 }
-pub func powi<T>(x: T, n: i32) T {
+pub func powi<T: Copyable>(x: T, n: i32) T {
     var exponent: u32 = if n < 0 {
         convert.checkedCast<u32, i32>(-(n + 1))!.unwrap() + 1
     } else {
@@ -222,95 +222,95 @@ pub func powi<T>(x: T, n: i32) T {
     }
     result
 }
-pub func exp<T>(x: T) T { expValue(x) }
-pub func exp2<T>(x: T) T {
+pub func exp<T: Copyable>(x: T) T { expValue(x) }
+pub func exp2<T: Copyable>(x: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.exp2f(toF32<T>(x)) }) }
     else { fromF64<T>(unsafe { ffi.exp2(toF64<T>(x)) }) }
 }
-pub func expm1<T>(x: T) T {
+pub func expm1<T: Copyable>(x: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.expm1f(toF32<T>(x)) }) }
     else { fromF64<T>(unsafe { ffi.expm1(toF64<T>(x)) }) }
 }
-pub func log<T>(x: T) T { logValue(x) }
-pub func log2<T>(x: T) T {
+pub func log<T: Copyable>(x: T) T { logValue(x) }
+pub func log2<T: Copyable>(x: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.log2f(toF32<T>(x)) }) }
     else { fromF64<T>(unsafe { ffi.log2(toF64<T>(x)) }) }
 }
-pub func log10<T>(x: T) T {
+pub func log10<T: Copyable>(x: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.log10f(toF32<T>(x)) }) }
     else { fromF64<T>(unsafe { ffi.log10(toF64<T>(x)) }) }
 }
-pub func log1p<T>(x: T) T {
+pub func log1p<T: Copyable>(x: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.log1pf(toF32<T>(x)) }) }
     else { fromF64<T>(unsafe { ffi.log1p(toF64<T>(x)) }) }
 }
-pub func sin<T>(x: T) T { sinValue(x) }
-pub func cos<T>(x: T) T { cosValue(x) }
-pub func tan<T>(x: T) T {
+pub func sin<T: Copyable>(x: T) T { sinValue(x) }
+pub func cos<T: Copyable>(x: T) T { cosValue(x) }
+pub func tan<T: Copyable>(x: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.tanf(toF32<T>(x)) }) }
     else { fromF64<T>(unsafe { ffi.tan(toF64<T>(x)) }) }
 }
-pub func asin<T>(x: T) T {
+pub func asin<T: Copyable>(x: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.asinf(toF32<T>(x)) }) }
     else { fromF64<T>(unsafe { ffi.asin(toF64<T>(x)) }) }
 }
-pub func acos<T>(x: T) T {
+pub func acos<T: Copyable>(x: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.acosf(toF32<T>(x)) }) }
     else { fromF64<T>(unsafe { ffi.acos(toF64<T>(x)) }) }
 }
-pub func atan<T>(x: T) T {
+pub func atan<T: Copyable>(x: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.atanf(toF32<T>(x)) }) }
     else { fromF64<T>(unsafe { ffi.atan(toF64<T>(x)) }) }
 }
-pub func atan2<T>(y: T, x: T) T {
+pub func atan2<T: Copyable>(y: T, x: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.atan2f(toF32<T>(y), toF32<T>(x)) }) }
     else { fromF64<T>(unsafe { ffi.atan2(toF64<T>(y), toF64<T>(x)) }) }
 }
-pub func sinh<T>(x: T) T {
+pub func sinh<T: Copyable>(x: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.sinhf(toF32<T>(x)) }) }
     else { fromF64<T>(unsafe { ffi.sinh(toF64<T>(x)) }) }
 }
-pub func cosh<T>(x: T) T {
+pub func cosh<T: Copyable>(x: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.coshf(toF32<T>(x)) }) }
     else { fromF64<T>(unsafe { ffi.cosh(toF64<T>(x)) }) }
 }
-pub func tanh<T>(x: T) T {
+pub func tanh<T: Copyable>(x: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.tanhf(toF32<T>(x)) }) }
     else { fromF64<T>(unsafe { ffi.tanh(toF64<T>(x)) }) }
 }
-pub func asinh<T>(x: T) T {
+pub func asinh<T: Copyable>(x: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.asinhf(toF32<T>(x)) }) }
     else { fromF64<T>(unsafe { ffi.asinh(toF64<T>(x)) }) }
 }
-pub func acosh<T>(x: T) T {
+pub func acosh<T: Copyable>(x: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.acoshf(toF32<T>(x)) }) }
     else { fromF64<T>(unsafe { ffi.acosh(toF64<T>(x)) }) }
 }
-pub func atanh<T>(x: T) T {
+pub func atanh<T: Copyable>(x: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.atanhf(toF32<T>(x)) }) }
     else { fromF64<T>(unsafe { ffi.atanh(toF64<T>(x)) }) }
 }
-pub func fma<T>(x: T, y: T, z: T) T {
+pub func fma<T: Copyable>(x: T, y: T, z: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.fmaf(toF32<T>(x), toF32<T>(y), toF32<T>(z)) }) }
     else { fromF64<T>(unsafe { ffi.fma(toF64<T>(x), toF64<T>(y), toF64<T>(z)) }) }
 }
-pub func nextAfter<T>(x: T, toward: T) T {
+pub func nextAfter<T: Copyable>(x: T, toward: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.nextafterf(toF32<T>(x), toF32<T>(toward)) }) }
     else { fromF64<T>(unsafe { ffi.nextafter(toF64<T>(x), toF64<T>(toward)) }) }
 }
-pub func erf<T>(x: T) T {
+pub func erf<T: Copyable>(x: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.erff(toF32<T>(x)) }) }
     else { fromF64<T>(unsafe { ffi.erf(toF64<T>(x)) }) }
 }
-pub func erfc<T>(x: T) T {
+pub func erfc<T: Copyable>(x: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.erfcf(toF32<T>(x)) }) }
     else { fromF64<T>(unsafe { ffi.erfc(toF64<T>(x)) }) }
 }
-pub func gamma<T>(x: T) T {
+pub func gamma<T: Copyable>(x: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.tgammaf(toF32<T>(x)) }) }
     else { fromF64<T>(unsafe { ffi.tgamma(toF64<T>(x)) }) }
 }
-pub func logGamma<T>(x: T) T {
+pub func logGamma<T: Copyable>(x: T) T {
     if meta.bitWidth<T>() == 32 { fromF32<T>(unsafe { ffi.lgammaf(toF32<T>(x)) }) }
     else { fromF64<T>(unsafe { ffi.lgamma(toF64<T>(x)) }) }
 }
@@ -325,7 +325,7 @@ func stirlingCorrection(x: f64) f64 {
     inv * (1.0 / 12.0 + square * (-1.0 / 360.0 + square * (1.0 / 1260.0
            + square * (-1.0 / 1680.0 + square * (1.0 / 1188.0 - square * 691.0 / 360360.0)))))
 }
-pub func beta<T>(x: T, y: T) T {
+pub func beta<T: Copyable>(x: T, y: T) T {
     var a = toF64<T>(x);
     var b = toF64<T>(y);
     if isNan<f64>(a) || isNan<f64>(b) { return nan<T>(); }
@@ -347,50 +347,50 @@ pub func beta<T>(x: T, y: T) T {
         + 0.91893853320467274178 + stirlingCorrection(p) + correction))
 }
 
-pub func sinCos<T>(x: T) (T, T) { (sin(x), cos(x)) }
-pub func ulp<T>(x: T) T {
+pub func sinCos<T: Copyable>(x: T) (T, T) { (sin(x), cos(x)) }
+pub func ulp<T: Copyable>(x: T) T {
     if isNan(x) || isInfinite(x) { return nan<T>(); }
     var toward = if signbit(x) { -inf<T>() } else { inf<T>() };
     var next = nextAfter(x, toward);
     if isInfinite(next) { next = nextAfter(x, T(0)); }
     abs(next - x)
 }
-pub func maxNum<T>(a: T, b: T) T {
+pub func maxNum<T: Copyable>(a: T, b: T) T {
     if isNan(a) { return b; }
     if isNan(b) { return a; }
     if a == T(0) && b == T(0) { return if signbit(a) { b } else { a }; }
     if a > b { a } else { b }
 }
-pub func minNum<T>(a: T, b: T) T {
+pub func minNum<T: Copyable>(a: T, b: T) T {
     if isNan(a) { return b; }
     if isNan(b) { return a; }
     if a == T(0) && b == T(0) { return if signbit(a) { a } else { b }; }
     if a < b { a } else { b }
 }
-pub func totalMin<T>(a: T, b: T) T {
+pub func totalMin<T: Copyable>(a: T, b: T) T {
     if cmp.totalCmp(a, b) == cmp.Ordering.Greater { b } else { a }
 }
-pub func totalMax<T>(a: T, b: T) T {
+pub func totalMax<T: Copyable>(a: T, b: T) T {
     if cmp.totalCmp(a, b) == cmp.Ordering.Less { b } else { a }
 }
-pub func clamp<T>(x: T, low: T, high: T) T {
+pub func clamp<T: Copyable>(x: T, low: T, high: T) T {
     if isNan(low) || isNan(high) || low > high { panic("invalid clamp bounds"); }
     if x < low { low } else if x > high { high } else { x }
 }
-pub func lerp<T>(a: T, b: T, t: T) T {
+pub func lerp<T: Copyable>(a: T, b: T, t: T) T {
     if (a <= T(0) && b >= T(0)) || (a >= T(0) && b <= T(0)) {
         a * (T(1) - t) + b * t
     } else {
         a + (b - a) * t
     }
 }
-pub func midpoint<T>(a: T, b: T) T { midpointValue(a, b) }
-pub func degrees<T>(radians: T) T { radians * T(180) / pi<T>() }
-pub func radians<T>(degrees: T) T { degrees * pi<T>() / T(180) }
-pub func distance2D<T>(x1: T, y1: T, x2: T, y2: T) T {
+pub func midpoint<T: Copyable>(a: T, b: T) T { midpointValue(a, b) }
+pub func degrees<T: Copyable>(radians: T) T { radians * T(180) / pi<T>() }
+pub func radians<T: Copyable>(degrees: T) T { degrees * pi<T>() / T(180) }
+pub func distance2D<T: Copyable>(x1: T, y1: T, x2: T, y2: T) T {
     hypot(x2 - x1, y2 - y1)
 }
-pub func reduceAngle<T>(x: T) T { remainder(x, tau<T>()) }
+pub func reduceAngle<T: Copyable>(x: T) T { remainder(x, tau<T>()) }
 
 // Keep the exponent separate so even products of subnormal or maximum
 // finite operands can participate in the quotient.
@@ -413,7 +413,7 @@ func scaledDot(a: f64, b: f64, c: f64, d: f64) (f64, c_int) {
 }
 func infiniteComponent(x: f64) f64 { copysign(if isInfinite(x) { 1.0 } else { 0.0 }, x) }
 
-func scaledExpComponent<T>(exponent: T, factor: T, scale: T) T {
+func scaledExpComponent<T: Copyable>(exponent: T, factor: T, scale: T) T {
     if factor == T(0) && !isNan(exponent) { return factor; }
     if isInfinite(scale) && isFinite(exponent) && isFinite(factor) {
         var shifted = toF64<T>(exponent) + logValue<f64>(absValue<f64>(toF64<T>(factor)));

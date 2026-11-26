@@ -11,7 +11,7 @@ pub class BorrowRef<T> {
 
     pub const func get() *const T { pointer }
 
-    pub const func map<U, F: Movable>(project: F) BorrowRef<U> {
+    pub const func map<U, F: Movable + Copyable>(project: F) BorrowRef<U> {
         var target = project(pointer);
         (*counter)++;
         unsafe { BorrowRef<U>(target, counter) }
@@ -30,7 +30,7 @@ pub class BorrowMut<T> {
 
     pub func get() *T { pointer }
 
-    pub static func map<U, F: Movable>(value: move Self, project: F) BorrowMut<U> {
+    pub static func map<U, F: Movable + Copyable>(value: move Self, project: F) BorrowMut<U> {
         var target = project(value.pointer);
         var state = value.counter;
         value.ownsBorrow = false;

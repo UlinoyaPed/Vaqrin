@@ -40,4 +40,4 @@ pub class FromFnIter<T, F: Movable> {
 
 pub func empty<T>() EmptyIter<T> { EmptyIter<T>() }
 pub func repeat<T: Copyable + Movable>(value: T) RepeatIter<T> { RepeatIter<T>(move(value)) }
-pub func fromFn<T, F: Movable>(callback: F) FromFnIter<T, F> { FromFnIter<T, F>(move(callback)) }
+pub func fromFn<T, F: Movable + Copyable>(callback: F) FromFnIter<T, F> { FromFnIter<T, F>(move(callback)) }

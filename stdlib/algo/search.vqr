@@ -1,21 +1,21 @@
 package algo
 import (cmp)
 
-pub func allOf<T, F: Movable>(values: []const T, predicate: F) bool {
+pub func allOf<T, F: Movable + Copyable>(values: []const T, predicate: F) bool {
     for i in usize(0)..values.len() {
         if !predicate(raw values[i]) { return false; }
     }
     true
 }
 
-pub func anyOf<T, F: Movable>(values: []const T, predicate: F) bool {
+pub func anyOf<T, F: Movable + Copyable>(values: []const T, predicate: F) bool {
     for i in usize(0)..values.len() {
         if predicate(raw values[i]) { return true; }
     }
     false
 }
 
-pub func noneOf<T, F: Movable>(values: []const T, predicate: F) bool {
+pub func noneOf<T, F: Movable + Copyable>(values: []const T, predicate: F) bool {
     !anyOf<T, F>(values, move(predicate))
 }
 
@@ -27,7 +27,7 @@ pub func count<T>(values: []const T, needle: *const T) usize {
     found
 }
 
-pub func countIf<T, F: Movable>(values: []const T, predicate: F) usize {
+pub func countIf<T, F: Movable + Copyable>(values: []const T, predicate: F) usize {
     var found: usize = 0;
     for i in usize(0)..values.len() {
         if predicate(raw values[i]) { found++; }
@@ -51,21 +51,21 @@ pub func findLast<T>(values: []const T, needle: *const T) ?usize {
     null
 }
 
-pub func findIf<T, F: Movable>(values: []const T, predicate: F) ?usize {
+pub func findIf<T, F: Movable + Copyable>(values: []const T, predicate: F) ?usize {
     for i in usize(0)..values.len() {
         if predicate(raw values[i]) { return some(i); }
     }
     null
 }
 
-pub func findIfNot<T, F: Movable>(values: []const T, predicate: F) ?usize {
+pub func findIfNot<T, F: Movable + Copyable>(values: []const T, predicate: F) ?usize {
     for i in usize(0)..values.len() {
         if !predicate(raw values[i]) { return some(i); }
     }
     null
 }
 
-pub func adjacentFind<T, F: Movable>(values: []const T, equals: F) ?usize {
+pub func adjacentFind<T, F: Movable + Copyable>(values: []const T, equals: F) ?usize {
     for i in usize(1)..values.len() {
         if equals(raw values[i - 1], raw values[i]) { return some(i - 1); }
     }
@@ -92,19 +92,19 @@ func upperIndex<T, K, F>(values: []const T, key: *const K, less: *F) usize {
     first
 }
 
-pub func lowerBound<T, K, F: Movable>(values: []const T, key: *const K, less: F) usize {
+pub func lowerBound<T, K, F: Movable + Copyable>(values: []const T, key: *const K, less: F) usize {
     lowerIndex<T, K, F>(values, key, raw less)
 }
 
-pub func upperBound<T, K, F: Movable>(values: []const T, key: *const K, less: F) usize {
+pub func upperBound<T, K, F: Movable + Copyable>(values: []const T, key: *const K, less: F) usize {
     upperIndex<T, K, F>(values, key, raw less)
 }
 
-pub func equalRange<T, K, F: Movable>(values: []const T, key: *const K, less: F) (usize, usize) {
+pub func equalRange<T, K, F: Movable + Copyable>(values: []const T, key: *const K, less: F) (usize, usize) {
     (lowerIndex<T, K, F>(values, key, raw less), upperIndex<T, K, F>(values, key, raw less))
 }
 
-pub func binarySearch<T, K, F: Movable>(values: []const T, key: *const K, less: F) ?usize {
+pub func binarySearch<T, K, F: Movable + Copyable>(values: []const T, key: *const K, less: F) ?usize {
     var index = lowerIndex<T, K, F>(values, key, raw less);
     if index != values.len() && !less(key, raw values[index]) { return some(index); }
     null

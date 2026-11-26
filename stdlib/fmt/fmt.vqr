@@ -37,13 +37,13 @@ func formatMagnitude(value: u128, radix: u8, negative: bool, uppercase: bool) !s
     text.fromBytes(output.asConstSlice())
 }
 
-func formatSigned<T>(value: T, radix: u8, uppercase: bool) !string {
+func formatSigned<T: Copyable>(value: T, radix: u8, uppercase: bool) !string {
     var number = i128(value);
     var negative = number < 0;
     var magnitude = if negative { 0u128 -% bitCast<u128>(number) } else { bitCast<u128>(number) };
     formatMagnitude(magnitude, radix, negative, uppercase)
 }
-func formatUnsigned<T>(value: T, radix: u8, uppercase: bool) !string {
+func formatUnsigned<T: Copyable>(value: T, radix: u8, uppercase: bool) !string {
     formatMagnitude(u128(value), radix, false, uppercase)
 }
 pub func formatInt(value: i8, radix: u8) !string { formatSigned<i8>(value, radix, false) }

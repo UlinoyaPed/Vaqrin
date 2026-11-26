@@ -8,7 +8,7 @@ pub class Cell<T: Copyable + Movable> {
     pub const func get() T { slot.unwrap() }
     pub func set(value: T) void { slot = some(move(value)); }
     pub func replace(value: T) T { opt.Storage<T>.replace(slot, move(value)).unwrap() }
-    pub func update<F: Movable>(transform: F) void { set(transform(get())); }
+    pub func update<F: Movable + Copyable>(transform: F) void { set(transform(get())); }
     pub static func intoInner(value: Self) T { opt.take<T>(value.slot).unwrap() }
 }
 
@@ -32,7 +32,7 @@ pub class OnceCell<T: Movable> {
         opt.take<T>(slot)
     }
 
-    pub func getOrInit<F: Movable>(factory: F) *const T {
+    pub func getOrInit<F: Movable + Copyable>(factory: F) *const T {
         switch get() {
             some(ptr) => ptr,
             null => {
@@ -60,7 +60,7 @@ pub class OnceCell<T: Movable> {
         get().unwrap()
     }
 
-    pub func getOrTryInit<F: Movable>(factory: F) !*const T {
+    pub func getOrTryInit<F: Movable + Copyable>(factory: F) !*const T {
         switch prepareTryInit()! {
             some(ptr) => ptr,
             null => {

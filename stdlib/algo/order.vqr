@@ -41,11 +41,11 @@ func drainHeap<T: Movable, F>(values: []T, less: *F) void {
     }
 }
 
-pub func heapify<T: Movable, F: Movable>(values: []T, less: F) void {
+pub func heapify<T: Movable, F: Movable + Copyable>(values: []T, less: F) void {
     buildHeap<T, F>(values, raw less);
 }
 
-pub func pushHeap<T: Movable, F: Movable>(values: []T, less: F) void {
+pub func pushHeap<T: Movable, F: Movable + Copyable>(values: []T, less: F) void {
     if values.len() == 0 { return; }
     var child = values.len() - 1;
     while child > 0 {
@@ -56,18 +56,18 @@ pub func pushHeap<T: Movable, F: Movable>(values: []T, less: F) void {
     }
 }
 
-pub func popHeap<T: Movable, F: Movable>(values: []T, less: F) void {
+pub func popHeap<T: Movable, F: Movable + Copyable>(values: []T, less: F) void {
     if values.len() < 2 { return; }
     var last = values.len() - 1;
     core.swap<T>(raw values[0], raw values[last]);
     siftDown<T, F>(values, 0, last, raw less);
 }
 
-pub func sortHeap<T: Movable, F: Movable>(values: []T, less: F) void {
+pub func sortHeap<T: Movable, F: Movable + Copyable>(values: []T, less: F) void {
     drainHeap<T, F>(values, raw less);
 }
 
-pub func sortBy<T: Movable, F: Movable>(values: []T, less: F) void {
+pub func sortBy<T: Movable, F: Movable + Copyable>(values: []T, less: F) void {
     buildHeap<T, F>(values, raw less);
     drainHeap<T, F>(values, raw less);
 }
@@ -123,7 +123,7 @@ func sortStableRange<T: Movable, F>(values: []T, less: *F) void {
     mergeStable<T, F>(values, middle, less);
 }
 
-pub func stableSortBy<T: Movable, F: Movable>(values: []T, less: F) void {
+pub func stableSortBy<T: Movable, F: Movable + Copyable>(values: []T, less: F) void {
     sortStableRange<T, F>(values, raw less);
 }
 
@@ -132,24 +132,24 @@ pub func stableSort<T: Movable>(values: []T) void {
     stableSortBy<T, func(*const T, *const T) bool>(values, less);
 }
 
-pub func isHeapUntil<T, F: Movable>(values: []const T, less: F) usize {
+pub func isHeapUntil<T, F: Movable + Copyable>(values: []const T, less: F) usize {
     for i in usize(1)..values.len() {
         if less(raw values[(i - 1) / 2], raw values[i]) { return i; }
     }
     values.len()
 }
 
-pub func isHeap<T, F: Movable>(values: []const T, less: F) bool {
+pub func isHeap<T, F: Movable + Copyable>(values: []const T, less: F) bool {
     isHeapUntil<T, F>(values, move(less)) == values.len()
 }
 
-pub func isSortedUntil<T, F: Movable>(values: []const T, less: F) usize {
+pub func isSortedUntil<T, F: Movable + Copyable>(values: []const T, less: F) usize {
     for i in usize(1)..values.len() {
         if less(raw values[i], raw values[i - 1]) { return i; }
     }
     values.len()
 }
 
-pub func isSorted<T, F: Movable>(values: []const T, less: F) bool {
+pub func isSorted<T, F: Movable + Copyable>(values: []const T, less: F) bool {
     isSortedUntil<T, F>(values, move(less)) == values.len()
 }

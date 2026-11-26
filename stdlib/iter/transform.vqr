@@ -112,30 +112,30 @@ pub class InspectIter<I: Movable, T: Movable, F: Movable> {
     }
 }
 
-pub func map<I: Movable, T: Movable, U: Movable, F: Movable>(source: I, transform: F) MapIter<I, T, U, F> {
+pub func map<I: Movable + Copyable, T: Movable, U: Movable, F: Movable + Copyable>(source: I, transform: F) MapIter<I, T, U, F> {
     MapIter<I, T, U, F>(move(source), move(transform))
 }
 
-pub func filter<I: Movable, T: Movable, F: Movable>(source: I, predicate: F) FilterIter<I, T, F> {
+pub func filter<I: Movable + Copyable, T: Movable, F: Movable + Copyable>(source: I, predicate: F) FilterIter<I, T, F> {
     FilterIter<I, T, F>(move(source), move(predicate))
 }
 
-pub func filterMap<I: Movable, T: Movable, U: Movable, F: Movable>(source: I, transform: F) FilterMapIter<I, T, U, F> {
+pub func filterMap<I: Movable + Copyable, T: Movable, U: Movable, F: Movable + Copyable>(source: I, transform: F) FilterMapIter<I, T, U, F> {
     FilterMapIter<I, T, U, F>(move(source), move(transform))
 }
 
-pub func tryMap<I: Movable, T: Movable, U: Movable, F: Movable>(source: I, transform: F) TryMapIter<I, T, U, F> {
+pub func tryMap<I: Movable + Copyable, T: Movable, U: Movable, F: Movable + Copyable>(source: I, transform: F) TryMapIter<I, T, U, F> {
     TryMapIter<I, T, U, F>(move(source), move(transform))
 }
 
-pub func tryFilter<I: Movable, T: Movable, F: Movable>(source: I, predicate: F) TryFilterIter<I, T, F> {
+pub func tryFilter<I: Movable + Copyable, T: Movable, F: Movable + Copyable>(source: I, predicate: F) TryFilterIter<I, T, F> {
     TryFilterIter<I, T, F>(move(source), move(predicate))
 }
 
-pub func mapWhile<I: Movable, T: Movable, U: Movable, F: Movable>(source: I, transform: F) MapWhileIter<I, T, U, F> {
+pub func mapWhile<I: Movable + Copyable, T: Movable, U: Movable, F: Movable + Copyable>(source: I, transform: F) MapWhileIter<I, T, U, F> {
     MapWhileIter<I, T, U, F>(move(source), move(transform))
 }
 
-pub func inspect<I: Movable, T: Movable, F: Movable>(source: I, observer: F) InspectIter<I, T, F> {
+pub func inspect<I: Movable + Copyable, T: Movable, F: Movable + Copyable>(source: I, observer: F) InspectIter<I, T, F> {
     InspectIter<I, T, F>(move(source), move(observer))
 }

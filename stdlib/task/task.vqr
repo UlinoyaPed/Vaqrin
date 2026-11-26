@@ -246,7 +246,7 @@ pub func sleep(duration: time.Duration) !void {
     sleepUntil(time.Instant.now()!.checkedAdd(duration)!)
 }
 
-pub func scope<F: Movable>(callback: F) !void {
+pub func scope<F: Movable + Copyable>(callback: F) !void {
     var group = TaskGroup();
     var outcome: !void = move(callback)(raw group);
     outcome!;

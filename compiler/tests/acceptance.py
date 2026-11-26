@@ -327,6 +327,61 @@ class Acceptance(CompilerCase):
                 result = self.process(VAQC, "check", source, good=False)
                 self.assertIn(b"no accessible overload", result.stderr)
 
+    def test_v020_audit_generic_copy_declarations(self):
+        good = """
+            import (meta)
+            func copy<T: Copyable>(value: T) T { value }
+            func borrow<T>(value: in T) void {}
+            func consume<T: Movable>(value: move T) void {}
+            func descriptor<T>(p: *const T, s: []const T, r: ref T) void {}
+            func optional<T: Copyable>(value: ?T) void {}
+            func tuple<T: Copyable>(value: (T, [2]T)) void {}
+            type Callback<T: Copyable> = func(T) void;
+            type BorrowCallback<T> = func(in T) void;
+            class Holder<T> {
+                comptime if meta.isCopyable<T>() {
+                    pub func accept(value: T) void {}
+                } else {
+                    pub func accept(value: move T) void {}
+                }
+            }
+            class Bounded<T: Copyable> {
+                pub func accept(value: T) void {}
+                pub func callback<U: Copyable>(value: func(U) T) void {}
+            }
+            func main() void {}
+        """
+        source = self.source("generic-audit-good.vqr", good)
+        self.process(VAQC, "check", "--audit-generic-copy", source)
+        cases = {
+            "unused": "func invalid<T>(value: T) void {}",
+            "movable": "func invalid<T: Movable>(value: T) void {}",
+            "optional": "func invalid<T>(value: ?T) void {}",
+            "result": "func invalid<T>(value: !T) void {}",
+            "array": "func invalid<T>(value: [2]T) void {}",
+            "tuple": "func invalid<T>(value: (i32, T)) void {}",
+            "callback": "func invalid<T>(callback: func(T) void) void {}",
+            "callback_alias": "type Bad<T> = func(T) void;",
+            "field": "class Bad<T> { var callback: func(T) void; }",
+            "method": "class Bad<T> { pub func accept(value: T) void {} }",
+            "method_generic": "class Bad { pub func accept<T>(value: T) void {} }",
+            "interface": "interface Bad<T> { func accept(value: T) void; }",
+            "conditional": "class Bad<T> { comptime if true { pub func accept(value: T) void {} } }",
+            "else": ("import (meta)\nclass Bad<T> { comptime if meta.isCopyable<T>() {} "
+                     "else { pub func accept(value: T) void {} } }"),
+            "shadowed": "class Bad<T: Copyable> { pub func accept<T>(value: T) void {} }",
+        }
+        for name, body in cases.items():
+            with self.subTest(name=name):
+                source = self.source(name + "/main.vqr", body + "\nfunc main() void {}")
+                result = self.process(VAQC, "check", "--audit-generic-copy", source, good=False)
+                self.assertIn(b"generic Value parameter requires a declared Copyable proof", result.stderr,
+                              result.stderr.decode())
+        # The transition switch must not be silently ignored by syntax-only mode.
+        rejected = self.process(VAQC, "check", "--syntax-only", "--audit-generic-copy",
+                                self.source("syntax.vqr", "func main() void {}"), good=False)
+        self.assertIn(b"requires semantic check mode", rejected.stderr)
+
     def test_v020_value_parameters_require_copyable_even_for_temporaries(self):
         cases = {
             "signature": "func f(x: ^i32) void {}",

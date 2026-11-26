@@ -118,6 +118,7 @@ void help() {
                "  --editor-workspace-symbols  Report binding and top-level references with paths\n"
                "  --dependencies FILE     List source inputs and directory probes for one .vqr\n"
                "  --timings              Report build stage durations on stderr\n"
+               "  --audit-generic-copy   Audit generic Value signatures during semantic check\n"
                "  --package-path DIR      Search additional local package roots\n"
                "  --cc PROGRAM            C driver for linking\n"
                "  --ar PROGRAM            Archiver for static libraries\n"
@@ -141,6 +142,7 @@ Request arguments(int argc, char **argv) {
       break;
     }
     if (a == "--timings") { r.timings = true; continue; }
+    if (a == "--audit-generic-copy") { r.options.auditGenericCopy = true; continue; }
     if (a == "--syntax-only") { r.syntaxOnly = true; continue; }
     if (a == "--diagnostics=json") continue;
     if (a == "--editor-hints") { r.editorHints = true; continue; }
@@ -215,6 +217,8 @@ Request arguments(int argc, char **argv) {
   if ((!r.overlay.empty() || !r.dependencies.empty()) &&
       (r.inputs.size() != 1 || r.inputs.front().extension() != ".vqr" || fs::is_directory(r.inputs.front())))
     fail({}, "--overlay and --dependencies require exactly one .vqr input", "E300");
+  if (r.options.auditGenericCopy && (!r.options.check || r.syntaxOnly || r.options.emit == "ast"))
+    fail({}, "--audit-generic-copy requires semantic check mode", "E300");
   if (r.syntaxOnly && (!r.options.check || r.editorHints || r.editorSymbols || r.workspaceSymbols || !r.dependencies.empty() || r.options.emit == "ast"))
     fail({}, "--syntax-only requires check mode and accepts source files and an optional overlay", "E300");
   if (!r.overlayMap.empty() && (!r.options.check || r.syntaxOnly || !r.overlay.empty()))

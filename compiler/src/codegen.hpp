@@ -82,6 +82,7 @@ struct Options {
   bool check = false;
   EditorHints *editorHints = nullptr;
   CompileTimings *compileTimings = nullptr;
+  bool auditGenericCopy = false;
 };
 
 struct Number {

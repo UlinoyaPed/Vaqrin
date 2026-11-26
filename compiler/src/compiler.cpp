@@ -1424,6 +1424,109 @@ std::pair<Type *, Constant *> Program::evaluate(const Ast &node, const File &fil
   return {v.type, result};
 }
 
+namespace {
+
+// This declaration-only pass does not construct dummy LLVM types. Facts
+// refer to lexical generic parameters, rather than successful instances.
+using GenericCopyFacts = std::map<std::string, bool>;
+
+void addGenericCopyFacts(GenericCopyFacts &facts, const Decl &decl) {
+  for (const auto &generic : decl.generics) {
+    if (generic.comptime) {
+      facts.erase(generic.name);
+      continue;
+    }
+    bool proven = false;
+    for (auto constraint = generic.type; constraint; constraint = constraint->tail)
+      if (constraint->kind == NodeKind::TypeName && constraint->text == "Copyable" &&
+          constraint->children.empty())
+        proven = true;
+    // A method's type parameter shadows an enclosing class parameter.
+    facts.insert_or_assign(generic.name, proven);
+  }
+}
+
+void auditGenericValueType(const Ast &type, const GenericCopyFacts &facts) {
+  if (!type) return;
+  if ((type->kind == NodeKind::TypeName || type->kind == NodeKind::Name) &&
+      type->children.empty()) {
+    if (auto fact = facts.find(type->text); fact != facts.end() && !fact->second)
+      fail(type->span, "generic Value parameter requires a declared Copyable proof for '" +
+                       type->text + "'; use in, mut, or move as appropriate", "E230");
+    return;
+  }
+  // These storage constructors copy their payload(s); descriptors such as
+  // pointers, slices, and shared references do not copy the pointed-to T.
+  if (type->kind == NodeKind::TypePrefix && (type->text == "?" || type->text == "!"))
+    auditGenericValueType(type->children.front(), facts);
+  else if (type->kind == NodeKind::TypeArray)
+    auditGenericValueType(type->children[1], facts);
+  else if (type->kind == NodeKind::TypeTuple)
+    for (const auto &part : type->children) auditGenericValueType(part, facts);
+}
+
+void auditNestedGenericCopyTypes(const Ast &type, const GenericCopyFacts &facts) {
+  if (!type) return;
+  if (type->kind == NodeKind::TypeFunction) {
+    for (const auto &parameter : type->children) {
+      if (parameterMode(parameter) == ParameterMode::Value)
+        auditGenericValueType(parameter, facts);
+      auditNestedGenericCopyTypes(parameter, facts);
+    }
+    auditNestedGenericCopyTypes(type->type, facts);
+    return;
+  }
+  if (type->kind == NodeKind::TypeArray) {
+    // The length expression is a constant expression, not a type.
+    auditNestedGenericCopyTypes(type->children[1], facts);
+    return;
+  }
+  if (type->kind == NodeKind::TypePrefix || type->kind == NodeKind::TypeTuple ||
+      type->kind == NodeKind::TypeName)
+    for (const auto &part : type->children) auditNestedGenericCopyTypes(part, facts);
+}
+
+void auditGenericCopyDeclaration(Program &program, const File &file, const Decl &decl,
+                                 GenericCopyFacts facts = {}) {
+  addGenericCopyFacts(facts, decl);
+  if (decl.kind == DeclKind::Conditional) {
+    auto selected = facts;
+    // A positive branch may establish a fact only for the real, resolved
+    // standard-library trait query, never from its name alone.
+    const auto &condition = decl.body;
+    if (condition && condition->kind == NodeKind::Call && condition->children.size() == 1) {
+      const auto &callee = condition->children.front();
+      if (callee->kind == NodeKind::Generic && callee->children.size() == 2) {
+        const auto &argument = callee->children[1];
+        auto target = path(callee->children.front());
+        if (target.ends_with(".isCopyable") && argument->kind == NodeKind::TypeName &&
+            argument->children.empty() && selected.contains(argument->text)) {
+          auto definitions = program.resolve(file, target, callee->span);
+          if (definitions.size() == 1 && definitions.front().file->standard &&
+              definitions.front().file->package == "meta" &&
+              definitions.front().decl->name == "isCopyable" && definitions.front().decl->comptime)
+            selected[argument->text] = true;
+        }
+      }
+    }
+    for (const auto &member : decl.members)
+      auditGenericCopyDeclaration(program, file, member, selected);
+    for (const auto &member : decl.otherwise)
+      auditGenericCopyDeclaration(program, file, member, facts);
+    return;
+  }
+  for (const auto &parameter : decl.params) {
+    if (decl.kind == DeclKind::Function && parameterMode(parameter.type) == ParameterMode::Value)
+      auditGenericValueType(parameter.type, facts);
+    auditNestedGenericCopyTypes(parameter.type, facts);
+  }
+  auditNestedGenericCopyTypes(decl.type, facts);
+  for (const auto &member : decl.members)
+    auditGenericCopyDeclaration(program, file, member, facts);
+}
+
+} // namespace
+
 std::unique_ptr<Module> Program::build() {
   std::size_t checked = 0;
   do {
@@ -1432,6 +1535,8 @@ std::unique_ptr<Module> Program::build() {
       const auto &file = files[checked++];
       if (file.standard && file.package == "net" && !hostedLinux64() && !hostedMac64())
         fail(file.span, "standard package 'net' requires hosted GNU/Linux or macOS on x86-64 or AArch64", "E290");
+      if (options.auditGenericCopy)
+        for (const auto &decl : file.declarations) auditGenericCopyDeclaration(*this, file, decl);
       if (file.standard && file.package != root) continue;
       for (const auto &d : file.declarations) {
         std::set<std::string> seen;

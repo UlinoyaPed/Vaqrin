@@ -1779,6 +1779,200 @@ void auditGenericCopyExpression(Program &program, const File &file, const Ast &n
   auditGenericCopyExpression(program, file, node->tail, facts);
 }
 
+// A separate, conservative call-site audit avoids pretending that syntax
+// alone implements the compiler's complete overload/type inference engine.
+// Shadowed names and unknown actual types are left to semantic lowering.
+struct GenericAuditBindings {
+  std::map<std::string, Ast> types;
+  std::set<std::string> shadowed;
+
+  void add(const std::string &name, const Ast &type = {}) {
+    if (name.empty() || name == "_") return;
+    if (!types.emplace(name, type).second) shadowed.insert(name);
+  }
+
+  bool contains(const std::string &name) const { return types.contains(name); }
+
+  Ast typeOf(const std::string &name) const {
+    auto found = types.find(name);
+    return found == types.end() || shadowed.contains(name) ? Ast{} : found->second;
+  }
+};
+
+void collectGenericAuditBindings(const Ast &node, GenericAuditBindings &bindings) {
+  if (!node) return;
+  if (node->kind == NodeKind::Binding) {
+    for (const auto &name : node->names)
+      bindings.add(name, node->names.size() == 1 ? node->type : Ast{});
+  } else if (node->kind == NodeKind::PatternName || node->kind == NodeKind::PatternRef ||
+             node->kind == NodeKind::PatternMutRef || node->kind == NodeKind::PatternIndirect) {
+    bindings.add(node->text);
+  } else if (node->kind == NodeKind::ForIn || node->kind == NodeKind::Arm ||
+             (node->kind == NodeKind::Binary && node->text == "catch")) {
+    for (const auto &name : node->names) bindings.add(name);
+  }
+  for (const auto &parameter : node->parameters)
+    bindings.add(parameter.name, parameter.type);
+  for (const auto &child : node->children)
+    collectGenericAuditBindings(child, bindings);
+  collectGenericAuditBindings(node->tail, bindings);
+}
+
+// Only compare syntax whose outer constructors have an established
+// correspondence. Alias expansion and implicit coercions belong to the
+// full semantic inference engine; skip those instead of guessing.
+void inferGenericAuditCopy(Program &program, const File &caller, const Ast &pattern,
+                           const Ast &actual, const GenericCopyFacts &facts,
+                           const std::set<std::string> &names, GenericCopyFacts &inferred) {
+  if (!pattern || !actual) return;
+  if (pattern->kind == NodeKind::TypeName && pattern->children.empty() &&
+      names.contains(pattern->text)) {
+    ActiveCopyTypes active;
+    auto proof = proveGenericCopy(program, caller, actual, facts, active);
+    auto [it, inserted] = inferred.emplace(pattern->text, proof);
+    if (!inserted && it->second != proof)
+      it->second = GenericCopyProof::Deferred;
+    return;
+  }
+  if (pattern->kind != actual->kind) return;
+  if (pattern->kind == NodeKind::TypePrefix && pattern->text == actual->text) {
+    inferGenericAuditCopy(program, caller, pattern->children.front(), actual->children.front(),
+                          facts, names, inferred);
+  } else if (pattern->kind == NodeKind::TypeArray) {
+    inferGenericAuditCopy(program, caller, pattern->children[1], actual->children[1],
+                          facts, names, inferred);
+  } else if (pattern->kind == NodeKind::TypeTuple && pattern->children.size() == actual->children.size()) {
+    for (std::size_t i = 0; i < pattern->children.size(); ++i)
+      inferGenericAuditCopy(program, caller, pattern->children[i], actual->children[i],
+                            facts, names, inferred);
+  }
+}
+
+Ast genericAuditActual(const Ast &argument, const Ast &parameter,
+                       const GenericAuditBindings &bindings) {
+  if (!argument || !parameter) return {};
+  auto value = argument;
+  if (value->kind == NodeKind::Move && value->children.size() == 1)
+    value = value->children.front();
+  if (value->kind != NodeKind::Name) return {};
+  auto actual = bindings.typeOf(value->text);
+  if (!actual) return {};
+  auto mode = parameterMode(actual);
+  // A named borrowed formal has a reference hint. Only unwrap it for
+  // another borrowing parameter, as the real inference algorithm does.
+  if (mode == ParameterMode::In || mode == ParameterMode::Mut) {
+    if (argument->kind != NodeKind::Name ||
+        (parameterMode(parameter) != ParameterMode::In &&
+         parameterMode(parameter) != ParameterMode::Mut))
+      return {};
+    actual = actual->children.front();
+  } else if (mode == ParameterMode::Move) {
+    actual = actual->children.front();
+  } else if (actual->kind == NodeKind::TypePrefix &&
+             (actual->text == "ref" || actual->text == "ref mut")) {
+    return {};
+  }
+  return actual;
+}
+
+void auditGenericCopyCall(Program &program, const File &file, const Ast &call,
+                          const GenericCopyFacts &facts, const GenericAuditBindings &bindings,
+                          bool implicitReceiver) {
+  if (call->children.empty()) return;
+  auto callee = call->children.front();
+  std::vector<Ast> arguments;
+  if (callee->kind == NodeKind::Generic) {
+    arguments.assign(callee->children.begin() + 1, callee->children.end());
+    callee = callee->children.front();
+  }
+  auto target = path(callee);
+  if (target.empty()) return;
+  auto dot = target.find('.');
+  auto first = target.substr(0, dot);
+  if (bindings.contains(first) || facts.contains(first)) return;
+  // An unqualified call in a method may resolve to an implicit receiver
+  // member rather than a package function.
+  if (dot == target.npos ? implicitReceiver : program.import(file, first).empty()) return;
+  if (dot != target.npos && target.find('.', dot + 1) != target.npos) return;
+  auto definitions = program.resolve(file, target, callee->span);
+  bool candidate = false, allMissing = true;
+  Span missing = call->span;
+  for (const auto &def : definitions) {
+    const auto &decl = *def.decl;
+    if (decl.kind != DeclKind::Function ||
+        decl.params.size() + 1 != call->children.size() ||
+        arguments.size() > decl.generics.size())
+      continue;
+    candidate = true;
+    std::set<std::string> inferNames;
+    GenericCopyFacts inferred;
+    for (std::size_t i = arguments.size(); i < decl.generics.size(); ++i)
+      if (!decl.generics[i].comptime) inferNames.insert(decl.generics[i].name);
+    for (std::size_t i = 0; i < decl.params.size() && !inferNames.empty(); ++i) {
+      auto pattern = decl.params[i].type;
+      auto actual = genericAuditActual(call->children[i + 1], pattern, bindings);
+      if (!actual || !pattern) continue;
+      if (parameterMode(pattern) != ParameterMode::Value)
+        pattern = pattern->children.front();
+      inferGenericAuditCopy(program, file, pattern, actual, facts, inferNames, inferred);
+    }
+    bool missingBound = false;
+    for (std::size_t i = 0; i < decl.generics.size(); ++i) {
+      const auto &generic = decl.generics[i];
+      if (!requiresGenericCopy(generic)) continue;
+      auto proof = GenericCopyProof::Deferred;
+      if (i < arguments.size()) {
+        ActiveCopyTypes active;
+        proof = proveGenericCopy(program, file, arguments[i], facts, active);
+      } else if (auto it = inferred.find(generic.name); it != inferred.end()) {
+        proof = it->second;
+      }
+      if (proof == GenericCopyProof::Missing) {
+        missingBound = true;
+        if (i < arguments.size()) missing = arguments[i]->span;
+      }
+    }
+    // Do not choose an overload here. Report only when every arity-
+    // compatible candidate is known to lack a Copyable guarantee.
+    allMissing &= missingBound;
+  }
+  if (candidate && allMissing)
+    fail(missing, "generic call requires a declared Copyable proof for its type argument", "E230");
+}
+
+void auditGenericCopyCalls(Program &program, const File &file, const Ast &node,
+                           const GenericCopyFacts &facts, const GenericAuditBindings &bindings,
+                           bool implicitReceiver) {
+  if (!node || facts.empty()) return;
+  if (node->kind == NodeKind::Call)
+    auditGenericCopyCall(program, file, node, facts, bindings, implicitReceiver);
+  // A generic class constructor or static receiver also contains an
+  // expression-level Generic node rather than a TypeName node.
+  if (node->kind == NodeKind::Generic && !node->children.empty()) {
+    auto target = path(node->children.front());
+    auto dot = target.find('.');
+    auto first = target.substr(0, dot);
+    if (!target.empty() && !bindings.contains(first) && !facts.contains(first) &&
+        (dot == target.npos ? !implicitReceiver :
+         !program.import(file, first).empty() && target.find('.', dot + 1) == target.npos)) {
+      auto defs = program.resolve(file, target, node->span);
+      if (defs.size() == 1 && (defs.front().decl->kind == DeclKind::Class ||
+                              defs.front().decl->kind == DeclKind::Enum ||
+                              defs.front().decl->kind == DeclKind::Alias)) {
+        auto syntax = std::make_shared<Node>();
+        syntax->kind = NodeKind::TypeName;
+        syntax->span = node->span;
+        syntax->text = target;
+        syntax->children.assign(node->children.begin() + 1, node->children.end());
+        auditNestedGenericCopyTypes(program, file, syntax, facts);
+      }
+    }
+  }
+  for (const auto &child : node->children)
+    auditGenericCopyCalls(program, file, child, facts, bindings, implicitReceiver);
+  auditGenericCopyCalls(program, file, node->tail, facts, bindings, implicitReceiver);
+}
+
 void auditGenericCopyDeclaration(Program &program, const File &file, const Decl &decl,
                                  GenericCopyFacts facts = {}, const Decl *owner = nullptr) {
   addGenericCopyFacts(facts, decl);
@@ -1823,6 +2017,15 @@ void auditGenericCopyDeclaration(Program &program, const File &file, const Decl 
   for (const auto &[name, value] : decl.initializers)
     auditGenericCopyExpression(program, file, value, facts);
   auditGenericCopyExpression(program, file, decl.body, facts);
+  if (!facts.empty()) {
+    GenericAuditBindings bindings;
+    for (const auto &parameter : decl.params) bindings.add(parameter.name, parameter.type);
+    for (const auto &[name, value] : decl.initializers) collectGenericAuditBindings(value, bindings);
+    collectGenericAuditBindings(decl.body, bindings);
+    for (const auto &[name, value] : decl.initializers)
+      auditGenericCopyCalls(program, file, value, facts, bindings, owner != nullptr);
+    auditGenericCopyCalls(program, file, decl.body, facts, bindings, owner != nullptr);
+  }
   for (const auto &member : decl.members)
     auditGenericCopyDeclaration(program, file, member, facts, owner);
 }

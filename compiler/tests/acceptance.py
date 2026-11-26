@@ -528,6 +528,54 @@ class Acceptance(CompilerCase):
                 result = self.process(VAQC, "check", "--audit-generic-copy", source, good=False)
                 self.assertIn(diagnostic.encode(), result.stderr, result.stderr.decode())
 
+    def test_v020_audit_generic_copy_call_constraints(self):
+        prelude = """
+            import (core)
+            func needs<T: Copyable>(value: in T) void {}
+            func needsPtr<T: Copyable>(value: *const T) void {}
+            func pair<T: Copyable, U: Copyable>(a: in T, b: in U) void {}
+            func size<T: Copyable>() usize { 0 }
+            type Identity<T> = T;
+            class Bounded<T: Copyable> {
+                pub static func create() void {}
+            }
+            func overloaded<T: Copyable>(value: in T) void {}
+            func overloaded<T>(value: *const T) void {}
+        """
+        good = prelude + """
+            func explicit<T: Copyable>(value: in T) void { needs<T>(value); }
+            func inferred<T: Copyable>(value: in T) void { needs(value); }
+            func descriptor<T>(value: *const T) void { needs<*const T>(value); }
+            func nested<T: Copyable>(value: *const T) void { needsPtr(value); }
+            func mixed<T: Copyable, U: Copyable>(a: in T, b: in U) void { pair<T>(a, b); }
+            func construct<T: Copyable>() void { Bounded<T>.create(); }
+            func noGuess<T>(value: *const T) void { overloaded(value); }
+            func shadow<T>(value: in T) void {
+                var needs: func(in T) void = (x: in T) void => {};
+                needs(value);
+            }
+            func main() void {}
+        """
+        source = self.source("copy-call-good.vqr", good)
+        self.process(VAQC, "check", "--audit-generic-copy", source)
+        cases = {
+            "explicit": ("func bad<T>(value: in T) void { needs<T>(value); }", "generic call requires"),
+            "inferred": ("func bad<T>(value: in T) void { needs(value); }", "generic call requires"),
+            "pointer": ("func bad<T>(value: *const T) void { needsPtr(value); }", "generic call requires"),
+            "local": ("func bad<T>() void { var value: T; needs(value); }", "generic call requires"),
+            "partial": ("func bad<T: Copyable, U>(a: in T, b: in U) void { pair<T>(a, b); }",
+                        "generic call requires"),
+            "alias": ("func bad<T>() void { size<Identity<T>>(); }", "generic call requires"),
+            "qualified": ("func bad<T: Movable>(value: in T) void { core.identity<T>(value); }",
+                          "generic call requires"),
+            "construction": ("func bad<T>() void { Bounded<T>.create(); }", "generic type argument"),
+        }
+        for name, (declaration, diagnostic) in cases.items():
+            with self.subTest(name=name):
+                source = self.source(name + "/main.vqr", prelude + declaration + "\nfunc main() void {}")
+                result = self.process(VAQC, "check", "--audit-generic-copy", source, good=False)
+                self.assertIn(diagnostic.encode(), result.stderr, result.stderr.decode())
+
     def test_v020_value_parameters_require_copyable_even_for_temporaries(self):
         cases = {
             "signature": "func f(x: ^i32) void {}",

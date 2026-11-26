@@ -137,6 +137,7 @@ void Body::checkPattern(const Ast &pat, ValueAt subject, BasicBlock *failure,
     if (std::ranges::any_of(bindings, [&](auto &b) { return b.first->text == pat->text; }))
       fail(pat->span, "duplicate pattern binding");
     if (borrowsSlot) {
+      rejectViewEscape(subject, pat->span);
       if (p.hasReference(subject.type))
         fail(pat->span, "bind the reference payload by value; move an owning subject for mutable references", "E230");
       if (pat->kind == NodeKind::PatternMutRef && !subject.writable)
@@ -244,7 +245,7 @@ ValueAt Body::match(const Ast &n, Type *expected) {
   for (std::size_t i = 1; i < n->children.size(); ++i) {
     auto arm = n->children[i];
     auto *entry = block("switch.arm");
-    using Binding = std::tuple<std::string, Type *, NodeKind, Borrow>;
+    using Binding = std::tuple<std::string, Type *, NodeKind, Borrow, bool>;
     std::vector<Binding> signature;
     std::vector<AllocaInst *> slots;
     std::vector<Span> declarations;
@@ -260,7 +261,7 @@ ValueAt Body::match(const Ast &n, Type *expected) {
       std::ranges::sort(bindings, {}, [](const auto &b) { return b.first->text; });
       std::vector<Binding> current;
       for (auto &[pat, v] : bindings) {
-        current.emplace_back(pat->text, v.type, pat->kind, v.origin);
+        current.emplace_back(pat->text, v.type, pat->kind, v.origin, v.temporaryBorrow && v.origin.checkedView);
         hintBinding(pat->span, v.type, EditorHints::BindingKind::Pattern);
       }
       if (first) {
@@ -291,7 +292,7 @@ ValueAt Body::match(const Ast &n, Type *expected) {
       armOwner = bind(" <match remainder>", ownerType, true, owner, arm->span);
     }
     for (unsigned j = 0; j < signature.size(); ++j) {
-      auto &[key, t, mode, borrowed] = signature[j];
+      auto &[key, t, mode, borrowed, temporary] = signature[j];
       auto id = bind(key, t, true, ir.CreateLoad(p.storage(t), slots[j]), arm->span);
       locals[id].declaration = declarations[j];
       if (!subject.borrowed && (mode == NodeKind::PatternRef || mode == NodeKind::PatternMutRef)) {
@@ -301,8 +302,9 @@ ValueAt Body::match(const Ast &n, Type *expected) {
         borrowed.via = -1;
         borrowed.alternatives.reset();
       }
-      if (t->kind == Kind::Reference || p.hasReference(t))
-        recordBorrow(id, {t, nullptr, nullptr, false, -1, false, false, borrowed}, arm->span);
+      if (t->kind == Kind::Reference || p.hasReference(t) || borrowed.checkedView)
+        recordBorrow(id, {t, nullptr, nullptr, false, -1, false, temporary && borrowed.checkedView,
+                          borrowed}, arm->span);
     }
     auto borrow = patternBorrows.end();
     if (subject.local >= 0 && std::ranges::any_of(signature, [](const auto &item) {
@@ -355,7 +357,7 @@ ValueAt Body::match(const Ast &n, Type *expected) {
   for (auto [v, b] : edges)
     phi->addIncoming(v, b);
   return trackView({resultType, phi, nullptr, false, -1, false, temporaryBorrow, origin,
-                    p.hasReference(resultType) && !borrowPayload}, n->span);
+                    (p.hasReference(resultType) || p.optionalReadonlyView(resultType)) && !borrowPayload}, n->span);
 }
 
 } // namespace vqr::detail

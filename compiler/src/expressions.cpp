@@ -44,7 +44,7 @@ Type *standaloneLambdaType(Program &p, const Ast &n, Resolve resolve) {
   auto signature = lambdaAnnotations(n, nullptr, resolve);
   // Borrow-return contracts can depend on the expected callable. Do
   // not guess a source or an environment-backed closure type.
-  if (p.hasReference(signature.result) || p.readonlyView(signature.result)) return nullptr;
+  if (p.hasReference(signature.result) || p.checkedViewResult(signature.result)) return nullptr;
   signature.parameters.push_back(signature.result);
   return p.aggregate(Kind::Function, signature.parameters, 0, false, std::move(signature.moves));
 }
@@ -895,20 +895,14 @@ ValueAt Body::fallback(const Ast &n, Type *expected) {
   merge(other ? std::vector{initial, initialized} : std::vector<std::vector<bool>>{initial}, initial.size());
   Borrow origin = v.origin;
   const bool reference = p.hasReference(inner);
-  bool borrowPayload = reference && v.hasBorrowPayload();
+  const bool view = p.optionalReadonlyView(v.type);
+  bool borrowPayload = (reference || view) && v.hasBorrowPayload();
   if (other) {
-    if (reference) mergeValueBorrow(origin, borrowPayload, alt, n->span);
+    if (reference || view) mergeValueBorrow(origin, borrowPayload, alt, n->span);
     else if (!(v.origin == alt.origin)) origin = {};
   }
-  return {inner,
-          phi,
-          nullptr,
-          false,
-          -1,
-          false,
-          v.temporaryBorrow || alt.temporaryBorrow,
-          origin,
-          reference && !borrowPayload};
+  return trackView({inner, phi, nullptr, false, -1, false,
+                    v.temporaryBorrow || alt.temporaryBorrow, origin, reference && !borrowPayload}, n->span);
 }
 
 ValueAt Body::castNumber(Type *to, const Ast &arg, Span span) {
@@ -966,8 +960,9 @@ ValueAt Body::builtin(std::string_view key, const Ast &n, const std::vector<Ast>
       target = target->parts[0];
     auto value = expression(n->children[1], target && target->kind == kind ? target->parts[0] : nullptr);
     if (!live()) return neverValue();
-    rejectViewEscape(value, n->span);
-    auto wrapped = wrap(p.aggregate(kind, {value.type}), read(value, n->span), true);
+    auto *wrappedType = p.aggregate(kind, {value.type});
+    if (!p.optionalReadonlyView(wrappedType)) rejectViewEscape(value, n->span);
+    auto wrapped = wrap(wrappedType, read(value, n->span), true);
     wrapped.temporaryBorrow = value.temporaryBorrow;
     wrapped.origin = value.origin;
     wrapped.noPayload = value.noPayload;
@@ -1427,7 +1422,7 @@ ValueAt Body::invoke(const Ast &n, const std::vector<Definition> &defs, const st
   if (defer && (returnType != p.voidTy || d.comptime))
     fail(n->span, "defer requires a runtime void call; handle errors within the deferred function", "E231");
   int borrowFrom = p.borrowParameter(best->definition, best->parameters, returnType, receiver.has_value());
-  const bool viewResult = borrowFrom >= 0 && p.readonlyView(returnType);
+  const bool viewResult = borrowFrom >= 0 && p.checkedViewResult(returnType);
   Borrow returnOrigin{};
   bool returnTemporary = false;
   if (dynamic) {
@@ -1815,7 +1810,7 @@ ValueAt Body::lambda(const Ast &n, Type *expected) {
     body.locals[id].origin.checkedView = p.scopedViewInput(signature[i]);
   }
   auto source = result ? p.functionBorrow(signature, result, expected ? expected->count : 0, n->span) : 0;
-  body.checkedViewReturn = source && p.readonlyView(result);
+  body.checkedViewReturn = source && p.checkedViewResult(result);
   if (source) body.returnRoot = parameterLocals[source - 1];
   auto returned = body.expression(n->tail, result);
   if (!result) {
@@ -2430,7 +2425,7 @@ ValueAt Body::call(const Ast &n, Type *expected, DeferRegistration *defer) {
     return neverValue();
   }
   if (ret == p.voidTy) return voidValue();
-  const bool viewResult = target.type->count && p.readonlyView(ret);
+  const bool viewResult = target.type->count && p.checkedViewResult(ret);
   returnOrigin.checkedView = viewResult;
   return trackView({ret, f, nullptr, false, -1, false,
                     (p.hasReference(ret) || viewResult) ? returnTemporary || returnOrigin.root < 0

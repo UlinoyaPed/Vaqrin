@@ -1198,6 +1198,89 @@ class StandardLibraryAcceptance(CompilerCase):
                 result = self.process(VAQC, "check", source, good=False)
                 self.assertIn(diagnostic.encode(), result.stderr, result.stderr.decode())
 
+    def test_linalg_nullable_row_keeps_owner(self):
+        prelude = """
+            import (linalg)
+            func rowOf(m: in linalg.Matrix<f64>, i: usize) ?[]const f64 from m {
+                m.row(i)
+            }
+            func untracked(row: ?[]const f64) void {}
+        """
+        good = prelude + """
+            func main() !void {
+                var m = linalg.Matrix<f64>.zeros(2, 2)!;
+                m.set(0, 1, 2.0);
+                {
+                    var row = m.row(0);
+                    if let some(values) = row { io.println(values[1] == 2.0)!; }
+                    io.println(m.row(2) == null)!;
+                }
+                m.set(0, 1, 4.0);
+                io.println(m.row(0).unwrap()[1] == 4.0)!;
+                var empty = linalg.Matrix<f64>.zeros(1, 0)!;
+                io.println(empty.row(0).unwrap().len() == 0)!;
+            }
+        """
+        for level in ("-O0", "-O2"):
+            with self.subTest(level=level):
+                self.hosted(good, "true\n" * 4, level)
+        for name, code, diagnostic in (
+            ("write", "var r = m.row(0); m.set(0, 0, 1.0); var _ = r.unwrap()[0];", "active borrow"),
+            ("move", "var r = m.row(0); var next = move(m);", "active borrow"),
+            ("unwrap", "var r = m.row(0).unwrap(); m.set(0, 0, 1.0);", "active borrow"),
+            ("pattern", "if let some(r) = m.row(0) { m.set(0, 0, 1.0); }", "active borrow"),
+            ("indirect", "var f = rowOf; var r = f(m, 0); m.set(0, 0, 1.0);", "active borrow"),
+            ("untracked", "untracked(m.row(0));", "untracked"),
+            ("temporary", "var r = linalg.Matrix<f64>.zeros(2, 2)!.row(0);", "temporary"),
+            ("ref_pattern", "if let some(ref r) = m.row(0) {}", "untracked"),
+            ("tuple", "var pair = (m.row(0), 1);", "untracked"),
+            ("assignment", "var r: ?[]const f64 = null; r = m.row(0);", "untracked"),
+        ):
+            with self.subTest(name=name):
+                source = self.source(name + "/main.vqr", prelude + """
+                    func main() !void {
+                        var m = linalg.Matrix<f64>.zeros(2, 2)!;
+                """ + code + "}")
+                result = self.process(VAQC, "check", source, good=False)
+                self.assertIn(diagnostic.encode(), result.stderr, result.stderr.decode())
+
+    def test_checked_optional_view_joins_and_propagates(self):
+        prelude = """
+            func selectRow(a: in [2]i32, take: bool) ?[]const i32 from a {
+                if take { some(a[:]) } else { null }
+            }
+            func propagate(a: in [2]i32, take: bool) ?[]const i32 from a {
+                selectRow(a, take)?
+            }
+            func pick(a: in [2]i32, take: bool) []const i32 from a {
+                selectRow(a, take) ?? a[:]
+            }
+        """
+        self.hosted(prelude + """
+            func main() !void {
+                var a = [2]i32{3, 5};
+                io.println(propagate(a, true).unwrap()[1])!;
+                io.println(propagate(a, false) == null)!;
+                io.println(pick(a, false)[0])!;
+                io.println(pick(a, true)[1])!;
+            }
+        """, "5\ntrue\n3\n5\n")
+        for name, declaration, diagnostic in (
+            ("mixed", """func mixed(a: in [2]i32, b: []const i32, take: bool) ?[]const i32 from a {
+                if take { some(a[:]) } else { some(b) }
+            }""", "untracked"),
+            ("fallback", """func mixed(a: in [2]i32, b: []const i32) []const i32 from a {
+                selectRow(a, false) ?? b
+            }""", "untracked"),
+            ("wrong_source", """func mixed(a: in [2]i32, b: in [2]i32, take: bool) ?[]const i32 from a {
+                if take { some(a[:]) } else { some(b[:]) }
+            }""", "declared source"),
+        ):
+            with self.subTest(name=name):
+                source = self.source(name + "/main.vqr", prelude + declaration + "\nfunc main() void {}")
+                result = self.process(VAQC, "check", source, good=False)
+                self.assertIn(diagnostic.encode(), result.stderr, result.stderr.decode())
+
     def test_qr_least_squares(self):
         self.hosted(r"""
             import (linalg, math, result)

@@ -292,7 +292,9 @@ void Body::holdCaptureBorrow(std::vector<CapturedLoan> &loans, ValueAt value, Sp
 }
 
 void Body::mergeValueBorrow(Borrow &combined, bool &payload, ValueAt value, Span span) {
-  if (p.readonlyView(value.type)) {
+  if (p.checkedViewResult(value.type)) {
+    // A provably null Optional has no view. A present empty slice still has an owner.
+    if (p.optionalReadonlyView(value.type) && !value.origin.checkedView && !value.hasBorrowPayload()) return;
     if (payload && combined.checkedView != value.origin.checkedView)
       fail(span, "checked and untracked views cannot be merged", "E230");
     if (value.origin.checkedView)
@@ -1200,7 +1202,7 @@ ValueAt Body::coerce(ValueAt v, Type *t, Span span) {
   if (t->kind == Kind::Result && v.type == p.errorTy) return wrap(t, read(v, span), false);
   if (t->kind == Kind::Result || t->kind == Kind::Optional) {
     auto inner = coerce(v, t->parts[0], span);
-    rejectViewEscape(inner, span);
+    if (!p.optionalReadonlyView(t)) rejectViewEscape(inner, span);
     auto wrapped = wrap(t, read(inner, span), true);
     wrapped.temporaryBorrow = inner.temporaryBorrow;
     wrapped.origin = inner.origin;
@@ -1314,7 +1316,8 @@ void Body::emitReturn(ValueAt value, Span span) {
   value = coerce(value, result, span);
   rejectTemporaryBorrow(value, span);
   if (checkedViewReturn) {
-    if (!value.origin.checkedView || value.origin.root != returnRoot || value.origin.alternatives)
+    const bool absent = p.optionalReadonlyView(result) && !value.origin.checkedView && !value.hasBorrowPayload();
+    if (!absent && (!value.origin.checkedView || value.origin.root != returnRoot || value.origin.alternatives))
       fail(span, "returned view must borrow from its declared source", "E230");
   } else {
     rejectViewEscape(value, span);
@@ -1535,7 +1538,7 @@ void Body::build(FunctionEntry &entry) {
       bindConstant(name, value.first, value.second, d.span);
   unsigned index = 0, runtime = 0;
   auto borrowArgument = p.borrowParameter(entry.def, entry.parameters, entry.result, owner && !d.associated);
-  checkedViewReturn = borrowArgument >= 0 && p.readonlyView(result);
+  checkedViewReturn = borrowArgument >= 0 && p.checkedViewResult(result);
   if (owner && !d.associated) {
     auto *arg = fn->getArg(runtime++);
     ++index;
@@ -1693,7 +1696,7 @@ ValueAt Body::conditional(const Ast &n, Type *expected) {
   for (auto [value, from] : edges)
     phi->addIncoming(value, from);
   return trackView({t, phi, nullptr, false, -1, false, temporaryBorrow, origin,
-                    p.hasReference(t) && !borrowPayload}, n->span);
+                    (p.hasReference(t) || p.optionalReadonlyView(t)) && !borrowPayload}, n->span);
 }
 
 void Body::statement(const Ast &n) {

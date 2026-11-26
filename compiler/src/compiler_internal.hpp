@@ -426,6 +426,8 @@ public:
   Type *reference(Type *t, bool readOnly, ParameterMode mode = ParameterMode::Value);
   bool hasReference(Type *t);
   bool readonlyView(Type *t) const;
+  bool optionalReadonlyView(Type *t) const;
+  bool checkedViewResult(Type *t) const;
   bool scopedViewInput(Type *t) const;
   bool canAdaptViewInput(Type *from, Type *target) const;
   bool viewContractSource(Type *parameter) const;

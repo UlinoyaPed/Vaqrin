@@ -15,7 +15,7 @@
 | `math` 浮点舍入 | `floor`、`ceil`、`trunc`、`round`、`roundEven` 和 `fract` 的按值输入明确需要 `T: Copyable`。仍只支持走原有浮点转换路径的类型（`f32`、`f64` 及其别名）；此处不增加整数或自定义数值类型支持，不改变共享转换入口或常量构造器。 | [math.vqr](../../stdlib/math/math.vqr) |
 | `bits` 字操作 | 按值接收泛型整数操作数的 19 个入口明确声明 `T: Copyable`；整数和位宽限制仍由原有内建操作检查。仅将 `T` 用作结果的 `maskLow<T>(count: usize) T` 不额外加界。位流接口未改变。 | [word.vqr](../../stdlib/bits/word.vqr) |
 | `bufio` | `Token.text() str from self`。文本视图受 Token 来源限制；这不等于 `ByteToken.bytes()` 或一般切片都已有相同契约。 | [bufio.vqr](../../stdlib/bufio/bufio.vqr) |
-| `num`、`linalg` | 大整数和有理数的迁移运算，以及已迁移的矩阵乘法、LU、QR 和求解，使用 `in` 借用只读操作数，不再让调用方为了这些操作创建裸指针。矩阵和向量的 `get/getMut` 返回随本体存活的 `?ref T` / `?ref mut T`；现有 Slice 接口尚未同步迁移。 | [num](../../stdlib/num)、[linalg](../../stdlib/linalg) |
+| `num`、`linalg` | 大整数和有理数的迁移运算，以及已迁移的矩阵乘法、LU、QR 和求解，使用 `in` 借用只读操作数，不再让调用方为了这些操作创建裸指针。矩阵和向量的 `get/getMut` 返回随本体存活的 `?ref T` / `?ref mut T`；标量 `asSlice()` 及 Matrix 的 `row()` 已保留只读借用；`row()` 越界仍返回 `null`。可写切片尚未迁移。 | [num](../../stdlib/num)、[linalg](../../stdlib/linalg) |
 | `coll` | Vec 的追加、插入和替换，以及 HashMap、BTreeMap 的已迁移插入接口，按类型的 `Copyable` 能力选择复制或显式转移。单个实例不会仅靠参数模式区分多个同名入口。 | [coll](../../stdlib/coll)、[容器验收](../../compiler/tests/coll_acceptance.py) |
 
 | `task` 提交工作 | `TaskGroup.spawn` 接收 Copyable 函数或闭包，`spawnOwned` 转移非 Copyable 且可跨任务交付的闭包；具名所有者写 `move(callback)`。这两个任务 API 不是额外参数模式。两者共用排队、取消、回收路径，不保留对调用者捕获的借用。自由函数 `task.spawn` 走复制入口，直接传入可写的组。 | [task.vqr](../../stdlib/task/task.vqr) |

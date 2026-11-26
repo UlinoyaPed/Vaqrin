@@ -147,6 +147,14 @@ bool Program::readonlyView(Type *t) const {
   return kind == Kind::Int || kind == Kind::Bool || kind == Kind::Char || kind == Kind::Float;
 }
 
+bool Program::optionalReadonlyView(Type *t) const {
+  return t && t->kind == Kind::Optional && t->parts[0]->kind == Kind::Slice && readonlyView(t->parts[0]);
+}
+
+bool Program::checkedViewResult(Type *t) const {
+  return readonlyView(t) || optionalReadonlyView(t);
+}
+
 bool Program::scopedViewInput(Type *t) const {
   return t->kind == Kind::Reference && t->parameterMode == ParameterMode::In && readonlyView(t->parts[0]);
 }
@@ -167,7 +175,7 @@ bool Program::viewContractSource(Type *parameter) const {
 
 int Program::borrowParameter(Definition def, const std::vector<Type *> &params, Type *result, bool receiver) {
   const auto &source = def.decl->borrowSource;
-  const bool view = !source.empty() && readonlyView(result);
+  const bool view = !source.empty() && checkedViewResult(result);
   if (view && (def.decl->external || def.decl->comptime))
     fail(def.decl->span, "checked view source requires a runtime Vaqrin function", "E230");
   if (!hasReference(result) && !view) {
@@ -201,7 +209,7 @@ std::size_t Program::functionBorrow(ArrayRef<Type *> parameters, Type *result, s
                                     Span span) {
   if (!hasReference(result)) {
     if (!explicitSource) return 0;
-    if (!readonlyView(result) || explicitSource > parameters.size() ||
+    if (!checkedViewResult(result) || explicitSource > parameters.size() ||
         !viewContractSource(parameters[explicitSource - 1]))
       fail(span, "checked readonly view requires a named 'in' source with owning storage", "E230");
     return explicitSource;
@@ -857,7 +865,7 @@ void Program::validateInterfaces(Type *type) {
           auto actual = parameters(found, methodTypes, nullptr, owner->comptimeArguments);
           if (actual != expected) continue;
           if (this->type(method.type, *found.file, methodTypes, owner->comptimeArguments) != result) continue;
-          if (hasReference(result) || readonlyView(result)) {
+          if (hasReference(result) || checkedViewResult(result)) {
             actual.insert(actual.begin(), pointer(owner, method.readOnly));
             auto expectedReceiver = expected;
             expectedReceiver.insert(expectedReceiver.begin(), pointer(interface, requirement.readOnly));

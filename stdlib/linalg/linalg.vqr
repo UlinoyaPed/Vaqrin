@@ -131,10 +131,10 @@ pub class Matrix<T: Copyable + Movable> {
     }
     pub const func at(row: usize, col: usize) T { *get(row, col).unwrap() }
     pub func set(row: usize, col: usize, value: T) void { *getMut(row, col).unwrap() = value; }
-    pub const func row(index: usize) ?[]const T {
+    pub const func row(index: usize) ?[]const T from self {
         if index >= height { return null; }
         var start = index * width;
-        some(values.asConstSlice()[start..start + width])
+        some(values.borrowSlice()[start..start + width])
     }
     pub func rowMut(index: usize) ?[]T {
         if index >= height { return null; }

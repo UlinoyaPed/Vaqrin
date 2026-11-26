@@ -148,7 +148,8 @@ bool Program::readonlyView(Type *t) const {
 }
 
 bool Program::optionalReadonlyView(Type *t) const {
-  return t && t->kind == Kind::Optional && t->parts[0]->kind == Kind::Slice && readonlyView(t->parts[0]);
+  // One nullable layer preserves the same owner contract as its readonly payload.
+  return t && t->kind == Kind::Optional && readonlyView(t->parts[0]);
 }
 
 bool Program::checkedViewResult(Type *t) const {

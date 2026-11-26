@@ -1373,6 +1373,70 @@ class Acceptance(CompilerCase):
                 source = self.source(name + "/main.vqr", prelude + body + "\nfunc main() void {}")
                 self.assertIn(diagnostic.encode(), self.process(VAQC, "check", source, good=False).stderr)
 
+    def test_v020_checked_optional_text_view_contracts(self):
+        prelude = """
+            func word(owner: in string) str from owner { owner }
+            func maybeWord(owner: in string, take: bool) ?str from owner {
+                if take { some(word(owner)) } else { null }
+            }
+            func propagate(owner: in string, take: bool) ?str from owner {
+                maybeWord(owner, take)?
+            }
+            func pick(owner: in string, take: bool) str from owner {
+                maybeWord(owner, take) ?? word(owner)
+            }
+            func sink(view: ?str) void {}
+        """
+        program = prelude + """
+            func main() !void {
+                var owner: string = "text";
+                {
+                    var f: func(value: in string, take: bool) ?str from value = maybeWord;
+                    var optional = f(owner, true);
+                    if let some(view) = optional { io.println(view)!; }
+                    io.println(propagate(owner, false) == null)!;
+                    io.println(propagate(owner, true).unwrap().byteLen())!;
+                    io.println(pick(owner, false))!;
+                    io.println(pick(owner, true))!;
+                }
+                owner = "next";
+                io.println(maybeWord(owner, true).unwrap())!;
+                var empty: string = "";
+                io.println(maybeWord(empty, true).unwrap().byteLen())!;
+            }
+        """
+        for level in ("-O0", "-O2"):
+            with self.subTest(level=level):
+                self.hosted(program, "text\ntrue\n4\ntext\ntext\nnext\n0\n", level)
+
+        cases = {
+            "owner_write": ('func bad() void { var s: string = "text"; var v = maybeWord(s, true); '
+                            's = "next"; }', "active borrow"),
+            "owner_move": ('func bad() void { var s: string = "text"; var v = maybeWord(s, true); '
+                           'var t = move(s); }', "active borrow"),
+            "empty_owner": ('func bad() void { var s: string = ""; var v = maybeWord(s, true); '
+                            's = "next"; }', "active borrow"),
+            "pattern": ('func bad() void { var s: string = "text"; '
+                        'if let some(v) = maybeWord(s, true) { s = "next"; } }', "active borrow"),
+            "temporary": ('func bad() void { var v = maybeWord("temp", true); }', "temporary"),
+            "untracked_call": ('func bad(s: in string) void { sink(maybeWord(s, true)); }', "untracked"),
+            "untracked_return": ('func bad(s: in string) ?str { maybeWord(s, true) }', "untracked"),
+            "assignment": ('func bad(s: in string) void { var v: ?str = null; v = maybeWord(s, true); }',
+                           "untracked"),
+            "wrong_source": ('func bad(a: in string, b: in string, take: bool) ?str from a { '
+                             'if take { maybeWord(a, true) } else { maybeWord(b, true) } }',
+                             "declared source"),
+            "mixed": ('func bad(a: in string, b: str, take: bool) ?str from a { '
+                      'if take { maybeWord(a, true) } else { some(b) } }', "untracked"),
+            "fallback": ('func bad(a: in string, b: str) str from a { maybeWord(a, false) ?? b }',
+                         "untracked"),
+        }
+        for name, (body, diagnostic) in cases.items():
+            with self.subTest(name=name):
+                source = self.source(name + "/main.vqr", prelude + body + "\nfunc main() void {}")
+                result = self.process(VAQC, "check", source, good=False)
+                self.assertIn(diagnostic.encode(), result.stderr, result.stderr.decode())
+
     def test_v020_checked_view_consumers_are_scoped(self):
         self.hosted("""
             import (parse);

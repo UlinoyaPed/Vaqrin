@@ -54,9 +54,9 @@
 ### 普通 Value 参数的标准库迁移
 
 - `Vec<T>` 的 `push`、`insert`、`replace` 及相应的保留值变体用类成员的 `comptime if meta.isCopyable<T>()` 选择签名：Copyable 元素用 `value: T`，否则用 `value: move T`。每个实例只有一个成员，不是仅模式不同的重载。两条分支都可交付独立临时值；非 Copyable 具名实参须显式 `move`。保留原有分配失败和越界时的所有权语义。
-- `Vec<T>.spliceOwned` 和 `intoIter` 明确消费整个 Vec；`fromSlice`、`splice` 和 `clone` 则只向 Copyable 元素开放。独立的迭代器或回调类型参数（如 `fromIter<I>`、`extend<I>`、`retain<F>`）不会从元素的条件分支取得 Copyable 保证，仍需要后续迁移。
+- `Vec<T>.spliceOwned` 和 `intoIter` 明确消费整个 Vec；`fromSlice`、`splice` 和 `clone` 则只向 Copyable 元素开放。独立的迭代器或回调类型参数（如 `fromIter<I>`、`extend<I>`、`retain<F>`）不会从元素的条件分支取得 Copyable 保证；这些现有 Value 接口已显式加入 `Copyable`，保留原有复制及局部移动行为。
 - 对只有一个元素类型的容器，可沿用此模式迁移插入、替换和保留值的操作。对 HashMap 和 BTree 等键、值独立的接口，须分别判定 K 和 V，而非假设两者具有相同模式。只读取的参数优先用 `in`；纯复制泛型函数加 `T: Copyable`。不能声明条件成员的独立函数，需要拆分 API 或重构为符合实际所有权的借用操作。
-- `HashMap<K, V>` 的 `insert`、`insertPreserving` 和 `getOrInsert` 系列按各自键和值是否 Copyable 选择形参模式。探测或扩容时只借用键；`insertPreserving` 失败时归还两项输入，覆盖时返回旧值并销毁旧键。现有键的 `getOrInsert` 不覆盖旧值。私有转移和扩容不再次复制；`HashSet.insert`、`entry` 的键与 `Entry.orInsert` 的值也采用相应模式。Entry 的现有 unsafe 生命周期约定没有改变。方法自身的泛型工厂、回调仍待迁移。
+- `HashMap<K, V>` 的 `insert`、`insertPreserving` 和 `getOrInsert` 系列按各自键和值是否 Copyable 选择形参模式。探测或扩容时只借用键；`insertPreserving` 失败时归还两项输入，覆盖时返回旧值并销毁旧键。现有键的 `getOrInsert` 不覆盖旧值。私有转移和扩容不再次复制；`HashSet.insert`、`entry` 的键与 `Entry.orInsert` 的值也采用相应模式。Entry 的现有 unsafe 生命周期约定没有改变。方法自身的按值泛型工厂、回调及迭代器已声明 `Copyable`（含 Entry 的 `andModify`、`orInsertWith`）。Vec、HashMap、FixedVec 和两种 deque 合计迁移 15 个这类签名；独立的非 Copyable 所有权入口及 Entry 生命周期仍需后续设计与验收。
 - `BTreeMap<K, V>.insert` 也分别判定 K 与 V。查找、节点分裂和插槽选择期间只借用键，确定位置后再搬入整对输入；失败时销毁收到的所有者，保留已存在的键和值。`BTreeSet.insert` 和底层 `FixedVec.insert` 按各自元素的 Copyable 能力选择单一签名。
 - `MaybeUninit<T>.write` 与 `ManuallyDrop<T>.new` 按 T 选择 Copy/Move 参数。手动存储容器始终不可复制，`ManuallyDrop.intoInner` 消费整个容器；初始化、提取与手动销毁的既有契约不变。deque、链表、共享存储和 OnceLock 的存储调用已使用显式移动或临时值。
 - 标准库已将有可写位置证明的替换改用 `core.Exchange<T>.replace`：目标通过受检查的 `mut` 借用进入，替换值按类型选择 Copy/Move，结果返回原所有者。可选槽的 `opt.take` 和 `opt.Storage<T>.replace` 使用相同规则；任务／线程已 join 的结果槽、channel 锁保护的投递槽仍由单独的 `unsafe opt.takeRaw` 处理。它要求指针指向活着、已初始化且对此调用独占的可选槽，不产生安全引用。已删除旧的 `core.replace` 和 `mem.replace` 指针入口；其他 opt 指针辅助接口不在此次迁移内。

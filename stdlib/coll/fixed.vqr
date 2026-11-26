@@ -138,7 +138,7 @@ pub class FixedVec<T: Movable, comptime N: usize> {
 
     pub func clear() void { truncate(0); }
 
-    pub func extend<I: Movable>(values: I) !void {
+    pub func extend<I: Movable + Copyable>(values: I) !void {
         for item in move(values) {
             switch tryPush(move(item)) {
                 PushResult.Stored => {},
@@ -175,7 +175,7 @@ pub class FixedVec<T: Movable, comptime N: usize> {
         move(result)
     }
 
-    pub func retain<F: Movable>(predicate: F) void {
+    pub func retain<F: Movable + Copyable>(predicate: F) void {
         var kept: usize = 0;
         for i in usize(0)..length {
             if predicate(get(i).unwrap()) {

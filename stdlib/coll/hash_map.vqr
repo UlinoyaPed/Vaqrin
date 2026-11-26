@@ -560,7 +560,7 @@ pub class HashMap<K: Movable, V: Movable> {
     }
 
     comptime if meta.isCopyable<K>() {
-        pub func getOrInsertWith<F: Movable>(key: K, create: F) !ref mut V from self {
+        pub func getOrInsertWith<F: Movable + Copyable>(key: K, create: F) !ref mut V from self {
             var index = findIndex(raw key, hashKey(raw key));
             switch index {
                 some(at) => {
@@ -576,7 +576,7 @@ pub class HashMap<K: Movable, V: Movable> {
         // Keep the map at this address and use this entry exclusively while it is live.
         pub unsafe func entry(key: K) Entry<K, V> { unsafe { Entry<K, V>(self, move(key)) } }
     } else {
-        pub func getOrInsertWith<F: Movable>(key: move K, create: F) !ref mut V from self {
+        pub func getOrInsertWith<F: Movable + Copyable>(key: move K, create: F) !ref mut V from self {
             var index = findIndex(raw key, hashKey(raw key));
             switch index {
                 some(at) => {
@@ -636,7 +636,7 @@ pub class HashMap<K: Movable, V: Movable> {
         }
     }
 
-    pub func retain<F: Movable>(predicate: F) void {
+    pub func retain<F: Movable + Copyable>(predicate: F) void {
         for i in usize(0)..buckets.len() {
             var bucket = buckets.getMutPtr(i).unwrap();
             if bucket.isOccupied() && !predicate(bucket.keyRef(), bucket.valueRef()) {
@@ -660,7 +660,7 @@ pub class HashMap<K: Movable, V: Movable> {
         if target != buckets.len() || tombstones != 0 { rehash(target)!; }
     }
 
-    pub func extend<I: Movable>(entries: I) !void {
+    pub func extend<I: Movable + Copyable>(entries: I) !void {
         for key, value in move(entries) { insert(move(key), move(value))!; }
     }
 
@@ -700,7 +700,7 @@ pub class Entry<K: Movable, V: Movable> {
         }
     }
     pub func getMut() ?*V { map.getMutPtr(queryPtr()) }
-    pub func andModify<F: Movable>(callback: F) *Self {
+    pub func andModify<F: Movable + Copyable>(callback: F) *Self {
         switch getMut() {
             some(address) => { move(callback)(address); },
             null => {},
@@ -712,7 +712,7 @@ pub class Entry<K: Movable, V: Movable> {
     } else {
         pub func orInsert(value: move V) !*V { map.getOrInsertPtr(takeKey(), move(value)) }
     }
-    pub func orInsertWith<F: Movable>(create: F) !*V {
+    pub func orInsertWith<F: Movable + Copyable>(create: F) !*V {
         switch getMut() {
             some(value) => {
                 var used = takeKey();

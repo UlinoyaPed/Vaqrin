@@ -322,7 +322,7 @@ pub class VecDeque<T: Movable> {
         some(move(previous))
     }
 
-    pub func retain<F: Movable>(predicate: F) void {
+    pub func retain<F: Movable + Copyable>(predicate: F) void {
         var kept: usize = 0;
         for i in usize(0)..length {
             var slot = slots.getMutPtr(physical(i)).unwrap();
@@ -340,7 +340,7 @@ pub class VecDeque<T: Movable> {
         if length == 0 { head = 0; }
     }
 
-    pub func extend<I: Movable>(values: I) !void {
+    pub func extend<I: Movable + Copyable>(values: I) !void {
         for item in move(values) { pushBack(move(item))!; }
     }
 
@@ -570,7 +570,7 @@ pub class FixedDeque<T: Movable, comptime N: usize> {
         }
     }
 
-    pub func retain<F: Movable>(predicate: F) void {
+    pub func retain<F: Movable + Copyable>(predicate: F) void {
         var kept: usize = 0;
         for i in usize(0)..length {
             var slot = address(physical(i));
@@ -617,7 +617,7 @@ pub class FixedDeque<T: Movable, comptime N: usize> {
         }
     }
 
-    pub func extend<I: Movable>(values: I) !void {
+    pub func extend<I: Movable + Copyable>(values: I) !void {
         for item in move(values) {
             switch pushBack(move(item)) {
                 PushResult.Stored => {},

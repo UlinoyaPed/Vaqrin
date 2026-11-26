@@ -50,7 +50,7 @@ pub class Vec<T: Movable> {
         }
     }
 
-    pub static func fromIter<I: Movable>(values: I) !Self {
+    pub static func fromIter<I: Movable + Copyable>(values: I) !Self {
         var out = Vec<T>();
         for item in move(values) { out.push(move(item))!; }
         move(out)
@@ -296,7 +296,7 @@ pub class Vec<T: Movable> {
         }
     }
 
-    pub func retain<F: Movable>(predicate: F) void {
+    pub func retain<F: Movable + Copyable>(predicate: F) void {
         var kept: usize = 0;
         for i in usize(0)..length {
             var address = data.unwrap().offset(i);
@@ -312,7 +312,7 @@ pub class Vec<T: Movable> {
         length = kept;
     }
 
-    pub func extend<I: Movable>(values: I) !void {
+    pub func extend<I: Movable + Copyable>(values: I) !void {
         for item in move(values) { push(move(item))!; }
     }
 

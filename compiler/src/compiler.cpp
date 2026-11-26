@@ -1464,6 +1464,73 @@ GenericCopyProof combineCopyProof(GenericCopyProof left, GenericCopyProof right)
 GenericCopyProof proveGenericCopy(Program &program, const File &file, const Ast &type,
                                   const GenericCopyFacts &facts, ActiveCopyTypes &active);
 
+// Resolve the actual standard-library query before using it as a fact.
+// Copyable is not established by a spelling match or a user look-alike.
+std::optional<std::string> genericCopyQuery(Program &program, const File &file,
+                                             const Ast &condition, const GenericCopyFacts &facts) {
+  if (!condition || condition->kind != NodeKind::Call || condition->children.size() != 1)
+    return {};
+  const auto &callee = condition->children.front();
+  if (callee->kind != NodeKind::Generic || callee->children.size() != 2) return {};
+  const auto &argument = callee->children[1];
+  auto target = path(callee->children.front());
+  if ((target != "isCopyable" && !target.ends_with(".isCopyable")) ||
+      argument->kind != NodeKind::TypeName || !argument->children.empty() ||
+      argument->text == "Self" || !facts.contains(argument->text))
+    return {};
+  auto definitions = program.resolve(file, target, callee->span);
+  if (definitions.size() == 1 && definitions.front().file->standard &&
+      definitions.front().file->package == "meta" &&
+      definitions.front().decl->name == "isCopyable" && definitions.front().decl->comptime)
+    return argument->text;
+  return {};
+}
+
+std::optional<bool> knownGenericCopyCondition(Program &program, const File &file,
+                                              const Ast &condition, const GenericCopyFacts &facts) {
+  if (!condition) return {};
+  if (condition->kind == NodeKind::Boolean) return condition->text == "true";
+  if (auto query = genericCopyQuery(program, file, condition, facts);
+      query && facts.at(*query) == GenericCopyProof::Proven)
+    return true;
+  // Missing is absence of a universal proof, NOT a negative trait fact.
+  if (condition->kind == NodeKind::Unary && condition->text == "!" &&
+      condition->children.size() == 1) {
+    auto inner = knownGenericCopyCondition(program, file, condition->children.front(), facts);
+    if (inner) return !*inner;
+    return {};
+  }
+  if (condition->kind == NodeKind::Binary && condition->children.size() == 2 &&
+      (condition->text == "&&" || condition->text == "||")) {
+    auto left = knownGenericCopyCondition(program, file, condition->children[0], facts);
+    const bool isAnd = condition->text == "&&";
+    if (left && *left != isAnd) return !isAnd;
+    auto right = knownGenericCopyCondition(program, file, condition->children[1], facts);
+    if (right && *right != isAnd) return !isAnd;
+    if (left && right) return isAnd;
+  }
+  return {};
+}
+
+void refineGenericCopyFacts(Program &program, const File &file, const Ast &condition,
+                            bool selected, GenericCopyFacts &facts) {
+  if (!condition) return;
+  if (condition->kind == NodeKind::Unary && condition->text == "!" &&
+      condition->children.size() == 1) {
+    refineGenericCopyFacts(program, file, condition->children[0], !selected, facts);
+    return;
+  }
+  if (condition->kind == NodeKind::Binary && condition->children.size() == 2 &&
+      ((selected && condition->text == "&&") || (!selected && condition->text == "||"))) {
+    for (const auto &operand : condition->children)
+      refineGenericCopyFacts(program, file, operand, selected, facts);
+    return;
+  }
+  if (selected)
+    if (auto query = genericCopyQuery(program, file, condition, facts))
+      facts[*query] = GenericCopyProof::Proven;
+}
+
 bool affectsCopyLayout(const Decl &member) {
   if (member.kind == DeclKind::Field) return true;
   if (member.kind == DeclKind::Function)
@@ -1478,35 +1545,85 @@ GenericCopyProof proveNominalCopy(Program &program, const File &file, const Decl
                                  const GenericCopyFacts &facts, ActiveCopyTypes &active) {
   using Proof = GenericCopyProof;
   if (decl.kind == DeclKind::Interface) return Proof::Missing;
-  if (decl.kind == DeclKind::Class) {
-    const auto mode = program.attribute(decl, "copy");
-    if (mode == "disabled") return Proof::Missing;
-    const auto unconditionalCopy = std::ranges::any_of(decl.members, [](const Decl &member) {
-      return member.kind == DeclKind::Function && member.name == "copy" &&
-             !member.associated && member.readOnly && member.params.empty() &&
-             member.generics.empty() && member.type && member.type->kind == NodeKind::TypeName &&
-             member.type->text == "Self" && member.type->children.empty();
-    });
-    if (mode == "enable" && unconditionalCopy) return Proof::Proven;
-    // A conditional destructor, custom copy or storage layout can change
-    // the answer. Do not claim a proof from either syntactic branch alone.
-    if (std::ranges::any_of(decl.members, [](const Decl &member) {
-          return member.kind == DeclKind::Conditional && affectsCopyLayout(member);
-        }))
-      return Proof::Deferred;
-    if (std::ranges::any_of(decl.members, [](const Decl &member) {
-          return member.kind == DeclKind::Function && member.name == "deinit" && !member.associated;
-        }))
-      return Proof::Missing;
-  }
-  auto result = Proof::Proven;
-  for (const auto &member : decl.members) {
-    if (member.kind == DeclKind::Field)
-      result = combineCopyProof(result, proveGenericCopy(program, file, member.type, facts, active));
-    else if (member.kind == DeclKind::Variant)
-      for (const auto &parameter : member.params)
-        result = combineCopyProof(result, proveGenericCopy(program, file, parameter.type, facts, active));
-  }
+  const auto mode = program.attribute(decl, "copy");
+  if (decl.kind == DeclKind::Class && mode == "disabled") return Proof::Missing;
+
+  struct LayoutPath {
+    GenericCopyFacts facts;
+    std::vector<const Decl *> fields;
+    bool hasDeinit = false;
+    bool hasCopy = false;
+    bool validCopy = false;
+  };
+  // Analyze selected storage and special methods together. A destructor or
+  // custom copy can override the answer from fields in its selected branch.
+  // Bound the number of alternatives during migration; never turn exhaustion
+  // into a successful proof.
+  constexpr std::size_t maxPaths = 64;
+  std::vector<LayoutPath> paths{{facts, {}, false, false, false}};
+  auto collect = [&](auto &&self, const std::vector<Decl> &members,
+                     std::vector<LayoutPath> &current) -> bool {
+    for (const auto &member : members) {
+      if (member.kind == DeclKind::Conditional) {
+        if (!affectsCopyLayout(member)) continue;
+        std::vector<LayoutPath> next;
+        for (const auto &state : current) {
+          auto known = knownGenericCopyCondition(program, file, member.body, state.facts);
+          for (bool selected : {true, false}) {
+            if (known && *known != selected) continue;
+            auto branch = state;
+            refineGenericCopyFacts(program, file, member.body, selected, branch.facts);
+            std::vector<LayoutPath> alternatives{std::move(branch)};
+            if (!self(self, selected ? member.members : member.otherwise, alternatives))
+              return false;
+            if (alternatives.size() > maxPaths - next.size()) return false;
+            for (auto &alternative : alternatives) next.push_back(std::move(alternative));
+          }
+        }
+        current = std::move(next);
+      } else {
+        for (auto &state : current) {
+          if (member.kind == DeclKind::Field || member.kind == DeclKind::Variant) {
+            state.fields.push_back(&member);
+          } else if (member.kind == DeclKind::Function && !member.associated) {
+            if (member.name == "deinit") state.hasDeinit = true;
+            if (member.name == "copy") {
+              state.hasCopy = true;
+              state.validCopy |= member.readOnly && member.params.empty() &&
+                                 member.generics.empty() && member.type &&
+                                 member.type->kind == NodeKind::TypeName &&
+                                 member.type->text == "Self" && member.type->children.empty();
+            }
+          }
+        }
+      }
+    }
+    return true;
+  };
+  if (!collect(collect, decl.members, paths)) return Proof::Deferred;
+
+  auto classify = [&](const LayoutPath &state) {
+    if (decl.kind == DeclKind::Class) {
+      if (mode == "enable" && state.validCopy) return Proof::Proven;
+      if (mode == "enable" && state.hasCopy) return Proof::Deferred;
+      if (state.hasDeinit) return Proof::Missing;
+    }
+    auto result = Proof::Proven;
+    for (const auto *member : state.fields) {
+      if (member->kind == DeclKind::Field)
+        result = combineCopyProof(result, proveGenericCopy(program, file, member->type, state.facts, active));
+      else
+        for (const auto &parameter : member->params)
+          result = combineCopyProof(result, proveGenericCopy(program, file, parameter.type, state.facts, active));
+    }
+    return result;
+  };
+  // All possible layouts must prove Copyable. Disagreement is a deferred
+  // obligation (unknown conditions can be correlated); all missing is a
+  // definite missing guarantee for this declaration.
+  auto result = classify(paths.front());
+  for (std::size_t i = 1; i < paths.size(); ++i)
+    if (classify(paths[i]) != result) return Proof::Deferred;
   return result;
 }
 
@@ -1634,36 +1751,32 @@ void auditNestedGenericCopyTypes(Program &program, const File &file, const Ast &
       auditNestedGenericCopyTypes(program, file, part, facts);
 }
 
-void refineGenericCopyFacts(Program &program, const File &file, const Ast &condition,
-                            bool selected, GenericCopyFacts &facts) {
-  if (!condition) return;
-  if (condition->kind == NodeKind::Unary && condition->text == "!" &&
-      condition->children.size() == 1) {
-    refineGenericCopyFacts(program, file, condition->children[0], !selected, facts);
+
+// Visit the type syntax that occurs inside uninstantiated bodies, including
+// explicit Lambda parameters, local bindings, allocations and array lengths.
+// A runtime if is lowered on both paths; it is not a declaration-level
+// comptime member selection and does not establish additional trait facts.
+void auditGenericCopyExpression(Program &program, const File &file, const Ast &node,
+                                 const GenericCopyFacts &facts) {
+  if (!node || facts.empty()) return;
+  if (node->kind == NodeKind::TypeName || node->kind == NodeKind::TypePrefix ||
+      node->kind == NodeKind::TypeTuple || node->kind == NodeKind::TypeFunction ||
+      node->kind == NodeKind::TypeArray) {
+    auditNestedGenericCopyTypes(program, file, node, facts);
+    if (node->kind == NodeKind::TypeArray)
+      auditGenericCopyExpression(program, file, node->children.front(), facts);
     return;
   }
-  if (condition->kind == NodeKind::Binary && condition->children.size() == 2 &&
-      ((selected && condition->text == "&&") || (!selected && condition->text == "||"))) {
-    for (const auto &operand : condition->children)
-      refineGenericCopyFacts(program, file, operand, selected, facts);
-    return;
+  auditGenericCopyExpression(program, file, node->type, facts);
+  for (const auto &parameter : node->parameters) {
+    if (node->kind == NodeKind::Lambda && parameter.type &&
+        parameterMode(parameter.type) == ParameterMode::Value)
+      auditGenericValueType(program, file, parameter.type, facts);
+    auditGenericCopyExpression(program, file, parameter.type, facts);
   }
-  // A true trait test can establish a fact only for the real, resolved
-  // standard-library query, never from a similarly named user function.
-  if (!selected || condition->kind != NodeKind::Call || condition->children.size() != 1) return;
-  const auto &callee = condition->children.front();
-  if (callee->kind != NodeKind::Generic || callee->children.size() != 2) return;
-  const auto &argument = callee->children[1];
-  auto target = path(callee->children.front());
-  if ((target != "isCopyable" && !target.ends_with(".isCopyable")) ||
-      argument->kind != NodeKind::TypeName || !argument->children.empty() ||
-      argument->text == "Self" || !facts.contains(argument->text))
-    return;
-  auto definitions = program.resolve(file, target, callee->span);
-  if (definitions.size() == 1 && definitions.front().file->standard &&
-      definitions.front().file->package == "meta" &&
-      definitions.front().decl->name == "isCopyable" && definitions.front().decl->comptime)
-    facts[argument->text] = GenericCopyProof::Proven;
+  for (const auto &child : node->children)
+    auditGenericCopyExpression(program, file, child, facts);
+  auditGenericCopyExpression(program, file, node->tail, facts);
 }
 
 void auditGenericCopyDeclaration(Program &program, const File &file, const Decl &decl,
@@ -1680,15 +1793,22 @@ void auditGenericCopyDeclaration(Program &program, const File &file, const Decl 
   };
   if (owner == &decl) refreshSelf(facts);
   if (decl.kind == DeclKind::Conditional) {
-    auto yes = facts, no = facts;
-    refineGenericCopyFacts(program, file, decl.body, true, yes);
-    refineGenericCopyFacts(program, file, decl.body, false, no);
-    refreshSelf(yes);
-    refreshSelf(no);
-    for (const auto &member : decl.members)
-      auditGenericCopyDeclaration(program, file, member, yes, owner);
-    for (const auto &member : decl.otherwise)
-      auditGenericCopyDeclaration(program, file, member, no, owner);
+    auditGenericCopyExpression(program, file, decl.body, facts);
+    auto known = knownGenericCopyCondition(program, file, decl.body, facts);
+    if (!known || *known) {
+      auto yes = facts;
+      refineGenericCopyFacts(program, file, decl.body, true, yes);
+      refreshSelf(yes);
+      for (const auto &member : decl.members)
+        auditGenericCopyDeclaration(program, file, member, yes, owner);
+    }
+    if (!known || !*known) {
+      auto no = facts;
+      refineGenericCopyFacts(program, file, decl.body, false, no);
+      refreshSelf(no);
+      for (const auto &member : decl.otherwise)
+        auditGenericCopyDeclaration(program, file, member, no, owner);
+    }
     return;
   }
   for (const auto &parameter : decl.params) {
@@ -1697,6 +1817,12 @@ void auditGenericCopyDeclaration(Program &program, const File &file, const Decl 
     auditNestedGenericCopyTypes(program, file, parameter.type, facts);
   }
   auditNestedGenericCopyTypes(program, file, decl.type, facts);
+  for (const auto &attribute : decl.attributes)
+    for (const auto &type : attribute.types)
+      auditNestedGenericCopyTypes(program, file, type, facts);
+  for (const auto &[name, value] : decl.initializers)
+    auditGenericCopyExpression(program, file, value, facts);
+  auditGenericCopyExpression(program, file, decl.body, facts);
   for (const auto &member : decl.members)
     auditGenericCopyDeclaration(program, file, member, facts, owner);
 }

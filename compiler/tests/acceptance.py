@@ -449,6 +449,85 @@ class Acceptance(CompilerCase):
                 result = self.process(VAQC, "check", "--audit-generic-copy", source, good=False)
                 self.assertIn(diagnostic.encode(), result.stderr, result.stderr.decode())
 
+    def test_v020_audit_generic_copy_local_types_and_conditional_layout(self):
+        prelude = """
+            import (meta)
+            type RequiresCopy<T: Copyable> = *const T;
+            class BranchStorage<T> {
+                comptime if meta.isCopyable<T>() {
+                    var value: T;
+                } else {
+                    var address: *const T;
+                }
+            }
+            class AlwaysOwned<T> {
+                comptime if meta.isCopyable<T>() {
+                    var value: ^T;
+                } else {
+                    var value: ^T;
+                }
+            }
+            class ConditionalDrop<T> {
+                comptime if meta.isCopyable<T>() {
+                    func deinit() {}
+                } else {
+                    func deinit() {}
+                }
+                var address: *const T;
+            }
+            class SelectedCopy<T: Copyable> {
+                #copy: enable
+                var address: *const T;
+                comptime if meta.isCopyable<T>() {
+                    pub const func copy() Self { Self{address: address} }
+                    func deinit() {}
+                }
+            }
+        """
+        good = prelude + """
+            func local<T: Copyable>(value: in T) void {
+                var f: func(T) T = (v: T) T => v;
+                var p: RequiresCopy<T>;
+                var nested = { (v: T) T => v };
+            }
+            func borrowed<T>(value: in T) void {
+                var f: func(in T) void;
+                var g = (v: in T) void => {};
+            }
+            func selected<T>(value: BranchStorage<T>) void {}
+            func custom<T: Copyable>(value: SelectedCopy<T>) void {}
+            class Known<T: Copyable> {
+                comptime if meta.isCopyable<T>() {
+                    pub func accept(value: T) void {}
+                } else {
+                    pub func unreachable(value: ^T) void {}
+                }
+            }
+            func main() void {}
+        """
+        source = self.source("copy-local-good.vqr", good)
+        self.process(VAQC, "check", "--audit-generic-copy", source)
+        cases = {
+            "binding": ("func bad<T>() void { var f: func(T) void; }", "generic Value parameter"),
+            "lambda": ("func bad<T>() void { var f = (v: T) void => {}; }", "generic Value parameter"),
+            "nested_lambda": ("func bad<T>() void { var f = () void => { "
+                              "var g = (v: T) void => {}; }; }", "generic Value parameter"),
+            "local_bound": ("func bad<T>() void { var p: RequiresCopy<T>; }", "generic type argument"),
+            "new_type": ("func bad<T>() void { var x = new RequiresCopy<T>(null); }", "generic type argument"),
+            "explicit_generic_arg": ("func bad<T>() void { meta.sizeOf<RequiresCopy<T>>(); }",
+                                     "generic type argument"),
+            "array_element": ("func bad<T>() void { var a: [2]func(T) void; }", "generic Value parameter"),
+            "runtime_if": ("func bad<T>() void { if meta.isCopyable<T>() { var f = (v: T) void => {}; } }",
+                           "generic Value parameter"),
+            "conditional_owner": ("func bad<T>(value: AlwaysOwned<T>) void {}", "generic Value parameter"),
+            "conditional_drop": ("func bad<T>(value: ConditionalDrop<T>) void {}", "generic Value parameter"),
+        }
+        for name, (declaration, diagnostic) in cases.items():
+            with self.subTest(name=name):
+                source = self.source(name + "/main.vqr", prelude + declaration + "\nfunc main() void {}")
+                result = self.process(VAQC, "check", "--audit-generic-copy", source, good=False)
+                self.assertIn(diagnostic.encode(), result.stderr, result.stderr.decode())
+
     def test_v020_value_parameters_require_copyable_even_for_temporaries(self):
         cases = {
             "signature": "func f(x: ^i32) void {}",

@@ -469,9 +469,9 @@ class Acceptance(CompilerCase):
             }
             class ConditionalDrop<T> {
                 comptime if meta.isCopyable<T>() {
-                    func deinit() {}
+                    func deinit() void {}
                 } else {
-                    func deinit() {}
+                    func deinit() void {}
                 }
                 var address: *const T;
             }
@@ -480,7 +480,7 @@ class Acceptance(CompilerCase):
                 var address: *const T;
                 comptime if meta.isCopyable<T>() {
                     pub const func copy() Self { Self{address: address} }
-                    func deinit() {}
+                    func deinit() void {}
                 }
             }
         """

@@ -382,6 +382,73 @@ class Acceptance(CompilerCase):
                                 self.source("syntax.vqr", "func main() void {}"), good=False)
         self.assertIn(b"requires semantic check mode", rejected.stderr)
 
+    def test_v020_audit_generic_copy_aliases_and_nominal_types(self):
+        prelude = """
+            import (meta)
+            type Identity<T> = T;
+            type Wrapped<T> = ?Identity<T>;
+            type Table<T, comptime N: usize> = [N]T;
+            type Ptr<T> = *const T;
+            type NeedsCopy<T: Copyable> = *const T;
+            class Record<T> { var value: T; }
+            class Descriptor<T> { var address: *const T; }
+            enum Choice<T> { Empty, Value(T), }
+            class Owner<T> {
+                #copy: disabled
+                var value: T;
+            }
+        """
+        good = prelude + """
+            func aliased<T: Copyable>(value: Wrapped<Identity<T>>) void {}
+            func array<T: Copyable, comptime N: usize>(value: Table<T, N>) void {}
+            func pointer<T>(value: Ptr<T>) void {}
+            func record<T: Copyable>(value: Record<T>) void {}
+            func descriptor<T>(value: Descriptor<T>) void {}
+            func enumValue<T: Copyable>(value: Choice<T>) void {}
+            func bounded<T: Copyable>(value: in NeedsCopy<Identity<T>>) void {}
+            func nested<T: Copyable>(value: func(Identity<T>) void) void {}
+            class SelfCopy<T: Copyable> {
+                var value: T;
+                pub static func accept(value: Self) void {}
+            }
+            class Guarded<T, U> {
+                comptime if meta.isCopyable<T>() && meta.isCopyable<U>() {
+                    pub func accept(value: (T, U)) void {}
+                }
+                comptime if !meta.isCopyable<T>() {} else {
+                    pub func acceptOther(value: Wrapped<T>) void {}
+                }
+            }
+            func main() void {}
+        """
+        source = self.source("symbolic-copy-good.vqr", good)
+        self.process(VAQC, "check", "--audit-generic-copy", source)
+        cases = {
+            "alias": ("func bad<T>(value: Identity<T>) void {}", "generic Value parameter"),
+            "nested_alias": ("func bad<T>(value: Wrapped<Identity<T>>) void {}", "generic Value parameter"),
+            "array_alias": ("func bad<T>(value: Table<T, 2>) void {}", "generic Value parameter"),
+            "nominal": ("func bad<T>(value: Record<T>) void {}", "generic Value parameter"),
+            "nested_nominal": ("func bad<T>(value: Record<Record<T>>) void {}", "generic Value parameter"),
+            "enum": ("func bad<T>(value: Choice<T>) void {}", "generic Value parameter"),
+            "owner": ("func bad<T: Copyable>(value: Owner<T>) void {}", "generic Value parameter"),
+            "box": ("func bad<T: Copyable>(value: ^T) void {}", "generic Value parameter"),
+            "exclusive": ("func bad<T: Copyable>(value: ref mut T) void {}", "generic Value parameter"),
+            "bound": ("func bad<T>(value: in NeedsCopy<T>) void {}", "generic type argument"),
+            "alias_bound": ("type Bad<T> = NeedsCopy<T>;", "generic type argument"),
+            "callback": ("func bad<T>(value: func(Identity<T>) void) void {}", "generic Value parameter"),
+            "self": ("class Bad<T> { var payload: T; pub static func accept(value: Self) void {} }",
+                     "generic Value parameter"),
+            "or": ("class Bad<T, U> { comptime if meta.isCopyable<T>() || meta.isCopyable<U>() "
+                   "{ pub func accept(value: (T, U)) void {} } }", "generic Value parameter"),
+            "cycle": ("type A<T> = B<T>; type B<T> = A<T>; func bad<T>(value: A<T>) void {}",
+                      "cyclic type alias"),
+        }
+        for name, (declaration, diagnostic) in cases.items():
+            with self.subTest(name=name):
+                source = self.source(name + "/main.vqr", prelude + declaration + "\nfunc main() void {}")
+                result = self.process(VAQC, "check", "--audit-generic-copy", source, good=False)
+                self.assertIn(diagnostic.encode(), result.stderr, result.stderr.decode())
+
     def test_v020_value_parameters_require_copyable_even_for_temporaries(self):
         cases = {
             "signature": "func f(x: ^i32) void {}",
